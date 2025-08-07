@@ -46,7 +46,8 @@ class NuCore:
         @param backend_password (str): The password for the nucore backend. (optional)
         @param reranker_url (str): The URL of the reranker service. If not provided, reranking will not be performed.
         
-        Note: Make sure that the collection_path and collection_name are set correctly to
+        Note: Make sure that the collection_path and collection_name are set correctly.
+        You will need to call load() after you are ready to use this object
         """
         if not collection_name or not collection_path or not backend_url:
             raise NuCoreError("collection_name and backend_url are mandatory parameters.")
@@ -59,6 +60,15 @@ class NuCore:
         self.lookup = {}
         self.rag_processor = RAGProcessor(collection_path, collection_name, reranker_url=reranker_url)
 
+    def __load_profile_from_file__(self, profile_path:str):
+        if not profile_path: 
+            raise NuCoreError("Profile path is mandatory.")
+
+        with open(profile_path, "rt", encoding="utf8") as f:
+            raw = json.load(f)
+
+        return self.__parse_profile__(raw)
+    
     def __load_profile_from_url__(self):
         """Load profile from the specified URL."""
         if not self.url:
@@ -213,10 +223,30 @@ class NuCore:
             )
         return Profile(timestamp=raw.get("timestamp", ""), families=families)
 
-    def load_profile(self):
-        self.profile = self.__load_profile_from_url__()
+    def load_profile(self, profile_path:str=None):
+        """Load profile from the specified path or URL.
+        :param profile_path: Optional path to the profile file. If not provided, will use the configured url in consturctor
+        :return: Loaded Profile object.
+        :raises NuCoreError: If no valid profile source is provided.
+        """
+        if profile_path:
+            self.profile = self.__load_profile_from_file__(profile_path)
+        elif not self.url:
+            raise NuCoreError("No valid profile source provided.")
+        else:
+            self.profile = self.__load_profile_from_url__()
         return self.profile
         
+    def __load_nodes_from_file__(self, nodes_path:str):
+        """Load nodes from the specified XML file path.
+        :param nodes_path: Path to the XML file containing nodes. (mandatory) 
+        :return: Parsed XML root element.
+        :raises NuCoreError: If the nodes path is not set or the file cannot be parsed.
+        """
+        if not nodes_path:
+            raise NuCoreError("Nodes path is not set.")
+        return ET.parse(nodes_path).getroot()
+
     def __load_nodes_from_url__(self):
         """Load nodes from the specified URL."""
         if not self.url:
@@ -237,9 +267,22 @@ class NuCore:
                     self.lookup[f"{nodedef.id}.{family.id}.{instance.id}"] = nodedef
         return self.lookup
     
-    def __load_nodes__(self):
-        """Load nodes from the specified path or URL."""
-        nodes = self.__load_nodes_from_url__()
+    def __load_nodes__(self, nodes_path:str=None):
+        """Load nodes from the specified path or URL.
+        :param nodes_path: Optional path to the XML file containing nodes. If not provided, will use the configured url in constructor.
+        :return: Parsed XML root element containing nodes.
+        :raises NuCoreError: If no valid nodes source is provided.
+        
+        This method will first try to load nodes from a file if `nodes_path` is provided, 
+        otherwise it will attempt to load from the configured URL.
+        """
+        nodes = None
+        if nodes_path:
+            nodes = self.__load_nodes_from_file__(nodes_path)
+        elif self.url:
+            nodes = self.__load_nodes_from_url__()
+        else:
+            raise NuCoreError("No valid nodes source provided.")
         return nodes
 
     def __build_editor__(self, edict) -> Editor:
@@ -341,23 +384,31 @@ class NuCore:
         
         """
         Load devices and profiles from the specified paths or URL.
+        :param kwargs: Optional parameters for loading.
+        - profile_path: Path to the profile file. If not provided, will use the configured URL.
+        - nodes_path: Path to the nodes XML file. If not provided, will use the configured URL.
+        - include_rag_docs: If True, include RAG documents in the output.
+        - dump: If True, dump the processed RAG documents to a file.
+        :return: Loaded devices and profiles.
+        :raises NuCoreError: If no valid profile or nodes source is provided.
+        :raises NuCoreError: If the RAG processor is not initialized.
         """
         
         include_rag_docs = kwargs.get("include_rag_docs", False)
         dump = kwargs.get("dump", False)
         
-        rc = self.load_devices()
+        rc = self.load_devices(profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
         if include_rag_docs:
             rc = self.load_rag_docs(dump=dump)
         return rc
 
     # To have the latest state, we need to load devices only
-    def load_devices(self, include_profiles=True):
+    def load_devices(self, include_profiles=True, profile_path:str=None, nodes_path:str=None):
         if include_profiles:
-            if not self.load_profile():
+            if not self.load_profile(profile_path):
                 return None
         
-        root = self.__load_nodes__()
+        root = self.__load_nodes__(nodes_path)
         if root == None:
             return None
 
@@ -528,5 +579,3 @@ class NuCore:
     def dump_json(self):
         return json.dumps(self.json())
     
-
-
