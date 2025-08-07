@@ -319,6 +319,14 @@ async def main(args):
             continue
 
 if __name__ == "__main__":
+
+    # Example usage
+    nucore = NuCore(collection_path="/tmp/nucore.db/", collection_name="nucore_collection", backend_url="http://192.168.4.225:8080" , backend_username="admin", backend_password="admin")
+    nucore.load(profile_path="/tmp/profile.json", nodes_path="/tmp/nodes.xml")
+    print(nucore)
+
+    exit(0)
+
     parser = argparse.ArgumentParser(
         description="Loader for NuCore Profile and Nodes XML files."
     )
