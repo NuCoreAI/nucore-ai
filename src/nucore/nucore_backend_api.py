@@ -327,9 +327,3 @@ class NuCoreBackendAPI:
                 print (ex)
                 return False
         return True
-
-# Example usage
-if __name__ == "__main__":
-    nucore=nucoreAPI()
-    key = nucore.get_d2d_key()
-    print (key)
