@@ -1,0 +1,2 @@
+
+build.blis/bin/llama-server ../models/Qwen3-Embedding-0.6B-f16.gguf --port 8052 --embeddings 
