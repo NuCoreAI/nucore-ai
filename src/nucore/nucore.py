@@ -6,20 +6,20 @@ import logging
 import xml.etree.ElementTree as ET
 
 
-from ai_iox_workflow.iox.loader import load_nodes
-from ai_iox_workflow.iox.profile import Profile, Family, Instance
-from ai_iox_workflow.iox.editor import Editor, EditorSubsetRange, EditorMinMaxRange
-from ai_iox_workflow.iox.linkdef import LinkDef, LinkParameter
-from ai_iox_workflow.iox.nodedef import NodeDef, NodeProperty, NodeCommands, NodeLinks
-from ai_iox_workflow.iox.node import TypeInfo, Property, Node
-from ai_iox_workflow.iox.cmd import Command, CommandParameter
-from ai_iox_workflow.iox.uom import get_uom_by_id
-from ai_iox_workflow.iox.nucore_api import nucoreAPI
-from ai_iox_workflow.rag.device_rag_formatter import DeviceRagFormatter
-from ai_iox_workflow.rag.tools_rag_formatter import ToolsRAGFormatter
-from ai_iox_workflow.rag.static_info_rag_formatter import StaticInfoRAGFormatter
-from ai_iox_workflow.rag.rag_processor import RAGProcessor
-from ai_iox_workflow.config import AIConfig
+from nucore import Profile, Family, Instance
+from nucore import Editor, EditorSubsetRange, EditorMinMaxRange
+from nucore import LinkDef, LinkParameter
+from nucore import NodeDef, NodeProperty, NodeCommands, NodeLinks
+from nucore import TypeInfo, Property, Node
+from nucore import Command, CommandParameter
+from nucore import get_uom_by_id
+from nucore import NuCoreBackendAPI as nucoreAPI
+from nucore import NuCorePrograms as nucorePrograms
+from config import AIConfig
+from rag import DeviceRagFormatter
+from rag import ToolsRAGFormatter
+from rag import StaticInfoRAGFormatter 
+from rag import RAGProcessor
 
 
 logger = logging.getLogger(__name__)
@@ -36,30 +36,29 @@ def debug(msg):
 
 class NuCore:
     """Class to handle nucore backend operations such as loading profiles and nodes."""
-    def __init__(self, profile_path=None, nodes_path=None, url=None, username=None, password=None):
-        self.profile_path = profile_path
-        self.nodes_path = nodes_path
-        self.url = url
-        self.username = username
-        self.password = password
-        if self.url:
-            if not self.username or not self.password:
-                raise NuCoreError("Username and password must be provided when using URL.")
-        elif not self.profile_path and not self.nodes_path: 
-            raise NuCoreError("Both profile_path and nodes_path must be provided.")
-        self.profile = None
+    def __init__(self, collection_path, collection_name:str, backend_url:str, backend_username:str=None, backend_password:str=None, reranker_url:str=None):
+        """
+        Initialize the NuCore instance with backend URL, username, and password.
+        @param collection_path: The path to the collection file. This is used to store all the embeddings. (mandatory)
+        @param collection_name: The name of the collection to be used. This is used to store all the embeddings. (mandatory)
+        @param backend_url: The URL of the nucore backend. (mandatory)
+        @param backend_username (str): The username for the nucore backend. (optional)
+        @param backend_password (str): The password for the nucore backend. (optional)
+        @param reranker_url (str): The URL of the reranker service. If not provided, reranking will not be performed.
+        
+        Note: Make sure that the collection_path and collection_name are set correctly to
+        """
+        if not collection_name or not collection_path or not backend_url:
+            raise NuCoreError("collection_name and backend_url are mandatory parameters.")
+
+        self.name = collection_name     
+        self.url = backend_url
+        self.username = backend_username
+        self.password = backend_password
         self.nodes = [] 
         self.lookup = {}
-        self.rag_processor = RAGProcessor(config.getCollectionNameForAssistant())
+        self.rag_processor = RAGProcessor(collection_path, collection_name, reranker_url=reranker_url)
 
-    def __load_profile_from_file__(self):
-        """Load profile from the specified file path."""
-        if not self.profile_path:
-            raise NuCoreError("Profile path is not set.")
-        with open(self.profile_path, "rt", encoding="utf8") as f:
-            raw = json.load(f)
-        return self.__parse_profile__(raw)
-    
     def __load_profile_from_url__(self):
         """Load profile from the specified URL."""
         if not self.url:
@@ -72,8 +71,6 @@ class NuCore:
         if response is None:
             raise NuCoreError("Failed to fetch profile from URL.")
         return self.__parse_profile__(response)
-
-
 
     def __parse_profile__(self, raw):
         """Build Profile from dict, with type/checking and lookups"""
@@ -217,21 +214,9 @@ class NuCore:
         return Profile(timestamp=raw.get("timestamp", ""), families=families)
 
     def load_profile(self):
-        """Load profile from the specified path or URL."""
-        if self.profile_path :
-            self.profile = self.__load_profile_from_file__()
-        elif self.url:
-            self.profile = self.__load_profile_from_url__()
-        else:
-            raise NuCoreError("No valid profile source provided.")
+        self.profile = self.__load_profile_from_url__()
         return self.profile
         
-    def __load_nodes_from_file__(self):
-        """Load nodes from the specified XML file path."""
-        if not self.nodes_path:
-            raise NuCoreError("Nodes path is not set.")
-        return ET.parse(self.nodes_path).getroot()
-
     def __load_nodes_from_url__(self):
         """Load nodes from the specified URL."""
         if not self.url:
@@ -254,13 +239,7 @@ class NuCore:
     
     def __load_nodes__(self):
         """Load nodes from the specified path or URL."""
-        nodes = None
-        if self.nodes_path:
-            nodes = self.__load_nodes_from_file__()
-        elif self.url:
-            nodes = self.__load_nodes_from_url__()
-        else:
-            raise NuCoreError("No valid nodes source provided.")
+        nodes = self.__load_nodes_from_url__()
         return nodes
 
     def __build_editor__(self, edict) -> Editor:
@@ -481,6 +460,21 @@ class NuCore:
         if response is None:
             raise NuCoreError("Failed to send commands.")
         return response
+    
+    async def create_automation_routines(self, routines:list):
+        """
+        Create automation routines using the nucore API.
+        
+        Args:
+            routines (list): A list of routines to create.
+        """
+        if len (routines) == 0:
+            raise NuCoreError ("No valid routines provided.")
+
+        nucore_api = nucoreAPI(base_url=self.url, username=self.username, password=self.password)
+        all_programs=nucorePrograms()
+        return nucore_api.upload_programs(all_programs)
+
     
     async def get_properties(self, device_id:str)-> dict[str, Property]:
         """

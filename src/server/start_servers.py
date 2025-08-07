@@ -2,7 +2,7 @@
 # This script is used to start the necessary servers for the AI IOX workflow.   
 # It is typically run in the background to keep the servers running.
 # It parses config.py to get the correct models for each server: embedding, ranking, and LLM.
-from ai_iox_workflow.config import AIConfig, LLAMA_CPP_EXECUTABLE, LLAMA_CPP_EXECUTABLE_WITH_GPU
+from config import AIConfig, LLAMA_CPP_EXECUTABLE, LLAMA_CPP_EXECUTABLE_WITH_GPU
 
 import shlex
 import time, argparse
@@ -36,8 +36,8 @@ if __name__ == "__main__":
     if not os.path.exists(LLAMA_CPP_EXECUTABLE):
         raise FileNotFoundError(f"Llama.cpp executable not found: {config.LLAMA_CPP_EXECUTABLE}")           
     if not os.path.exists(os.path.join(config.__models_path__, config.__llm_model__)):
-        raise FileNotFoundError(f"LLM model not found: {os.path.join(config.MODELS_DIR, config.__llm_model__)}")
-    
+        raise FileNotFoundError(f"LLM model not found: {os.path.join(config.__models_path__, config.__llm_model__)}")
+
 
 
     # Prepare the arguments for the LLM server
@@ -74,7 +74,7 @@ if args.with_reranker:
     # This server is used to rerank documents based on their relevance to a query.
     # It uses the BGE reranker model specified in the config.
     if not os.path.exists(os.path.join(config.__models_path__, config.__reranker_model__)):
-        raise FileNotFoundError(f"Reranker model not found: {os.path.join(config.MODELS_DIR, config.__reranker_model__)}")
+        raise FileNotFoundError(f"Reranker model not found: {os.path.join(config.__models_path__, config.__reranker_model__)}")
     reranker_server_args = config.__reranker_model_server_args__
     reranker_server_process = subprocess.Popen(
         [LLAMA_CPP_EXECUTABLE] + shlex.split(reranker_server_args), 
@@ -90,7 +90,7 @@ if args.with_embedding:
     # This server is used to generate embeddings for documents.
     # It uses the Qwen3 embedding model specified in the config.
     if not os.path.exists(os.path.join(config.__models_path__, config.__embedding_model__)):
-        raise FileNotFoundError(f"Embedding model not found: {os.path.join(config.MODELS_DIR, config.__embedding_model__)}")
+        raise FileNotFoundError(f"Embedding model not found: {os.path.join(config.__models_path__, config.__embedding_model__)}")
     embedding_server_args = config.__embedding_model_server_args__
     embedding_server_process = subprocess.Popen(
         [LLAMA_CPP_EXECUTABLE] + shlex.split(embedding_server_args), 

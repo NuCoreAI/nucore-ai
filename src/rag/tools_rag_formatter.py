@@ -6,9 +6,8 @@ Tool definitions for RAG (Retrieval-Augmented Generation) processing.
 Converts tools from a JSON file into RAG chunks suitable for use in AI workflows/embeddings.
 The tools are formatted with a title, content, and examples, which can be used to enhance the context for AI models.
 """
-from ai_iox_workflow.config import AIConfig
-from ai_iox_workflow.rag.rag_data_struct import RAGData
-from ai_iox_workflow.rag.rag_formatter import RAGFormatter
+from rag.rag_data_struct import RAGData
+from rag.rag_formatter import RAGFormatter
 
 
 class ToolsRAGFormatter(RAGFormatter):
@@ -21,9 +20,13 @@ class ToolsRAGFormatter(RAGFormatter):
         """
         Convert the formatted tools into a list of RAG documents.
         Each document contains an ID, category, and content.
-        :param tools_path if provided if not the default from config will be used.
+        :param tools_path must be provided 
+        :return: RAGData object containing the tools documents.
+        :raises FileNotFoundError: If the tools_path does not exist.
+        :raises ValueError: If the tools_path is not provided.
+        :raises Exception: If the tools_path is not a file or if it contains no valid JSON data.
         """
-        tools_path=kwargs["tools_path"] if "tools_path" in kwargs else AIConfig().getToolsFile()
+        tools_path=kwargs["tools_path"] if "tools_path" in kwargs else None 
         
         if not Path(tools_path).exists():
             raise FileNotFoundError(f"Tools file not found: {tools_path}")

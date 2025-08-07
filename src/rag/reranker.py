@@ -1,17 +1,20 @@
 import json,requests,re
-from ai_iox_workflow.config import AIConfig
-config= AIConfig()
 
 class Reranker:
-    def __init__(self):
+    def __init__(self, reranker_url:str):
         """
             Reranks documents based on a query using the BGE reranker model.
+        :param reranker_url: The URL of the BGE reranker service (OpenAI based)
         """
+        self.__reranker_url__ = reranker_url
 
     def is_question(self, text):
         return text.strip().endswith("?") or bool(re.match(r"^(who|what|when|where|why|how)\b", text.strip().lower()))
 
     def compute(self, query:str, documents:list):
+        if self.__reranker_url__ is None:
+            print("Reranker URL is not set. Please provide a valid URL if you want to use reranking.")
+            return None
         """
         Computes the relevance of documents based on a query using the BGE reranker model.
         :param query: The query string to evaluate.
@@ -24,7 +27,8 @@ class Reranker:
             "query": query ,
             "documents": documents 
         }
-        response = requests.post(config.getRerankerURL(), json=payload)
+
+        response = requests.post(self.__reranker_url__, json=payload)
 
         response.raise_for_status()
         if response.status_code != 200:

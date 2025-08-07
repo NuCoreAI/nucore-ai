@@ -8,12 +8,12 @@
             "name": "assistant", 
             "type": "debugpy",
             "request": "launch",
-            "program": "platform/assistant/assistant.py",
+            "program": "src/assistant/assistant.py",
             "console": "integratedTerminal",
             "args": [
                "--url=http://192.168.4.225:8080" ,
                "--username=admin",
-               "--password=admin"
+               "--password=admin",
             ],
             "justMyCode": false
         },
@@ -21,97 +21,14 @@
             "name": "remmote-assistant", 
             "type": "debugpy",
             "request": "launch",
-            "program": "platform/assistant/assistant.py",
+            "program": "src/assistant/assistant.py",
             "console": "integratedTerminal",
             "args": [
                "--url=http://192.168.4.225:8080" ,
                "--username=admin",
                "--password=admin",
-               "--remote_model_url=https://vyvhz7of8dar39-8013.proxy.runpod.net",
-               "--remote_auth_token=eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJ1dWlkIjoiMDA6MjE6Yjk6MjY6MjY6MjYiLCJzdWIiOiJtaWNoZWxAdW5pdmVyc2FsLWRldmljZXMuY29tIiwiaWF0IjoxNzU0NTc2MTA4LCJleHAiOjE3NTQ1Nzk3MDgsImF1ZCI6WyJlaXN5IiwicG9ydGFsIl0sImlzcyI6InBvcnRhbCJ9.GN9I-_b90erFJeezuGCaInZtWZQucWA9nrQC5hTt_IU9H0vWoi7bpqSKlcdicudxYtdhiE9nkUQi_zMscRxmpg"
-            ],
-            "justMyCode": false
-        },
-        {
-            "name": "nucore", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "platform/nucore.py",
-            "console": "integratedTerminal",
-            "args": [
-               "--url=http://192.168.4.225:8080" ,
-               "--username=admin",
-               "--password=admin"
-            ],
-            "justMyCode": false
-        },
-        {
-            "name": "create device fine-tuning dataset", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/create_device_ft_data.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "create concepts fine-tuning dataset", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/create_concepts_ft_data.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "create cpn (Colored Petri Nets) fine-tuning dataset", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/create_cpns_ft_data.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "create DSL (JSONLogic) fine-tuning dataset", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/create_dsls_ft_data.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "test DSL (JSONLogic) fine-tuning dataset", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/datasets/dsls/test_dsl_api.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "tests a finetuned model directly on openpipe", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/model_test.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "combine samples", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/combine_samples.py",
-            "console": "integratedTerminal",
-            "args": [
-               "--input_path=/home/michel/workspace/nucore/ai-workflow/finetuning_data/datasets/dsls",
-            ],
-            "justMyCode": false
-        },
-        {
-            "name": "parse cpn", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "finetuning_data/parse_cpn.py",
-            "console": "integratedTerminal",
-            "args": [
-               "input_file=/home/michel/workspace/nucore/ai-workflow/finetuning_data/datasets/cpns/nodes-0021b9262626_finetune_0.jsonl",
+               "--model_url=https://vyvhz7of8dar39-8013.proxy.runpod.net",
+               "--model_auth_token=eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJ1dWlkIjoiMDA6MjE6Yjk6MjY6MjY6MjYiLCJzdWIiOiJtaWNoZWxAdW5pdmVyc2FsLWRldmljZXMuY29tIiwiaWF0IjoxNzU0NTk2MTU2LCJleHAiOjE3NTQ1OTk3NTYsImF1ZCI6WyJlaXN5IiwicG9ydGFsIl0sImlzcyI6InBvcnRhbCJ9.l9wkxq6CxjnTyBnWlnDScJv6mdxK0LCKQm9j1CB54Y2l01L8oF3veGN9KTN3437X53U8sTDI3epEDLA9audx0Q"
             ],
             "justMyCode": false
         },
@@ -119,7 +36,7 @@
             "name": "start_servers", 
             "type": "debugpy",
             "request": "launch",
-            "program": "platform/start_servers.py",
+            "program": "src/server/start_servers.py",
             "console": "integratedTerminal",
             "justMyCode": false
         }
