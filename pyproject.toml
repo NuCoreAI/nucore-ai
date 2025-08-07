@@ -9,8 +9,8 @@ description = "Lightweight library for command/control/optimization/automation o
 readme = "README.md"
 license = "MIT"
 authors = [
+ { name="Michel Kohanim", email="michel@universal-devices.com" },
  { name="P.A. SCHEMBRI", email="pa.schembri@advanced-stack.com" }
- { name="Michel Kohanim", email="michel@universal-devices.com" }
 ]
 dependencies = [
  "requests",
@@ -21,5 +21,5 @@ dependencies = [
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
 [tool.setuptools]
-package-dir = {"" = "platform"}
-packages = ["nucore-ai"]
+package-dir = {"" = "src"}
+packages = ["assistant", "config", "rag", "nucore", "server"]

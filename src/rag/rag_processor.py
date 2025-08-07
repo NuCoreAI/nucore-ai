@@ -1,23 +1,33 @@
 # rag processor
 
-import json
+import json, os
 import chromadb
 import requests
 import numpy as np
-from ai_iox_workflow.config import AIConfig
-from ai_iox_workflow.rag.rag_data_struct import RAGData
-from ai_iox_workflow.rag.rag_formatter import RAGFormatter
-from ai_iox_workflow.rag.reranker import Reranker
+from .rag_data_struct import RAGData
+from .reranker import Reranker
 
 
 class RAGProcessor:
-    def __init__(self, collection_name, db_path=None, base_url=None, username=None, password=None):
-        self.config = AIConfig()
-        self.db = chromadb.PersistentClient(path=self.config.getCollectionPersistencePath(collection_name, db_path)) 
+    def __init__(self, collection_path, collection_name, reranker_url:str = None):
+        """
+        Initializes the RAGProcessor with a collection name and database path.
+        :param collection_name: The name of the collection to use.
+        :param collection_path: The path to the collection file.
+        """
+        if not collection_name or not isinstance(collection_name, str):
+            raise ValueError("Collection name must be a non-empty string")
+
+        if not collection_path or not isinstance(collection_path, str):
+            raise ValueError("Collection path must be a non-empty string")
+        
+        path = os.path.join(collection_path, f"{collection_name}_db")
+
+        self.db = chromadb.PersistentClient(path=path)
+        if not self.db:
+            raise ValueError(f"Failed to connect to the database at {path}")
         self.collection = self.db.get_or_create_collection(collection_name)
-        self.username = username if username else "admin"
-        self.password = password if password else "admin"
-        self.reranker = Reranker()
+        self.reranker = Reranker(reranker_url=reranker_url)
 
     def embed_document(self, document:str):
         """

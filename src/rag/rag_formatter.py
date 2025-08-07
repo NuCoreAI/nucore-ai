@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from ai_iox_workflow.rag.rag_data_struct import RAGData
+from .rag_data_struct import RAGData
 
 """
 An abstract method for all RAG formatters

@@ -1,22 +1,30 @@
-#simple class to communicate with nucore
+#simple class to communicate with nucore backends such as eisy/iox
 
 # Method 1: Using requests (recommended)
 import requests
-import json
 import re
 import xml.etree.ElementTree as ET
-from .nodedef import NodeDef, Property
+from .nodedef import Property
 from .uom import PREDEFINED_UOMS, UNKNOWN_UOM
 
-default_base_url="http://localhost:8080"
-default_username="admin"
-default_password="admin"
+class NuCoreBackendAPI:
+    def __init__(self, base_url:str, username:str, password:str):
+        """
+        Initializes the NuCoreBackendAPI with the base URL and credentials.
+        This class provides methods to interact with the nucore backend API, including fetching nodes, properties, and sending commands.
+        This class can be replaced by anything else that implements the same methods.
 
-class nucoreAPI:
-    def __init__(self, base_url:str=None, username:str=None, password:str=None):
-        self.base_url=base_url if base_url else default_base_url
-        self.username=username if username else default_username
-        self.password=password if password else default_password
+        Args:
+            base_url (str): The base URL of the nucore API.
+            username (str): The username for authentication.
+            password (str): The password for authentication.
+        """
+        if not base_url or not username or not password:
+            raise ValueError("Base URL, username, and password must be provided")
+        
+        self.base_url = base_url.rstrip('/')  # Ensure base URL does not end with a slash
+        self.username = username
+        self.password = password
 
     def __get(self, path:str):
         try:
@@ -63,6 +71,10 @@ class nucoreAPI:
             if uom in PREDEFINED_UOMS.keys():
                 return int(uom)
             else:
+                for _, uom_entry in PREDEFINED_UOMS.items(): 
+                    if uom_entry.label.upper() == uom.upper() or uom_entry.name.upper() == uom.upper():
+                        return int(uom_entry.id)
+
                 print(f"UOM {uom} is not a known UOM")
                 return UNKNOWN_UOM 
         except ValueError:

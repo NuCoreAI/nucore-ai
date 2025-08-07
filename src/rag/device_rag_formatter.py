@@ -1,10 +1,10 @@
 # format rag 
 
 import re
-from ai_iox_workflow.iox.nodedef import NodeProperty
-from ai_iox_workflow.rag.rag_data_struct import RAGData
-from ai_iox_workflow.rag.rag_formatter import RAGFormatter
-from ai_iox_workflow.iox.node import Node
+from nucore import NodeProperty, Node
+from .rag_data_struct import RAGData
+from .rag_formatter import RAGFormatter
+from nucore import Node 
 
 
 DEVICE_SECTION_HEADER="***Device***"

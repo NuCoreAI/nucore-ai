@@ -1,25 +1,25 @@
 import re
-import time 
-
-import requests
+import requests, os
 import json
 import httpx
 import asyncio, argparse
 
-from sympy import true
-from ai_iox_workflow.iox.nucore_api import nucoreAPI
-from ai_iox_workflow.iox.nucore_programs import nucorePrograms
-from ai_iox_workflow.config import AIConfig
-from ai_iox_workflow.nucore import NuCore
+from nucore import NuCore 
+from config import AIConfig
 
 """
 Best option
 build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/finetuned/qwen2.5-coder-dls-7b/qwen2.5-coder-dls-7b-Q4_K_M.gguf --jinja --host localhost -c 60000 --port 8013 -t 15  --n-gpu-layers 32 --batch-size 8192
 """
+from importlib.resources import files
+
+# Assuming this code is inside your_package/module.py
+data_path = files('assistant').joinpath('nucore.system.prompt')
+
+with data_path.open('r', encoding='utf-8') as f:
+    system_prompt = f.read().strip()
 
 config = AIConfig()
-with open(f"{config.__assistant_path__}/nucore.system.prompt", "r") as f:
-    system_prompt = f.read().strip()
 
 class NuCoreAssistant:
     def __init__(self, args, websocket=None):
@@ -28,14 +28,17 @@ class NuCoreAssistant:
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.nuCore = NuCore(
-            profile_path=args.profile_path,
-            nodes_path=args.nodes_path,
-            url=args.url,
-            username=args.username,
-            password=args.password
+            collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
+            collection_name="nucore.assistant",
+            backend_url=args.url,
+            backend_username=args.username,
+            backend_password=args.password
         )
-        self.__model_url__ = args.remote_model_url+"/v1/chat/completions" if args.remote_model_url else config.getModelURL()
-        self.__remote_auth_token__ = args.remote_auth_token if args.remote_auth_token else None
+        model_url = args.model_url+"/v1/chat/completion" if args.model_url else config.getModelURL()
+        if not model_url:
+            raise ValueError("Model URL is required to initialize NuCoreAssistant")
+        self.__model_url__ = model_url
+        self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
         print (self.__model_url__)
         self.nuCore.load()
 
@@ -45,26 +48,16 @@ class NuCoreAssistant:
         Set the remote model access token.
         :param token: The access token to set.
         """
-        self.__remote_auth_token__ = token
+        self.__model_auth_token__ = token
 
-    async def create_automation_routine(self,customer_input:list):
-        if not customer_input or 'individual_prompts' not in customer_input :
-            return ("apologies, it seems that I may have lost your request. Please try again")
-        individual_prompts=customer_input['individual_prompts']
-        if len (individual_prompts) == 0:
-            return ("apologies, I couldn't understand your prompt.")
-
-        ep = nucoreAPI()
-        all_programs=nucorePrograms()
-        available_nodes=ep.get_nodes()
-        runtime_profile=ep.get_profiles()
-
-        for individual_prompt in individual_prompts:
-            await self.send_response(f"Ok, now: {individual_prompt}")
-            #user_prompt=self.get_auto_routine_prompt(individual_prompt, available_nodes, runtime_profile)
-            #system_prompt=self.get_system_prompt()
-
-        return ep.upload_programs(all_programs)
+    async def create_automation_routine(self,routines:list):
+        """
+        Create automation routines in NuCore.
+        :param routines: A list of routines to create.
+        :return: The result of the routine creation.
+        **for now, just a stub **
+        """
+        return self.nuCore.create_automation_routines(routines)
     
     async def process_property_query(self, prop_query:list):
         if not prop_query or len(prop_query) == 0:
@@ -164,7 +157,7 @@ class NuCoreAssistant:
         }
 
         response = requests.post(self.__model_url__, json=payload, headers={
-            "Authorization": f"Bearer {self.__remote_auth_token__}" if self.__remote_auth_token__ else "",
+            "Authorization": f"Bearer {self.__model_auth_token__}" if self.__model_auth_token__ else "",
         })
         response.raise_for_status()
         await self.send_response(response.json()["choices"][0]["message"]["content"])
@@ -259,7 +252,7 @@ class NuCoreAssistant:
         full_response = ""
         try:
             with httpx.stream("POST", self.__model_url__, timeout=100, json=payload,headers={
-                "Authorization": f"Bearer {self.__remote_auth_token__}" if self.__remote_auth_token__ else "",
+                "Authorization": f"Bearer {self.__model_auth_token__}" if self.__model_auth_token__ else "",
             }) as response:
                 if response.status_code == 401 or response.status_code == 403:
                     print(f"Authorization token is invalid or expired. You need to refresh it.")
@@ -330,20 +323,6 @@ if __name__ == "__main__":
         description="Loader for NuCore Profile and Nodes XML files."
     )
     parser.add_argument(
-        "--profile",
-        dest="profile_path",
-        type=str,
-        required=False,
-        help="Path to the profile JSON file (profile-xxx.json)",
-    )
-    parser.add_argument(
-        "--nodes",
-        dest="nodes_path",
-        type=str,
-        required=False,
-        help="Path to the nodes XML file (nodes.xml)",
-    )
-    parser.add_argument(
         "--url",
         dest="url",
         type=str,
@@ -365,15 +344,22 @@ if __name__ == "__main__":
         help="The password to authenticate with the nucore platform",
     )
     parser.add_argument(
-        "--remote_model_url",
-        dest="remote_model_url",
+        "--collection_path",
+        dest="collection_path",
+        type=str,
+        required=False,
+        help="The path to the embedding collection db. If not provided, defaults to ~/.nucore_db.",
+    )
+    parser.add_argument(
+        "--model_url",
+        dest="model_url",
         type=str,
         required=False,
         help="The URL of the remote model. If provided, this should be a valid URL that responds to OpenAI's API requests.",
     )
     parser.add_argument(
-        "--remote_auth_token",
-        dest="remote_auth_token",
+        "--model_auth_token",
+        dest="model_auth_token",
         type=str,
         required=False,
         help="Optional authentication token for the remote model API (if required by the remote model) to be used in the Authorization header. You are responsible for refreshing the token if needed.",
