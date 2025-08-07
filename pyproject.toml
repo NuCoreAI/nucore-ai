@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nucore-ai"
+version = "1.0.0"
+description = "Lightweight library for command/control/optimization/automation of smart home devices using LLMs"
+readme = "README.md"
+license = "MIT"
+authors = [
+ { name="P.A. SCHEMBRI", email="pa.schembri@advanced-stack.com" }
+ { name="Michel Kohanim", email="michel@universal-devices.com" }
+]
+dependencies = [
+ "requests",
+ "transformers",
+ "sentence-transformers",
+ "chromadb",
+]
+urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
+
+[tool.setuptools]
+package-dir = {"" = "platform"}
+packages = ["nucore-ai"]

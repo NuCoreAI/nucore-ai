@@ -1,0 +1,21 @@
+
+build.blis/bin/llama-server ../models/qwen2.5-coder-3b.gguf --port 8000 --embeddings 
+
+Test:
+    curl -X POST \
+        http://localhost:8080/v1/embeddings \
+        -H 'Content-Type: application/json' \
+        -d '{
+          "input": "Your text to embed"
+        }'
+
+In python:
+ import requests
+     import json
+
+     url = "http://localhost:8080/v1/embeddings"
+     headers = {"Content-Type": "application/json"}
+     data = {"input": "Your text to embed"}
+
+     response = requests.post(url, headers=headers, data=json.dumps(data))
+     print(response.json())
