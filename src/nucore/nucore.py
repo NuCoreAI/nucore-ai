@@ -36,15 +36,17 @@ def debug(msg):
 
 class NuCore:
     """Class to handle nucore backend operations such as loading profiles and nodes."""
-    def __init__(self, collection_path, collection_name:str, backend_url:str, backend_username:str=None, backend_password:str=None, embedder_url:str=None,reranker_url:str=None):
+    def __init__(self, collection_path, collection_name:str, backend_url:str, backend_username:str=None, backend_password:str=None, 
+                 embedder_url:str=None, reranker_url:str=None):
         """
         Initialize the NuCore instance with backend URL, username, and password.
-        @param collection_path: The path to the collection file. This is used to store all the embeddings. (mandatory)
-        @param collection_name: The name of the collection to be used. This is used to store all the embeddings. (mandatory)
-        @param backend_url: The URL of the nucore backend. (mandatory)
-        @param backend_username (str): The username for the nucore backend. (optional)
-        @param backend_password (str): The password for the nucore backend. (optional)
-        @param reranker_url (str): The URL of the reranker service. If not provided, reranking will not be performed.
+        :param collection_path: The path to the collection file. This is used to store all the embeddings. (mandatory)
+        :param collection_name: The name of the collection to be used. This is used to store all the embeddings. (mandatory)
+        :param backend_url: The URL of the nucore backend. (mandatory)
+        :param backend_username (str): The username for the nucore backend. (optional)
+        :param backend_password (str): The password for the nucore backend. (optional)
+        :param reranker_url (str): The URL of the reranker service. If not provided, reranking will not be performed.
+        :param static_docs_path (str): The path to the static information directory. If not provided, static information will not be included.
         
         Note: Make sure that the collection_path and collection_name are set correctly.
         You will need to call load() after you are ready to use this object
@@ -360,15 +362,15 @@ class NuCore:
         embed = kwargs.get("embed", False) 
         all_docs = device_rag_docs
         tools = kwargs.get("tools", False)
-        static_info = kwargs.get("static_info", False)
+        static_path = kwargs.get("static_docs_path", False)
         dump = kwargs.get("dump", False)
         if tools: 
             tools_rag_docs = self.format_tools()
             if tools_rag_docs:
                 all_docs += tools_rag_docs
-        
-        if static_info: 
-            static_info_rag_docs = self.format_static_info()
+
+        if static_path: 
+            static_info_rag_docs = self.format_static_info(static_path)
             if static_info_rag_docs:
                 all_docs += static_info_rag_docs
 
@@ -396,10 +398,13 @@ class NuCore:
         
         include_rag_docs = kwargs.get("include_rag_docs", False)
         dump = kwargs.get("dump", False)
+        static_docs_path = kwargs.get("static_docs_path", None)
+        embed = kwargs.get("embed", False)
+
         
         rc = self.load_devices(profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
         if include_rag_docs:
-            rc = self.load_rag_docs(dump=dump)
+            rc = self.load_rag_docs(dump=dump, static_docs_path=static_docs_path, embed=embed)
         return rc
 
     # To have the latest state, we need to load devices only

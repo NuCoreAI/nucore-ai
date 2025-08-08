@@ -77,7 +77,7 @@ if args.with_reranker:
         raise FileNotFoundError(f"Reranker model not found: {os.path.join(config.__models_path__, config.__reranker_model__)}")
     reranker_server_args = config.__reranker_model_server_args__
     reranker_server_process = subprocess.Popen(
-        [LLAMA_CPP_EXECUTABLE] + shlex.split(reranker_server_args), 
+        [_LLAMA_CPP_EXECUTABLE] + shlex.split(reranker_server_args), 
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -93,7 +93,7 @@ if args.with_embedder:
         raise FileNotFoundError(f"Embedding model not found: {os.path.join(config.__models_path__, config.__embedding_model__)}")
     embedding_server_args = config.__embedding_model_server_args__
     embedding_server_process = subprocess.Popen(
-        [LLAMA_CPP_EXECUTABLE] + shlex.split(embedding_server_args), 
+        [_LLAMA_CPP_EXECUTABLE] + shlex.split(embedding_server_args), 
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True

@@ -39,13 +39,13 @@ class NuCoreAssistant:
         if not self.nuCore:
             raise ValueError("Failed to initialize NuCore. Please check your configuration."
         )
-        model_url = args.model_url+"/v1/chat/completion" if args.model_url else config.getModelURL()
+        model_url = args.model_url if args.model_url else config.getModelURL()
         if not model_url:
             raise ValueError("Model URL is required to initialize NuCoreAssistant")
         self.__model_url__ = model_url
         self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
         print (self.__model_url__)
-        self.nuCore.load()
+        self.nuCore.load(include_rag_docs=True, static_docs_path="/tmp/embeddings", embed=True)
 
     def set_remote_model_access_token(self, token: str):
         """
