@@ -446,6 +446,9 @@ class NuCore:
                     instance_id = int(family_elem.get("instance"))
                 except (ValueError, TypeError):
                     instance_id = 1
+            else:
+                family_id = 0
+                instance_id = 1
 
             node = Node(
                 flag=int(node_elem.get("flag")),
