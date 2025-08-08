@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nucore-ai"
-version = "1.0.3"
+version = "1.0.4"
 description = "Lightweight library for command/control/optimization/automation of smart home devices using LLMs"
 readme = "README.md"
 license = "MIT"
