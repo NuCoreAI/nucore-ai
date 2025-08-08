@@ -28,8 +28,8 @@
                "--username=admin",
                "--password=admin",
                "--model_url=http://192.168.5.224:8013/v1/chat/completions",
-               "--embedder_url=https://192.168.5.224:8052/v1/embeddings",
-               "--reranker_url=https://192.168.5.224:8026/v1/rerank",
+               "--embedder_url=http://192.168.5.224:8052/v1/embeddings",
+               "--reranker_url=http://192.168.5.224:8026/v1/rerank",
             ],
             "justMyCode": false
         },

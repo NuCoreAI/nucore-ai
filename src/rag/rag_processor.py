@@ -24,7 +24,7 @@ class RAGProcessor:
         
         path = os.path.join(collection_path, f"{collection_name}_db")
 
-        self.db = RAGSQLiteDB(path="path")
+        self.db = RAGSQLiteDB(path=path)
         if not self.db:
             raise ValueError(f"Failed to connect to the database at {path}")
         self.collection = self.db.get_or_create_collection(collection_name, metric="cosine")
