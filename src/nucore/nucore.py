@@ -36,7 +36,7 @@ def debug(msg):
 
 class NuCore:
     """Class to handle nucore backend operations such as loading profiles and nodes."""
-    def __init__(self, collection_path, collection_name:str, backend_url:str, backend_username:str=None, backend_password:str=None, reranker_url:str=None):
+    def __init__(self, collection_path, collection_name:str, backend_url:str, backend_username:str=None, backend_password:str=None, embedder_url:str=None,reranker_url:str=None):
         """
         Initialize the NuCore instance with backend URL, username, and password.
         @param collection_path: The path to the collection file. This is used to store all the embeddings. (mandatory)
@@ -58,7 +58,7 @@ class NuCore:
         self.password = backend_password
         self.nodes = [] 
         self.lookup = {}
-        self.rag_processor = RAGProcessor(collection_path, collection_name, reranker_url=reranker_url)
+        self.rag_processor = RAGProcessor(collection_path, collection_name, embedder_url=embedder_url, reranker_url=reranker_url)
 
     def __load_profile_from_file__(self, profile_path:str):
         if not profile_path: 

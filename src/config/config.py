@@ -16,21 +16,21 @@ class AIConfig:
 
         self.__ragdb_file__ = "ragdb"
 
-        self.__model_host__="localhost"
+        self.__model_host__="0.0.0.0"
         self.__model_port__=8013
         self.__model_url__=f"http://{self.__model_host__}:{self.__model_port__}/v1/chat/completions"
         self.__llm_model__ = "finetuned/qwen2.5-coder-dls-7b/qwen2.5-coder-nucore-7b-Q4_K_M.gguf" 
         self.__llm_model_params__ = "-c 60000 --temp 0.0 --repeat-penalty 1.1 --n-gpu-layers 100 --batch-size 8196"
         self.__llm_model_server_args__ = f"-m {os.path.join(self.__models_path__,self.__llm_model__)} --host {self.__model_host__} --port {self.__model_port__} {self.__llm_model_params__}"
 
-        self.__reranker_host__="localhost"
+        self.__reranker_host__="0.0.0.0"
         self.__reranker_port__=8026
         self.__reranker_url__=f"http://{self.__reranker_host__}:{self.__reranker_port__}/v1/rerank"
         self.__reranker_model__ = "bge-reranker-v2-m3.gguf" 
         self.__reranker_model_params__ = "--reranking --temp 0.0 "
         self.__reranker_model_server_args__ = f"-m {os.path.join(self.__models_path__,self.__reranker_model__)} --host {self.__reranker_host__} --port {self.__reranker_port__} {self.__reranker_model_params__}"
 
-        self.__embedding_host__="localhost"
+        self.__embedding_host__="0.0.0.0"
         self.__embedding_port__=8052
         self.__embedding_url__=f"http://{self.__embedding_host__}:{self.__embedding_port__}/v1/embeddings"
         self.__embedding_model__ = "Qwen3-Embedding-0.6B-f16.gguf"
@@ -62,7 +62,7 @@ class AIConfig:
     def getRerankerURL(self):
         return self.__reranker_url__    
 
-    def getEmbeddingURL(self):
+    def getEmbedderURL(self):
         return self.__embedding_url__
 
     

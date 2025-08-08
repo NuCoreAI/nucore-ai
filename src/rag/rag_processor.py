@@ -1,15 +1,16 @@
 # rag processor
 
 import json, os
-import chromadb
+from .rag_db import RAGSQLiteDB, RAGSQLiteDBCollection 
 import requests
 import numpy as np
 from .rag_data_struct import RAGData
 from .reranker import Reranker
+from .embedder import Embedder
 
 
 class RAGProcessor:
-    def __init__(self, collection_path, collection_name, reranker_url:str = None):
+    def __init__(self, collection_path, collection_name, embedder_url = None, reranker_url:str = None):
         """
         Initializes the RAGProcessor with a collection name and database path.
         :param collection_name: The name of the collection to use.
@@ -23,70 +24,14 @@ class RAGProcessor:
         
         path = os.path.join(collection_path, f"{collection_name}_db")
 
-        self.db = chromadb.PersistentClient(path=path)
+        self.db = RAGSQLiteDB(path="path")
         if not self.db:
             raise ValueError(f"Failed to connect to the database at {path}")
-        self.collection = self.db.get_or_create_collection(collection_name)
+        self.collection = self.db.get_or_create_collection(collection_name, metric="cosine")
         self.reranker = Reranker(reranker_url=reranker_url)
+        self.embedder = Embedder(embedder_url=embedder_url)
 
-    def embed_document(self, document:str):
-        """
-         embeds a document using the embedding model
-        """
-        if not document:
-            raise ValueError("Document cannot be empty")
-        
-        headers = {
-            "Content-Type": "application/json"
-        }
 
-        body = {
-            "input": document
-        }
-
-        try:
-            response = requests.post(self.config.getEmbeddingURL(), headers=headers, data=json.dumps(body))
-            if response.status_code != 200:
-                print(f"Error: {response.status_code} - {response.text} - data size = {len(document)}")
-                return None
-            result = response.json()
-            if "data" not in result:
-                print("No embedding found in response")
-                return None
-            data = result["data"][0]
-            if "embedding" not in data:
-                print("No embedding key in data")
-                return None
-            embedding = data["embedding"]
-            if not isinstance(embedding, list):
-                print("No embedding key in data")
-                return None
-            if len(embedding) == 0:
-                print("Embedding is empty")
-                return None
-
-            return embedding 
-            # Convert to float if necessary
-            #embedding_result = [float(x) for x in embedding]
-            # Normalize the embedding
-            embedding_result = np.array(embedding) #, dtype=np.float32)
-            normalized_embedding = embedding_result / np.linalg.norm(embedding_result)
-            if normalized_embedding is None: 
-                print("Embedding is zero, returning original embedding")
-                return embedding_result.tolist()
-            norm = round(np.linalg.norm(normalized_embedding), 5)
-            if norm < 0.98 or norm > 1.02:
-                print("Normalization failed - norm is not close to 1.0, norm: {norm}")
-
-            return normalized_embedding.tolist() 
-        except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
-            return None
-        
-        except Exception as e:
-            print(f"Error occurred: {e}")
-            return None
-        
     def add_update(self, collection_data:RAGData):
         """
             adds to the collection to the collection with its embedding and metadata
@@ -181,7 +126,7 @@ class RAGProcessor:
             if i in unchanged:
                 continue
             doc_content = documents["documents"][i]
-            embedding = self.embed_document(doc_content)
+            embedding = self.embedder.embed_document(doc_content)
             if embedding is not None:
                 result["documents"].append(doc_content)
                 result["embeddings"].append(embedding)
@@ -203,7 +148,7 @@ class RAGProcessor:
             raise ValueError("Query text cannot be empty")
         query_text = f"query: {query_text.strip()}".strip()
 
-        query_embedding = self.embed_document(query_text)
+        query_embedding = self.embedder.embed_document(query_text)
         if not query_embedding:
             print("Failed to embed query text")
             return None

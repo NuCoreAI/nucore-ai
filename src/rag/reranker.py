@@ -13,8 +13,12 @@ class Reranker:
 
     def compute(self, query:str, documents:list):
         if self.__reranker_url__ is None:
-            print("Reranker URL is not set. Please provide a valid URL if you want to use reranking.")
-            return None
+            raise ValueError("Reranker URL is not set. Please provide a valid URL if you want to use reranking.")
+        if query is None or not isinstance(query, str):
+            raise ValueError("Query must be a non-empty string.")
+        if documents is None or not isinstance(documents, list) or len(documents) == 0:
+            raise ValueError("Documents must be a non-empty list of strings.")
+        
         """
         Computes the relevance of documents based on a query using the BGE reranker model.
         :param query: The query string to evaluate.

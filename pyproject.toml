@@ -14,12 +14,12 @@ authors = [
 ]
 dependencies = [
  "requests",
- "transformers",
- "sentence-transformers",
- "chromadb",
+ "numpy",
+ "httpx",
+ "hnswlib" 
 ]
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["assistant", "config", "rag", "nucore", "server"]
+packages = ["assistant", "prompts", "config", "rag", "nucore", "server"]
