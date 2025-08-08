@@ -14,7 +14,7 @@ build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/finetuned/qw
 from importlib.resources import files
 
 # Assuming this code is inside your_package/module.py
-data_path = files('assistant').joinpath('nucore.system.prompt')
+data_path = files('prompts').joinpath('nucore.system.prompt')
 
 with data_path.open('r', encoding='utf-8') as f:
     system_prompt = f.read().strip()
@@ -32,7 +32,12 @@ class NuCoreAssistant:
             collection_name="nucore.assistant",
             backend_url=args.url,
             backend_username=args.username,
-            backend_password=args.password
+            backend_password=args.password,
+            embedder_url=args.embedder_url if args.embedder_url else config.getEmbedderURL(),
+            reranker_url=args.reranker_url if args.reranker_url else config.getRerankerURL()
+        )
+        if not self.nuCore:
+            raise ValueError("Failed to initialize NuCore. Please check your configuration."
         )
         model_url = args.model_url+"/v1/chat/completion" if args.model_url else config.getModelURL()
         if not model_url:
@@ -364,7 +369,20 @@ if __name__ == "__main__":
         required=False,
         help="Optional authentication token for the remote model API (if required by the remote model) to be used in the Authorization header. You are responsible for refreshing the token if needed.",
     )
-
+    parser.add_argument(
+        "--embedder_url",
+        dest="embedder_url",
+        type=str,
+        required=False,
+        help="The URL of the embedder service. If provided, this should be a valid URL that responds to OpenAI's API requests."
+    )
+    parser.add_argument(
+        "--reranker_url",
+        dest="reranker_url",
+        type=str,
+        required=False,
+        help="The URL of the reranker service. If provided, this should be a valid URL that responds to OpenAI's API requests."
+    )
 
     args = parser.parse_args()
     asyncio.run(main(args))
