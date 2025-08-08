@@ -45,7 +45,9 @@ class NuCoreAssistant:
         self.__model_url__ = model_url
         self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
         print (self.__model_url__)
-        self.nuCore.load(include_rag_docs=True, static_docs_path="/tmp/embeddings", embed=True)
+        self.nuCore.load()
+        ### us the following to include rags and embed them and rerank them.
+        #self.nuCore.load(include_rag_docs=True, static_docs_path="/tmp/embeddings", embed=True)
 
     def set_remote_model_access_token(self, token: str):
         """
