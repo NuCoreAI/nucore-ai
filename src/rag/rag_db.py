@@ -133,7 +133,8 @@ class RAGSQLiteDBCollection:
 
     def get(self, ids, include: Optional[Sequence[str]]=None)->Dict[str,Any]:
         include = set(include or [])
-        ids = [str(i) for i in ids]
+        if ids:
+            ids = [str(i) for i in ids]
         if not ids: return {"ids": [], "embeddings": [], "metadatas": [], "documents": []}
         q = f"SELECT id, idx, vector, metadata, document FROM items WHERE id IN ({','.join('?'*len(ids))})"
         rows = self._con.execute(q, ids).fetchall()
