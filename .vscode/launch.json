@@ -54,6 +54,11 @@
             "request": "launch",
             "program": "src/server/start_servers.py",
             "console": "integratedTerminal",
+            "args": [
+                "--with_gpu=true",
+                "--with_reranker=true",
+                "--with_embedder=true"
+            ],
             "justMyCode": false
         }
     ]

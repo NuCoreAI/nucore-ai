@@ -18,7 +18,7 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Start NuCore.AI LLM servers.")
     argparser.add_argument("--with_gpu", default=True, help="Use GPU for LLM server. Default is true.")
     argparser.add_argument("--with_reranker", default=False, help="Start a reranker server. Default is false.")
-    argparser.add_argument("--with_embedding", default=False, help="Start an embedding server. Default is false.")
+    argparser.add_argument("--with_embedder", default=False, help="Start an embedding server. Default is false.")
 
 
     args = argparser.parse_args()
@@ -83,7 +83,7 @@ if args.with_reranker:
         text=True
     )
 
-if args.with_embedding:
+if args.with_embedder:
     # Ensure the embedding server is started only if the argument is provided
     print("Starting Embedding Server...")
     # Start the embedding server
