@@ -28,8 +28,6 @@
                "--username=admin",
                "--password=admin",
                "--model_url=http://192.168.5.224:8013/v1/chat/completions",
-               "--embedder_url=http://192.168.5.224:8052/v1/embeddings",
-               "--reranker_url=http://192.168.5.224:8026/v1/rerank",
             ],
             "justMyCode": false
         },
@@ -44,7 +42,7 @@
                "--username=admin",
                "--password=admin",
                "--model_url=https://vyvhz7of8dar39-8013.proxy.runpod.net/v1/chat/completions",
-               "--model_auth_token=eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJ1dWlkIjoiMDA6MjE6Yjk6MjY6MjY6MjYiLCJzdWIiOiJtaWNoZWxAdW5pdmVyc2FsLWRldmljZXMuY29tIiwiaWF0IjoxNzU0NTk2MTU2LCJleHAiOjE3NTQ1OTk3NTYsImF1ZCI6WyJlaXN5IiwicG9ydGFsIl0sImlzcyI6InBvcnRhbCJ9.l9wkxq6CxjnTyBnWlnDScJv6mdxK0LCKQm9j1CB54Y2l01L8oF3veGN9KTN3437X53U8sTDI3epEDLA9audx0Q"
+               "--model_auth_token=eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJ1dWlkIjoiMDA6MjE6Yjk6MjY6MjY6MjYiLCJzdWIiOiJtaWNoZWxAdW5pdmVyc2FsLWRldmljZXMuY29tIiwiaWF0IjoxNzU2NjcwNDgyLCJleHAiOjE3NTY2NzQwODIsImF1ZCI6WyJlaXN5IiwicG9ydGFsIl0sImlzcyI6InBvcnRhbCJ9.F9y0prK3X09nIaArTywwMu7rIdgMUwDddNV0gK3OcSxpXwW-FAjO7NOJQC-xpoBeAl-Sy-WThTjj8-xbMHk47A",
             ],
             "justMyCode": false
         },
