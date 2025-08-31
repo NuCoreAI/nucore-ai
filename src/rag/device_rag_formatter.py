@@ -75,7 +75,7 @@ class DeviceRagFormatter(RAGFormatter):
 
     def add_command(self, command):
         with self.block(level_increase=4):
-            self.write(f"{command.name} [{command.id}]")
+            self.write(f"{command.name} [id={command.id}]")
             if command.parameters:
                 with self.block():
                     i=1

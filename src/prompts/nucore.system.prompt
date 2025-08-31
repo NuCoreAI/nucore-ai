@@ -25,7 +25,7 @@ Respond with one or more structured JSON blocks in this format:
 __BEGIN_NUCORE_COMMAND__
 {
   "device_id": "<DEVICE_ID>",
-  "command_id": "<COMMAND_ID>",
+  "command_id": "<COMMAND_ID>" 
   "command_params": [
     {
       "id": "<PARAM_ID>, 
@@ -36,12 +36,10 @@ __BEGIN_NUCORE_COMMAND__
 }
 __END_NUCORE_COMMAND__
 
-- **Always use UOM_ID and not UOM_NAME**
+- It's **CRITICAL** to find the **DEVICE_ID** for the device that the user is asking for.  
+- For multiple commands (e.g. both this and that), do **not** repeat them. Separate them into their own commands with their own device id, **CASE SENSITIVE** command id, and paramters.
 - Do **not** do anything with cars unless explicity stated 
-- Use this only when the query requests an **action** 
-- For multiple commands (e.g. both this and that), do **not** repeat them. Separate them into their own commands with their own device id and paramters.
 - If the command relates to setting colors, first try finding a device with name **color** in the name, then for a command for XY in that device
-- Use only exact values, IDs, and formats from DEVICE STRUCTURE. 
 
 ---
 
