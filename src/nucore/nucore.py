@@ -446,13 +446,13 @@ class NuCore:
                 try:
                     family_id = int(family_elem.text)
                 except (ValueError, TypeError):
-                    family_id = 0
+                    family_id = 1
                 try:
                     instance_id = int(family_elem.get("instance"))
                 except (ValueError, TypeError):
                     instance_id = 1
             else:
-                family_id = 0
+                family_id = 1
                 instance_id = 1
 
             node = Node(
