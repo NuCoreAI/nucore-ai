@@ -13,10 +13,27 @@ build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/finetuned/qw
 """
 from importlib.resources import files
 
-# Assuming this code is inside your_package/module.py
-data_path = files('prompts').joinpath('nucore.system.prompt')
+def get_data_directory(parent:str, subdir:str) -> str:
+    """
+    Returns the path to a subdirectory within a parent directory.
+    
+    Args:
+        parent (str): The parent directory.
+        subdir (str): The subdirectory to access.
+        
+    Returns:
+        str: The path to the specified subdirectory.
+    """
 
-with data_path.open('r', encoding='utf-8') as f:
+    return str(files(parent).joinpath(subdir)) if subdir else str(files(parent))
+
+#print current working directory
+print(os.getcwd())
+
+# Assuming this code is inside your_package/module.py
+data_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.system.prompt")
+
+with open(data_path, 'r', encoding='utf-8') as f:
     system_prompt = f.read().strip()
 
 config = AIConfig()

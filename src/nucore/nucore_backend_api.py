@@ -201,11 +201,11 @@ class NuCoreBackendAPI:
                 if value is not None:
                     if id is None or id == '' or id == "n/a" or id == "N/A":
                         url += f"/{value}"
-                        if uom is not None:
+                        if uom is not None and uom != '':
                             url += f"/{self.__get_uom(uom)}"
                     else:
                         url += f"?{id}"
-                        if uom is not None:
+                        if uom is not None and uom != '':
                             url += f".{self.__get_uom(uom)}"
                         url += f"={value}"
             elif len(command_params) > 1:
