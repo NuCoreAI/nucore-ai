@@ -176,26 +176,35 @@ class NuCoreBackendAPI:
         if not commands or len(commands) == 0:
             print("No commands to send")
             return None
+
+        try:
+            if isinstance(commands, list) and 'commands' in commands[0]:
+                commands = commands[0].get("commands", commands)
+            elif isinstance(commands[0], list):
+            #incase we have a list of commands 
+                commands = commands[0] 
+        except Exception as ex:
+            pass
         
         for command in commands:
             if not isinstance(command, dict):
                 print(f"Invalid command format: {command}")
                 continue
 
-            device_id = command.get("device_id")
+            device_id = command.get("device") or command.get("device_id")
             if not device_id:
                 raise ValueError("No device ID found in command")
-            command_id = command.get("command_id")
+            command_id = command.get("command") or command.get("command_id")
             if not command_id:
                 raise ValueError("No command ID found in command")
-            command_params = command.get("command_params", [])
+            command_params = command.get("command_params", []) or command.get("parameters", [])
             
             # Construct the url: /rest/nodes/<device_id>/cmd/<command_id>/<params[value] 
 
             url = f"/rest/nodes/{device_id}/cmd/{command_id}"
             if len(command_params) == 1:
                 param = command_params[0]
-                id = param.get("id", None)
+                id = param.get("id", None) or param.get("name", None)
                 uom = param.get("uom", None)
                 value = param.get("value", None)
                 if value is not None:
@@ -209,8 +218,8 @@ class NuCoreBackendAPI:
                             url += f".{self.__get_uom(uom)}"
                         url += f"={value}"
             elif len(command_params) > 1:
-                unamed_params = [p for p in command_params if not p.get("id")]
-                named_params = [p for p in command_params if p.get("id")]
+                unamed_params = [p for p in command_params if not (p.get("id") or p.get("name"))]
+                named_params = [p for p in command_params if (p.get("id") or p.get("name"))]
 
                 # Add all parameters to the url
                 for param in unamed_params:
@@ -220,7 +229,7 @@ class NuCoreBackendAPI:
                         continue
                     url += f"/{value}"
                     uom = param.get("uom", None)
-                    if uom is not None:
+                    if uom is not None and uom != '':
                         url += f"/{self.__get_uom(uom)}"
 
                 no_name_param1 = False
@@ -229,7 +238,7 @@ class NuCoreBackendAPI:
                     # Add named parameters to the url
                     for param in named_params:
                         the_rest_of_the_url = ""
-                        id = param.get("id", None)
+                        id = param.get("id", None) or param.get("name", None)
                         value = param.get("value", None)
                         if value is None:
                             print(f"No value found for named parameter {id} in command {command_id}")
@@ -246,7 +255,7 @@ class NuCoreBackendAPI:
 
                         the_rest_of_the_url = f"?{id}" if i == 0 else f"?{id}" if no_name_param1 else f"&{id}"
                         uom = param.get("uom", None)
-                        if uom is not None:
+                        if uom is not None and uom != '':
                             the_rest_of_the_url += f".{self.__get_uom(uom)}"
                         the_rest_of_the_url += f"={value}"
                         url += the_rest_of_the_url
