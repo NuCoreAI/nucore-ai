@@ -88,7 +88,7 @@ class NuCoreAssistant:
             return "No property query provided"
         for property in prop_query:
             # Process the property query
-            device_id = property.get('device_id')
+            device_id = property.get('device') or property.get('device_id')
             if not device_id:
                 print(f"No device ID provided for property query: {property}")
                 continue
@@ -96,7 +96,7 @@ class NuCoreAssistant:
             if not properties:
                 print(f"No properties found for device {property['device_id']}")
                 continue
-            prop_id = property.get('property_id')
+            prop_id = property.get('property') or property.get('property_id')
             prop_name = property.get('property_name')
             device_name = self.nuCore.get_device_name(device_id)
             if not device_name:
@@ -217,8 +217,9 @@ class NuCoreAssistant:
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
 
-        sprompt = system_prompt.replace("{device_docs}", device_docs)
-        sprompt.strip()
+        #sprompt = system_prompt.replace("{device_docs}", device_docs)
+        #sprompt.strip()
+        sprompt = system_prompt.strip()
         with open(f"/tmp/ai.prompt", "w") as f:
             f.write(sprompt)
 
@@ -238,7 +239,7 @@ class NuCoreAssistant:
 
         user_message = {
             "role": "user",
-            "content": f"USER QUERY:{query}"
+            "content": f"DEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}"
         }
 
         #first use rag for relevant documents
