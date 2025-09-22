@@ -86,6 +86,12 @@ class NuCoreAssistant:
     async def process_property_query(self, prop_query:list):
         if not prop_query or len(prop_query) == 0:
             return "No property query provided"
+        try:
+            if isinstance(prop_query[0], list): 
+                prop_query = prop_query[0]
+        except Exception as e:
+            pass
+
         for property in prop_query:
             # Process the property query
             device_id = property.get('device') or property.get('device_id')
@@ -271,7 +277,7 @@ class NuCoreAssistant:
             "stream": True,
             'cache_prompt':True,
             "n_keep": -1,
-            "temperature": 0.0,
+            "temperature": 1.0,
             "max_tokens": 60_000,
         }
         full_response = ""
