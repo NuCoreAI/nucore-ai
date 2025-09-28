@@ -60,7 +60,7 @@ nvidia-smi
 ```
 
 ## The Model
-You are going to be using a finetuned version of Qwen2.5-Coder-7B [here](https://huggingface.co/mkohanim/qwen2.5-coder-nucore-7b)
+You are going to be using a finetuned version of Qwen2.5-Coder-7B [here](https://huggingface.co/mkohanim/nucore.11)
 
 ## Testing
 For testing, you can either use a live eisy or use example profiles/nodes [here](https://github.com/NuCoreAI/ai-workflow)
