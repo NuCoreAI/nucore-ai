@@ -84,7 +84,7 @@ class NuCoreAssistant:
         :return: The result of the routine creation.
         **for now, just a stub **
         """
-        return self.nuCore.create_automation_routines(routines)
+        return await self.nuCore.create_automation_routines(routines)
     
     async def process_property_query(self, prop_query:list):
         if not prop_query or len(prop_query) == 0:
@@ -128,7 +128,7 @@ class NuCoreAssistant:
         i=0
         for question in questions:
             i+=1
-            await self.send_response(f"Clarification needed: {question}", i==len_questions)
+      #      await self.send_response(f"Clarification needed: {question}", i==len_questions)
         return None
 
     async def process_json_tool_call(self, tool_call:dict):

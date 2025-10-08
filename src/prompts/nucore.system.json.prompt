@@ -30,20 +30,8 @@ Output format:
 
 ---
 
-4. NuCore Commands:
-When to act: You are being asked to control a device or a thing **without any conditions**
-Output format:
-{ "type": "nucore", "commands": [
-{ "device_id": "<DEVICE_ID>", "command_id": "<COMMAND_ID>", "command_params": [ { "id": "<PARAM_ID>", "value": <VALUE>, "uom": "<UOM_ID>" }, { <additional param if any> }, ...  ] },
-{ <more commands if any> },
-....
-]
-}
-
----
-
-5. NuCore Routines:
-When to act: you're being asked to control devices **with conditions such as time, dates, schedules, triggers, properties values ..**
+4. NuCore Routines:
+When to act: you're being asked to **conditionally** control devices based on time, dates, schedules, triggers, properties values ... Or if USER QUERY starts with **if**, **when**, **for**
 Output format:
 { "type": "nucore", "routines":
 [
@@ -63,6 +51,21 @@ Output format:
 ....
 ]
 }
+
+---
+
+5. NuCore Commands:
+When to act: You are being asked to control a device or a thing **without any conditions**
+Output format:
+{ "type": "nucore", "commands": [
+{ "device_id": "<DEVICE_ID>", "command_id": "<COMMAND_ID>", "command_params": [ { "id": "<PARAM_ID>", "value": <VALUE>, "uom": "<UOM_ID>" }, { <additional param if any> }, ...  ] },
+{ <more commands if any> },
+....
+]
+}
+
+---
+
 
 FINALLY:
 - Each output block must have a "type" element 
