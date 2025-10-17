@@ -30,13 +30,9 @@ def get_data_directory(parent:str, subdir:str) -> str:
 #print current working directory
 print(os.getcwd())
 
-# Response type:
-response_type="json"  # can be "json" or "nucore"
-
 # Assuming this code is inside your_package/module.py
-data_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.system.prompt" if response_type=="nucore" else "nucore.system.json.prompt")
-
-with open(data_path, 'r', encoding='utf-8') as f:
+prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.system.prompt") 
+with open(prompts_path, 'r', encoding='utf-8') as f:
     system_prompt = f.read().strip()
 
 config = AIConfig()
@@ -121,37 +117,52 @@ class NuCoreAssistant:
             else:
                 print(f"No property ID provided for device {property['device_id']}")
 
-    async def process_clarify_tool_call(self, questions:list):
-        if not questions or len(questions) == 0:
-            return None
-        len_questions = len(questions)
-        i=0
-        for question in questions:
-            i+=1
-      #      await self.send_response(f"Clarification needed: {question}", i==len_questions)
+    async def process_clarify_device_tool_call(self, clarify:dict):
+        """
+        {"tool":"ClarifyDevice","args":{"clarify":{
+            "question": "natural language question",
+            "options": [
+                { "name": "name of possible device 1"},
+                { "name": "name of possible device 2"},
+                ...
+            ]}
+            }}
+        """
+        return None
+
+    async def process_clarify_event_tool_call(self, clarify:dict):
+        """
+        {"tool":"ClarifyEvent","args":{"clarify":{
+            "question": "natural language question",
+            "options": [
+                { "name": "name of possible event 1"},
+                { "name": "name of possible event 2"},
+                ...
+            ]}
+            }}
+        """
         return None
 
     async def process_json_tool_call(self, tool_call:dict):
         if not tool_call:
             return None
-        type = tool_call.get("type")
-        if not type:
-            return None
-        if type == "text":
-            return None
-            #return await self.send_response(tool_call.get("content"), True)
-        elif type == "clarify":
-            return await self.process_clarify_tool_call(tool_call.get("questions"))
-        elif type == "nucore":
-            if "commands" in tool_call:
-                return await self.nuCore.send_commands(tool_call.get("commands"))
-            elif "queries" in tool_call:
-                return await self.process_property_query(tool_call.get("queries"))
-            elif "routines" in tool_call:
-                return await self.create_automation_routine(tool_call.get("routines"))
-            else:
+        try:
+            type = tool_call.get("tool")
+            if not type:
                 return None
-
+            elif type == "PropQuery":
+                return await self.process_property_query(tool_call.get("args").get("queries"))
+            elif type == "Command":
+                return await self.nuCore.send_commands(tool_call.get("args").get("commands"))
+            elif type == "ClarifyDevice":
+                return await self.process_clarify_device_tool_call(tool_call.get("args").get("clarify"))
+            elif type == "ClarifyEvent":
+                return await self.process_clarify_event_tool_call(tool_call.get("args").get("clarify"))
+            elif type == "Routine":
+                return await self.create_automation_routine(tool_call.get("args").get("routines"))
+        except Exception as e:
+            print(f"Error processing tool call: {e}")
+            
         return None
 
     async def process_json_tool_calls(self, tool_calls):
@@ -166,46 +177,14 @@ class NuCoreAssistant:
         if not full_response: 
             return None
 
-        if response_type == "json":
-            tools = None
-            try:
-                tools = json.loads(full_response)
-                return await self.process_json_tool_calls(tools)
-            except Exception as ex:
-                if not full_response or not begin_marker or not end_marker:
-                    return ValueError("Invalid input to process_tool_call")
+        tools = None
+        try:
+            tools = json.loads(full_response)
+            return await self.process_json_tool_calls(tools)
+        except Exception as ex:
+            if not full_response or not begin_marker or not end_marker:
+                return ValueError("Invalid input to process_tool_call")
             
-        #we need an ordered command list to process. The order is important:
-        # first command must run first and second next etc.
-        parameters = [] #ordered set of commands 
-
-        command_pattern = re.compile(rf'{begin_marker}(.*?){end_marker}', re.DOTALL)
-        matches = command_pattern.findall(full_response)
-
-        for match in matches:
-            try:
-                # Remove any comments that start with //, # or /* and end with */
-                match = re.sub(r'//.*?$|#.*?$|/\*.*?\*/', '', match, flags=re.MULTILINE)
-                # Remove any leading or trailing whitespace
-                match = match.strip()
-                if not match:
-                    continue
-                # Parse the JSON block
-                parameter_json = json.loads(match.strip())
-                parameters.append(parameter_json)
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON from nucore block: {e}")
-                return None
-            
-        if len(parameters) > 0:
-            if begin_marker == "__BEGIN_NUCORE_COMMAND__":
-                return await self.nuCore.send_commands(parameters)
-        
-            elif begin_marker == "__BEGIN_NUCORE_PROPERTY_QUERY__":
-                return await self.process_property_query(parameters) 
-        
-        return None
-
     async def send_response(self, message, is_end=False):
         if not message:
             return
@@ -289,16 +268,19 @@ class NuCoreAssistant:
         if not query:
             await self.send_response("No query provided, exiting ...", True)
             return None
+
         if query.startswith("?"):
             query = "\n"+query[1:].strip()  # Remove leading '?' if presented
-        else:
+#        else:
             # This is a code-only query, so we don't need to send the system prompt
-            query = f"**code-only** **no-explanation**\n{query}"
+#            query = f"**code-only** **no-explanation**\n{query}"
 
         user_message = {
             "role": "user",
-            "content": f"DEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}"
+            "content": f"DEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}" 
         }
+
+        print (f"\n\n*********************System Prompt:********************\n\n{user_message['content']}\n\n")
 
         #first use rag for relevant documents
         #rag_results = self.nuCore.query(query, num_rag_results, rerank)
@@ -365,11 +347,7 @@ class NuCoreAssistant:
 
             # now parse the full response and look for blocks between __NUCORE_COMMAND_BEGIN__ and __NUCORE_COMMAND_END__. 
             # convert the blocks to json and add to list
-            if response_type == "json":
-                await self.process_tool_call(full_response, None, None)
-            else:  
-                await self.process_tool_call(full_response, "__BEGIN_NUCORE_COMMAND__", "__END_NUCORE_COMMAND__")
-                await self.process_tool_call(full_response, "__BEGIN_NUCORE_PROPERTY_QUERY__", "__END_NUCORE_PROPERTY_QUERY__")
+            await self.process_tool_call(full_response, None, None)
 
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
