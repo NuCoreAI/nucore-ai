@@ -48,6 +48,19 @@
             "justMyCode": false
         },
         {
+            "name": "openai-assistant", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/openai_assistant.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--url=http://192.168.4.225:8080" ,
+               "--username=admin",
+               "--password=admin",
+            ],
+            "justMyCode": false
+        },
+        {
             "name": "start_servers", 
             "type": "debugpy",
             "request": "launch",
@@ -59,6 +72,17 @@
                 "--with_embedder=true"
             ],
             "justMyCode": false
-        }
+        },
+        {
+            "name": "pytest - test_full_permutations.py",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["-s","src/scheduler/test_full_permutations.py"],                    // add args here, e.g. "-m", "not e2e"
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true                 // follow into subprocesses if your code spawns them
+        },
     ]
 }

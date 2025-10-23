@@ -7,6 +7,9 @@ import asyncio, argparse
 from nucore import NuCore 
 from config import AIConfig
 
+from assistant_session import AssistantSession
+
+
 """
 Best option
 build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/finetuned/qwen2.5-coder-dls-7b/qwen2.5-coder-dls-7b-Q4_K_M.gguf --jinja --host localhost -c 60000 --port 8013 -t 15  --n-gpu-layers 32 --batch-size 8192
@@ -41,6 +44,7 @@ class NuCoreAssistant:
     def __init__(self, args, websocket=None):
         self.websocket=websocket
         self.sent_system_prompt=False
+        self.session = AssistantSession()
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.nuCore = NuCore(
@@ -110,25 +114,14 @@ class NuCoreAssistant:
                 prop = properties.get(prop_id)
                 if prop:
                     text = f"\nNuCore: {prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}"
-                    #await self.send_user_content_to_llm(text)
                     await self.send_response(text, True)
                 else:
                     print( f"Property {prop_id} not found for device {property['device_id']}")
             else:
                 print(f"No property ID provided for device {property['device_id']}")
 
-    async def process_clarify_device_tool_call(self, clarify:dict):
-        """
-        {"tool":"ClarifyDevice","args":{"clarify":{
-            "question": "natural language question",
-            "options": [
-                { "name": "name of possible device 1"},
-                { "name": "name of possible device 2"},
-                ...
-            ]}
-            }}
-        """
-        return None
+    async def process_clarify_device_tool_call(self, clarify:dict, user_response:str = None):
+        return await self.session.process_clarify_device_tool_call(clarify, user_response)
 
     async def process_clarify_event_tool_call(self, clarify:dict):
         """
@@ -151,14 +144,17 @@ class NuCoreAssistant:
             if not type:
                 return None
             elif type == "PropQuery":
+                self.session.redo_query = False
                 return await self.process_property_query(tool_call.get("args").get("queries"))
             elif type == "Command":
+                self.session.redo_query = False
                 return await self.nuCore.send_commands(tool_call.get("args").get("commands"))
             elif type == "ClarifyDevice":
                 return await self.process_clarify_device_tool_call(tool_call.get("args").get("clarify"))
             elif type == "ClarifyEvent":
                 return await self.process_clarify_event_tool_call(tool_call.get("args").get("clarify"))
             elif type == "Routine":
+                self.session.redo_query = False
                 return await self.create_automation_routine(tool_call.get("args").get("routines"))
         except Exception as e:
             print(f"Error processing tool call: {e}")
@@ -275,10 +271,15 @@ class NuCoreAssistant:
             # This is a code-only query, so we don't need to send the system prompt
 #            query = f"**code-only** **no-explanation**\n{query}"
 
+        context = None
+        if self.session.has_messages():
+            context = self.session.get_context()
         user_message = {
             "role": "user",
-            "content": f"DEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}" 
+            "content": f"\n\nDEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}\n\n<END_OF_QUERY>" if not context 
+                else f"\n\nDEVICE STRUCTURE:\n\n{device_docs}\n\n{context}\n\nUSER QUERY:{query}\n\n<END_OF_QUERY>", 
         }
+        self.session.last_user_query=query
 
         print (f"\n\n*********************System Prompt:********************\n\n{user_message['content']}\n\n")
 
@@ -302,6 +303,7 @@ class NuCoreAssistant:
 
         #if not self.sent_system_prompt:
         messages.append(system_message)
+        
         self.sent_system_prompt = True
 
         messages.append(user_message)
@@ -311,8 +313,10 @@ class NuCoreAssistant:
             "stream": True,
             'cache_prompt':True,
             "n_keep": -1,
-            "temperature": 1.0,
-            "max_tokens": 60_000,
+            "temperature": 0.0,
+        #    "top_p":0.9,
+            "stop":["\n\n<END_OF_QUERY>"] ,
+            "max_tokens": 16000,
         }
         full_response = ""
         try:
@@ -347,6 +351,8 @@ class NuCoreAssistant:
 
             # now parse the full response and look for blocks between __NUCORE_COMMAND_BEGIN__ and __NUCORE_COMMAND_END__. 
             # convert the blocks to json and add to list
+            with open("nucore_out.json", "w") as f: 
+                f.write(full_response)
             await self.process_tool_call(full_response, None, None)
 
         except Exception as e:
@@ -374,8 +380,11 @@ async def main(args):
                 break
 
             print(f"\n>>>>>>>>>>\n")
-                
-            await assistant.process_customer_input(user_input, num_rag_results=3, rerank=False)
+
+            while True:
+                await assistant.process_customer_input(user_input, num_rag_results=3, rerank=False)
+                if not assistant.session.redo_query:
+                    break
             print ("\n\n<<<<<<<<<<\n")
             
         except Exception as e:

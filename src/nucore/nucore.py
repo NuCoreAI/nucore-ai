@@ -16,10 +16,6 @@ from nucore import get_uom_by_id
 from nucore import NuCoreBackendAPI as nucoreAPI
 from nucore import NuCorePrograms as nucorePrograms
 from config import AIConfig
-from rag import DeviceRagFormatter
-from rag import ToolsRAGFormatter
-from rag import StaticInfoRAGFormatter 
-from rag import RAGProcessor
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +56,7 @@ class NuCore:
         self.password = backend_password
         self.nodes = [] 
         self.lookup = {}
+        from rag import RAGProcessor
         self.rag_processor = RAGProcessor(collection_path, collection_name, embedder_url=embedder_url, reranker_url=reranker_url)
 
     def __load_profile_from_file__(self, profile_path:str):
@@ -324,6 +321,7 @@ class NuCore:
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
+        from rag import DeviceRagFormatter
         device_rag_formatter = DeviceRagFormatter(indent_str=" ", prefix="-")
         return device_rag_formatter.format(nodes=self.nodes) 
     
@@ -334,6 +332,7 @@ class NuCore:
         """
         if not self.profile:
             raise NuCoreError("No profile loaded.")
+        from rag import ToolsRAGFormatter
         tools_rag_formatter = ToolsRAGFormatter(indent_str=" ", prefix="-")
         return tools_rag_formatter.format(tools_path=config.getToolsFile())
     
@@ -343,6 +342,7 @@ class NuCore:
         :param path: Path to the static information directory.
         :return: List of formatted static information to be used for embeddings.
         """
+        from rag import StaticInfoRAGFormatter 
         static_info_rag_formatter = StaticInfoRAGFormatter(indent_str=" ", prefix="-")
         return static_info_rag_formatter.format(static_info_path=path)
 

@@ -1,0 +1,1 @@
+{"tool":"PropQuery","args":{"queries":[{"device_id":"n005_304bb7720b64","property_id":"ST","property_name":"Status","reasoning":"User asked whether PulseSound is paired; query the Status property."}]}}

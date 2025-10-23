@@ -32,6 +32,7 @@ On Ubuntu:
 sudo ubuntu-drivers install
 sudo apt install nvidia-utils-{latest version}
 sudo apt install nvidia-cuda-toolkit
+sudo apt install nvidia-prime (for intel)
 ```
 Now you are ready to build:
 ```shell

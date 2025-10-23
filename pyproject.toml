@@ -16,7 +16,11 @@ dependencies = [
  "requests",
  "numpy",
  "httpx",
- "hnswlib" 
+ "hnswlib",
+ "APScheduler>=3.10,<4.0",
+ "astral>=2.2",
+ "aiohttp>=3.9",
+ "pytest-asyncio"
 ]
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
