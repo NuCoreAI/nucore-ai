@@ -28,35 +28,19 @@ async def fast_scheduler(monkeypatch, tmp_path):
         now = datetime.now().astimezone(sched.tz)
         delay = 3 if payload.get("phase") == "start" else 4
         return orig_add_date(now + timedelta(seconds=delay), cb, payload, persist_id=persist_id)
-    monkeypatch.setattr(sched, "_add_date_job", clamp_date)
+#    monkeypatch.setattr(sched, "_add_date_job", clamp_date)
 
-    def _add_date_job(self, run_dt: datetime, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> str:
-        async def wrapper():
-            await self._maybe_await(cb, {**payload, "scheduled_for": run_dt})
-        job = self.sched.add_job(wrapper, trigger=DateTrigger(run_date=run_dt, timezone=self.tz))
-        self._index_jobs(persist_id, job.id)
-        return job.id
     # Cron becomes immediate date (+1s)
-    def _fast_cron(trigger, cb, payload, *, persist_id=None):
+    def fast_cron(trigger, cb, payload, *, persist_id=None):
         now = datetime.now().astimezone(sched.tz)
         return clamp_date(now + timedelta(seconds=3), cb, payload, persist_id=persist_id)
 
-    def fast_cron(trigger:CronTrigger, cb, payload, *, persist_id=None):
-        async def wrapper():
-            await sched._maybe_await(cb, {**payload, "scheduled_for": datetime.now(sched.tz)})
-
-        #trigger.start_date = datetime.now().astimezone(sched.tz) + timedelta(seconds=10)
-        #f trigger.end_date:
-        #   trigger.end_date = datetime.now().astimezone(sched.tz) + timedelta(seconds=15)
-        job = sched.sched.add_job(wrapper, trigger=trigger)
-        sched._index_jobs(persist_id, job.id)
-    
-    monkeypatch.setattr(sched, "_add_cron_job", fast_cron)
+#    monkeypatch.setattr(sched, "_add_cron_job", fast_cron)
 
     # Solar events are near-future
     base = datetime.now().astimezone(sched.tz)
-    monkeypatch.setattr(sched.sun, "sunrise", lambda d: base + timedelta(seconds=3))
-    monkeypatch.setattr(sched.sun, "sunset",  lambda d: base + timedelta(seconds=4))
+    monkeypatch.setattr(sched.sun, "sunrise", lambda d: base + timedelta(seconds=10))
+    monkeypatch.setattr(sched.sun, "sunset",  lambda d: base + timedelta(seconds=15))
     return sched
 
 @pytest.mark.asyncio
@@ -71,9 +55,9 @@ async def test_all_13_forms_fire_start_and_end_where_applicable(fast_scheduler):
 
     # 13 forms
     forms = [
-        {"at": {"time": hhmmss}},  # 1
-    #    {"at": {"time": hhmmss, "date": today_str}},  # 9 -> start
-    #    {"at": {"sunrise": -1}},  # 2 -> start
+    #    {"at": {"time": hhmmss}},  # 1
+    #     {"at": {"time": hhmmss, "date": today_str}},  # 9 -> start
+        {"at": {"sunrise": -1}},  # 2 -> start
     #    {"at": {"sunset": 0}},    # 3 -> start
     #    {"from": {"sunrise": 0, "for": {"hours":0,"minutes":0,"seconds":1}}},  # 4 -> start,end
     #    {"from": {"sunrise": 0, "to": {"sunset": 0}}},  # 5 -> start,end

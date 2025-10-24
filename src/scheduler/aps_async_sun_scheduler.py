@@ -19,7 +19,8 @@ from apscheduler.triggers.date import DateTrigger
 from astral import LocationInfo
 from astral.sun import sun
 
-DEFAULT_GRACE_PERIOD = 1  # seconds = 10 minutes
+DEFAULT_GRACE_PERIOD = 10  # seconds = 10 minutes
+DEFAULT_END_OFFSET = timedelta(seconds=DEFAULT_GRACE_PERIOD)
 
 # ----------------------- core types for holiday plugins -----------------------
 @dataclass
@@ -45,6 +46,8 @@ def _parse_hhmmss(s: str) -> time:
     except ValueError:
         print(f"Invalid time format, expected HH:MM or HH:MM:SS but got {s}")
         return time.now()
+
+
 
 def _parse_date(s: str) -> date:
     y, m, d = s.split("/")
@@ -137,7 +140,8 @@ class AsyncAPSunScheduler:
             # No running loop (e.g., created outside an async context) — create one
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
-        self.sched = AsyncIOScheduler(timezone=self.tz, event_loop=self.loop, job_defaults={"misfire_grace_time": grace_period, "coalesce": True, "replace_existing": True, "max_instances": 1})
+        #self.sched = AsyncIOScheduler(timezone=self.tz, event_loop=self.loop, job_defaults={"misfire_grace_time": grace_period, "coalesce": True, "replace_existing": True, "max_instances": 1})
+        self.sched = AsyncIOScheduler(timezone=self.tz, event_loop=self.loop, job_defaults={"misfire_grace_time": grace_period, "coalesce": True, "max_instances": 1})
         self.sched.start()
         self.persist_path = persist_path
         if self.persist_path:
@@ -309,16 +313,33 @@ class AsyncAPSunScheduler:
             if asyncio.iscoroutine(res):
                 await res
 
-    def _add_cron_job(self, trigger: CronTrigger, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> str:
+    def _schedule_end(self, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> None:
+        if persist_id:
+            persist_id = f"{persist_id}-end"
+        if payload:
+            payload = dict(payload)
+            payload["phase"] = "end"
+            payload["persist_id"] = persist_id
+
+        async def wrapper():
+            self._maybe_await(cb, payload)
+        end_trigger = DateTrigger(run_date=datetime.now() + DEFAULT_END_OFFSET, timezone=self.tz)
+        return self._add_date_job(False, end_trigger, wrapper, payload, persist_id=persist_id)
+
+    def _add_cron_job(self, manual_termination: bool, trigger: CronTrigger, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> str:
         async def wrapper():
             await self._maybe_await(cb, {**payload, "scheduled_for": datetime.now(self.tz)})
+            if manual_termination and payload.get("phase") == "start":
+                self._schedule_end(cb, payload, persist_id=persist_id)
         job = self.sched.add_job(wrapper, trigger=trigger)
         self._index_jobs(persist_id, job.id)
         return job.id
 
-    def _add_date_job(self, run_dt: datetime, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> str:
+    def _add_date_job(self, manual_termination: bool, run_dt: datetime, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> str:
         async def wrapper():
             await self._maybe_await(cb, {**payload, "scheduled_for": run_dt})
+            if manual_termination and payload.get("phase") == "start":
+                self._schedule_end(cb, payload, persist_id=persist_id)
         job = self.sched.add_job(wrapper, trigger=DateTrigger(run_date=run_dt, timezone=self.tz))
         self._index_jobs(persist_id, job.id)
         return job.id
@@ -328,13 +349,13 @@ class AsyncAPSunScheduler:
         # date+time one-shot
         if "date" in at and "time" in at:
             run_dt = datetime.combine(_parse_date(at["date"]), _parse_hhmmss(at["time"]), tzinfo=self.tz)
-            return [self._add_date_job(run_dt, cb, {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)]
+            return [self._add_date_job(True, run_dt, cb, {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)]
 
         # daily at time
         if "time" in at:
             t = _parse_hhmmss(at["time"])
             trig = CronTrigger(hour=t.hour, minute=t.minute, second=t.second, timezone=self.tz)
-            return [self._add_cron_job(trig, cb, {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)]
+            return [self._add_cron_job(True, trig, cb, {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)]
 
         # sunrise/sunset with offset seconds
         if "sunrise" in at or "sunset" in at:
@@ -347,11 +368,12 @@ class AsyncAPSunScheduler:
                 if dt <= now:
                     nxt = today + timedelta(days=1)
                     dt = (self.sun.sunrise(nxt) if "sunrise" in at else self.sun.sunset(nxt)) + offset
-                async def fire_then_resched():
-                    await self._maybe_await(cb, {"phase": "start", "scheduled_for": dt, "spec": {"at": at}, "meta": meta})
+                self._add_date_job(True, dt, lambda ev: fire_then_resched(ev), {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)
+                async def fire_then_resched(ev):
+                    await self._maybe_await(cb, ev) 
                     await schedule_next()
-                self._add_date_job(dt, lambda ev: fire_then_resched(), {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)
                 return dt
+
             nxt_dt = await schedule_next()
             return [f"sun-at:{nxt_dt.isoformat()}"]
 
@@ -369,8 +391,8 @@ class AsyncAPSunScheduler:
             else:
                 to = frm["to"]
                 end_dt = datetime.combine(_parse_date(to["date"]), _parse_hhmmss(to["time"]), tzinfo=self.tz)
-            jobs.append(self._add_date_job(start_dt, cb, {"phase": "start", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
-            jobs.append(self._add_date_job(end_dt, cb, {"phase": "end", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
+            jobs.append(self._add_date_job(False, start_dt, cb, {"phase": "start", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
+            jobs.append(self._add_date_job(False, end_dt, cb, {"phase": "end", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
             return jobs
 
         # recurring ranges (no explicit date)
@@ -408,9 +430,10 @@ class AsyncAPSunScheduler:
                 today = datetime.now(self.tz).date()
                 start_dt, end_dt = compute_window(today)
                 await self._maybe_await(cb, {"phase": "start", "scheduled_for": start_dt, "spec": full_spec, "meta": meta})
-                self._add_date_job(end_dt, cb, {"phase": "end", "spec": full_spec, "meta": meta}, persist_id=persist_id)
+                #schedule the end event
+                self._add_date_job(False, end_dt, cb, {"phase": "end", "spec": full_spec, "meta": meta}, persist_id=persist_id)
             trig = CronTrigger(hour=t.hour, minute=t.minute, second=t.second, timezone=self.tz)
-            jobs.append(self._add_cron_job(trig, lambda ev=None: on_start(), {"phase": "start", "spec": full_spec, "meta": meta}, persist_id=persist_id))
+            jobs.append(self._add_cron_job(False, trig, lambda ev=None: on_start(), {"phase": "start", "spec": full_spec, "meta": meta}, persist_id=persist_id))
             return jobs
 
         # sunrise/sunset involvement -> schedule per day then reschedule
@@ -422,10 +445,10 @@ class AsyncAPSunScheduler:
 
             async def fire_and_reschedule():
                 await self._maybe_await(cb, {"phase": "start", "scheduled_for": start_dt, "spec": full_spec, "meta": meta})
-                self._add_date_job(end_dt, cb, {"phase": "end", "spec": full_spec, "meta": meta}, persist_id=persist_id)
+                self._add_date_job(False, end_dt, cb, {"phase": "end", "spec": full_spec, "meta": meta}, persist_id=persist_id)
                 await schedule_today_or_tomorrow()
 
-            self._add_date_job(start_dt, lambda ev=None: fire_and_reschedule(), {"phase": "start", "spec": full_spec, "meta": meta}, persist_id=persist_id)
+            self._add_date_job(False, start_dt, lambda ev=None: fire_and_reschedule(), {"phase": "start", "spec": full_spec, "meta": meta}, persist_id=persist_id)
             return start_dt
 
         nxt = await schedule_today_or_tomorrow()
@@ -456,8 +479,9 @@ class AsyncAPSunScheduler:
                 if end_dt <= start_dt:
                     end_dt += timedelta(days=1)
                 await self._maybe_await(cb, {"phase": "start", "scheduled_for": start_dt, "spec": spec, "meta": meta})
-                self._add_date_job(end_dt, cb, {"phase": "end", "spec": spec, "meta": meta}, persist_id=persist_id)
-            jobs.append(self._add_cron_job(trig, lambda ev=None: on_start(), {"phase": "start", "spec": spec, "meta": meta}, persist_id=persist_id))
+                # schedule the end event
+                self._add_date_job(False, end_dt, cb, {"phase": "end", "spec": spec, "meta": meta}, persist_id=persist_id)
+            jobs.append(self._add_cron_job(False, trig, lambda ev=None: on_start(), {"phase": "start", "spec": spec, "meta": meta}, persist_id=persist_id))
             return jobs
 
         if "for" in frm:
@@ -467,8 +491,8 @@ class AsyncAPSunScheduler:
                 start_dt = datetime.combine(now.date(), start_t, tzinfo=self.tz)
                 end_dt = start_dt + dur
                 await self._maybe_await(cb, {"phase": "start", "scheduled_for": start_dt, "spec": spec, "meta": meta})
-                self._add_date_job(end_dt, cb, {"phase": "end", "spec": spec, "meta": meta}, persist_id=persist_id)
-            jobs.append(self._add_cron_job(trig, lambda ev=None: on_start(), {"phase": "start", "spec": spec, "meta": meta}, persist_id=persist_id))
+                self._add_date_job(False, end_dt, cb, {"phase": "end", "spec": spec, "meta": meta}, persist_id=persist_id)
+            jobs.append(self._add_cron_job(False, trig, lambda ev=None: on_start(), {"phase": "start", "spec": spec, "meta": meta}, persist_id=persist_id))
             return jobs
 
         raise ValueError("weekly.from must include 'to.time' or 'for'")
@@ -512,7 +536,7 @@ class AsyncAPSunScheduler:
                 async def fire_then_next(dd=run_dt, y=yr):
                     await self._maybe_await(callback, {"phase":"start", "scheduled_for": dd, "spec": {"_kind":"holiday_at","provider":provider_name,"time":time_hhmm,"title_contains":title_contains,"categories":categories}, "meta": meta})
                     await schedule_for_year(y + years_ahead)
-                job_ids.append(self._add_date_job(run_dt, lambda ev=None, _fn=fire_then_next: _fn(), {"phase":"start", "spec": {"_kind":"holiday_at","provider":provider_name,"time":time_hhmm,"title_contains":title_contains,"categories":categories}, "meta": meta}, persist_id=persist_id))
+                job_ids.append(self._add_date_job(True, run_dt, lambda ev=None, _fn=fire_then_next: _fn(), {"phase":"start", "spec": {"_kind":"holiday_at","provider":provider_name,"time":time_hhmm,"title_contains":title_contains,"categories":categories}, "meta": meta}, persist_id=persist_id))
 
         for yr in range(start_year, start_year + years_ahead + 1):
             await schedule_for_year(yr)
@@ -556,10 +580,10 @@ class AsyncAPSunScheduler:
 
                 async def fire_then_next(sdt=start_dt, edt=end_dt, y=yr):
                     await self._maybe_await(callback, {"phase":"start","scheduled_for": sdt, "spec": {"_kind":"holiday_window","provider":provider_name,"from":from_time_hhmm,"to":to_time_hhmm,"duration":duration,"title_contains":title_contains,"categories":categories}, "meta": meta})
-                    self._add_date_job(edt, callback, {"phase":"end","spec": {"_kind":"holiday_window","provider":provider_name,"from":from_time_hhmm,"to":to_time_hhmm,"duration":duration,"title_contains":title_contains,"categories":categories}, "meta": meta}, persist_id=persist_id)
+                    self._add_date_job(False, edt, callback, {"phase":"end","spec": {"_kind":"holiday_window","provider":provider_name,"from":from_time_hhmm,"to":to_time_hhmm,"duration":duration,"title_contains":title_contains,"categories":categories}, "meta": meta}, persist_id=persist_id)
                     await schedule_for_year(y + years_ahead)
 
-                job_ids.append(self._add_date_job(start_dt, lambda ev=None, _fn=fire_then_next: _fn(), {"phase":"start", "spec": {"_kind":"holiday_window","provider":provider_name,"from":from_time_hhmm,"to":to_time_hhmm,"duration":duration,"title_contains":title_contains,"categories":categories}, "meta": meta}, persist_id=persist_id))
+                job_ids.append(self._add_date_job(False, start_dt, lambda ev=None, _fn=fire_then_next: _fn(), {"phase":"start", "spec": {"_kind":"holiday_window","provider":provider_name,"from":from_time_hhmm,"to":to_time_hhmm,"duration":duration,"title_contains":title_contains,"categories":categories}, "meta": meta}, persist_id=persist_id))
 
         for yr in range(start_year, start_year + years_ahead + 1):
             await schedule_for_year(yr)
@@ -572,7 +596,7 @@ class AsyncAPSunScheduler:
     async def add_annual_fixed_day(self, month: int, day: int, time_hhmm: str, callback: Callable[[Dict[str, Any]], Any], *, meta: Any = None, persist_id: Optional[str] = None) -> List[str]:
         t = _parse_hhmmss(time_hhmm)
         trig = CronTrigger(month=month, day=day, hour=t.hour, minute=t.minute, second=t.second, timezone=self.tz)
-        job_id = self._add_cron_job(trig, callback, {"phase": "start", "spec": {"_kind":"annual_fixed","month":month,"day":day,"time":time_hhmm}, "meta": meta}, persist_id=persist_id)
+        job_id = self._add_cron_job(True, trig, callback, {"phase": "start", "spec": {"_kind":"annual_fixed","month":month,"day":day,"time":time_hhmm}, "meta": meta}, persist_id=persist_id)
         await self._persist_upsert(persist_id, {"_kind":"annual_fixed","month":month,"day":day,"time":time_hhmm}, meta)
         return [job_id]
 
@@ -581,8 +605,9 @@ class AsyncAPSunScheduler:
         job_ids: List[str] = []
         for (m, d) in dates:
             trig = CronTrigger(month=m, day=d, hour=t.hour, minute=t.minute, second=t.second, timezone=self.tz)
-            job_ids.append(self._add_cron_job(trig, callback, {"phase":"start", "spec": {"_kind":"annual_fixed","month":m,"day":d,"time":time_hhmm}, "meta": meta}, persist_id=persist_id))
+            job_ids.append(self._add_cron_job(True, trig, callback, {"phase":"start", "spec": {"_kind":"annual_fixed","month":m,"day":d,"time":time_hhmm}, "meta": meta}, persist_id=persist_id))
         await self._persist_upsert(persist_id, {"_kind":"annual_dates","dates":dates,"time":time_hhmm}, meta)
+        await self._persist_upsert(f"{persist_id}-end", {"_kind":"annual_dates","dates":dates,"time":time_hhmm}, meta)
         return job_ids
 
     async def add_annual_nth_weekday(self, month: int, weekday: int | str, nth: int, time_hhmm: str, callback: Callable[[Dict[str, Any]], Any], *, meta: Any = None, persist_id: Optional[str] = None) -> List[str]:
@@ -596,7 +621,7 @@ class AsyncAPSunScheduler:
             async def fire_and_next():
                 await self._maybe_await(callback, {"phase": "start", "scheduled_for": run_dt, "spec": {"_kind":"annual_nth_weekday","month":month,"weekday":w,"nth":nth,"time":time_hhmm}, "meta": meta})
                 await schedule_year(year + 1)
-            self._add_date_job(run_dt, lambda ev=None: fire_and_next(), {"phase":"start", "spec": {"_kind":"annual_nth_weekday","month":month,"weekday":w,"nth":nth,"time":time_hhmm}, "meta": meta}, persist_id=persist_id)
+            self._add_date_job(False, run_dt, lambda ev=None: fire_and_next(), {"phase":"start", "spec": {"_kind":"annual_nth_weekday","month":month,"weekday":w,"nth":nth,"time":time_hhmm}, "meta": meta}, persist_id=persist_id)
             return run_dt
 
         now = datetime.now(tz)

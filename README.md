@@ -13,7 +13,15 @@ git clone https://github.com/NuCoreAI/nucore-ai.git
 ```
 
 ## llama.cpp compile and build
-1. Download llama.cpp
+1. Download llama.cpp and install prereqs
+```shell
+sudo apt install build-essential 
+sudo apt install cmake
+sudo apt install clang
+sudo apt install libomp-dev
+sudo apt install libcurl4-openssl-dev 
+
+```
 2. Go to the directory and do as per one of the options below:
 
 ### No GPU
