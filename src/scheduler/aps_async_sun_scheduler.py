@@ -20,7 +20,7 @@ from astral import LocationInfo
 from astral.sun import sun
 
 DEFAULT_GRACE_PERIOD = 10  # seconds = 10 minutes
-DEFAULT_END_OFFSET = timedelta(seconds=DEFAULT_GRACE_PERIOD)
+DEFAULT_END_OFFSET = timedelta(seconds=3)
 
 # ----------------------- core types for holiday plugins -----------------------
 @dataclass
@@ -321,10 +321,11 @@ class AsyncAPSunScheduler:
             payload["phase"] = "end"
             payload["persist_id"] = persist_id
 
-        async def wrapper():
-            self._maybe_await(cb, payload)
-        end_trigger = DateTrigger(run_date=datetime.now() + DEFAULT_END_OFFSET, timezone=self.tz)
-        return self._add_date_job(False, end_trigger, wrapper, payload, persist_id=persist_id)
+        async def crapper(dummy):
+            await self._maybe_await(cb, payload)
+        end_date=datetime.now(self.tz)+DEFAULT_END_OFFSET
+        print(f"now = {datetime.now(tz=self.tz)}, end = {end_date}")
+        return self._add_date_job(False, end_date, crapper, payload, persist_id=persist_id)
 
     def _add_cron_job(self, manual_termination: bool, trigger: CronTrigger, cb, payload: Dict[str, Any], *, persist_id: Optional[str] = None) -> str:
         async def wrapper():
@@ -340,6 +341,7 @@ class AsyncAPSunScheduler:
             await self._maybe_await(cb, {**payload, "scheduled_for": run_dt})
             if manual_termination and payload.get("phase") == "start":
                 self._schedule_end(cb, payload, persist_id=persist_id)
+
         job = self.sched.add_job(wrapper, trigger=DateTrigger(run_date=run_dt, timezone=self.tz))
         self._index_jobs(persist_id, job.id)
         return job.id
@@ -368,10 +370,12 @@ class AsyncAPSunScheduler:
                 if dt <= now:
                     nxt = today + timedelta(days=1)
                     dt = (self.sun.sunrise(nxt) if "sunrise" in at else self.sun.sunset(nxt)) + offset
+                print(f"{'sunrise' if 'sunrise' in at else 'sunset'}: {dt.astimezone()}")
                 self._add_date_job(True, dt, lambda ev: fire_then_resched(ev), {"phase": "start", "spec": {"at": at}, "meta": meta}, persist_id=persist_id)
                 async def fire_then_resched(ev):
                     await self._maybe_await(cb, ev) 
-                    await schedule_next()
+                    if ev.get('phase') == "start":
+                        await schedule_next()
                 return dt
 
             nxt_dt = await schedule_next()
@@ -391,8 +395,8 @@ class AsyncAPSunScheduler:
             else:
                 to = frm["to"]
                 end_dt = datetime.combine(_parse_date(to["date"]), _parse_hhmmss(to["time"]), tzinfo=self.tz)
-            jobs.append(self._add_date_job(False, start_dt, cb, {"phase": "start", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
-            jobs.append(self._add_date_job(False, end_dt, cb, {"phase": "end", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
+            jobs.append(self._add_date_job(start_dt==end_dt, start_dt, cb, {"phase": "start", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
+            jobs.append(self._add_date_job(start_dt==end_dt, end_dt, cb, {"phase": "end", "spec": {"from": frm}, "meta": meta}, persist_id=persist_id))
             return jobs
 
         # recurring ranges (no explicit date)
@@ -420,7 +424,7 @@ class AsyncAPSunScheduler:
                 else:
                     raise ValueError("Invalid 'to' anchor")
                 if end_dt <= start_dt and "date" not in to:
-                    end_dt += timedelta(days=1)
+                    end_dt +=  DEFAULT_END_OFFSET #timedelta(days=1)
             return start_dt, end_dt
 
         # pure time daily starts -> cron for start; end scheduled as one-shot each day

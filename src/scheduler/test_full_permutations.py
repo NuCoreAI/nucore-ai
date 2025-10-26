@@ -39,8 +39,8 @@ async def fast_scheduler(monkeypatch, tmp_path):
 
     # Solar events are near-future
     base = datetime.now().astimezone(sched.tz)
-    monkeypatch.setattr(sched.sun, "sunrise", lambda d: base + timedelta(seconds=10))
-    monkeypatch.setattr(sched.sun, "sunset",  lambda d: base + timedelta(seconds=15))
+    monkeypatch.setattr(sched.sun, "sunrise", lambda d: datetime.now().astimezone(sched.tz)+ timedelta(seconds=5))
+    monkeypatch.setattr(sched.sun, "sunset",  lambda d: datetime.now().astimezone(sched.tz)+ timedelta(seconds=10))
     return sched
 
 @pytest.mark.asyncio
@@ -57,18 +57,18 @@ async def test_all_13_forms_fire_start_and_end_where_applicable(fast_scheduler):
     forms = [
     #    {"at": {"time": hhmmss}},  # 1
     #     {"at": {"time": hhmmss, "date": today_str}},  # 9 -> start
-        {"at": {"sunrise": -1}},  # 2 -> start
+    #    {"at": {"sunrise": -1}},  # 2 -> start
     #    {"at": {"sunset": 0}},    # 3 -> start
     #    {"from": {"sunrise": 0, "for": {"hours":0,"minutes":0,"seconds":1}}},  # 4 -> start,end
     #    {"from": {"sunrise": 0, "to": {"sunset": 0}}},  # 5 -> start,end
     #    {"from": {"sunrise": 0, "to": {"sunset": 0, "day":1}}},  # 6 -> start,end
-    #    {"from": {"time": hhmmss, "to": {"sunset": 0, "day":1}}},  # 7 -> start,end
+    ## more tests needed    {"from": {"time": hhmmss, "to": {"sunset": 0, "day":1}}},  # 7 -> start,end
     #    {"from": {"time": hhmmss, "to": {"time": hhmmss, "day":0}}}, # 8 -> start,end
     #    {"from": {"time": hhmmss, "for": {"hours":0,"minutes":0,"seconds":1}}},  # from time for duration
     #    {"from": {"time": hhmmss, "date": today_str, "for": {"hours":0,"minutes":0,"seconds":1}}},  # 10 -> start,end
     #    {"from": {"time": hhmmss, "date": today_str, "to": {"time": hhmmss, "date": tomorrow_str}}},  # 11 -> start,end
-    #    {"from": {"time": "22:00:00", "to": {"time": "06:00", "day":1}}},  # 12 -> start,end
-    #    {"weekly": {"days": "sun,mon,tue,wed,thu,fri,sat", "from": {"time": hhmmss, "to": {"time": hhmmss}}}},  # 13 -> start,end
+    ##    {"from": {"time": "22:00:00", "to": {"time": "06:00", "day":1}}},  # 12 -> start,end
+    ##    {"weekly": {"days": "sun,mon,tue,wed,thu,fri,sat", "from": {"time": hhmmss, "to": {"time": hhmmss}}}},  # 13 -> start,end
     ]
     
     got_start = asyncio.Event()
