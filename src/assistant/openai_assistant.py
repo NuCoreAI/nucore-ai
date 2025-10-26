@@ -35,6 +35,7 @@ prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.system
 with open(prompts_path, 'r', encoding='utf-8') as f:
     system_prompt = f.read().strip()
 
+
 config = AIConfig()
 
 class NuCoreAssistant:
