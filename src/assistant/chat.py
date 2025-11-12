@@ -39,15 +39,14 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            data = await websocket.receive_text()
+            data = await websocket.receive_text()    
             
             # Parse the received JSON data
             message_data = json.loads(data)
             user_message = message_data.get("message", "")
-            bot_repsonse=None
 
             if user_message:
-                bot_response = await eisy_ai.process_customer_input(user_message, websocket=websocket)
+                await eisy_ai.process_customer_input(user_message, websocket=websocket)
             
             
     except Exception as e:

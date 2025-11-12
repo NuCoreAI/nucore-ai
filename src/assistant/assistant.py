@@ -195,7 +195,7 @@ class NuCoreAssistant:
 
     async def process_tool_responses(self, responses, websocket):
         if not responses:
-            await self.send_response(await self.get_random_full_failure_message(), False, websocket)
+            await self.send_response(await self.get_random_full_failure_message(), True, websocket)
             return None
         if not websocket:
             print(responses)
@@ -206,11 +206,11 @@ class NuCoreAssistant:
                 status_codes.append(response.status_code)
         #now if all are 200, return a random success message
         if all(code == 200 for code in status_codes):
-            await self.send_response(await self.get_random_success_message(), False, websocket)
+            await self.send_response(await self.get_random_success_message(), True, websocket)
         elif all(code != 200 for code in status_codes):
-            await self.send_response(await self.get_random_full_failure_message(), False, websocket)
+            await self.send_response(await self.get_random_full_failure_message(), True, websocket)
         else:
-            await self.send_response(await self.get_random_partial_failure_message(), False, websocket)
+            await self.send_response(await self.get_random_partial_failure_message(), True, websocket)
         return responses
 
     async def send_commands(self, commands:list, websocket):
@@ -282,11 +282,13 @@ class NuCoreAssistant:
         if not message:
             return
         if websocket:
-            await websocket.send_json({
+            payload={
                 "sender": "bot",
                 "message": message,
-                "end": True if is_end else False
-            })
+                "end": "true" if is_end else "false"
+            }
+            #print(payload)
+            await websocket.send_text(json.dumps(payload))
         print(message, end="", flush=True)
 
     async def send_user_content_to_llm(self, user_content, websocket=None):
@@ -421,45 +423,43 @@ class NuCoreAssistant:
         }
         full_response = ""
         try:
-            with httpx.stream("POST", self.__model_url__, timeout=100, json=payload,headers={
-                "Authorization": f"Bearer {self.__model_auth_token__}" if self.__model_auth_token__ else "",
-            }) as response:
-                if response.status_code == 401 or response.status_code == 403:
-                    print(f"Authorization token is invalid or expired. You need to refresh it.")
-                    return None
-                elif response.status_code == 500:
-                    print(f"Internal server error. Please try again later (most probably the authorization token is invalid or expired).")
-                    return None
-                else:
-                    for line in response.iter_lines():
-                        if line.startswith("data: "):
-                            token_data = line[len(b"data: "):]
-                            try:
-                                finish_reason = json.loads(token_data.strip())['choices'][0]['finish_reason']
-                                if finish_reason == "stop":
-                                    break
-                                token_data = json.loads(token_data.strip())['choices'][0]['delta'].get('content', '')
-                            except json.JSONDecodeError:
-                                continue
-                            if token_data:
-                                # Print the token data as it arrives
-                                if isinstance(token_data, bytes):
-                                    token_data = token_data.decode("utf-8")
-                                await self.send_response(token_data, False, None)
-                                #full_response += token_data  # Collect the token data
-                                full_response += token_data
-
+            async with httpx.AsyncClient() as client:
+                async with client.stream("POST", self.__model_url__, timeout=100, json=payload, headers={
+                    "Authorization": f"Bearer {self.__model_auth_token__}" if self.__model_auth_token__ else "",
+                }) as response:
+                    if response.status_code == 401 or response.status_code == 403:
+                        print(f"Authorization token is invalid or expired. You need to refresh it.")
+                        return None
+                    elif response.status_code == 500:
+                        print(f"Internal server error. Please try again later (most probably the authorization token is invalid or expired).")
+                        return None
+                    else:
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                token_data = line[len(b"data: "):]
+                                try:
+                                    finish_reason = json.loads(token_data.strip())['choices'][0]['finish_reason']
+                                    if finish_reason == "stop":
+                                        break
+                                    token_data = json.loads(token_data.strip())['choices'][0]['delta'].get('content', '')
+                                except json.JSONDecodeError:
+                                    continue
+                                if token_data:
+                                    # Print the token data as it arrives
+                                    if isinstance(token_data, bytes):
+                                        token_data = token_data.decode("utf-8")
+                                    await self.send_response(token_data, False, websocket if self.debug_mode else None)
+                                    #full_response += token_data  # Collect the token data
+                                    full_response += token_data
 
             # now parse the full response and look for blocks between __NUCORE_COMMAND_BEGIN__ and __NUCORE_COMMAND_END__. 
             # convert the blocks to json and add to list
             #with open("nucore_out.json", "w") as f: 
             #    f.write(full_response)
-            await self.process_tool_call(full_response, websocket, None, None)
             if websocket: 
                 if self.debug_mode:
-                    await self.send_response(full_response, True, websocket)
-                else:
-                    await self.send_response("", True, websocket)
+                    await self.send_response("\r\n***\r\n", False, websocket)
+            await self.process_tool_call(full_response, websocket, None, None)
 
 
         except Exception as e:
