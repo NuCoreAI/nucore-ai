@@ -1,1 +1,1 @@
-{"tool":"PropQuery","args":{"queries":[{"device_id":"n005_304bb7720b64","property_id":"ST","property_name":"Status","reasoning":"User asked whether PulseSound is paired; query the Status property."}]}}
+{"tool":"Command","args":{"commands":[{"device_id":"ZB31965_011_1","command_id":"DOF","reasoning":"User requested turning off Hue Left."},{"device_id":"ZB24569_011_1","command_id":"DOF","reasoning":"User requested turning off Hue Right."}]}}

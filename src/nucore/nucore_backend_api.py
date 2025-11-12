@@ -28,7 +28,8 @@ class NuCoreBackendAPI:
 
     def __get(self, path:str):
         try:
-            url=f"{self.base_url}/{path}"
+            path = path if path.startswith("/") else f"/{path}"
+            url=f"{self.base_url}{path}" 
             # Method 1a: Using auth parameter (simplest)
             response = requests.get(
             url,
@@ -36,7 +37,6 @@ class NuCoreBackendAPI:
             )
             if response.status_code != 200:
                 print (f"invalid url status code = {response.status_code}")
-                return None
             return response
         except Exception as ex:
             print (f"failed connection {ex}")

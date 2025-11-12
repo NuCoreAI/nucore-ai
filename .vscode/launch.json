@@ -28,7 +28,21 @@
                "--url=http://192.168.4.225:8080" ,
                "--username=admin",
                "--password=admin",
-               "--model_url=http://192.168.6.58:8013/v1/chat/completions",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "LAN-chat", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/chat.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--url=http://192.168.4.225:8080" ,
+               "--username=admin",
+               "--password=admin",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
             ],
             "justMyCode": false
         },
