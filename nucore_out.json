@@ -1,1 +1,17 @@
-{"tool":"Command","args":{"commands":[{"device_id":"ZB31965_011_1","command_id":"DOF","reasoning":"User requested turning off Hue Left."},{"device_id":"ZB24569_011_1","command_id":"DOF","reasoning":"User requested turning off Hue Right."}]}}
+{
+    "tool": "Command",
+    "args": {
+        "commands": [
+            {
+                "device_id": "ZB31965_011_1",
+                "command_id": "DOF",
+                "reasoning": "User requested turning off Hue Left."
+            },
+            {
+                "device_id": "ZB24569_011_1",
+                "command_id": "DOF",
+                "reasoning": "User requested turning off Hue Right."
+            }
+        ]
+    }
+}

@@ -107,7 +107,8 @@ class NuCoreAssistant:
         :return: The result of the routine creation.
         **for now, just a stub **
         """
-        return await self.nuCore.create_automation_routines(routines, websocket)
+        #return await self.nuCore.create_automation_routines(routines, websocket)
+        await self.send_response(await self.get_random_success_message(), True, websocket)
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
@@ -356,8 +357,8 @@ class NuCoreAssistant:
         #sprompt = system_prompt.replace("{device_docs}", device_docs)
         #sprompt.strip()
         sprompt = system_prompt.strip()
-        with open(f"/tmp/ai.prompt", "w") as f:
-            f.write(sprompt)
+      #  with open(f"/tmp/ai.prompt", "w") as f:
+      #      f.write(sprompt)
 
         system_message = {
             "role": "system",

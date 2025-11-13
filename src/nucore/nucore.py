@@ -520,19 +520,24 @@ class NuCore:
             raise NuCoreError("Failed to send commands.")
         return response
     
-    async def create_automation_routines(self, routines:list):
+    async def create_automation_routines(self, routines:list, websocket):
         """
         Create automation routines using the nucore API.
         
         Args:
             routines (list): A list of routines to create.
+            websocket: The websocket connection to use for communication.
         """
         if len (routines) == 0:
             raise NuCoreError ("No valid routines provided.")
+        #remove the port from the url since we are using eisyui
+        #conver it to a url object first
+        from urllib.parse import urlparse
+        parsed_url =  urlparse(self.url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.hostname}"
 
-        nucore_api = nucoreAPI(base_url=self.url, username=self.username, password=self.password)
-        all_programs=nucorePrograms()
-        return nucore_api.upload_programs(all_programs)
+        nucore_api = nucoreAPI(base_url=base_url, username=self.username, password=self.password)
+        return nucore_api.upload_programs(routines)
 
     
     async def get_properties(self, device_id:str)-> dict[str, Property]:

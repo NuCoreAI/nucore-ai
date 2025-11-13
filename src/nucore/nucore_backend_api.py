@@ -42,6 +42,18 @@ class NuCoreBackendAPI:
             print (f"failed connection {ex}")
             return None
     
+    def __put(self, path:str, body:str, headers):
+        try:
+            url=f"{self.base_url}{path}"
+            response = requests.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            if response.status_code != 200:
+                print (f"invalid url status code = {response.status_code}")
+                return None
+            return response
+        except Exception as ex:
+            print (f"failed put: {ex}")
+            return None
+
     def __post(self, path:str, body:str, headers):
         try:
             url=f"{self.base_url}{path}"
@@ -317,7 +329,19 @@ class NuCoreBackendAPI:
         except requests.RequestException as e:
             raise Exception(f"SOAP request failed: {str(e)}")
 
-    def upload_programs(self, programs:dict):
+    def upload_programs(self, programs:list):
+        if not programs:
+            return False
+
+        for program_content in programs:
+            try:
+                self.__put(f'/api/ai/trigger', body=program_content, headers=None)
+            except Exception as ex:
+                print (ex)
+                return False
+        return True
+
+    def upload_programs_old(self, programs:dict):
         if not programs:
             return False
         key=self.get_d2d_key()
