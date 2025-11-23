@@ -11,7 +11,7 @@
             "program": "src/assistant/assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.4.225:8080" ,
+               "--url=http://192.168.6.149:8080" ,
                "--username=admin",
                "--password=admin",
                "--model_url=http://localhost:8013/v1/chat/completions",
@@ -25,7 +25,7 @@
             "program": "src/assistant/assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.4.225:8080" ,
+               "--url=http://192.168.6.149:8080" ,
                "--username=admin",
                "--password=admin",
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
@@ -39,7 +39,7 @@
             "program": "src/assistant/chat.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.4.225:8080" ,
+               "--url=http://192.168.6.149:8080" ,
                "--username=admin",
                "--password=admin",
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
@@ -53,7 +53,7 @@
             "program": "src/assistant/assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.4.225:8080" ,
+               "--url=http://192.168.6.149:8080" ,
                "--username=admin",
                "--password=admin",
                "--model_url=https://vyvhz7of8dar39-8013.proxy.runpod.net/v1/chat/completions",
@@ -68,7 +68,7 @@
             "program": "src/assistant/openai_assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.4.225:8080" ,
+               "--url=http://192.168.6.149:8080" ,
                "--username=admin",
                "--password=admin",
             ],

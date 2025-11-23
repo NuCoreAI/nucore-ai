@@ -13,8 +13,7 @@ from nucore import NodeDef, NodeProperty, NodeCommands, NodeLinks
 from nucore import TypeInfo, Property, Node
 from nucore import Command, CommandParameter
 from nucore import get_uom_by_id
-from nucore import NuCoreBackendAPI as nucoreAPI
-from nucore import NuCorePrograms as nucorePrograms
+from nucore import NuCoreBackendAPI 
 from config import AIConfig
 
 
@@ -32,28 +31,23 @@ def debug(msg):
 
 class NuCore:
     """Class to handle nucore backend operations such as loading profiles and nodes."""
-    def __init__(self, collection_path, collection_name:str, backend_url:str, backend_username:str=None, backend_password:str=None, 
-                 embedder_url:str=None, reranker_url:str=None):
+    def __init__(self, collection_path, collection_name:str, nucore_api:NuCoreBackendAPI, embedder_url:str=None, reranker_url:str=None):
         """
-        Initialize the NuCore instance with backend URL, username, and password.
+        Initialize the NuCore instance with backend API and RAG processor. 
         :param collection_path: The path to the collection file. This is used to store all the embeddings. (mandatory)
         :param collection_name: The name of the collection to be used. This is used to store all the embeddings. (mandatory)
-        :param backend_url: The URL of the nucore backend. (mandatory)
-        :param backend_username (str): The username for the nucore backend. (optional)
-        :param backend_password (str): The password for the nucore backend. (optional)
+        :param nucore_api: An instance of NuCoreBackendAPI to interact with the backend. (mandatory)
         :param reranker_url (str): The URL of the reranker service. If not provided, reranking will not be performed.
         :param static_docs_path (str): The path to the static information directory. If not provided, static information will not be included.
         
         Note: Make sure that the collection_path and collection_name are set correctly.
         You will need to call load() after you are ready to use this object
         """
-        if not collection_name or not collection_path or not backend_url:
-            raise NuCoreError("collection_name and backend_url are mandatory parameters.")
+        if not collection_name or not collection_path:
+            raise NuCoreError("collection_name/path are mandatory parameters.")
 
         self.name = collection_name     
-        self.url = backend_url
-        self.username = backend_username
-        self.password = backend_password
+        self.nucore_api = nucore_api
         self.nodes = [] 
         self.lookup = {}
         from rag import RAGProcessor
@@ -70,13 +64,7 @@ class NuCore:
     
     def __load_profile_from_url__(self):
         """Load profile from the specified URL."""
-        if not self.url:
-            raise NuCoreError("URL is not set.")
-        if not self.username or not self.password:
-            raise NuCoreError("Username and password must be provided for URL access.")
-
-        nucore_api = nucoreAPI(base_url=self.url, username=self.username, password=self.password)
-        response = nucore_api.get_profiles()
+        response = self.nucore_api.get_profiles()
         if response is None:
             raise NuCoreError("Failed to fetch profile from URL.")
         return self.__parse_profile__(response)
@@ -230,7 +218,7 @@ class NuCore:
         """
         if profile_path:
             self.profile = self.__load_profile_from_file__(profile_path)
-        elif not self.url:
+        elif not self.nucore_api:
             raise NuCoreError("No valid profile source provided.")
         else:
             self.profile = self.__load_profile_from_url__()
@@ -248,13 +236,7 @@ class NuCore:
 
     def __load_nodes_from_url__(self):
         """Load nodes from the specified URL."""
-        if not self.url:
-            raise NuCoreError("URL is not set.")
-        if not self.username or not self.password:
-            raise NuCoreError("Username and password must be provided for URL access.")
-
-        nucore_api = nucoreAPI(base_url=self.url, username=self.username, password=self.password)
-        response = nucore_api.get_nodes()
+        response = self.nucore_api.get_nodes()
         if response is None:
             raise NuCoreError("Failed to fetch nodes from URL.")
         return ET.fromstring(response)
@@ -278,7 +260,7 @@ class NuCore:
         nodes = None
         if nodes_path:
             nodes = self.__load_nodes_from_file__(nodes_path)
-        elif self.url:
+        elif self.nucore_api:
             nodes = self.__load_nodes_from_url__()
         else:
             raise NuCoreError("No valid nodes source provided.")
@@ -514,8 +496,7 @@ class NuCore:
         return self.rag_processor.query(query_text, num_results, rerank=rerank)
 
     async def send_commands(self, commands:list):
-        nucore_api = nucoreAPI(base_url=self.url, username=self.username, password=self.password)
-        response = nucore_api.send_commands(commands)
+        response = self.nucore_api.send_commands(commands)
         if response is None:
             raise NuCoreError("Failed to send commands.")
         return response
@@ -530,14 +511,7 @@ class NuCore:
         """
         if len (routines) == 0:
             raise NuCoreError ("No valid routines provided.")
-        #remove the port from the url since we are using eisyui
-        #conver it to a url object first
-        from urllib.parse import urlparse
-        parsed_url =  urlparse(self.url)
-        base_url = f"{parsed_url.scheme}://{parsed_url.hostname}"
-
-        nucore_api = nucoreAPI(base_url=base_url, username=self.username, password=self.password)
-        return nucore_api.upload_programs(routines)
+        return self.nucore_api.upload_programs(routines)
 
     
     async def get_properties(self, device_id:str)-> dict[str, Property]:
@@ -553,8 +527,7 @@ class NuCore:
             NuCoreError: If the device_id is empty or if the response cannot be parsed.
         """
         # Use nucoreAPI to fetch properties
-        nucore_api = nucoreAPI(base_url=self.url, username=self.username, password=self.password)
-        properties = nucore_api.get_properties(device_id)
+        properties = self.nucore_api.get_properties(device_id)
         if properties is None:
             raise NuCoreError(f"Failed to get properties for device {device_id}.")
         return properties

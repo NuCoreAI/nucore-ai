@@ -6,6 +6,7 @@ import asyncio, argparse
 
 from nucore import NuCore 
 from config import AIConfig
+from iox import IoXWrapper
 
 from assistant_session import AssistantSession
 
@@ -50,9 +51,11 @@ class NuCoreAssistant:
         self.nuCore = NuCore(
             collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
             collection_name="nucore.assistant",
-            backend_url=args.url,
-            backend_username=args.username,
-            backend_password=args.password,
+            nucore_api=IoXWrapper(
+                base_url=args.url,
+                username=args.username,
+                password=args.password
+            ),
             embedder_url=args.embedder_url if args.embedder_url else config.getEmbedderURL(),
             reranker_url=args.reranker_url if args.reranker_url else config.getRerankerURL()
         )
