@@ -212,3 +212,4 @@ ui/node_modules
 examples/
 finetuning_data/old/
 finetuning_data/secrets/
+logs/
