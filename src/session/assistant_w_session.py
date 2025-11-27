@@ -8,6 +8,9 @@ from nucore import NuCore
 from config import AIConfig
 from iox import IoXWrapper
 
+from assistant_session import AssistantSession
+
+
 """
 Best option
 build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/finetuned/qwen2.5-coder-dls-7b/qwen2.5-coder-dls-7b-Q4_K_M.gguf --jinja --host localhost -c 60000 --port 8013 -t 15  --n-gpu-layers 32 --batch-size 8192
@@ -41,6 +44,7 @@ config = AIConfig()
 class NuCoreAssistant:
     def __init__(self, args):
         self.sent_system_prompt=False
+        self.session = AssistantSession()
         self.debug_mode = False
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
@@ -218,7 +222,7 @@ class NuCoreAssistant:
         return await self.process_tool_responses(responses, websocket)
     
     async def process_clarify_device_tool_call(self, clarify:dict, websocket, user_response:str = None):
-        return None
+        return await self.session.process_clarify_device_tool_call(clarify, websocket, user_response)
 
     async def process_clarify_event_tool_call(self, websocket, clarify:dict):
         """
@@ -241,14 +245,17 @@ class NuCoreAssistant:
             if not type:
                 return None
             elif type == "PropQuery":
+                self.session.redo_query = False
                 return await self.process_property_query(tool_call.get("args").get("queries"), websocket)
             elif type == "Command":
+                self.session.redo_query = False
                 return await self.send_commands(tool_call.get("args").get("commands"), websocket)
             elif type == "ClarifyDevice":
                 return await self.process_clarify_device_tool_call(tool_call.get("args").get("clarify"), websocket)
             elif type == "ClarifyEvent":
                 return await self.process_clarify_event_tool_call(websocket, tool_call.get("args").get("clarify"))
             elif type == "Routine":
+                self.session.redo_query = False
                 return await self.create_automation_routine(tool_call.get("args").get("routines"), websocket)
         except Exception as e:
             print(f"Error processing tool call: {e}")
@@ -372,11 +379,14 @@ class NuCoreAssistant:
 #            query = f"**code-only** **no-explanation**\n{query}"
 
         context = None
+        if self.session.has_messages():
+            context = self.session.get_context()
         user_message = {
             "role": "user",
             "content": f"\n\nDEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}\n\n<END_OF_QUERY>" if not context 
                 else f"\n\nDEVICE STRUCTURE:\n\n{device_docs}\n\n{context}\n\nUSER QUERY:{query}\n\n<END_OF_QUERY>", 
         }
+        self.session.last_user_query=query
 
         print (f"\n\n*********************System Prompt:********************\n\n{user_message['content']}\n\n")
 
@@ -481,7 +491,11 @@ async def main(args):
                 break
 
             print(f"\n>>>>>>>>>>\n")
-            await assistant.process_customer_input(user_input, num_rag_results=3, rerank=False)
+
+            while True:
+                await assistant.process_customer_input(user_input, num_rag_results=3, rerank=False)
+                if not assistant.session.redo_query:
+                    break
             print ("\n\n<<<<<<<<<<\n")
             
         except Exception as e:

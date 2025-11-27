@@ -12,6 +12,7 @@ from .node import Node
 from .nodedef import NodeDef, NodeProperty, NodeCommands, NodeLinks, Property
 from .profile import Profile, Family, Instance
 from .uom import UOMEntry, get_uom_by_id
-from .nucore import NuCore, NuCoreError
+from .nucore_error import NuCoreError
+from .nucore import NuCore
 
-__all__ = ["NuCore", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreBackendAPI", "NuCorePrograms", "Command", "CommandParameter", "Editor", "LinkDef", "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id]
+__all__ = ["NuCore", "NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreBackendAPI", "NuCorePrograms", "Command", "CommandParameter", "Editor", "LinkDef", "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id]

@@ -1,5 +1,3 @@
-from udi_interface import udi_interface
-from udi_interface import LOGGER
 import requests, re, xml.etree.ElementTree as ET
 import sys
 import os
@@ -25,6 +23,10 @@ class IoXWrapper(NuCoreBackendAPI):
         """
         super().__init__()  # Initialize parent with no parameters
         if poly:
+            # import only in case we are running in polglot context since 
+            # udi_interface redirects standard input/output to polyglot LOGGER
+            from udi_interface import udi_interface, unload_interface
+            from udi_interface import LOGGER
             self.poly = poly
             self.poly.subscribe(self.poly.ISY, self.__info__)
             message = {'getIsyInfo': {}}
@@ -92,12 +94,20 @@ class IoXWrapper(NuCoreBackendAPI):
             return None
         
     def get_profiles(self):
+        """
+        Get all profiles from the IoX device.
+        :return: JSON response containing all profiles.
+        """
         response = self.get("/rest/profiles")
         if response == None:
             return None
         return response.json()
 
     def get_nodes(self):
+        """
+        Get all nodes from the IoX device.
+        :return: XML response containing all nodes.
+        """
         response = self.get("/rest/nodes")
         if response == None:
             return None

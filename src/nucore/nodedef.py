@@ -85,3 +85,4 @@ class NodeDef:
                 s.append(textwrap.indent(str(cmd), "  - "))
 
         return "\n".join(s)
+
