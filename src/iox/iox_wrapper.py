@@ -1,9 +1,12 @@
+import json
 import requests, re, xml.etree.ElementTree as ET
 import sys
 import os
+import asyncio, websockets, base64
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_backend_api import NuCoreBackendAPI
 from nucore.nodedef import Property
+import xml.etree.ElementTree as ET
 
 class IoXWrapper(NuCoreBackendAPI):
     ''' 
@@ -59,7 +62,8 @@ class IoXWrapper(NuCoreBackendAPI):
             # Method 1a: Using auth parameter (simplest)
             response = requests.get(
             url,
-            auth=(self.username, self.password)
+            auth=(self.username, self.password),
+            verify=False
             )
             if response.status_code != 200:
                 print (f"invalid url status code = {response.status_code}")
@@ -263,3 +267,89 @@ class IoXWrapper(NuCoreBackendAPI):
                 print (ex)
                 return False
         return True
+
+    async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
+        """
+        Subscribe to events
+        :param on_message_callback: function to call when an event is received
+        :param on_connect_callback: function to call when connection is established
+        :param on_disconnect_callback: function to call when connection is lost
+        All callback functions should be async
+        :return: True if subscription is successful, False otherwise
+        The format for event data is a dictionary of the following structure:
+        {
+            'seqnum': str or None,
+            'sid': str or None,
+            'timestamp': str or None,
+            'control': str,
+            'action': {
+                'value': str,
+                'uom': str or None,
+                'prec': str or None
+            },
+            'node': str,
+            'fmtAct': str,
+            'fmtName': str
+        }
+        """
+
+        try:
+            import ssl
+            if self.base_url.startswith("https"):
+                ws_url = self.base_url.replace("https", "wss") + "/rest/subscribe"
+                ssl_context= ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            else:
+                ws_url = self.base_url.replace("http", "ws") + "/rest/subscribe"
+                ssl_context=None
+            #make base64 authorization header
+            credentials = f"{self.username}:{self.password}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            headers = {
+                "Authorization": f"Basic {encoded_credentials}"
+            }
+            async with websockets.connect(ws_url, ssl=ssl_context, additional_headers=headers) as websocket:
+                if on_connect_callback:
+                    await on_connect_callback()
+                try:
+                    async for message in websocket:
+                        if on_message_callback:
+                            try:
+                                #parse the xml message
+                                root = ET.fromstring(message)
+                                control = root.find('control')
+                                action = root.find('action')
+                                node = root.find('node')
+                                fmtAct = root.find('fmtAct')
+                                fmtName = root.find('fmtName')
+                                eventInfo = root.find('eventInfo')
+                                event_data = {
+                                    'seqnum': root.get('seqnum', None ),
+                                    'sid': root.get('sid', None),
+                                    'timestamp': root.get('timestamp', None),
+                                    'control': control.text if control is not None else None,
+                                    'action': {
+                                        'value': action.text if action is not None else None,
+                                        'uom': action.get('uom', None) if action is not None else None,
+                                        'prec': action.get('prec', None) if action is not None else None
+                                    },
+                                    'node': node.text if node is not None else None,
+                                    'fmtAct': fmtAct.text if fmtAct is not None else None,
+                                    'fmtName': fmtName.text if fmtName is not None else None,
+                                    'eventInfo': ET.tostring(eventInfo) if eventInfo is not None else None
+                                }
+                                await on_message_callback(event_data)
+                            except Exception as ex:
+                                print(f"Failed to process incoming message: {str(ex)}: {message}")
+                                continue
+                #except websockets.ConnectionClosed:
+                except websockets.ConnectionClosed :
+                    print("WebSocket connection closed")
+                    if on_disconnect_callback:
+                        await on_disconnect_callback()
+        except Exception as ex:
+            print(f"Failed to subscribe to events: {str(ex)}")
+            return False
+        return True
+    

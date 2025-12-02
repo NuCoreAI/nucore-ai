@@ -139,7 +139,7 @@ class DeviceRagFormatter(RAGFormatter):
         if not self.lines[index].startswith(DEVICE_SECTION_HEADER):
             return None 
         
-        content = self.lines[index] 
+        content = "\n" + self.lines[index] 
         index += 1
         device_id = "n/a"
         device_name = "n/a"

@@ -50,8 +50,8 @@ class Profile:
     Defines the overall structure of a profile file, containing
     information about families and instances.
     """
-    timestamp: str
-    families: list[Family]
+    timestamp: str = "" 
+    families: list[Family] = field(default_factory=list)
     nodes:  dict = field(default_factory=dict)
     lookup: dict = field(default_factory=dict)
     
