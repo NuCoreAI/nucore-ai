@@ -47,8 +47,7 @@ class IoXWrapper(NuCoreBackendAPI):
         if info is not None:
             isy_ip = info['isy_ip_address']
             isy_port = info['isy_port']
-            if info['isy_https'] == 1:
-                isy_https = True
+            isy_https = info['isy_https'] == 1
             self.base_url = f"{'https' if isy_https else 'http'}://{isy_ip}:{isy_port}"
             self.username = info['isy_username']
             self.password = info['isy_password']
