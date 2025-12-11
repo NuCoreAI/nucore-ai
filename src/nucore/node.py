@@ -45,17 +45,21 @@ class Node:
             )
         )
 
-    def json(self):
+    def json(self, parent):
+        #pnode = node.pnode
+        #pnode = None if pnode is None or pnode == node.address else pnode 
+        #if pnode:
+        #    pnode = nodes.get(pnode, None)
         return {
             "name": self.name,
             "address": self.address,
-            "properties":[p.json() for p in self.node_def.properties] if self.node_def else [],
-               "properties":[p.json() for p in self.node_def.properties] if self.node_def else [],
-                   "properties":[p.json() for p in self.node_def.properties] if self.node_def else [],
-            "links": {
-                "ctl": [link for link in self.node_def.links.ctl],
-                "rsp": [link for link in self.node_def.links.rsp],
-            } if self.node_def and self.node_def.links else [],
+            "parent.name": parent.name if parent else None,
+            "parent.address": parent.address if parent else None,
+            "properties":[p.json() for p in self.node_def.properties] if self.node_def and self.node_def.properties else [],
+            "accepts.commands":[c.json() for c in self.node_def.cmds.accepts] if self.node_def and self.node_def.cmds.accepts else [],
+            "sends.commands":[c.json() for c in self.node_def.cmds.sends] if self.node_def and self.node_def.cmds.sends else [],
+            "controller.links": [link.json() for link in self.node_def.links.ctl] if self.node_def.links and self.node_def.links.ctl else [],
+            "responder.links": [link.json() for link in self.node_def.links.rsp] if self.node_def.links and self.node_def.links.rsp else [],
         }
 
     @staticmethod

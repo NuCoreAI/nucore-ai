@@ -15,16 +15,6 @@ class CommandParameter:
     init: str | None = None
     optional: bool | None = None
 
-    def __str__(self):
-        parts = [f"{self.id} ({self.editor})"]
-        if self.name:
-            parts.append(f"Name: {self.name}")
-        if self.init:
-            parts.append(f"Init: {self.init}")
-        if self.optional:
-            parts.append("Optional")
-        return ", ".join(parts).join(" - ").join(self.editor)
-    
     def json(self):
         out = {
             "id": self.id,
@@ -44,14 +34,6 @@ class Command:
     format: str | None = None
     parameters: list[CommandParameter] = field(default_factory=list)
 
-    def __str__(self):
-        s = f"{self.name}"
-        if len(self.parameters) > 0:
-            s += textwrap.indent("\nParameters:", "--")
-            for param in self.parameters:
-                s += textwrap.indent(f"\n{param.name}: {param.editor}", "---")
-        return s
-    
     def json(self):
         return {
             "name": self.name,

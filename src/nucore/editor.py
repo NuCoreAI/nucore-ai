@@ -13,28 +13,7 @@ class EditorSubsetRange:
     subset: str
     names: dict = field(default_factory=dict)
 
-    def __str__(self):
-        parts = []
-        for s in self.subset.split(","):
-            s = s.strip()
-            if "-" in s:
-                # It's a range 'a-b'
-                parts.append(s)
-                parts.append(
-                    ", ".join([f"{k} = {v}" for k, v in self.names.items()])
-                )
-            else:
-                # Single value
-                val_name = self.names.get(s)
-                if val_name:
-                    parts.append(f"{s} = {val_name}")
-                else:
-                    parts.append(s)
-        subset_str = ", ".join(parts)
-        return f"Discrete values: {subset_str} {self.uom}"
-    
     def json(self):
-        label = "Discrete values"
         description = "Subset of allowed values" 
         out = {
             "uom": f"{self.uom.label} = {self.uom.description}",
@@ -61,7 +40,7 @@ class EditorSubsetRange:
         Returns a description of the subset.
         """
         #desc = f"Enum of Unit {self.uom.label}"
-        desc = f"Enum [uom id={self.uom.id}]"
+        desc = f"uom={self.uom.label} uom_id={self.uom.id}"
         return desc
 
     def get_names(self):
@@ -83,12 +62,12 @@ class EditorSubsetRange:
                 # It's a range 'a-b'
                 #names.append(f"between {s}")
                 for k, v in self.names.items():
-                    names.append(f"{v} [{k}]")
+                    names.append(f"{k}:{v}")
             else:
                 # Single value
                 val_name = self.names.get(s)
                 if val_name:
-                    names.append(f"{val_name} [{s}]")
+                    names.append(f"{s}:{val_name}")
                 else:
                     names.append(s)
         return names
@@ -106,24 +85,6 @@ class EditorMinMaxRange:
     step: float = None
     names: dict = field(default_factory=dict)
 
-    def __str__(self):
-        if self.uom.id == "25":
-            label = "Discrete values"
-        else:
-            label = "Range"
-
-        parts = [f"{label}: between {self.min} and {self.max} {self.uom}"]
-
-        if self.step:
-            parts.append(f" by step of {self.step}.")
-
-        if self.names:
-            parts.append(" mapping: ")
-            parts.append(
-                ", ".join([f"{k} = {v}" for k, v in self.names.items()])
-            )
-        return "".join(parts)
-
     def json(self):
         if self.uom.id == "25":
             label = "Discrete values"
@@ -139,7 +100,7 @@ class EditorMinMaxRange:
         if self.names:
             out["mappings"] = [
                 {
-                    "{k}": v
+                    k: v
                 } for k, v in self.names.items()]
         return out 
 
@@ -147,9 +108,10 @@ class EditorMinMaxRange:
         """
         Returns a description of the range.
         """
-        desc = f"Range {self.min} to {self.max} Unit {self.uom.label} [uom id={self.uom.id}]"
+        #desc = f"Range {self.min} to {self.max} Unit {self.uom.label} [uom id={self.uom.id}]"
+        desc = f"Range: min={self.min},max={self.max},uom={self.uom.label},uom_id={self.uom.id}"
         if self.step:
-            desc += f" (step of {self.step} and precision of {self.prec if self.prec else 1})."
+            desc += f",step={self.step},precision={self.prec if self.prec else 1}"
 
         return desc
     
@@ -160,7 +122,7 @@ class EditorMinMaxRange:
         names = []
         if self.names:
             for k, v in self.names.items():
-                names.append(f"{v} [{k}]")
+                names.append(f"{k}:{v}")
         return names
 
 @dataclass
@@ -172,9 +134,6 @@ class Editor:
 
     id: str
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
-
-    def __str__(self):
-        return "; ".join([f"{r}" for r in self.ranges])
 
     def json(self):
         return {

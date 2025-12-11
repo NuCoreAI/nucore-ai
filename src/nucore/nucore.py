@@ -88,7 +88,7 @@ class NuCore:
             return Node.load_from_xml(response)
         
         raise NuCoreError("No valid nodes source provided.")
-
+    
     def format_nodes(self):
         """
         Format nodes for fine tuning or other purposes 

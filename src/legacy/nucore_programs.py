@@ -67,7 +67,7 @@ if __name__ == "__main__":
     ep.add_program("D2D/0002.PGM", program1)
     ep.add_program("D2D/0001.PGM", program2)
 
-    from .nucore_backend_api import nucoreAPI
+    from ..nucore.nucore_backend_api import nucoreAPI
     eap = nucoreAPI()
     eap.upload_programs(ep)
     print ('here')

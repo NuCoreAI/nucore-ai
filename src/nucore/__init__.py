@@ -1,5 +1,4 @@
 from .nucore_backend_api import NuCoreBackendAPI
-from .nucore_programs import NuCorePrograms 
 from .cmd import Command, CommandParameter 
 from .editor import Editor, EditorMinMaxRange, EditorSubsetRange
 from .linkdef import LinkDef, LinkParameter
@@ -15,4 +14,4 @@ from .uom import UOMEntry, get_uom_by_id
 from .nucore_error import NuCoreError
 from .nucore import NuCore
 
-__all__ = ["NuCore", "NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreBackendAPI", "NuCorePrograms", "Command", "CommandParameter", "Editor", "LinkDef", "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id]
+__all__ = ["NuCore", "NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreBackendAPI", "Command", "CommandParameter", "Editor", "LinkDef", "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id]

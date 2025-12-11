@@ -61,7 +61,7 @@ class DeviceRagFormatter(RAGFormatter):
 
     def add_property(self, prop: NodeProperty):
         with self.block(level_increase=4):
-            self.write(f"{prop.name} [id={prop.id}]")
+            self.write(f"{prop.name} id={prop.id}")
             if prop.editor and prop.editor.ranges:
                 for range in prop.editor.ranges:
                     with self.block():
@@ -75,24 +75,27 @@ class DeviceRagFormatter(RAGFormatter):
 
     def add_command(self, command):
         with self.block(level_increase=4):
-            self.write(f"{command.name} [id={command.id}]")
+            cmd_line=f"{command.name} id={command.id}"
+            if command.parameters is not None and len(command.parameters) > 0:
+                cmd_line += " parameters:"
+            self.write(cmd_line)
             if command.parameters:
+                i=1
                 with self.block():
-                    i=1
-                    with self.block():
-                        for param in command.parameters:
-                            self.write(f"Parameter {i}: name={param.name if param.name else 'n/a'} [id={param.id if param.id else 'n/a'}]")
-                            i += 1
-                            if param.editor and param.editor.ranges:
-                                for range in param.editor.ranges:
-                                    with self.block():
-                                        if range.get_description():
-                                            self.write(f"{range.get_description()}")
-                                        if range.names:
-                                            with self.block(): 
-                                                #self.write("Permissible values:")
-                                                for name in range.get_names():
-                                                    self.write(name)
+                    for param in command.parameters:
+                        #self.write(f"Parameter {i}: name={param.name if param.name else 'n/a'} [id={param.id if param.id else 'n/a'}]")
+                        self.write(f"{param.name if param.name else 'n/a'} id={param.id if param.id else 'n/a'}")
+                        i += 1
+                        if param.editor and param.editor.ranges:
+                            for range in param.editor.ranges:
+                                with self.block():
+                                    if range.get_description():
+                                        self.write(f"{range.get_description()}")
+                                    if range.names:
+                                        with self.block(): 
+                                            #self.write("Permissible values:")
+                                            for name in range.get_names():
+                                                self.write(name)
 
     def format_node(self, node, parent):
         self.add_device_section(node, parent)

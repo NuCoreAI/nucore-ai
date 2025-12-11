@@ -2,6 +2,7 @@
 
 import re
 import requests, os
+from pathlib import Path
 import json
 import httpx
 import asyncio, argparse
@@ -32,12 +33,22 @@ def get_data_directory(parent:str, subdir:str) -> str:
 print(os.getcwd())
 
 # Assuming this code is inside your_package/module.py
-prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.system.prompt") 
+prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt") 
 with open(prompts_path, 'r', encoding='utf-8') as f:
     system_prompt = f.read().strip()
 
-
 config = AIConfig()
+
+SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
+if not SECRETS_DIR.exists():
+    raise FileNotFoundError(f"Secrets directory {SECRETS_DIR} does not exist. Please create it and add your OpenAI API key.")
+# Load the OpenAI API key from the secrets file
+if not (SECRETS_DIR / "keys.py").exists():
+    raise FileNotFoundError(f"Secrets file {SECRETS_DIR / 'keys.py'} does not exist. Please create it and add your OpenAI API key.")
+
+exec(open(SECRETS_DIR / "keys.py").read())  # This will set OPENAI_API_KEY
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 class NuCoreAssistant:
     def __init__(self, args):
@@ -57,8 +68,7 @@ class NuCoreAssistant:
             reranker_url=args.reranker_url if args.reranker_url else config.getRerankerURL()
         )
         if not self.nuCore:
-            raise ValueError("Failed to initialize NuCore. Please check your configuration."
-        )
+            raise ValueError("Failed to initialize NuCore. Please check your configuration.")
         model_url = args.model_url if args.model_url else config.getModelURL()
         if not model_url:
             raise ValueError("Model URL is required to initialize NuCoreAssistant")
@@ -273,7 +283,7 @@ class NuCoreAssistant:
             tools = json.loads(full_response)
             return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
-            if not full_response or not begin_marker or not end_marker:
+            if not full_response: # or not begin_marker or not end_marker:
                 return ValueError("Invalid input to process_tool_call")
             
     async def send_response(self, message, is_end=False, websocket=None):
@@ -380,6 +390,12 @@ class NuCoreAssistant:
         }
 
         print (f"\n\n*********************System Prompt:********************\n\n{user_message['content']}\n\n")
+<<<<<<< HEAD
+=======
+        with open(f"/tmp/ai.prompt", "w") as f:
+            f.write(sprompt)
+            f.write(user_message['content'])
+>>>>>>> d40ad8b (help)
 
         #first use rag for relevant documents
         #rag_results = self.nuCore.query(query, num_rag_results, rerank)
@@ -433,15 +449,18 @@ class NuCoreAssistant:
                             if isinstance(text, bytes):
                                 text = text.decode("utf-8")
                             full_response += text
-                            await self.send_response(text, False)
-                    elif t in ("completed", "response.completed"):
-                        await self.send_response("", True)  # indicate end of response
-                    elif t == "error":
-                        print(f"Error from model: {event.error}")
-                
-            await self.process_tool_call(full_response, None, None)
-            with open("nucore_out.json", "w") as f: 
-                f.write(full_response)
+            # now parse the full response and look for blocks between __NUCORE_COMMAND_BEGIN__ and __NUCORE_COMMAND_END__. 
+            # convert the blocks to json and add to list
+            #with open("nucore_out.json", "w") as f: 
+            #    f.write(full_response)
+            if websocket: 
+                if self.debug_mode:
+                    await self.send_response("\r\n***\r\n", False, websocket)
+            print(f"\n\n*********************Full LLM Response:********************\n\n{full_response}\n\n") 
+            rc = await self.process_tool_call(full_response, websocket, None, None)
+            if rc == None:
+                # if no tool calls were found, just send the full response back to the user
+                await self.send_response(full_response, True, websocket) 
 
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
