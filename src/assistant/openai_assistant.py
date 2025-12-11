@@ -390,12 +390,9 @@ class NuCoreAssistant:
         }
 
         print (f"\n\n*********************System Prompt:********************\n\n{user_message['content']}\n\n")
-<<<<<<< HEAD
-=======
         with open(f"/tmp/ai.prompt", "w") as f:
             f.write(sprompt)
             f.write(user_message['content'])
->>>>>>> d40ad8b (help)
 
         #first use rag for relevant documents
         #rag_results = self.nuCore.query(query, num_rag_results, rerank)
