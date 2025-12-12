@@ -421,8 +421,8 @@ class NuCoreAssistant:
         try:
             full_response = ""
             with client.chat.completions.stream(
-                #model="gpt-4.1-nano",  # or gpt-4o, gpt-4.1-mini for slightly higher quality
-                model="ft:gpt-4.1-mini-2025-04-14:universal-devices:nucore-13:CSfIc6HZ",  # or gpt-4o, gpt-4.1-mini for slightly higher quality
+                model="gpt-4.1-mini",  # or gpt-4o, gpt-4.1-mini for slightly higher quality
+                #model="ft:gpt-4.1-mini-2025-04-14:universal-devices:nucore-13:CSfIc6HZ",  # or gpt-4o, gpt-4.1-mini for slightly higher quality
                 messages=messages,
                 temperature=1.0,
                 top_p=0.9,
@@ -453,7 +453,7 @@ class NuCoreAssistant:
             if websocket: 
                 if self.debug_mode:
                     await self.send_response("\r\n***\r\n", False, websocket)
-            print(f"\n\n*********************Full LLM Response:********************\n\n{full_response}\n\n") 
+            #print(f"\n\n*********************Full LLM Response:********************\n\n{full_response}\n\n") 
             rc = await self.process_tool_call(full_response, websocket, None, None)
             if rc == None:
                 # if no tool calls were found, just send the full response back to the user

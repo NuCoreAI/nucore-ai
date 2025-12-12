@@ -40,7 +40,8 @@ class EditorSubsetRange:
         Returns a description of the subset.
         """
         #desc = f"Enum of Unit {self.uom.label}"
-        desc = f"uom={self.uom.label} uom_id={self.uom.id}"
+        has_names= self.names is not None and len(self.names) > 0
+        desc = f"uom={self.uom.label},uom_id={self.uom.id}"
         return desc
 
     def get_names(self):
@@ -109,7 +110,7 @@ class EditorMinMaxRange:
         Returns a description of the range.
         """
         #desc = f"Range {self.min} to {self.max} Unit {self.uom.label} [uom id={self.uom.id}]"
-        desc = f"Range: min={self.min},max={self.max},uom={self.uom.label},uom_id={self.uom.id}"
+        desc = f"uom={self.uom.label},uom_id={self.uom.id},min={self.min},max={self.max}"
         if self.step:
             desc += f",step={self.step},precision={self.prec if self.prec else 1}"
 

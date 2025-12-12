@@ -32,7 +32,7 @@ def get_data_directory(parent:str, subdir:str) -> str:
 print(os.getcwd())
 
 # Assuming this code is inside your_package/module.py
-prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.system.prompt") 
+prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt") 
 with open(prompts_path, 'r', encoding='utf-8') as f:
     system_prompt = f.read().strip()
 
