@@ -104,6 +104,6 @@ class NuCoreBackendAPI(ABC):
             programs (list): List of program contents to upload.
             
         Returns:
-            bool: True if successful, False otherwise.
+            list: List of responses from the backend for each program uploaded.
         """
         pass

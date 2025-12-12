@@ -217,17 +217,17 @@ class NuCore:
             raise NuCoreError("Failed to send commands.")
         return response
     
-    async def create_automation_routines(self, routines:list, websocket):
+    async def create_automation_routines(self, routines:list):
         """
         Create automation routines using the nucore API.
         
         Args:
             routines (list): A list of routines to create.
-            websocket: The websocket connection to use for communication.
         """
         if len (routines) == 0:
             raise NuCoreError ("No valid routines provided.")
-        return self.nucore_api.upload_programs(routines)
+        responses=await self.nucore_api.upload_programs(routines)
+        return responses
 
     
     async def get_properties(self, device_id:str)-> dict[str, Property]:

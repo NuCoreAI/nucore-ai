@@ -75,6 +75,19 @@
             "justMyCode": false
         },
         {
+            "name": "openai-assistant-responses", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/openai_assistant_responses.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--url=http://192.168.6.149:8080" ,
+               "--username=admin",
+               "--password=admin",
+            ],
+            "justMyCode": false
+        },
+        {
             "name": "start_servers", 
             "type": "debugpy",
             "request": "launch",
