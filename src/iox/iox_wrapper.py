@@ -265,14 +265,12 @@ class IoXWrapper(NuCoreBackendAPI):
         orig_base_url=self.base_url; 
         for program_content in programs:
             try:
+                program_content = {
+                    'routine': program_content
+                }
                 #temporarily remove the port if present
-                self.base_url=re.sub(r':\d+', '', self.base_url)
-                #now add port 5000 to it
-                self.base_url+= ':5000'
-                #replace http with https if needed
-                if self.base_url.startswith("http"):
-                    self.base_url=self.base_url.replace("http", "https")
-                responses.append(self.put(f'/api/ai/trigger', body=program_content, headers=None))
+                self.base_url="http://localhost:5000"
+                responses.append(self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=None))
             except Exception as ex:
                 print (ex)
                 self.base_url = orig_base_url

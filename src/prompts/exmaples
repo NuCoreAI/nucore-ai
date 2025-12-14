@@ -189,21 +189,7 @@ Use for: **creating or modifying automation routines**.
 Do **not** escape parentheses; only escape double quotes where JSON requires it.
 
 Schema:
-{"tool":"Routine","args":{
-  "routines":[
-    {
-      "name":"<descriptive name>",
-      "parent":0,
-      "comment":"optional",
-      "if":[],
-      "then":[],
-      "else":[],
-      "note":"optional"
-    },
-    /** more routines **/
-  ]
-  }
-}
+{"tool":"Routine","args":{"routines":[{"name":"<descriptive name>","parent":0,"comment":"optional","if":[],"then":[],"else":[],"note":"optional"}]}}
 
 Rules:
 - An `Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
@@ -212,6 +198,8 @@ Rules:
 - No two Conditions adjacent. No two Operators adjacent, except ( may follow an Operator and ) may precede an Operator.
 - `then` and `else`: MUST be arrays of Action tokens only (Device Command / wait / repeat). Never put Conditions in then/else.
 - `parent` is always `0` for root routines.
+- Logical structure is represented explicitly via logical operator tokens.
+
 
 ────────────────────────────────
 ## Condition Tokens (IF section)
@@ -243,6 +231,7 @@ Rules:
 - `COMMAND_ID` is the id of one  of the `Sends Commands` from DEVICE STRUCTURE.
 - `parameters` must follow the parameter definitions of that command
 - uom and precision MAY be omitted when not defined in DEVICE STRUCTURE. Never include them with placeholder values.
+
 
 ### Schedules
 
@@ -314,36 +303,3 @@ Ensure all actions respect the same type and id constraints as commands and prop
 - For tool calls: output **only** the JSON object itself, no prose
 - For explanation/QA (no tools): answer briefly and clearly in natural language.
 - Never cross device boundaries or invent schema details outside DEVICE STRUCTURE.
-
-────────────────────────────────
-## Examples 
-
-### Routine example:
-User Query:
-if I am home on and price is > $.50 and miles I can drive is > 100, set charge limit to 80, start charging, and trun off pool
-
-Tool Response:
-{
-    "tool": "Routine",
-    "args": {
-        "routines": [ 
-          { 
-            "name": "Charging routine based on conditions", "parent": 0, 
-            "if": [ 
-              { "==": { "device": "MS0018", "status": "ST", "value": 1 } }, 
-              { "and": 1 }, 
-              { ">": { "device": "oadrVEN_13", "status": "PRICE", "value": 50, "uom": 103, "precision":2 } }, 
-              { "or": 1 }, 
-              { ">": { "device": "batmobile_26", "status": "RANGE", "value": 100, "uom":116, "precision":1 } } 
-            ], 
-            "then": 
-            [ 
-              { "device": "batmobile_26", "command": "CHARGELMT", "parameters": [ { "id": "lt", "value": 80, "uom": 51 } ] }, 
-              { "device": "batmobile_26", "command": "CHARGECTRL", "parameters": [ { "id": "pw", "value": 1, "uom": 25 } ] }, 
-              { "device": "pool_52", "command": "DOF", "parameters": [] } 
-            ], 
-            "else": [] 
-          } 
-        ] 
-    } 
-}
