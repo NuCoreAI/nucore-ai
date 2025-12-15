@@ -189,7 +189,21 @@ Use for: **creating or modifying automation routines**.
 Do **not** escape parentheses; only escape double quotes where JSON requires it.
 
 Schema:
-{"tool":"Routine","args":{"routines":[{"name":"<descriptive name>","parent":0,"comment":"optional","if":[],"then":[],"else":[],"note":"optional"}]}}
+{"tool":"Routine","args":{
+  "routines":[
+    {
+      "name":"<descriptive name>",
+      "parent":0,
+      "comment":"optional",
+      "if":[],
+      "then":[],
+      "else":[],
+      "note":"optional"
+    },
+    /** more routines **/
+  ]
+  }
+}
 
 Rules:
 - An `Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
@@ -198,8 +212,6 @@ Rules:
 - No two Conditions adjacent. No two Operators adjacent, except ( may follow an Operator and ) may precede an Operator.
 - `then` and `else`: MUST be arrays of Action tokens only (Device Command / wait / repeat). Never put Conditions in then/else.
 - `parent` is always `0` for root routines.
-- Logical structure is represented explicitly via logical operator tokens.
-
 
 ────────────────────────────────
 ## Condition Tokens (IF section)
@@ -218,7 +230,7 @@ Rules:
 - `VALUE` integer respecting DEVICE STRUCTURE ranges  
 - `UOM_ID` = integer UOM id  
 - `PRECISION` = integer indicating decimal places
-- uom and precision MAY be omitted when not defined in DEVICE STRUCTURE. Never include them with placeholder values.
+- uom and precision MUST BE INCLUDED for each defined parameter
 
 ### COC (Change of Control)
 
@@ -230,8 +242,7 @@ Rules:
 - <OP> is one of: `==`, `!=`  
 - `COMMAND_ID` is the id of one  of the `Sends Commands` from DEVICE STRUCTURE.
 - `parameters` must follow the parameter definitions of that command
-- uom and precision MAY be omitted when not defined in DEVICE STRUCTURE. Never include them with placeholder values.
-
+- uom and precision MUST BE INCLUDED for each defined parameter
 
 ### Schedules
 

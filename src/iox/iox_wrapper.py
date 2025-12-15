@@ -258,25 +258,26 @@ class IoXWrapper(NuCoreBackendAPI):
             responses.append(self.get(url))
         return responses
 
-    def upload_programs(self, programs:list):
-        if not programs:
+    def upload_program(self, program:dict):
+        if not program:
             return False
-        responses = []
         orig_base_url=self.base_url; 
-        for program_content in programs:
-            try:
-                program_content = {
-                    'routine': program_content
-                }
-                #temporarily remove the port if present
-                self.base_url="http://localhost:5000"
-                responses.append(self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=None))
-            except Exception as ex:
-                print (ex)
-                self.base_url = orig_base_url
-                return None
+        response=None
+        try:
+            program_content = {
+                'routine': program 
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            #temporarily remove the port if present
+            self.base_url="http://localhost:5000"
+            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+        except Exception as ex:
+            print (ex)
+        
         self.base_url = orig_base_url
-        return responses
+        return response
     
 
     async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 

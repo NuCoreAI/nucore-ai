@@ -96,14 +96,14 @@ class NuCoreBackendAPI(ABC):
         pass
 
     @abstractmethod
-    def upload_programs(self, programs:list):
+    def upload_program(self, program:dict):
         """
-        Upload programs to the backend.
+        Upload a single program to the backend. 
         
         Args:
-            programs (list): List of program contents to upload.
+            program (dict): The program content to upload.
             
         Returns:
-            list: List of responses from the backend for each program uploaded.
+            str: The response from the backend for the uploaded program.
         """
         pass

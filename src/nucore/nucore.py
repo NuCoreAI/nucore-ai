@@ -217,16 +217,16 @@ class NuCore:
             raise NuCoreError("Failed to send commands.")
         return response
     
-    async def create_automation_routines(self, routines:list):
+    async def create_automation_routine(self, routine:dict):
         """
         Create automation routines using the nucore API.
         
         Args:
-            routines (list): A list of routines to create.
+            routine (dict): A routine to create.
         """
-        if len (routines) == 0:
-            raise NuCoreError ("No valid routines provided.")
-        responses=await self.nucore_api.upload_programs(routines)
+        if not routine:
+            raise NuCoreError ("No valid routine provided.")
+        responses=await self.nucore_api.upload_program(routine)
         return responses
 
     

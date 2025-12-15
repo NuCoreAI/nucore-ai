@@ -1,6 +1,7 @@
 # implement openai assistant using Responses API
 
 import re
+from urllib import response
 import requests, os
 from pathlib import Path
 import json
@@ -11,7 +12,7 @@ from nucore import NuCore
 from config import AIConfig
 
 from iox import IoXWrapper
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 
 from importlib.resources import files
 
@@ -48,7 +49,7 @@ if not (SECRETS_DIR / "keys.py").exists():
 
 exec(open(SECRETS_DIR / "keys.py").read())  # This will set OPENAI_API_KEY
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 class NuCoreAssistant:
     def __init__(self, args):
@@ -116,9 +117,12 @@ class NuCoreAssistant:
         :return: The result of the routine creation.
         **for now, just a stub **
         """
-        responses = await self.nuCore.create_automation_routines(routines)
+        if not routines or len(routines) == 0:
+            return "No routines provided"
+        responses = []
+        for routine in routines:
+            responses.append(await self.nuCore.create_automation_routine(routine))
         await self.process_tool_responses(responses, websocket)
-        return responses
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
@@ -129,6 +133,7 @@ class NuCoreAssistant:
         except Exception as e:
             pass
 
+        props=[]
         for property in prop_query:
             # Process the property query
             device_id = property.get('device') or property.get('device_id')
@@ -147,14 +152,18 @@ class NuCoreAssistant:
             if prop_id:
                 prop = properties.get(prop_id)
                 if prop:
-                    if websocket:
-                        await self.send_response(f"{prop.formatted if prop.formatted else prop.value}", True, websocket)
-                    text = f"\nNuCore: {prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}"
-                    await self.send_response(text, True, websocket)
+                    #text = f"rephrase_in_natural_language_\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
+                    text = f"rephrase_in_natural_language_\"{device_name}: {prop.formatted if prop.formatted else prop.value}\""
+                    props.append(text)
+                    #await self.send_response(text, True, websocket)
                 else:
                     print( f"Property {prop_id} not found for device {property['device_id']}")
             else:
                 print(f"No property ID provided for device {property['device_id']}")
+
+        if len(props) > 0:
+            text = "\n".join(props) 
+            await self.process_customer_input(text, websocket=websocket)
 
     async def get_random_success_message(self):
         messages = [
@@ -352,39 +361,34 @@ class NuCoreAssistant:
             self.message_history.append({"role": "user", "content": user_content})
             
             # Create response - pass previous messages as additional_messages
-            response = client.responses.create(
-                model="gpt-4o-mini",
+            stream = await client.responses.create(
+                model="gpt-4.1-mini",
                 instructions=sprompt,
                 input=self.message_history,
                 temperature=1.0,
-            )
-            
-            # Extract the response content
-            if response.output:
-                for output_item in response.output:
-                    if output_item.type == "message":
-                        for output_subitem in output_item.content:
-                            if hasattr(output_subitem, 'content'):
-                                full_response += output_subitem.content
-                            elif hasattr(output_subitem, 'text'):
-                                full_response += output_subitem.text
-                    elif hasattr(output_item, 'content'):
-                        full_response += output_item.content
-                    elif hasattr(output_item, 'text'):
-                        full_response += output_item.text
-            
-            # Add assistant response to message history
-            if full_response:
-                self.message_history.append({"role": "assistant", "content": full_response})
+                stream=True
+            ) 
+            first_line=True
+            async for event in stream:
+            # Text chunks as they arrive
+                if event.type == "response.output_text.delta":
+                    full_response += event.delta
+                    if first_line:
+                        await self.send_response(f"\n{event.delta}", False, websocket)
+                        first_line = False
+                    else:
+                        await self.send_response(event.delta, False, websocket)
+            # End of response
+                elif event.type == "response.completed":
+                    if full_response:
+                        self.message_history.append({"role": "assistant", "content": full_response})
+                        rc = await self.process_tool_call(full_response, websocket, None, None)
+                        if self.debug_mode:
+                            await self.send_response("\r\n***\r\n", False, websocket)
+                        else:
+                            await self.send_response("\n", False, websocket)
 
-            if websocket: 
-                if self.debug_mode:
-                    await self.send_response("\r\n***\r\n", False, websocket)
-            
-            rc = await self.process_tool_call(full_response, websocket, None, None)
-            if rc == None:
-                # if no tool calls were found, just send the full response back to the user
-                await self.send_response(full_response, True, websocket) 
+            # Add assistant response to message history
 
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
