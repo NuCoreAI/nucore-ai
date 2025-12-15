@@ -42,7 +42,6 @@ class NuCoreAssistant:
     def __init__(self, args):
         self.sent_system_prompt=False
         self.debug_mode = False
-        self.message_history = []
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.nuCore = NuCore(
@@ -57,14 +56,14 @@ class NuCoreAssistant:
             reranker_url=args.reranker_url if args.reranker_url else config.getRerankerURL()
         )
         if not self.nuCore:
-            raise ValueError("Failed to initialize NuCore. Please check your configuration.")
+            raise ValueError("Failed to initialize NuCore. Please check your configuration."
+        )
         model_url = args.model_url if args.model_url else config.getModelURL()
         if not model_url:
             raise ValueError("Model URL is required to initialize NuCoreAssistant")
         self.__model_url__ = model_url
         self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
         print (self.__model_url__)
-        self.device_docs = None
         self.nuCore.load()
         ### us the following to include rags and embed them and rerank them.
         #self.nuCore.load(include_rag_docs=True, static_docs_path="/tmp/embeddings", embed=True)
@@ -107,12 +106,8 @@ class NuCoreAssistant:
         :return: The result of the routine creation.
         **for now, just a stub **
         """
-        if not routines or len(routines) == 0:
-            return "No routines provided"
-        responses = []
-        for routine in routines:
-            responses.append(await self.nuCore.create_automation_routine(routine))
-        await self.process_tool_responses(responses, websocket)
+        #return await self.nuCore.create_automation_routines(routines, websocket)
+        await self.send_response(await self.get_random_success_message(), True, websocket)
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
@@ -122,7 +117,7 @@ class NuCoreAssistant:
                 prop_query = prop_query[0]
         except Exception as e:
             pass
-        text = None
+
         for property in prop_query:
             # Process the property query
             device_id = property.get('device') or property.get('device_id')
@@ -131,28 +126,24 @@ class NuCoreAssistant:
                 continue
             properties = await self.nuCore.get_properties(device_id)
             if not properties:
-                print(f"No properties found for device {device_id}")
+                print(f"No properties found for device {property['device_id']}")
                 continue
             prop_id = property.get('property') or property.get('property_id')
+            prop_name = property.get('property_name')
             device_name = self.nuCore.get_device_name(device_id)
             if not device_name:
                 device_name = device_id
             if prop_id:
                 prop = properties.get(prop_id)
-                text = "rephrase_in_natural_language_\""
                 if prop:
-                    #text = f"rephrase_in_natural_language_\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
-                    text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}\n"
-                    #await self.send_response(text, True, websocket)
+                    if websocket:
+                        await self.send_response(f"{prop.formatted if prop.formatted else prop.value}", True, websocket)
+                    text = f"\nNuCore: {prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}"
+                    await self.send_response(text, True, websocket)
                 else:
-                    print( f"Property {prop_id} not found for device {device_name}")
+                    print( f"Property {prop_id} not found for device {property['device_id']}")
             else:
-                print(f"No property ID provided for device {device_name}")
-
-        if text is not None:
-            text += "\""
-            await self.process_customer_input(text, websocket=websocket, mandatory=True)
-            return  
+                print(f"No property ID provided for device {property['device_id']}")
 
     async def get_random_success_message(self):
         messages = [
@@ -202,44 +193,46 @@ class NuCoreAssistant:
         import random
         return random.choice(messages)
 
-    async def process_tool_responses(self, responses, websocket, original_messages=None):
-        if not responses or len(responses) == 0:
+    async def process_tool_responses(self, responses, websocket):
+        if not responses:
             await self.send_response(await self.get_random_full_failure_message(), True, websocket)
             return None
         if not websocket:
             print(responses)
             return responses
         status_codes: list = []
-        if False: 
-            if isinstance(responses, list):
-                for response in responses:
-                    status_codes.append(response.status_code)
-            #now if all are 200, return a random success message
-            if all(code == 200 for code in status_codes):
-                await self.send_response(await self.get_random_success_message(), True, websocket)
-            elif all(code != 200 for code in status_codes):
-                await self.send_response(await self.get_random_full_failure_message(), True, websocket)
-            else:
-                await self.send_response(await self.get_random_partial_failure_message(), True, websocket)
+        if isinstance(responses, list):
+            for response in responses:
+                status_codes.append(response.status_code)
+        #now if all are 200, return a random success message
+        if all(code == 200 for code in status_codes):
+            await self.send_response(await self.get_random_success_message(), True, websocket)
+        elif all(code != 200 for code in status_codes):
+            await self.send_response(await self.get_random_full_failure_message(), True, websocket)
         else:
-            if isinstance(responses, list):
-                output="rephrase_in_natural_language_\""
-                for i in range(len(responses)):
-                    response = responses[i]
-                    original_message = original_messages[i] if original_messages and i < len(original_messages) else " "
-                    output += f"{original_message}{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\n"
-
-                output+="\""
-                await self.process_customer_input(output, websocket=websocket, mandatory=True)
-            else:
-                await self.process_customer_input(f"rephrase_in_natural_language_\"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
-
+            await self.send_response(await self.get_random_partial_failure_message(), True, websocket)
         return responses
 
     async def send_commands(self, commands:list, websocket):
         responses = await self.nuCore.send_commands(commands)
-        return await self.process_tool_responses(responses, websocket, original_messages=commands)
+        return await self.process_tool_responses(responses, websocket)
     
+    async def process_clarify_device_tool_call(self, clarify:dict, websocket, user_response:str = None):
+        return None
+
+    async def process_clarify_event_tool_call(self, websocket, clarify:dict):
+        """
+        {"tool":"ClarifyEvent","args":{"clarify":{
+            "question": "natural language question",
+            "options": [
+                { "name": "name of possible event 1"},
+                { "name": "name of possible event 2"},
+                ...
+            ]}
+            }}
+        """
+        return None
+
     async def process_json_tool_call(self, tool_call:dict, websocket):
         if not tool_call:
             return None
@@ -251,6 +244,10 @@ class NuCoreAssistant:
                 return await self.process_property_query(tool_call.get("args").get("queries"), websocket)
             elif type == "Command":
                 return await self.send_commands(tool_call.get("args").get("commands"), websocket)
+            elif type == "ClarifyDevice":
+                return await self.process_clarify_device_tool_call(tool_call.get("args").get("clarify"), websocket)
+            elif type == "ClarifyEvent":
+                return await self.process_clarify_event_tool_call(websocket, tool_call.get("args").get("clarify"))
             elif type == "Routine":
                 return await self.create_automation_routine(tool_call.get("args").get("routines"), websocket)
         except Exception as e:
@@ -272,12 +269,10 @@ class NuCoreAssistant:
 
         tools = None
         try:
-            #remove markdowns such as ```json ... ```
-            full_response = re.sub(r"```json(.*?)```", r"\1", full_response, flags=re.DOTALL).strip()
             tools = json.loads(full_response)
             return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
-            if not full_response:
+            if not full_response or not begin_marker or not end_marker:
                 return ValueError("Invalid input to process_tool_call")
             
     async def send_response(self, message, is_end=False, websocket=None):
@@ -293,14 +288,39 @@ class NuCoreAssistant:
             await websocket.send_text(json.dumps(payload))
         print(message, end="", flush=True)
 
-    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, mandatory:bool=False):
+    async def send_user_content_to_llm(self, user_content, websocket=None):
+        """
+        Send user content to the LLM for processing.
+        :param user_content: The content provided by the user.
+        """
+        if not user_content:
+            print("No user content provided, exiting ...")
+            return
+        user_message = {
+            "role": "user",
+            "content": f"{user_content.strip()}"
+        }
+        messages = [user_message]
+        payload={
+            "messages": messages,
+            "stream": False,
+            "temperature": 2.0,
+            "max_tokens": 60_000,
+        }
+
+        response = requests.post(self.__model_url__, json=payload, headers={
+            "Authorization": f"Bearer {self.__model_auth_token__}" if self.__model_auth_token__ else "",
+        })
+        response.raise_for_status()
+        await self.send_response(response.json()["choices"][0]["message"]["content"], True, websocket)
+        return None
+
+    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None):
         """
         Process the customer input by sending it to the AI model and handling the response.
         :param query: The customer input to process.
         :param num_rag_results: The number of RAG results to use for the actual query
         :param rerank: Whether to rerank the results.
-        :param websocket: The websocket to send responses to (if any).
-        :param mandatory: Whether the output is mandatory (if True, it'll print regardless of _debug_mode) 
         """
 
         if not query:
@@ -310,11 +330,15 @@ class NuCoreAssistant:
         rc = await self.__check_debug_mode__(query, websocket)
         if rc:
             return None
+        messages =[]
 
         device_docs = ""
         if not self.nuCore.load_devices(include_profiles=False):
                 raise ValueError("Failed to load devices from NuCore. Please check your configuration.")
 
+        # Load RAG documents
+        #if not self.nuCore.load_rag_docs(dump=False):
+        #    raise ValueError("Failed to load RAG documents from NuCore. Please check your configuration.")
         rag = self.nuCore.format_nodes()
         if not rag:
             raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
@@ -326,43 +350,73 @@ class NuCoreAssistant:
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
 
-        if self.device_docs is None:
-            self.device_docs = device_docs
-
-        changed = device_docs != self.device_docs
-        if changed and len(self.message_history)>0:
-            #reset message history if device docs have changed
-            self.message_history = []
-            self.device_docs = device_docs
-
+        #sprompt = system_prompt.replace("{device_docs}", device_docs)
+        #sprompt.strip()
         sprompt = system_prompt.strip()
+      #  with open(f"/tmp/ai.prompt", "w") as f:
+      #      f.write(sprompt)
 
-        query = query.strip()
+        system_message = {
+            "role": "system",
+            "content": sprompt
+        }
+        query= query.strip()
         if not query:
             await self.send_response("No query provided, exiting ...", True, websocket)
             return None
 
         if query.startswith("?"):
-            query = "\n"+query[1:].strip()
+            query = "\n"+query[1:].strip()  # Remove leading '?' if presented
+#        else:
+            # This is a code-only query, so we don't need to send the system prompt
+#            query = f"**code-only** **no-explanation**\n{query}"
 
-        user_content = f"USER QUERY:{query}"
-        if len(self.message_history) == 0 :
-            self.message_history.append({"role": "system", "content": sprompt})
-            user_content = f"DEVICE STRUCTURE:\n\n{device_docs}\n\n{user_content}"
+        context = None
+        user_message = {
+            "role": "user",
+            "content": f"\n\nDEVICE STRUCTURE:\n\n{device_docs}\n\nUSER QUERY:{query}\n\n<END_OF_QUERY>" if not context 
+                else f"\n\nDEVICE STRUCTURE:\n\n{device_docs}\n\n{context}\n\nUSER QUERY:{query}\n\n<END_OF_QUERY>", 
+        }
 
+        print (f"\n\n*********************System Prompt:********************\n\n{user_message['content']}\n\n")
+
+        #first use rag for relevant documents
+        #rag_results = self.nuCore.query(query, num_rag_results, rerank)
+        #context = None
+        #if rag_results:
+        #    context = "***Relevant documents***\n"
+        #    for document in rag_results['documents']:
+        #        context += f"---\n{document}"
+#
+#        query = query.strip() if not context else f"{context.strip()}\n\n Customer Question: {query.strip()}"
+
+#        print (f"\n\n*********************Customer Query: {query}********************\n\n")
+
+#        if rag_results:
+#            print(f"\n\n*********************Top 5 Query Results:(Rerank = {rerank})********************\n\n")
+#            for i in range(len(rag_results['ids'])):
+#                print(f"{i+1}. {rag_results['ids'][i]} - {rag_results['distances'][i]} - {rag_results['relevance_scores'][i]}")
+#            print("\n\n***************************************************************\n\n")
+
+        #if not self.sent_system_prompt:
+        messages.append(system_message)
+        
+        self.sent_system_prompt = True
+
+        messages.append(user_message)
+        # Step 1: Get tool call
+        payload={
+            "messages": messages,
+            "stream": True,
+            'cache_prompt':True,
+            "n_keep": -1,
+            "temperature": 0.0,
+        #    "top_p":0.9,
+            "stop":["\n\n<END_OF_QUERY>"] ,
+            "max_tokens": 16000,
+        }
+        full_response = ""
         try:
-            full_response = ""
-            
-            # Add user message to history
-            self.message_history.append({"role": "user", "content": user_content})
-            payload={
-                "messages": self.message_history,
-                "stream": True,
-                'cache_prompt':True,
-                "n_keep": -1,
-                "temperature": 0.0,
-                "max_tokens": 16000,
-            }
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", self.__model_url__, timeout=100, json=payload, headers={
                     "Authorization": f"Bearer {self.__model_auth_token__}" if self.__model_auth_token__ else "",
@@ -392,28 +446,25 @@ class NuCoreAssistant:
                                     #full_response += token_data  # Collect the token data
                                     full_response += token_data
 
-                    # now parse the full response and look for blocks between __NUCORE_COMMAND_BEGIN__ and __NUCORE_COMMAND_END__. 
-                    # convert the blocks to json and add to list
-                    #with open("nucore_out.json", "w") as f: 
-                    #    f.write(full_response)
-                    if websocket: 
-                        if self.debug_mode:
-                            await self.send_response("\r\n***\r\n", False, websocket)
+            # now parse the full response and look for blocks between __NUCORE_COMMAND_BEGIN__ and __NUCORE_COMMAND_END__. 
+            # convert the blocks to json and add to list
+            #with open("nucore_out.json", "w") as f: 
+            #    f.write(full_response)
+            if websocket: 
+                if self.debug_mode:
+                    await self.send_response("\r\n***\r\n", False, websocket)
             await self.process_tool_call(full_response, websocket, None, None)
 
-            # Add assistant response to message history
 
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
-            import traceback
-            traceback.print_exc()
         return None 
     
 
 async def main(args):
     print("Welcome to NuCore AI Assistant!")
     print("Type 'quit' to exit")
-    assistant = NuCoreAssistant(args)
+    assistant = NuCoreAssistant(args)  # Replace with actual websocket connection if needed
     i=0
     
     while True:
@@ -506,3 +557,5 @@ def get_parser_args():
 if __name__ == "__main__":
     args = get_parser_args()
     asyncio.run(main(args))
+
+    
