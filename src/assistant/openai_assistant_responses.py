@@ -133,8 +133,7 @@ class NuCoreAssistant:
                 prop_query = prop_query[0]
         except Exception as e:
             pass
-
-        props=[]
+        text = None
         for property in prop_query:
             # Process the property query
             device_id = property.get('device') or property.get('device_id')
@@ -146,25 +145,25 @@ class NuCoreAssistant:
                 print(f"No properties found for device {device_id}")
                 continue
             prop_id = property.get('property') or property.get('property_id')
-            prop_name = property.get('property_name')
             device_name = self.nuCore.get_device_name(device_id)
             if not device_name:
                 device_name = device_id
             if prop_id:
                 prop = properties.get(prop_id)
+                text = "rephrase_in_natural_language_\""
                 if prop:
                     #text = f"rephrase_in_natural_language_\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
-                    text = f"rephrase_in_natural_language_\"{device_name}: {prop.formatted if prop.formatted else prop.value}\""
-                    props.append(text)
+                    text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}\n"
                     #await self.send_response(text, True, websocket)
                 else:
                     print( f"Property {prop_id} not found for device {device_name}")
             else:
                 print(f"No property ID provided for device {device_name}")
 
-        if len(props) > 0:
-            text = "\n".join(props) 
+        if text is not None:
+            text += "\""
             await self.process_customer_input(text, websocket=websocket, mandatory=True)
+            return  
 
     async def get_random_success_message(self):
         messages = [
@@ -215,14 +214,14 @@ class NuCoreAssistant:
         return random.choice(messages)
 
     async def process_tool_responses(self, responses, websocket, original_messages=None):
-        if not responses:
+        if not responses or len(responses) == 0:
             await self.send_response(await self.get_random_full_failure_message(), True, websocket)
             return None
         if not websocket:
             print(responses)
             return responses
         status_codes: list = []
-        if original_messages is None or len(original_messages) == 0:
+        if False: 
             if isinstance(responses, list):
                 for response in responses:
                     status_codes.append(response.status_code)
@@ -235,38 +234,23 @@ class NuCoreAssistant:
                 await self.send_response(await self.get_random_partial_failure_message(), True, websocket)
         else:
             if isinstance(responses, list):
+                output="rephrase_in_natural_language_\""
                 for i in range(len(responses)):
                     response = responses[i]
-                    original_message = original_messages[i]
-                    await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
+                    original_message = original_messages[i] if original_messages and i < len(original_messages) else " "
+                    output += f"{original_message}{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\n"
+
+                output+="\""
+                await self.process_customer_input(output, websocket=websocket, mandatory=True)
             else:
-                response = responses
-                original_message = original_messages[0]
-                await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
-            await self.send_response("\n", True, websocket)
+                await self.process_customer_input(f"rephrase_in_natural_language_\"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
 
         return responses
 
     async def send_commands(self, commands:list, websocket):
         responses = await self.nuCore.send_commands(commands)
-        return await self.process_tool_responses(responses, websocket, commands)
+        return await self.process_tool_responses(responses, websocket, original_messages=commands)
     
-    async def process_clarify_device_tool_call(self, clarify:dict, websocket, user_response:str = None):
-        return None
-
-    async def process_clarify_event_tool_call(self, websocket, clarify:dict):
-        """
-        {"tool":"ClarifyEvent","args":{"clarify":{
-            "question": "natural language question",
-            "options": [
-                { "name": "name of possible event 1"},
-                { "name": "name of possible event 2"},
-                ...
-            ]}
-            }}
-        """
-        return None
-
     async def process_json_tool_call(self, tool_call:dict, websocket):
         if not tool_call:
             return None
@@ -278,10 +262,6 @@ class NuCoreAssistant:
                 return await self.process_property_query(tool_call.get("args").get("queries"), websocket)
             elif type == "Command":
                 return await self.send_commands(tool_call.get("args").get("commands"), websocket)
-            elif type == "ClarifyDevice":
-                return await self.process_clarify_device_tool_call(tool_call.get("args").get("clarify"), websocket)
-            elif type == "ClarifyEvent":
-                return await self.process_clarify_event_tool_call(websocket, tool_call.get("args").get("clarify"))
             elif type == "Routine":
                 return await self.create_automation_routine(tool_call.get("args").get("routines"), websocket)
         except Exception as e:
@@ -392,18 +372,20 @@ class NuCoreAssistant:
                 input=self.message_history,
                 temperature=1.0,
                 stream=True
-            ) 
-            first_line=True
+            )
+            first_line = True 
             async for event in stream:
             # Text chunks as they arrive
                 if event.type == "response.output_text.delta":
+                    if not event.delta or event.delta == "" or event.delta.isspace():
+                        continue
                     full_response += event.delta
+                    if first_line:
+                        if event.delta[0] != '{':
+                            mandatory = True
+                    first_line = False
                     if mandatory or self.debug_mode:
-                        if first_line:
-                            await self.send_response(f"\n{event.delta}", False, websocket)
-                            first_line = False
-                        else:
-                            await self.send_response(f"{event.delta}", False, websocket)
+                        await self.send_response(f"{event.delta}", False, websocket)
             # End of response
                 elif event.type == "response.completed":
                     if full_response:
