@@ -226,8 +226,8 @@ class NuCore:
         """
         if not routine:
             raise NuCoreError ("No valid routine provided.")
-        responses=await self.nucore_api.upload_program(routine)
-        return responses
+        response=self.nucore_api.upload_program(routine)
+        return response
 
     
     async def get_properties(self, device_id:str)-> dict[str, Property]:

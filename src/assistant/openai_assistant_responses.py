@@ -111,7 +111,7 @@ class NuCoreAssistant:
         """
         self.__model_auth_token__ = token
 
-    async def create_automation_routine(self,routines:list, websocket):
+    async def create_automation_routines(self,routines:list, websocket):
         """
         Create automation routines in NuCore.
         :param routines: A list of routines to create.
@@ -123,7 +123,21 @@ class NuCoreAssistant:
         responses = []
         for routine in routines:
             responses.append(await self.nuCore.create_automation_routine(routine))
-        await self.process_tool_responses(responses, websocket)
+        text="rephrase_in_natural_language_\""
+
+        if len(responses)>0:
+            for i in range (len(responses)):
+                response=responses[i]
+                routine=routines[i]
+                routine_name = routine.get("name", f"Routine {i+1}")
+                if response.status_code == 200:
+                    text += f"{routine_name} created successfully.\n"
+                else:
+                    text += f"Failed to create {routine_name} with status code {response.status_code}.\n"
+        else:
+            text += "Error: No routines were created.\n"
+        text += "\""
+        await self.process_customer_input(text, websocket=websocket, mandatory=True)
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
@@ -150,7 +164,7 @@ class NuCoreAssistant:
                 device_name = device_id
             if prop_id:
                 prop = properties.get(prop_id)
-                text = "rephrase_in_natural_language_\""
+                text = "rephrase_in_natural_language_\" "
                 if prop:
                     #text = f"rephrase_in_natural_language_\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
                     text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}\n"
@@ -263,7 +277,7 @@ class NuCoreAssistant:
             elif type == "Command":
                 return await self.send_commands(tool_call.get("args").get("commands"), websocket)
             elif type == "Routine":
-                return await self.create_automation_routine(tool_call.get("args").get("routines"), websocket)
+                return await self.create_automation_routines(tool_call.get("args").get("routines"), websocket)
         except Exception as e:
             print(f"Error processing tool call: {e}")
             
@@ -357,6 +371,7 @@ class NuCoreAssistant:
 
         user_content = f"USER QUERY:{query}"
         if len(self.message_history) == 0 :
+            self.message_history.append({"role": "system", "content": sprompt})
             user_content = f"DEVICE STRUCTURE:\n\n{device_docs}\n\n{user_content}"
 
         try:
@@ -368,7 +383,8 @@ class NuCoreAssistant:
             # Create response - pass previous messages as additional_messages
             stream = await client.responses.create(
                 model="gpt-4.1-mini",
-                instructions=sprompt,
+#                model="ft:gpt-4.1-mini-2025-04-14:universal-devices:nucore13:Cmy5unf9",
+                #instructions=sprompt,
                 input=self.message_history,
                 temperature=1.0,
                 stream=True
@@ -383,6 +399,8 @@ class NuCoreAssistant:
                     if first_line:
                         if event.delta[0] != '{':
                             mandatory = True
+                        if mandatory or self.debug_mode:
+                            await self.send_response(f"\r\n***\r\n", False, websocket)
                     first_line = False
                     if mandatory or self.debug_mode:
                         await self.send_response(f"{event.delta}", False, websocket)

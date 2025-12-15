@@ -69,7 +69,6 @@ class IoXWrapper(NuCoreBackendAPI):
             )
             if response.status_code != 200:
                 print (f"invalid url status code = {response.status_code}")
-                return None
             return response
         except Exception as ex:
             print (f"failed connection {ex}")
@@ -81,7 +80,6 @@ class IoXWrapper(NuCoreBackendAPI):
             response = requests.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 print (f"invalid url status code = {response.status_code}")
-                return None
             return response
         except Exception as ex:
             print (f"failed put: {ex}")
@@ -93,7 +91,6 @@ class IoXWrapper(NuCoreBackendAPI):
             response = requests.post(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 print (f"invalid url status code = {response.status_code}")
-                return None
             return response
         except Exception as ex:
             print (f"failed post: {ex}")
