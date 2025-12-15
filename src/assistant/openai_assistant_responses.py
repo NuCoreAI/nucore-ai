@@ -77,6 +77,7 @@ class NuCoreAssistant:
         self.__model_url__ = model_url
         self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
         print (self.__model_url__)
+        self.device_docs = None
         self.nuCore.load()
 
     async def __check_debug_mode__(self, query, websocket):
@@ -142,7 +143,7 @@ class NuCoreAssistant:
                 continue
             properties = await self.nuCore.get_properties(device_id)
             if not properties:
-                print(f"No properties found for device {property['device_id']}")
+                print(f"No properties found for device {device_id}")
                 continue
             prop_id = property.get('property') or property.get('property_id')
             prop_name = property.get('property_name')
@@ -157,9 +158,9 @@ class NuCoreAssistant:
                     props.append(text)
                     #await self.send_response(text, True, websocket)
                 else:
-                    print( f"Property {prop_id} not found for device {property['device_id']}")
+                    print( f"Property {prop_id} not found for device {device_name}")
             else:
-                print(f"No property ID provided for device {property['device_id']}")
+                print(f"No property ID provided for device {device_name}")
 
         if len(props) > 0:
             text = "\n".join(props) 
@@ -213,7 +214,7 @@ class NuCoreAssistant:
         import random
         return random.choice(messages)
 
-    async def process_tool_responses(self, responses, websocket):
+    async def process_tool_responses(self, responses, websocket, original_messages=None):
         if not responses:
             await self.send_response(await self.get_random_full_failure_message(), True, websocket)
             return None
@@ -221,21 +222,34 @@ class NuCoreAssistant:
             print(responses)
             return responses
         status_codes: list = []
-        if isinstance(responses, list):
-            for response in responses:
-                status_codes.append(response.status_code)
-        #now if all are 200, return a random success message
-        if all(code == 200 for code in status_codes):
-            await self.send_response(await self.get_random_success_message(), True, websocket)
-        elif all(code != 200 for code in status_codes):
-            await self.send_response(await self.get_random_full_failure_message(), True, websocket)
+        if original_messages is None or len(original_messages) == 0:
+            if isinstance(responses, list):
+                for response in responses:
+                    status_codes.append(response.status_code)
+            #now if all are 200, return a random success message
+            if all(code == 200 for code in status_codes):
+                await self.send_response(await self.get_random_success_message(), True, websocket)
+            elif all(code != 200 for code in status_codes):
+                await self.send_response(await self.get_random_full_failure_message(), True, websocket)
+            else:
+                await self.send_response(await self.get_random_partial_failure_message(), True, websocket)
         else:
-            await self.send_response(await self.get_random_partial_failure_message(), True, websocket)
+            if isinstance(responses, list):
+                for i in range(len(responses)):
+                    response = responses[i]
+                    original_message = original_messages[i]
+                    await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket)
+            else:
+                response = responses
+                original_message = original_messages[0]
+                await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket)
+            await self.send_response("\n", True, websocket)
+
         return responses
 
     async def send_commands(self, commands:list, websocket):
         responses = await self.nuCore.send_commands(commands)
-        return await self.process_tool_responses(responses, websocket)
+        return await self.process_tool_responses(responses, websocket, commands)
     
     async def process_clarify_device_tool_call(self, clarify:dict, websocket, user_response:str = None):
         return None
@@ -339,6 +353,15 @@ class NuCoreAssistant:
 
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
+
+        if self.device_docs is None:
+            self.device_docs = device_docs
+
+        changed = device_docs != self.device_docs
+        if changed and len(self.message_history)>0:
+            #reset message history if device docs have changed
+            self.message_history = []
+            self.device_docs = device_docs
 
         sprompt = system_prompt.strip()
 
