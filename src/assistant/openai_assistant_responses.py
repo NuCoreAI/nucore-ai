@@ -164,7 +164,7 @@ class NuCoreAssistant:
 
         if len(props) > 0:
             text = "\n".join(props) 
-            await self.process_customer_input(text, websocket=websocket)
+            await self.process_customer_input(text, websocket=websocket, mandatory=True)
 
     async def get_random_success_message(self):
         messages = [
@@ -238,11 +238,11 @@ class NuCoreAssistant:
                 for i in range(len(responses)):
                     response = responses[i]
                     original_message = original_messages[i]
-                    await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket)
+                    await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
             else:
                 response = responses
                 original_message = original_messages[0]
-                await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket)
+                await self.process_customer_input(f"rephrase_in_natural_language_\"{original_message} {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
             await self.send_response("\n", True, websocket)
 
         return responses
@@ -323,12 +323,14 @@ class NuCoreAssistant:
             await websocket.send_text(json.dumps(payload))
         print(message, end="", flush=True)
 
-    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None):
+    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, mandatory:bool=False):
         """
         Process the customer input using OpenAI Responses API with conversation state.
         :param query: The customer input to process.
         :param num_rag_results: The number of RAG results to use for the actual query
         :param rerank: Whether to rerank the results.
+        :param websocket: The websocket to send responses to (if any).
+        :param mandatory: Whether the output is mandatory (if True, it'll print regardless of _debug_mode) 
         """
 
         if not query:
@@ -396,17 +398,18 @@ class NuCoreAssistant:
             # Text chunks as they arrive
                 if event.type == "response.output_text.delta":
                     full_response += event.delta
-                    if first_line:
-                        await self.send_response(f"\n{event.delta}", False, websocket)
-                        first_line = False
-                    else:
-                        await self.send_response(event.delta, False, websocket)
+                    if mandatory or self.debug_mode:
+                        if first_line:
+                            await self.send_response(f"\n{event.delta}", False, websocket)
+                            first_line = False
+                        else:
+                            await self.send_response(f"{event.delta}", False, websocket)
             # End of response
                 elif event.type == "response.completed":
                     if full_response:
                         self.message_history.append({"role": "assistant", "content": full_response})
                         rc = await self.process_tool_call(full_response, websocket, None, None)
-                        if self.debug_mode:
+                        if self.debug_mode or mandatory:
                             await self.send_response("\r\n***\r\n", False, websocket)
                         else:
                             await self.send_response("\n", False, websocket)
