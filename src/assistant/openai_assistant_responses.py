@@ -137,7 +137,7 @@ class NuCoreAssistant:
         else:
             text += "Error: No routines were created.\n"
         text += "\""
-        await self.process_customer_input(text, websocket=websocket, mandatory=True)
+        await self.process_customer_input(text, websocket=websocket, text_only=True)
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
@@ -176,7 +176,7 @@ class NuCoreAssistant:
 
         if text is not None:
             text += "\""
-            await self.process_customer_input(text, websocket=websocket, mandatory=True)
+            await self.process_customer_input(text, websocket=websocket, text_only=True)
             return  
 
     async def get_random_success_message(self):
@@ -255,9 +255,9 @@ class NuCoreAssistant:
                     output += f"{original_message}{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\n"
 
                 output+="\""
-                await self.process_customer_input(output, websocket=websocket, mandatory=True)
+                await self.process_customer_input(output, websocket=websocket, text_only=True)
             else:
-                await self.process_customer_input(f"rephrase_in_natural_language_\"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, mandatory=True)
+                await self.process_customer_input(f"rephrase_in_natural_language_\"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, text_only=True)
 
         return responses
 
@@ -283,10 +283,21 @@ class NuCoreAssistant:
             
         return None
 
+    def _remove_duplicate_routines(self, routines:list):
+        seen = set()
+        unique_routines = []
+        for routine in routines:
+            routine_tuple = tuple(sorted(routine.items()))
+            if routine_tuple not in seen:
+                seen.add(routine_tuple)
+                unique_routines.append(routine)
+        return unique_routines
+
     async def process_json_tool_calls(self, tool_calls, websocket):
         if isinstance(tool_calls, dict):
             return await self.process_json_tool_call(tool_calls, websocket)
         elif isinstance(tool_calls, list):
+            tool_calls = self._remove_duplicate_routines(tool_calls)
             for tool_call in tool_calls:
                 return await self.process_json_tool_call(tool_call, websocket)
         return None
@@ -304,6 +315,9 @@ class NuCoreAssistant:
         except Exception as ex:
             if not full_response:
                 return ValueError("Invalid input to process_tool_call")
+            else:
+                print(f"Error parsing tool call JSON: {ex}")
+                return None
             
     async def send_response(self, message, is_end=False, websocket=None):
         if not message:
@@ -317,14 +331,14 @@ class NuCoreAssistant:
             await websocket.send_text(json.dumps(payload))
         print(message, end="", flush=True)
 
-    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, mandatory:bool=False):
+    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, text_only:bool=False):
         """
         Process the customer input using OpenAI Responses API with conversation state.
         :param query: The customer input to process.
         :param num_rag_results: The number of RAG results to use for the actual query
         :param rerank: Whether to rerank the results.
         :param websocket: The websocket to send responses to (if any).
-        :param mandatory: Whether the output is mandatory (if True, it'll print regardless of _debug_mode) 
+        :param text_only: Whether to return text only without processing tool calls
         """
 
         if not query:
@@ -368,7 +382,7 @@ class NuCoreAssistant:
 
         if query.startswith("?"):
             query = "\n"+query[1:].strip()
-
+        
         user_content = f"USER QUERY:{query}"
         if len(self.message_history) == 0 :
             self.message_history.append({"role": "system", "content": sprompt})
@@ -398,18 +412,19 @@ class NuCoreAssistant:
                     full_response += event.delta
                     if first_line:
                         if event.delta[0] != '{':
-                            mandatory = True
-                        if mandatory or self.debug_mode:
+                            text_only = True
+                        if text_only or self.debug_mode:
                             await self.send_response(f"\r\n***\r\n", False, websocket)
                     first_line = False
-                    if mandatory or self.debug_mode:
+                    if text_only or self.debug_mode:
                         await self.send_response(f"{event.delta}", False, websocket)
             # End of response
                 elif event.type == "response.completed":
                     if full_response:
                         self.message_history.append({"role": "assistant", "content": full_response})
-                        rc = await self.process_tool_call(full_response, websocket, None, None)
-                        if self.debug_mode or mandatory:
+                        if not text_only:
+                            rc = await self.process_tool_call(full_response, websocket, None, None)
+                        if self.debug_mode or text_only:
                             await self.send_response("\r\n***\r\n", False, websocket)
                         else:
                             await self.send_response("\n", False, websocket)

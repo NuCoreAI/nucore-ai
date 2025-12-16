@@ -226,6 +226,36 @@ class NuCore:
         """
         if not routine:
             raise NuCoreError ("No valid routine provided.")
+        
+        thens = routine.get("then", None)
+        if thens is not None and len (thens) > 0:
+            for then in thens:
+                parameters = then.get("parameters", None)
+                if parameters is not None:
+                    for param in parameters:
+                        uom_id = param.get("uom", None)
+                        precision = param.get("precision", None)
+                        value = param.get("value", None)
+                        if precision is not None:
+                            prec = int(precision)
+                            if uom_id is not None and int(uom_id) != 25: 
+                                value = value * (10 ** prec)
+                                param["value"] = value 
+        elses = routine.get("else", None)
+        if elses is not None and len (elses) > 0:
+            for else_ in elses:
+                parameters = else_.get("parameters", None)
+                if parameters is not None:
+                    for param in parameters:
+                        uom_id = param.get("uom", None)
+                        precision = param.get("precision", None)
+                        value = param.get("value", None)
+                        if precision is not None:
+                            prec = int(precision)
+                            if uom_id is not None and int(uom_id) != 25: 
+                                value = value * (10 ** prec)
+                                param["value"] = value 
+
         response=self.nucore_api.upload_program(routine)
         return response
 

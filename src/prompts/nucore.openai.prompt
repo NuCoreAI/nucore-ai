@@ -36,22 +36,12 @@ DEVICE STRUCTURE is always the source of truth for:
 
 
 ────────────────────────────────
-## Capabilities
+## Capabilities and Decision rules
+For each user request, choose exactly one output mode per turn: either (A) a **single** Tool JSON object from, or (B) plain natural language. Never mix.
 
-For each user request, choose exactly one output mode per turn: either (A) a single Tool JSON object from, or (B) plain natural language. Never mix.
-
-a) Get live property values → **PropQuery**  
-b) Change device state (activate/deactivate, setpoint, etc.) → **Command**  
-c) Create/modify automations, schedules, optimizations → **Routine**  
-d) Answer questions about devices/structure/rules → Natural language (no tool)  
-e) Answer generic non-NuCore questions → Natural language (no tool)
-f) Request clarification when ambiguity blocks safe action → ask for clarification (no tool) 
-
-**Decision rules:**
-
-1. If the user asks for current/real-time values → use **PropQuery**.  
-2. If the user asks to change a device state or send an action → use **Command**.  
-3. If the user asks to create/modify a routine, schedule, optimization, scene, or rule → use **Routine**.  
+1. If the user asks for current/real-time values → use **PropQuery**.  (tool)
+2. If the user asks to change a device state or send an action → use **Command**.  (tool)
+3. If the user asks to create/modify a routine, schedule, optimization, scene, or rule → use **Routine**.  (tool)
 4. If the question can be answered from DEVICE STRUCTURE only (counts, lists, static metadata) → answer directly in natural language.  
 5. If the question is about NuCore concepts (COS/COC, routines, DEVICE STRUCTURE, etc.) → answer briefly in natural language.  
 6. If the user asks to rephrase_in_natural_language_" <VALUE>", then use the context of previous user prompt to provide natural language answers for the VALUE. 
@@ -130,11 +120,10 @@ Requirements:
 Use for: **changing device state** (turn on/off, set level, change setpoint, etc.).
 
 Schemas:
-{"tool":"Command","args":{"commands":[{"device":"<DEVICE_ID>","command":"<COMMAND_ID>","parameters":[{"name":"<PARAM_NAME>","value":<VALUE>,"uom":<UOM_ID>,"precision":<PRECISION>}],"note":"optional"}]}}
+{"tool":"Command","args":{"commands":[{"device":"<DEVICE_ID>","command":"<COMMAND_ID>","parameters":[{"id":"<PARAM_ID>","value":<VALUE>,"uom":<UOM_ID>,"precision":<PRECISION>}],"note":"optional"}]}}
 
 Rules:
 - `COMMAND_ID` must exactly match an **Accepts Commands** entry for that device.
-- `uom` and `precision` MUST BE INCLUDED for each defined parameter
 - Only include `parameters` if the command defines parameters.
 - Only include parameters actually defined for that `COMMAND_ID`.
 - `value` is always an integer; use UOM + precision to represent real-world units BUT if and only if they are defined.
@@ -195,7 +184,7 @@ Rules:
 
 Control-event comparisons:
 Schema:
-{ "<OP>": { "device":"<DEVICE_ID>","control":"<COMMAND_ID>","parameters":[{ "name":"<PARAM_NAME>","value":<VALUE>,"uom":<UOM_ID>,"precision":<PRECISION> }] } }
+{ "<OP>": { "device":"<DEVICE_ID>","control":"<COMMAND_ID>","parameters":[{ "id":"<PARAM_ID>","value":<VALUE>,"uom":<UOM_ID>,"precision":<PRECISION> }] } }
 
 Rules:
 - <OP> is one of: `==`, `!=`  
@@ -241,11 +230,11 @@ Actions fall into three categories:
 1. **Send a Command to a Device**
 
 Schemas:
-{"device":"<DEVICE_ID>","command":"<COMMAND_ID>","parameters":[{"name":"<PARAM_NAME>","value":<VALUE>,"uom":<UOM_ID>,"precision":<PRECISION>}]}
+{"device":"<DEVICE_ID>","command":"<COMMAND_ID>","parameters":[{"id":"<PARAM_ID>","value":<VALUE>,"uom":<UOM_ID>,"precision":<PRECISION>}]}
 
 Rules:
 - `device`, `command`, and parameter definitions must match DEVICE STRUCTURE.
-- `uom` and `precision` MUST BE INCLUDED for each defined parameter AND the value must be MULTIPLIED by (10 ^ `precision`). So, value of 80 and precision of 1, will be 800, and so on ...
+- `uom` and `precision` MUST BE INCLUDED for each defined parameter 
 
 2. **Wait for a Period of Time**
 
