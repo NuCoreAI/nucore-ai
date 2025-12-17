@@ -230,11 +230,25 @@ Rules:
 Rules:
 - random is boolean which tells the system to wait randomly from 0 to the duration
 
-3.2.3. Repeat an Array of Actions
-{"repeat":{"count":<number_of_iterations>,"actions":[]}}
+3.2.3. Repeat all Action Tokens following this token till the next Repeat Token 
 
 Rules:
-- actions: is an array of Action tokens
+- Repeat tokens execution ALL Action Tokens that follow repeatedly. 
+- Repeat tokens can NOT be nested
+- A Repeat Token after another Repeat Token breaks sequence of the last one
+
+3.2.3.1 Repeat every <duration>
+{“repeat”:  { type: “every”, “hours”: <HH>, “minutes”: <MM>, “seconds”: <SS>}}
+
+Rules:
+- At least one of hours, minutes, seconds must be specified
+
+3.2.3.2 Repeat for <number of times> 
+{“repeat”:  { type: “for”, “count”: <number_of_iterations>, “random”:<BOOLEAN> }}
+
+Rules:
+- count is mandatory
+- random is either true/false specifying whether a random number from 0 to count should be used 
 
 ────────────────────────────────
 # FINAL RULES
