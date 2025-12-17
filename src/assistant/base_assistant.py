@@ -94,7 +94,7 @@ def get_parser_args():
 class NuCoreBaseAssistant(ABC):
     def __init__(self, args):
         #prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt") 
-        self.debug_mode = False
+        self.debug_mode = True
         self.message_history = []
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
@@ -222,7 +222,8 @@ class NuCoreBaseAssistant(ABC):
                 device_name = device_id
             if prop_id:
                 prop = properties.get(prop_id)
-                text = "rephrase_in_natural_language_\" "
+                if text is None:
+                    text = "rephrase_in_natural_language_\" "
                 if prop:
                     #text = f"rephrase_in_natural_language_\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
                     text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}\n"
@@ -269,12 +270,12 @@ class NuCoreBaseAssistant(ABC):
             type = tool_call.get("tool")
             if not type:
                 return None
-            elif type == "PropQuery":
-                return await self.process_property_query(tool_call.get("args").get("queries"), websocket)
-            elif type == "Command":
-                return await self.send_commands(tool_call.get("args").get("commands"), websocket)
-            elif type == "Routine":
-                return await self.create_automation_routines(tool_call.get("args").get("routines"), websocket)
+            elif type == "PropsQuery":
+                return await self.process_property_query(tool_call.get("args"), websocket)
+            elif type == "Commands":
+                return await self.send_commands(tool_call.get("args"), websocket)
+            elif type == "Routines":
+                return await self.create_automation_routines(tool_call.get("args"), websocket)
         except Exception as e:
             print(f"Error processing tool call: {e}")
             

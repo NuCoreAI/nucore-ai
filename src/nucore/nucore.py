@@ -271,11 +271,14 @@ class NuCore:
                                 prec = int(precision)
                                 if uom_id is not None and int(uom_id) != 25: 
                                     value = value * (10 ** prec)
-                                    param["value"] = value 
+                                    param["value"] = value
+
         except Exception as e:
             print(f"Failed to process routine: {str(e)}")
             return None
 
+        print( "****Routine after processing:") 
+        print(json.dumps(routine, indent=4))
         response=self.nucore_api.upload_program(routine)
         return response
 

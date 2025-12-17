@@ -46,9 +46,9 @@ A. Tool JSON
 B. Natural language
 
 ## Decision rules:
-1. Real-time property value → PropQuery
-2. Change device state / send action → Command
-3. Create or modify automation → Routine
+1. Real-time properties value → PropsQuery
+2. Change device(s) states / send action → Commands
+3. Create or modify automations → Routines
 4. Static questions answerable from DEVICE STRUCTURE → natural language
 5. NuCore concepts (COS/COC/routines/etc.) → brief natural language
 6. rephrase_in_natural_language "<PHRASE>" → natural language
@@ -93,16 +93,17 @@ Output must be strict JSON
 ────────────────────────────────
 # TOOLS
 
-1. PropQuery — Read-Only
-{"tool":"PropQuery","args":{
-  "queries":[
+1. PropsQuery — Read-Only
+{"tool":"PropsQuery","args":[
     {"device":"<DEVICE_ID>","property_id":"<property_id>","property_name":"<property_name>","note":"optional"}
   ]
-}}
+}
 
-2. Command — Change State
-{"tool":"Command","args":{
-  "commands":[
+Rules:
+- Exactly one query element per property in the `args`
+
+2. Commands — Change State
+{"tool":"Commands","args":[
     {
       "device":"<DEVICE_ID>",
       "command":"<command_id>",
@@ -112,18 +113,18 @@ Output must be strict JSON
       "note":"optional"
     }
   ]
-}}
+}
 
 Rules:
+- Exactly one command element per command in the `args` array
 - Parameters only if defined
 - uom:
     - If the customer does not provide a unit for the value, use the default uom_id for parameters.
     - If the customer provides a unit for the value, match the unit to a supported uom for that parameter and use its uom_id. If one is not found:
     - give the customer a list of supported uoms and request for clarification 
 
-3. Routine — Automation
-{"tool":"Routine","args":{
-  "routines":[
+3. Routines — Automations
+{"tool":"Routines","args":[
     {
       "name":"<name>",
       "enabled":true,
@@ -135,14 +136,19 @@ Rules:
       "note":"optional"
     }
   ]
-}}
+}
 
 Rules:
+- Exaclty one routine element per automation task in the `args` array 
 - A CONDITION TOKEN is one of: COS token, COC token, Schedule token
 - An `Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
 - `if` MUST be an array of alternating sequence: `Condition`, `Operator`, `Condition`, `Operator`, …, `Condition`
 - No two Conditions adjacent. No two Operators adjacent, except ( may follow an Operator and ) may precede an Operator.
-- `then` and `else`: MUST be arrays of Action tokens only (Device Command / Wait / Repeat). Never put Conditions in then/else.
+- Create as many routines as necessary to meet user query requirements
+- `then` and `else`: MUST be arrays of Action tokens **only** (Device Command / Wait / Repeat) and **Never** include other Condition Tokens.
+- If user provided conditions cause contradictions, create new routines for those conditions and their associated Action tokens.
+
+
 
 3.1. CONDITION TOKENS (IF) 
 3.1.1 COS
@@ -157,7 +163,7 @@ Status comparisons on properties:
 }}
 
 Rules:
-- <OP> is one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
+- <OP> is exactly one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
 - uom:
     - If the customer does not provide a unit for the value, use the default uom_id for the property.
     - If the customer provides a unit for the value, match the unit to a supported uom for that property and use its uom_id. If one is not found:
