@@ -19,7 +19,6 @@ class EditorSubsetRange:
             "uom": f"{self.uom.label} = {self.uom.description}",
             "description": description,
         }
-        parts = []
         for s in self.subset.split(","):
             s = s.strip()
             if "-" in s:
@@ -40,8 +39,7 @@ class EditorSubsetRange:
         Returns a description of the subset.
         """
         #desc = f"Enum of Unit {self.uom.label}"
-        has_names= self.names is not None and len(self.names) > 0
-        desc = f"uom={self.uom.label},uom_id={self.uom.id}"
+        desc = f"uom={self.uom.label},uom_id={self.uom.id},precision=0"
         return desc
 
     def get_names(self):
@@ -112,7 +110,8 @@ class EditorMinMaxRange:
         #desc = f"Range {self.min} to {self.max} Unit {self.uom.label} [uom id={self.uom.id}]"
         desc = f"uom={self.uom.label},uom_id={self.uom.id},min={self.min},max={self.max}"
         if self.step:
-            desc += f",step={self.step},precision={self.prec if self.prec else 1}"
+            desc += f",step={self.step}"
+        desc += f",precision={self.prec if self.prec else 0}"
 
         return desc
     

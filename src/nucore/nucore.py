@@ -226,35 +226,55 @@ class NuCore:
         """
         if not routine:
             raise NuCoreError ("No valid routine provided.")
-        
-        thens = routine.get("then", None)
-        if thens is not None and len (thens) > 0:
-            for then in thens:
-                parameters = then.get("parameters", None)
-                if parameters is not None:
-                    for param in parameters:
-                        uom_id = param.get("uom", None)
-                        precision = param.get("precision", None)
-                        value = param.get("value", None)
-                        if precision is not None:
-                            prec = int(precision)
-                            if uom_id is not None and int(uom_id) != 25: 
-                                value = value * (10 ** prec)
-                                param["value"] = value 
-        elses = routine.get("else", None)
-        if elses is not None and len (elses) > 0:
-            for else_ in elses:
-                parameters = else_.get("parameters", None)
-                if parameters is not None:
-                    for param in parameters:
-                        uom_id = param.get("uom", None)
-                        precision = param.get("precision", None)
-                        value = param.get("value", None)
-                        if precision is not None:
-                            prec = int(precision)
-                            if uom_id is not None and int(uom_id) != 25: 
-                                value = value * (10 ** prec)
-                                param["value"] = value 
+        try: 
+            ifs = routine.get("if", None)
+            if ifs is not None and len (ifs) > 0:
+                for if_ in ifs:
+                    op = list(if_.keys())[0]
+                    condition = if_[op]
+                    if not isinstance(condition, dict):
+                        continue
+                    if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
+                        continue
+                    uom_id = condition.get("uom", None)
+                    precision = condition.get("precision", None)
+                    value = condition.get("value", None)
+                    if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
+                        continue
+                    value = value * (10 ** precision)
+                    condition["value"] = int(value)
+            
+            thens = routine.get("then", None)
+            if thens is not None and len (thens) > 0:
+                for then in thens:
+                    parameters = then.get("parameters", None)
+                    if parameters is not None:
+                        for param in parameters:
+                            uom_id = param.get("uom", None)
+                            precision = param.get("precision", None)
+                            value = param.get("value", None)
+                            if precision is not None:
+                                prec = int(precision)
+                                if uom_id is not None and int(uom_id) != 25: 
+                                    value = value * (10 ** prec)
+                                    param["value"] = value 
+            elses = routine.get("else", None)
+            if elses is not None and len (elses) > 0:
+                for else_ in elses:
+                    parameters = else_.get("parameters", None)
+                    if parameters is not None:
+                        for param in parameters:
+                            uom_id = param.get("uom", None)
+                            precision = param.get("precision", None)
+                            value = param.get("value", None)
+                            if precision is not None:
+                                prec = int(precision)
+                                if uom_id is not None and int(uom_id) != 25: 
+                                    value = value * (10 ** prec)
+                                    param["value"] = value 
+        except Exception as e:
+            print(f"Failed to process routine: {str(e)}")
+            return None
 
         response=self.nucore_api.upload_program(routine)
         return response

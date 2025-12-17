@@ -63,13 +63,14 @@ B. Natural language
 
 Output must be strict JSON
 
-- Start with { and end with } and stop
+- Start with { and end with }
 - No trailing commas
 - Balanced {} and []
 - Numbers unquoted
 - Strings quoted
 - Booleans: true / false
 - Output JSON only — no surrounding text
+- Stop immediately after final }
 
 ────────────────────────────────
 # GLOBAL OUTPUT RULES
