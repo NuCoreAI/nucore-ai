@@ -9,7 +9,6 @@ import asyncio, argparse
 from nucore import NuCore 
 
 from openai import AsyncOpenAI
-from importlib.resources import files
 from base_assistant import NuCoreBaseAssistant, get_parser_args
 
 
@@ -93,5 +92,5 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 
 if __name__ == "__main__":
     args = get_parser_args()
-    openai_assistant = NuCoreOpenAIAssistant(args)
+    openai_assistant = NuCoreAssistant(args)
     asyncio.run(openai_assistant.main(welcome_message="Welcome to NuCore OpenAI Assistant."))
