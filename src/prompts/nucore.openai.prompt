@@ -142,13 +142,11 @@ Rules:
 - Exaclty one routine element per automation task in the `args` array 
 - A CONDITION TOKEN is one of: COS token, COC token, Schedule token
 - An `Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
-- `if` **MUST** be an array of alternating sequence: `Condition`, `Operator`, `Condition`, `Operator`, …, `Condition`
-- No two Conditions adjacent. No two Operators adjacent, except ( may follow an Operator and ) may precede an Operator.
+- `if` **MUST** be an array of **alternating** sequence: {`Condition Token`},{`Operator`},{`Condition Token`},{`Operator`}, …, {`Condition Token`}
+- No two Conditions adjacent. No two Operators adjacent, except `(` may **follow** an Operator and `)` may **precede** an Operator.
 - Create as many routines as necessary to meet user query requirements
 - `then` and `else`: MUST be arrays of Action tokens **only** (Device Command / Wait / Repeat) and **Never** include other Condition Tokens.
 - If user provided conditions cause contradictions, create new routines for those conditions and their associated Action tokens.
-
-
 
 3.1. CONDITION TOKENS (IF) 
 3.1.1 COS

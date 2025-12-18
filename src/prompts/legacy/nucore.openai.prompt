@@ -184,8 +184,8 @@ Schema:
 
 Rules:
 - `A` Condition token is one of: COS token, COC token, Schedule token
-- An `Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
-- `if` MUST be an array of alternating sequence: `Condition`, `Operator`, `Condition`, `Operator`, …, `Condition`
+- A `Logical-Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
+- `if` MUST be an array of alternating sequence: Condition, Logical-Operator, Condition, Logical-Operator, …, Condition
 - No two Conditions adjacent. No two Operators adjacent, except ( may follow an Operator and ) may precede an Operator.
 - `then` and `else`: MUST be arrays of Action tokens only (Device Command / Wait / Repeat). Never put Conditions in then/else.
 
@@ -198,10 +198,10 @@ Use these token types in the `"if"` array:
 
 Status comparisons on properties:
 Schema:
-{ "<OP>": { "device":"<DEVICE_ID>","status":"<PROPERTY_ID>","value":<VALUE>,"uom":<uom_id>,"precision":<PRECISION> } }
+{ "<Math-Operator>": { "device":"<DEVICE_ID>","status":"<PROPERTY_ID>","value":<VALUE>,"uom":<uom_id>,"precision":<PRECISION> } }
 
 Rules:
-- <OP> is one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
+- <Math-Operator> is one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
 - `PROPERTY_ID` is the property's `id` from DEVICE STRUCTURE
 - `value` is FPIF(uom_customer_value) 
 
@@ -213,7 +213,7 @@ Schema:
 
 Rules:
 - <OP> is one of: `==`, `!=`  
-- `COMMAND_ID` is the id of one  of the `Sends Commands` from DEVICE STRUCTURE.
+- `COMMAND_ID` is the command id of one  of the `Sends Commands` from DEVICE STRUCTURE.
 - `parameters` must follow the parameter definitions of that command
 - `value` is FPIF(uom_customer_value) 
 
@@ -258,7 +258,8 @@ Schemas:
 {"device":"<DEVICE_ID>","command":"<COMMAND_ID>","parameters":[{"id":"<PARAM_ID>","value":<VALUE>,"uom":<uom_id>,"precision":<PRECISION>}]}
 
 Rules:
-- `device`, `command`, and parameter definitions must match DEVICE STRUCTURE.
+- `device` is the Device ID  from DEVICE STRUCTURE
+- `command` is the command ID from DEVICE STRUCTURE
 - `uom` and `precision` MUST BE INCLUDED for each parameter as defined in DEVICE STRUCTURE 
 - `value` is FPIF(customer_value) 
 
