@@ -147,20 +147,22 @@ Rules:
 3.2 Logical Operator Tokens - EXACT FORMAT REQUIRED:
 
 Valid operator tokens (use exactly as shown):
-- { "and": 1 }
-- { "or": 1 }
+- {"and":1}
+- {"or":1}
 
 Valid grouping tokens (use exactly as shown):
-- { "(": 1 }
-- { ")": 1 }
+- {"(":1}
+- {")":1}
 
 Critical Rules:
 - Key must be a single character string: "and", "or", "(", or ")"
 - No spaces inside quotes: "(" not " (" or "( "
+- No extra spaces between tag:value
 - No escaped quotes: use " not \"
 - No double quotes: ")" not "")"
 - Value is always integer 1 (unquoted)
-- Exact spacing: one space after colon
+- Each "{" must be closed with "}"
+
 
 Invalid Examples (Common Errors):
 - {"")":1}        ← Extra quote inside key
@@ -343,34 +345,41 @@ Rules:
 Use one of these exact forms:
 
 At a specific time once daily:
-1. { "at":   { "time": "<HH>:<MM>" } }
+1. {"at":{"time":"<HH>:<MM>"}}
 
 At sunrise +/- offset seconds daily
-2. { "at":   { "sunrise": <OFFSET>} }
+2. {"at":{"sunrise":<OFFSET>}}
 
 At sunset +/- offset seconds daily
-3. { "at":   { "sunset": <OFFSET>} }
+3. {"at":{"sunset":<OFFSET>}}
 
 At a specific time and date
-4. { "at":   { "time":"<HH>:<MM>","date":"<YYYY/MM/DD>" }}
+4. {"at":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"}}
 
-At a specific time on specific day(s)
-5. { "weekly": { "days":"sun,mon,tue,wed,thu,fri,sat","at":{ "time":"<HH>:<MM>" }}}
+Weekly at a specific time on specific day(s)
+5. {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"time":"<HH>:<MM>"}}}
+
+Weekly at surnise +/- offset seconds on specific day(s) 
+5.1. {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"sunrise":<OFFSET>}}}
+
+Weekly at sunset +/- offset seconds on specific day(s) 
+5.2. {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"sunset":<OFFSET>}}}
 
 Duration (from to):
-6. { "from": { "sunrise": <OFFSET>}, "for": { "hours":<HH>,"minutes":<MM>,"seconds":<SS> }}
-7. { "from": { "sunrise": <OFFSET>}, "to": { "sunset": <OFFSET> }}
-8. { "from": { "sunrise": <OFFSET>}, "to": { "sunset": <OFFSET>, "day":<OFFSET_DAYS>}}
-9. { "from": { "time":"<HH>:<MM>"}, "to":{ "sunset":<OFFSET>,"day":<OFFSET_DAYS> }}
-10. { "from": { "time":"<HH>:<MM>"}, "to":{ "time":"<HH>:<MM>","day":<OFFSET_DAYS> }}
-11. { "from": { "time":"<HH>:<MM>", "date":"<YYYY/MM/DD>"}, "for":{ "hours":<HH>,"minutes":<MM>, "seconds":<SS> }}
-12. { "from": { "time":"<HH>:<MM>", "date":"<YYYY/MM/DD>"}, "to":{ "time":"<HH>:<MM>","date":"<YYYY/MM/DD>" }}
-13. { "from": { "time":"<HH>:<MM>"}, "to":{ "time":"<HH>:<MM>","day":<OFFSET_DAYS> }}
-14. { "weekly": { "days":"sun,mon,tue,wed,thu,fri,sat","from":{ "time":"<HH>:<MM>"},"to":{ "time":"<HH>:<MM>"}}}
+6. {"from":{"sunrise":<OFFSET>},"for":{"hours":<HH>,"minutes":<MM>,"seconds":<SS>}}
+7. {"from":{"sunrise":<OFFSET>},"to":{"sunset":<OFFSET>}}
+8. {"from":{"sunrise":<OFFSET>},"to":{"sunset":<OFFSET>,"day":<OFFSET_DAYS>}}
+9. {"from":{"time":"<HH>:<MM>"},"to":{"sunset":<OFFSET>,"day":<OFFSET_DAYS> }}
+10. {"from":{"time":"<HH>:<MM>"},"to":{"time":"<HH>:<MM>","day":<OFFSET_DAYS>}}
+11. {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"for":{"hours":<HH>,"minutes":<MM>,"seconds":<SS>}}
+12. {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"}}
+13. {"from":{"time":"<HH>:<MM>"},"to":{"time":"<HH>:<MM>","day":<OFFSET_DAYS>}}
+14. {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"time":"<HH>:<MM>"},"to":{"time":"<HH>:<MM>"}}}
 
 Rules:
 - Without **weekly**, schedules run once daily; for specific days, use weekly
 - `OFFSET`: is integer offsets (seconds) for before/after sunset: negative=before, positive=after, 0=exact.
+  - If offset is given in any unit but seconds, convert to seconds
 - `OFFSET_DAYS`: is integer for the number of days of duration after the start time. 0 = today, 1 = next day, 2 = two days from now, and so on and so forth
 - For overnight ranges crossing midnight, use day:1. For same day ranges, use day:0. 
 - `HH`: 2 digit hour

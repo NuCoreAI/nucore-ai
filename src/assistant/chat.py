@@ -4,7 +4,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from base_assistant import get_parser_args
 #from generic_assistant import NuCoreAssistant as eisyAI
-from openai_assistant import NuCoreAssistant as eisyAI
+#from openai_assistant import NuCoreAssistant as eisyAI
+from claude_assistant import NuCoreAssistant as eisyAI
 
 import uvicorn
 import json

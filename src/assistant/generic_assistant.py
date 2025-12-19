@@ -25,6 +25,13 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _sub_init(self):
         pass
 
+    def _include_system_prompt_in_history(self) -> bool:
+        """
+        Whether to include the system prompt in the message history.
+        :return: True if the system prompt should be included, False otherwise.
+        """
+        return True
+
     async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool):
         """
         Process the customer input using OpenAI Responses API with conversation state.

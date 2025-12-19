@@ -169,6 +169,7 @@ class NuCoreBaseAssistant(ABC):
         """
         self.__model_auth_token__ = token
 
+
     async def create_automation_routines(self,routines:list, websocket):
         """
         Create automation routines in NuCore.
@@ -383,7 +384,8 @@ class NuCoreBaseAssistant(ABC):
         
         user_content = f"USER QUERY:{query}"
         if len(self.message_history) == 0 :
-            self.message_history.append({"role": "system", "content": sprompt})
+            if self._include_system_prompt_in_history():
+                self.message_history.append({"role": "system", "content": sprompt})
             user_content = f"DEVICE STRUCTURE:\n\n{device_docs}\n\n{user_content}"
             with open("/tmp/device_docs.txt", "w") as f:
                 f.write(device_docs)
@@ -399,6 +401,14 @@ class NuCoreBaseAssistant(ABC):
             import traceback
             traceback.print_exc()
             return None
+
+    @abstractmethod
+    def _include_system_prompt_in_history(self) -> bool:
+        """
+        Whether to include the system prompt in the message history.
+        :return: True if the system prompt should be included, False otherwise.
+        """
+        return True
 
     @abstractmethod
     async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool)-> str:
