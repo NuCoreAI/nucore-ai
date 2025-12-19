@@ -139,10 +139,11 @@ Rules:
 }
 
 Rules:
-- Exaclty one routine element per automation task in the `args` array 
-- A CONDITION TOKEN is one of: COS token, COC token, Schedule token
-- An `Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
-- `if` **MUST** be an array of **alternating** sequence: {`Condition Token`},{`Operator`},{`Condition Token`},{`Operator`}, …, {`Condition Token`}
+- Exactly one routine element per automation task in the `args` array 
+- `A` Condition token is one of: COS token, COC token, Schedule token
+- A `Logical-Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
+- `if` MUST be an array of alternating sequence: Condition token, Logical-Operator, Condition token, Logical-Operator, …, Condition token
+- Schedule tokens, COS tokens, and COC tokens (conditions) can be combined but MUST be separated by Logical-Operator 
 - No two Conditions adjacent. No two Operators adjacent, except `(` may **follow** an Operator and `)` may **precede** an Operator.
 - Create as many routines as necessary to meet user query requirements
 - `then` and `else`: MUST be arrays of Action tokens **only** (Device Command / Wait / Repeat) and **Never** include other Condition Tokens.
@@ -152,7 +153,7 @@ Rules:
 3.1.1 COS
 Status comparisons on properties:
 
-{ "<OP>": {
+{ "<Math-Operator>": {
   "device":"<DEVICE_ID>",
   "status":"<property_id>",
   "value":<customer_value_as_is>,
@@ -161,7 +162,7 @@ Status comparisons on properties:
 }}
 
 Rules:
-- <OP> is exactly one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
+- <Math-Operator> is exactly one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
 - uom:
     - If the customer does not provide a unit for the value, use the default uom_id for the property.
     - If the customer provides a unit for the value, match the unit to a supported uom for that property and use its uom_id. If one is not found:
@@ -170,7 +171,7 @@ Rules:
 3.1.2 COC
 Control-event comparisons:
 
-{ "<OP>": {
+{ "<Equality-Operator>": {
   "device":"<DEVICE_ID>",
   "control":"<command_id>",
   "parameters":[
@@ -179,7 +180,7 @@ Control-event comparisons:
 }}
 
 Rules:
-- <OP> is one of: `==`, `!=`  
+- <Equality-Operator> is one of: `==`, `!=`  
 - command_id is the id of one  of the `Sends Commands` from DEVICE STRUCTURE.
 - parameters only if defined
 - uom:
@@ -190,11 +191,13 @@ Rules:
 3.1.3 Schedules
 Use one of these exact forms:
 
-At a specific time:
+At a specific time once daily:
 1. { "at":   { "time": "<HH>:<MM>" } }
 2. { "at":   { "sunrise": <OFFSET>} }
 3. { "at":   { "sunset": <OFFSET>} }
 4. { "at":   { "time":"<HH>:<MM>","date":"<YYYY/MM/DD>" }}
+
+At a specific time on specific day(s)
 5. { "weekly": { "days":"sun,mon,tue,wed,thu,fri,sat","at":{ "time":"<HH>:<MM>" }}}
 
 Duration (from to):
@@ -208,8 +211,10 @@ Duration (from to):
 13. { "from": { "time":"<HH>:<MM>"}, "to":{ "time":"<HH>:<MM>","day":<OFFSET_DAYS> }}
 14. { "weekly": { "days":"sun,mon,tue,wed,thu,fri,sat","from":{ "time":"<HH>:<MM>"},"to":{ "time":"<HH>:<MM>"}}}
 
+Rules:
+- Without **weekly**, schedules runs once daily; for specific days, use weekly
 - `OFFSET`: is integer offsets (seconds) for before/after sunset: negative=before, positive=after, 0=exact.
-- `OFFSET_DAYS`: is integer for the number of days of duration after the start time. 0 = today, 1 = 1 day from now, and so on and so forth 
+- `OFFSET_DAYS`: is integer for the number of days of duration after the start time. 0 = today, 1 = next day, 2 = two days from now, and so on and so forth 
 - `HH`: 2 digit hour
 - `MM`: 2 digit minutes
 - `SS`: 2 digit seconds
@@ -223,6 +228,8 @@ Actions fall into three categories:
 {"device":"<DEVICE_ID>","command":"<command_id>","parameters":[{"id":"<PARAM_ID>","value":<customer_value_as_is>,"uom":<uom_id>,"precision":<precision>}]}
 
 Rules:
+- `device` is always the device's id
+- `command` is always the command's id 
 - uom:
     - If the customer does not provide a unit for the value, use the default uom_id for the parameter.
     - If the customer provides a unit for the value, match the unit to a supported uom for that parameter and use its uom_id. If one is not found:
