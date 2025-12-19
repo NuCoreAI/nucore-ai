@@ -138,19 +138,170 @@ Rules:
   ]
 }
 
-Rules:
+3.1 General Rules:
 - Exactly one routine element per automation task in the `args` array 
-- `A` Condition token is one of: COS token, COC token, Schedule token
-- A `Logical-Operator` token is exactly one of: { "and": 1 }, { "or": 1 }, { "(": 1 }, { ")": 1 }
-- `if` MUST be an array of alternating sequence: Condition token, Logical-Operator, Condition token, Logical-Operator, …, Condition token
-- Schedule tokens, COS tokens, and COC tokens (conditions) can be combined but MUST be separated by Logical-Operator 
-- No two Conditions adjacent. No two Operators adjacent, except `(` may **follow** an Operator and `)` may **precede** an Operator.
+- parent: 0 for root folder (top-level routines)
 - Create as many routines as necessary to meet user query requirements
-- `then` and `else`: MUST be arrays of Action tokens **only** (Device Command / Wait / Repeat) and **Never** include other Condition Tokens.
 - If user provided conditions cause contradictions, create new routines for those conditions and their associated Action tokens.
 
-3.1. CONDITION TOKENS (IF) 
-3.1.1 COS
+3.2 Logical Operator Tokens - EXACT FORMAT REQUIRED:
+
+Valid operator tokens (use exactly as shown):
+- { "and": 1 }
+- { "or": 1 }
+
+Valid grouping tokens (use exactly as shown):
+- { "(": 1 }
+- { ")": 1 }
+
+Critical Rules:
+- Key must be a single character string: "and", "or", "(", or ")"
+- No spaces inside quotes: "(" not " (" or "( "
+- No escaped quotes: use " not \"
+- No double quotes: ")" not "")"
+- Value is always integer 1 (unquoted)
+- Exact spacing: one space after colon
+
+Invalid Examples (Common Errors):
+- {"")":1}        ← Extra quote inside key
+- {""(":1}        ← Extra quote before key
+- {" (":1}        ← Space before paren
+- {"( ":1}        ← Space after paren
+- {"(":1 }        ← Extra space before closing brace
+- {'(':1}         ← Single quotes (must be double quotes)
+- {"(":"1"}       ← Value quoted (must be unquoted integer)
+- {"and" : 1}     ← Extra spaces around colon
+
+3.3 `if` Block - Condition Logic
+The `if` array represents a mathematical boolean expression in flattened sequential order.
+Read left-to-right (or top to bottom), the array evaluates conditions using logical operators and parentheses exactly like mathematical notation.
+
+Components:
+- Condition: A COS token, COC token, or Schedule token
+- Logical Operator - see 3.2 
+- Grouping: see 3.2 — work exactly like parentheses in math
+
+Expression Rules:
+- Conditions and Logical Operators alternate: Condition, Logical Operator, Condition, Logical Operator, …, Condition
+- No two conditions adjacent (must have operator between them)
+- No two Logical Operators adjacent, EXCEPT:
+  • Opening paren `(` may follow any operator
+  • Closing paren `)` may precede any operator
+  • Adjacent parens of same type (like `((` or `))`) are INVALID
+- Parentheses group sub-expressions for precedence, just like in math
+- Operator precedence follows standard boolean logic when not grouped
+
+Examples:
+
+a. Simple AND:
+   [{condition1}, {"and":1}, {condition2}]
+   → condition1 AND condition2
+
+b. Simple OR:
+   [{condition1}, {"or":1}, {condition2}]
+   → condition1 OR condition2
+
+c. Mixed without grouping:
+   [{condition1}, {"or":1}, {condition2}, {"and":1}, {condition3}]
+   → condition1 OR condition2 AND condition3
+   (AND has higher precedence, evaluates as: condition1 OR (condition2 AND condition3))
+
+d. Grouped precedence:
+   [{"(":1}, {condition1}, {"or":1}, {condition2}, {")":1}, {"and":1}, {condition3}]
+   → (condition1 OR condition2) AND condition3
+
+e. Multiple groups:
+   [{condition1}, {"and":1}, {"(":1}, {condition2}, {"or":1}, {condition3}, {")":1}]
+   → condition1 AND (condition2 OR condition3)
+
+f. Nested grouping:
+   [{"(":1}, {condition1}, {"or":1}, {"(":1}, {condition2}, {"and":1}, {condition3}, {")":1}, {")":1}]
+   → (condition1 OR (condition2 AND condition3))
+
+g. Complex nested:
+   [{condition1}, {"and":1}, {"(":1}, {condition2}, {"or":1}, {"(":1}, {condition3}, {"and":1}, {condition4}, {")":1}, {")":1}, {"or":1}, {condition5}]
+   → condition1 AND (condition2 OR (condition3 AND condition4)) OR condition5
+
+Invalid Examples:
+- [{condition1}, {condition2}] ← No operator between conditions
+- [{condition1}, {"and":1}, {"or":1}, {condition2}] ← Adjacent operators (invalid)
+- [{"(":1}, {"(":1}, {condition1}, {")":1}, {")":1}] ← Adjacent opening parens (invalid)
+- [{condition1}, {"and":1}] ← Expression ends with operator (invalid)
+
+Mathematical Translation:
+The flattened array preserves standard boolean algebra precedence and grouping rules.
+When in doubt, think of each token as you would read a mathematical formula from left to right.
+
+3.4 then/else Blocks — Action Execution
+
+The `then` and `else` arrays contain Action tokens that execute sequentially when the routine is triggered.
+
+Structure:
+- `then`: Array of actions executed when `if` evaluates to TRUE
+- `else`: Array of actions executed when `if` evaluates to FALSE
+- Both arrays execute actions in strict sequential order (first to last)
+- Empty arrays are valid (creates a trigger with no actions)
+
+Action Types:
+1. Device Commands — send commands to devices
+2. Wait — pause execution for a duration
+3. Repeat — mark the start of a repeated action sequence
+
+Execution Rules:
+- Actions execute one at a time, in array order
+- Each action completes before the next begins
+- Wait actions BLOCK subsequent actions (execution pauses)
+- Repeat markers affect all actions that follow them in the array
+- Multiple device commands in the same array all execute for the same trigger condition
+- If `then` executes, `else` does NOT execute (and vice versa)
+- If the condition turns to false while in Wait/Repeat, the routine stops the Wait/Repeat cycle and exits
+
+Examples:
+
+1. Simple sequential actions:
+   "then": [
+     {"device":"light1_ID","command":"DON","parameters":[]},  ← executes first
+     {"wait":{"duration":5,"random":false}},              ← executes second, blocks for 5 seconds
+     {"device":"light2_ID","command":"DON","parameters":[]}  ← executes third (after wait completes)
+   ]
+
+2. Multiple devices, no wait:
+   "then": [
+     {"device":"light1_ID","command":"DON","parameters":[]},  ← executes immediately
+     {"device":"light2_ID","command":"DON","parameters":[]},  ← executes immediately after
+     {"device":"light3_ID","command":"DON","parameters":[]}   ← executes immediately after
+   ]
+   All three commands execute sequentially but rapidly (no blocking)
+
+3. With repeat marker - marks the start of a repeated action sequence (see 3.5.3 for details):
+
+4. Then/else branching:
+   "if": [{"at":{"time":"18:00"}}],
+   "then": [
+     {"device":"light1_ID","command":"DON","parameters":[]}   ← executes if time is 18:00
+   ],
+   "else": [
+     {"device":"light1_ID","command":"DFOF","parameters":[]}  ← executes if time is NOT 18:00
+   ]
+
+5. Empty else:
+   "then": [
+     {"device":"light1_ID","command":"DON","parameters":[]}
+   ],
+   "else": []  ← valid: do nothing if condition is false
+
+Timing Behavior:
+- Device commands execute as fast as the system can send them (typically milliseconds apart)
+- Wait actions introduce deliberate delays
+- Repeat markers cause the entire following sequence to execute multiple times before continuing
+- Total routine execution time = sum of all wait durations + device command overhead
+
+Invalid:
+- Condition tokens in then/else (conditions ONLY belong in `if`)
+- Mixing then and else (only one executes per routine evaluation)
+
+3.5. CONDITION TOKENS (IF) 
+3.5.1 COS
 Status comparisons on properties:
 
 { "<Math-Operator>": {
@@ -168,7 +319,7 @@ Rules:
     - If the customer provides a unit for the value, match the unit to a supported uom for that property and use its uom_id. If one is not found:
     - give the customer a list of supported uoms for that property and request for clarification 
 
-3.1.2 COC
+3.5.2 COC
 Control-event comparisons:
 
 { "<Equality-Operator>": {
@@ -188,13 +339,19 @@ Rules:
     - If the customer provides a unit for the value, match the unit to a supported uom for that parameter and use its uom_id. If one is not found:
     - give the customer a list of supported uoms for that parameter and request for clarification 
 
-3.1.3 Schedules
+3.5.3 Schedules
 Use one of these exact forms:
 
 At a specific time once daily:
 1. { "at":   { "time": "<HH>:<MM>" } }
+
+At sunrise +/- offset seconds daily
 2. { "at":   { "sunrise": <OFFSET>} }
+
+At sunset +/- offset seconds daily
 3. { "at":   { "sunset": <OFFSET>} }
+
+At a specific time and date
 4. { "at":   { "time":"<HH>:<MM>","date":"<YYYY/MM/DD>" }}
 
 At a specific time on specific day(s)
@@ -212,19 +369,20 @@ Duration (from to):
 14. { "weekly": { "days":"sun,mon,tue,wed,thu,fri,sat","from":{ "time":"<HH>:<MM>"},"to":{ "time":"<HH>:<MM>"}}}
 
 Rules:
-- Without **weekly**, schedules runs once daily; for specific days, use weekly
+- Without **weekly**, schedules run once daily; for specific days, use weekly
 - `OFFSET`: is integer offsets (seconds) for before/after sunset: negative=before, positive=after, 0=exact.
-- `OFFSET_DAYS`: is integer for the number of days of duration after the start time. 0 = today, 1 = next day, 2 = two days from now, and so on and so forth 
+- `OFFSET_DAYS`: is integer for the number of days of duration after the start time. 0 = today, 1 = next day, 2 = two days from now, and so on and so forth
+- For overnight ranges crossing midnight, use day:1. For same day ranges, use day:0. 
 - `HH`: 2 digit hour
 - `MM`: 2 digit minutes
 - `SS`: 2 digit seconds
 - `YYYY/MM/DD`: 4 digit year/2 digit month/2 digit day 
 - `days` is a lowercase comma-separated string with no spaces.
 
-3.2. ACTION TOKENS (THEN/ELSE) 
+3.6. ACTION TOKENS (THEN/ELSE) 
 Actions fall into three categories:
 
-3.2.1 Device Commands
+3.6.1 Device Commands
 {"device":"<DEVICE_ID>","command":"<command_id>","parameters":[{"id":"<PARAM_ID>","value":<customer_value_as_is>,"uom":<uom_id>,"precision":<precision>}]}
 
 Rules:
@@ -235,31 +393,57 @@ Rules:
     - If the customer provides a unit for the value, match the unit to a supported uom for that parameter and use its uom_id. If one is not found:
     - give the customer a list of supported uoms for that parameter and request for clarification 
 
-3.2.2. Wait for a Period of Time
+3.6.2. Wait for a Period of Time
 {"wait":{"duration":<duration_in_seconds>,"random":<BOOLEAN>}}
 
 Rules:
 - random is boolean which tells the system to wait randomly from 0 to the duration
 
-3.2.3. Repeat all Action Tokens following this token till the next Repeat Token 
+3.6.3. Repeat Sequence Marker
+
+The repeat token is a SEQUENCE MARKER that marks the beginning of a repeated action sequence.
+All Action tokens that appear AFTER the repeat marker in the array will be repeated.
+The sequence continues until either:
+  • Another repeat marker is encountered (which starts a new repeated sequence)
+  • The end of the then/else array
+
+Pattern 1: Repeat N times (count-based)
+{"repeat":{"type":"for", "count":<COUNT>,"random":<BOOLEAN>}}
 
 Rules:
-- Repeat tokens execution ALL Action Tokens that follow repeatedly. 
-- Repeat tokens can NOT be nested
-- A Repeat Token after another Repeat Token breaks sequence of the last one
+- count: positive integer specifying number of iterations
+- random: if true, repeats a random number from 0 to count; if false, repeats exactly count times
+- All actions following this marker execute sequentially, then the entire sequence repeats count times
 
-3.2.3.1 Repeat every <duration>
-{“repeat”:  { type: “every”, “hours”: <HH>, “minutes”: <MM>, “seconds”: <SS>}}
+Example:
+"then": [
+  {"device":"light1","command":"DON","parameters":[]},     ← executes once
+  {"repeat":{"type":"for","count":3,"random":false}},      ← MARKER: repeat following actions 3 times
+  {"device":"light2-ID","command":"DFON","parameters":[]}  ← repeated 3 times
+  {"wait":{"duration":1,"random":false}},                  ← repeated 3 times (blocks 10s each iteration)
+  {"device":"light2-ID","command":"DFOF","parameters":[]}  ← repeated 3 times
+  {"wait":{"duration":1,"random":false}},                  ← repeated 3 times (blocks 10s each iteration)
+]
+
+Execution: Turn on light1 → Flash light2 On/Off 3 times.
+
+Pattern 2: Repeat every duration (periodic)
+{"repeat":{"type":"every","hours":<HH>,"minutes":<MM>,"seconds":<SS>}}
 
 Rules:
 - At least one of hours, minutes, seconds must be specified
+- All actions following this marker execute, then wait duration, then repeat indefinitely
 
-3.2.3.2 Repeat for <number of times> 
-{“repeat”:  { type: “for”, “count”: <number_of_iterations>, “random”:<BOOLEAN> }}
+Example:
+"then": [
+  {"repeat":{"type":"every","hours":2,"minutes":0,"seconds":0}}, ← MARKER: repeat every 2 hours
+  {"device":"dev1_ID","command":"DON","parameters":[]},             ← executed every 2 hours
+  {"wait":{"duration":60,"random":false}}                        ← executed every 2 hours
+]
 
-Rules:
-- count is mandatory
-- random is either true/false specifying whether a random number from 0 to count should be used 
+General Rules:
+- Repeat markers CANNOT be nested (a repeat inside a repeated sequence is invalid)
+- If a second repeat marker appears, it terminates the previous repeat scope and starts a new one
 
 ────────────────────────────────
 # FINAL RULES
