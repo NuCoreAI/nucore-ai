@@ -42,7 +42,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         Whether to include the system prompt in the message history.
         :return: True if the system prompt should be included, False otherwise.
         """
-        return False
+        return True
     async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool):
         """
         Process the customer input using OpenAI Responses API with conversation state.
@@ -59,7 +59,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             stream = await self.client.responses.create(
                 model="gpt-4.1-mini",
 #                model="ft:gpt-4.1-mini-2025-04-14:universal-devices:nucore13:Cmy5unf9",
-                instructions=self.system_prompt,
+                # instructions=self.system_prompt,
                 input=self.message_history,
                 temperature=1.0,
                 stream=True
