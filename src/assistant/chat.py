@@ -3,9 +3,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from base_assistant import get_parser_args
-#from generic_assistant import NuCoreAssistant as eisyAI
-from openai_assistant import NuCoreAssistant as eisyAI
-#from claude_assistant import NuCoreAssistant as eisyAI
+from generic_assistant import NuCoreAssistant as eisyAI_local
+from openai_assistant import NuCoreAssistant as eisyAI_openai
+from claude_assistant import NuCoreAssistant as eisyAI_claude
 
 import uvicorn
 import json
@@ -59,7 +59,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
 def NuCoreChat(args):
     global eisy_ai
-    eisy_ai=eisyAI(args)
+    if args.model_url== "openai":
+        eisy_ai=eisyAI_openai(args)
+    elif args.model_url == "claude":
+        eisy_ai=eisyAI_claude(args)
+    else:
+        eisy_ai=eisyAI_local(args)
     
     # Run the server with HTTPS
     uvicorn.run(

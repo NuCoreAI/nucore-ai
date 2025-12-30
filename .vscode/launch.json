@@ -47,6 +47,34 @@
             "justMyCode": false
         },
         {
+            "name": "OpenAI-chat", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/chat.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--url=http://192.168.6.149:8080" ,
+               "--username=admin",
+               "--password=admin",
+               "--model_url=openai",
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Claude-chat", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/chat.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--url=http://192.168.6.149:8080" ,
+               "--username=admin",
+               "--password=admin",
+               "--model_url=claude",
+            ],
+            "justMyCode": false
+        },
+        {
             "name": "remote-assistant", 
             "type": "debugpy",
             "request": "launch",
@@ -68,20 +96,20 @@
             "program": "src/assistant/openai_assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.6.149:8080" ,
+               "--url=http://192.168.6.134:8080" ,
                "--username=admin",
                "--password=admin",
             ],
             "justMyCode": false
         },
         {
-            "name": "openai-assistant-responses", 
+            "name": "claude-assistant", 
             "type": "debugpy",
             "request": "launch",
-            "program": "src/assistant/openai_assistant_responses.py",
+            "program": "src/assistant/claude_assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=http://192.168.6.149:8080" ,
+               "--url=http://192.168.6.134:8080" ,
                "--username=admin",
                "--password=admin",
             ],

@@ -31,6 +31,7 @@ DEVICE STRUCTURE is the sole source of truth for:
 - uom / uom_id
 - enums, ranges, precision, step, subset
 
+
 ────────────────────────────────
 # DEFINITIONS
 
@@ -491,6 +492,7 @@ After resolution:
 ────────────────────────────────
 # FINAL RULES
 - Tool call → JSON only
-- Explanation → brief natural language
+- Explanation → outside tool or inside the "note" element in the tool: brief natural language
 - DEVICE STRUCTURE is law
 - Determinism over creativity
+- All IDs are immutable; must preserve everything including white spaces.

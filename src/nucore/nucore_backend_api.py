@@ -89,6 +89,8 @@ class NuCoreBackendAPI(ABC):
         
         Returns:
             str: The response from the server.
+
+        NOTE: device ids are URL encoded. backend must decode them.
         
         Raises:
             ValueError: If the command format is invalid or if required fields are missing.

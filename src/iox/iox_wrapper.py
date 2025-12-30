@@ -1,8 +1,9 @@
 import json
-import requests, re, xml.etree.ElementTree as ET
+from urllib.parse import unquote 
+import requests, xml.etree.ElementTree as ET
 import sys
 import os
-import asyncio, websockets, base64
+import websockets, base64
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_backend_api import NuCoreBackendAPI
 from nucore.nodedef import Property
@@ -189,6 +190,8 @@ class IoXWrapper(NuCoreBackendAPI):
             device_id = command.get("device") or command.get("device_id")
             if not device_id:
                 raise ValueError("No device ID found in command")
+            #device_ids are url encoded. decode them
+            device_id = unquote(device_id)
             command_id = command.get("command") or command.get("command_id")
             if not command_id:
                 raise ValueError("No command ID found in command")
@@ -262,7 +265,7 @@ class IoXWrapper(NuCoreBackendAPI):
         response=None
         try:
             program_content = {
-                'routine': program 
+                'routine': unquote(program)
             }
             headers = {
                 "Content-Type": "application/json"

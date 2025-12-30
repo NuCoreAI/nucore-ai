@@ -6,6 +6,12 @@ from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from nucore import Node 
 
+#since LLMs are dumb when it comes to whitespaces, are going to url encode device ids
+from urllib.parse import quote
+
+def encode_id(id:str)->str:
+    return quote(id, safe='')
+
 
 DEVICE_SECTION_HEADER="***Device***"
 
@@ -43,9 +49,9 @@ class DeviceRagFormatter(RAGFormatter):
     def add_device_section(self, device: Node, parent: Node ):
         self.section(f"Device")
         self.write(f"Name: {device.name}")
-        self.write(f"ID: {device.address}")
+        self.write(f"ID: {encode_id(device.address)}")
         if parent:
-            self.write(f"Parent: {parent.name} [ID: {parent.address}]")
+            self.write(f"Parent: {parent.name} [ID: {encode_id(parent.address)}]")
 
     def add_properties_section(self):
         with self.block():

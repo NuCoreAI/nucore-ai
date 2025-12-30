@@ -9,7 +9,7 @@ import asyncio, argparse
 from nucore import NuCore 
 
 from openai import AsyncOpenAI
-from base_assistant import NuCoreBaseAssistant, get_parser_args
+from base_assistant import NuCoreBaseAssistant, get_parser_args, normalize_number_spacing
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -77,13 +77,14 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                         if text_only or self.debug_mode:
                             await self.send_response(f"\r\n***\r\n", False, websocket)
                     first_line = False
+                    normalized_event_delta = normalize_number_spacing(full_response, event.delta)
                     if text_only or self.debug_mode:
-                        await self.send_response(f"{event.delta}", False, websocket)
+                        await self.send_response(f"{normalized_event_delta}", False, websocket)
             # End of response
                 elif event.type == "response.completed":
-                    if full_response:
+                    if full_response is not None and full_response != "":
                         if not text_only:
-                            rc = await self.process_tool_call(full_response, websocket, None, None)
+                           await self.process_tool_call(full_response, websocket, None, None)
 #                        if self.debug_mode or text_only:
 #                            await self.send_response("\r\n***\r\n", False, websocket)
 #                        else:

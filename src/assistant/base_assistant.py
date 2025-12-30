@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 import re,os
 import json
-import asyncio, argparse
+import argparse
 
 from nucore import NuCore 
 from iox import IoXWrapper
@@ -90,6 +90,25 @@ def get_parser_args():
         help="The URL of the reranker service. If provided, this should be a valid URL that responds to OpenAI's API requests."
     )
     return parser.parse_args()
+
+def normalize_number_spacing(full_response:str, text: str) -> str:
+    """
+    Ensure a space exists between letters/symbols and numbers.
+    Safe for temperature units, percentages, and common abbreviations.
+    """
+    if full_response is not None:
+        before_delta= len(full_response) - len(text)
+        before_delta_text = full_response[before_delta-1]
+
+        if full_response.endswith(text) and before_delta_text not in ['%', '°', '$'] and text[0].isdigit():
+            text = " " + text
+    # Letter or symbol followed by digit → add space
+    text = re.sub(r'([a-zA-Z°%])(\d)', r'\1 \2', text)
+
+    # Digit followed by letter or symbol → add space
+    text = re.sub(r'(\d)([a-zA-Z%])', r'\1 \2', text)
+
+    return text
 
 class NuCoreBaseAssistant(ABC):
     def __init__(self, args):
@@ -251,7 +270,7 @@ class NuCoreBaseAssistant(ABC):
             for i in range(len(responses)):
                 response = responses[i]
                 original_message = original_messages[i] if original_messages and i < len(original_messages) else " "
-                output += f"{original_message}{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\n"
+                output += f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)} - {original_message}\n"
 
             output+="\""
             await self.process_customer_input(output, websocket=websocket, text_only=True)
@@ -320,7 +339,7 @@ class NuCoreBaseAssistant(ABC):
             
     async def send_response(self, message, is_end=False, websocket=None):
         if not message:
-            return
+            return None
         if websocket:
             payload={
                 "sender": "bot",
@@ -329,6 +348,7 @@ class NuCoreBaseAssistant(ABC):
             }
             await websocket.send_text(json.dumps(payload))
         print(message, end="", flush=True)
+        return message
 
     async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, text_only:bool=False):
         """
@@ -387,8 +407,9 @@ class NuCoreBaseAssistant(ABC):
             if self._include_system_prompt_in_history():
                 self.message_history.append({"role": "system", "content": sprompt})
             user_content = f"DEVICE STRUCTURE:\n\n{device_docs}\n\n{user_content}"
-            with open("/tmp/device_docs.txt", "w") as f:
-                f.write(device_docs)
+            if self.debug_mode:
+                with open("/tmp/device_docs.txt", "w") as f:
+                    f.write(device_docs)
         # Add user message to history
         self.message_history.append({"role": "user", "content": user_content})
             
