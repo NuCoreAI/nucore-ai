@@ -2,9 +2,10 @@
 
 import re
 from nucore import NodeProperty, Node
+
 from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
-from nucore import Node 
+from nucore import Node, Group, Folder
 
 #since LLMs are dumb when it comes to whitespaces, are going to url encode device ids
 from urllib.parse import quote
@@ -12,8 +13,13 @@ from urllib.parse import quote
 def encode_id(id:str)->str:
     return quote(id, safe='')
 
+DEVICE_HEADER="Device"
+GROUP_HEADER="Group"
+FOLDER_HEADER="Folder"
 
-DEVICE_SECTION_HEADER="***Device***"
+DEVICE_SECTION_HEADER=f"***{DEVICE_HEADER}***"
+GROUP_SECTION_HEADER=f"***{GROUP_HEADER}***"
+FOLDER_SECTION_HEADER=f"***{FOLDER_HEADER}***"
 
 class DeviceRagFormatter(RAGFormatter):
     def __init__(self, indent_str: str = "    ", prefix: str = ""):
@@ -47,11 +53,21 @@ class DeviceRagFormatter(RAGFormatter):
         return BlockContext(self)
 
     def add_device_section(self, device: Node, parent: Node ):
-        self.section(f"Device")
+        self.section(DEVICE_HEADER)
         self.write(f"Name: {device.name}")
         self.write(f"ID: {encode_id(device.address)}")
         if parent:
             self.write(f"Parent: {parent.name} [ID: {encode_id(parent.address)}]")
+
+    def add_group_section(self, group: Group):
+        self.section(GROUP_HEADER)
+        self.write(f"Name: {group.name}")
+        self.write(f"ID: {encode_id(group.address)}")
+        
+    def add_folder_section(self, folder: Folder):
+        self.section(FOLDER_HEADER)
+        self.write(f"Name: {folder.name}")
+        self.write(f"ID: {encode_id(folder.address)}")
 
     def add_properties_section(self):
         with self.block():
@@ -124,6 +140,26 @@ class DeviceRagFormatter(RAGFormatter):
                 for cmd in node.node_def.cmds.sends:
                     self.add_command(cmd)
 
+    def format_group(self, group):
+        self.add_group_section(group)
+#        if group.node_def:
+#            if group.node_def.properties:
+#                self.add_properties_section()
+#                for prop in group.node_def.properties:
+#                    self.add_property(prop)
+#
+#            if group.node_def.cmds.accepts:
+#                self.add_accept_commands_section()
+#                for cmd in group.node_def.cmds.accepts:
+#                    self.add_command(cmd)
+
+#            if group.node_def.cmds.sends:
+#                self.add_send_commands_section()
+#                for cmd in group.node_def.cmds.sends:
+#                    self.add_command(cmd)
+
+    def format_folder(self, folder):
+        self.add_folder_section(folder)
 
     def to_text(self) -> str:
         return "\n".join(self.lines)
@@ -143,12 +179,17 @@ class DeviceRagFormatter(RAGFormatter):
         if match:
             return match.group(1)
         return None
-    
+
+    def __is_section_header__(self, index:int): 
+        return self.lines[index].startswith(DEVICE_SECTION_HEADER) or \
+               self.lines[index].startswith(GROUP_SECTION_HEADER) or \
+               self.lines[index].startswith(FOLDER_SECTION_HEADER)
+
     def __get_device_content__(self, index:int, rag_docs:RAGData):
         if not isinstance(rag_docs, RAGData):
             raise ValueError("RAG data must be a non-empty dictionary")
 
-        if not self.lines[index].startswith(DEVICE_SECTION_HEADER):
+        if not self.__is_section_header__(index):
             return None 
         
         content = "\n" + self.lines[index] 
@@ -161,7 +202,7 @@ class DeviceRagFormatter(RAGFormatter):
                 device_id = self.__get_device_id__(self.lines[i])
             if self.lines[i].startswith("Name:"):
                 device_name = self.__get_device_name__(self.lines[i])
-            elif self.lines[i].startswith(DEVICE_SECTION_HEADER):
+            elif self.__is_section_header__(i):
                 # we reached the end of this device content
                 break
             content += "\n" + self.lines[i]
@@ -175,6 +216,8 @@ class DeviceRagFormatter(RAGFormatter):
         Convert the formatted devices into a list of RAG documents.
         Each document contains an ID, name, and content.
         :param nodes: mandatory, a list of nodes to format.
+        :param groups: optional, a list of groups to format.
+        :param folders: optional, a list of folders to format.
         :return: RAGData object containing the formatted documents.
         :raises ValueError: if no nodes are provided or if nodes is not a list. 
         """
@@ -189,12 +232,26 @@ class DeviceRagFormatter(RAGFormatter):
             if pnode:
                 pnode = nodes.get(pnode, None)
             self.format_node(node, pnode)
+        if "groups" in kwargs:
+            groups = kwargs["groups"]
+            if not isinstance(groups, dict):
+                raise ValueError("Groups must be a dictionary")
+            for group in groups.values():
+                self.format_group(group)
+        if "folders" in kwargs:
+            folders = kwargs["folders"]
+            if not isinstance(folders, dict):
+                raise ValueError("Folders must be a dictionary")
+            for folder in folders.values():
+                self.format_folder(folder)
+
+
         rag_docs:RAGData = RAGData()
         i = 0
         # Iterate through the lines to find device sections
         # and extract their content
         while i < len(self.lines):
-            if self.lines[i].startswith(DEVICE_SECTION_HEADER):
+            if self.__is_section_header__(i):
                 i = self.__get_device_content__(i, rag_docs)
             i += 1
         

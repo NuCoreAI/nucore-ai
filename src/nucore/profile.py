@@ -2,16 +2,18 @@ from dataclasses import dataclass, field
 
 from .editor import Editor
 from .linkdef import LinkDef
-from .nodedef import NodeDef, NodeProperty, NodeCommands, NodeLinks, Property
+from .nodedef import NodeDef, NodeProperty, NodeCommands, NodeLinks
 from .linkdef import LinkParameter
 from .cmd import Command, CommandParameter
 from .nucore_error import NuCoreError
-from .node import Node, TypeInfo
+from .node_base import node_is_group
+from .node import Node
+from .group import Group
+from .folder import Folder
 from .editor import EditorMinMaxRange, EditorSubsetRange
 from .uom import get_uom_by_id
 import json
 import logging
-import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,8 @@ class Profile:
     timestamp: str = "" 
     families: list[Family] = field(default_factory=list)
     nodes:  dict = field(default_factory=dict)
+    groups: dict = field(default_factory=dict)
+    folders: dict = field(default_factory=dict)
     lookup: dict = field(default_factory=dict)
     
 
@@ -119,8 +123,7 @@ class Profile:
                 continue
             instances = []
             #mpg names hack
-            mpg_index = 0
-            for iidx, i in enumerate(f.get("instances", [])):
+            for _, i in enumerate(f.get("instances", [])):
                 # Build Editors for reference first
                 editors_dict = {}
                 for edict in i.get("editors", []):
@@ -257,80 +260,40 @@ class Profile:
         self.build_lookup()
 
         self.nodes = {} 
-        for node_elem in root.findall(".//node"):
-            typeinfo_elems = node_elem.findall("./typeInfo/t")
-            typeinfo = [
-                TypeInfo(t.get("id"), t.get("val")) for t in typeinfo_elems
-            ]
+        self.groups = {} 
+        tag_names = ['./node', './group']
+        elements = []
+        for tag in tag_names:
+            elements.extend(root.findall(f'{tag}')) 
 
-            property_elems = node_elem.findall("./property")
-            properties = {}
-            for p_elem in property_elems:
-                prop = Property(
-                    id=p_elem.get("id"),
-                    value=p_elem.get("value"),
-                    formatted=p_elem.get("formatted"),
-                    uom=p_elem.get("uom"),
-                    prec=int(p_elem.get("prec")) if p_elem.get("prec") else None,
-                    name=p_elem.get("name"),
-                )
-                properties[prop.id] = prop 
+        for node_elem in elements:
+            node_flag=int(node_elem.get("flag"))
+            is_group=node_is_group(node_flag)
 
-            # youtube hack
-            node_def_id = node_elem.get("nodeDefId")
-            family_elem = node_elem.find("./family")
-            if family_elem is not None:
-                try:
-                    family_id = int(family_elem.text)
-                except (ValueError, TypeError):
-                    family_id = 1
-                try:
-                    instance_id = int(family_elem.get("instance"))
-                except (ValueError, TypeError):
-                    instance_id = 1
+            node = None
+            if is_group:
+                node = Group(node_elem)
             else:
-                family_id = 1
-                instance_id = 1
+                node = Node(node_elem)
 
-            node = Node(
-                flag=int(node_elem.get("flag")),
-                nodeDefId=node_def_id,
-                address=node_elem.find("./address").text,
-                name=node_elem.find("./name").text,
-                family=family_id,
-                instance=instance_id,
-                hint=node_elem.find("./hint").text if node_elem.find("./hint") is not None else None,
-                type=node_elem.find("./type").text if node_elem.find("./type") is not None else None,
-                enabled=(node_elem.find("./enabled").text.lower() == "true"),
-                deviceClass=int(node_elem.find("./deviceClass").text) if node_elem.find("./deviceClass") is not None else None,
-                wattage=int(node_elem.find("./wattage").text) if node_elem.find("./wattage") is not None else None,
-                dcPeriod=int(node_elem.find("./dcPeriod").text) if node_elem.find("./dcPeriod") is not None else None,
-                startDelay=int(node_elem.find("./startDelay").text) if node_elem.find("./startDelay") is not None else None,
-                endDelay=int(node_elem.find("./endDelay").text) if node_elem.find("./endDelay") is not None else None,
-                pnode=node_elem.find("./pnode").text if node_elem.find("./pnode") is not None else None,
-                rpnode=node_elem.find("./rpnode").text 
-                if node_elem.find("./rpnode") is not None
-                else None,
-                sgid=int(node_elem.find("./sgid").text)
-                if node_elem.find("./sgid") is not None
-                else None,
-                typeInfo=typeinfo,
-                properties=properties,
-                parent=node_elem.find("./parent").text
-                if node_elem.find("./parent") is not None
-                else None,
-                custom=node_elem.find("./custom").attrib
-                if node_elem.find("./custom") is not None
-                else None,
-                devtype=node_elem.find("./devtype").attrib
-                if node_elem.find("./devtype") is not None
-                else None,
-            )
-            if node_def_id:
-                node.node_def = self.lookup.get(f"{node_def_id}.{family_id}.{instance_id}")
+            if node.node_def_id:
+                node.node_def = self.lookup.get(f"{node.node_def_id}.{node.family}.{node.instance}")
                 if not node.node_def:
-                    debug(f"[WARN] No NodeDef found for: {node_def_id}")
+                    debug(f"[WARN] No NodeDef found for: {node.node_def_id}")
 
-            self.nodes[node.address] = node
+            if is_group:
+                self.groups[node.address] = node
+            else :
+                self.nodes[node.address] = node 
+        
+        elements = root.findall(f'./folder')
 
-        return self.nodes
+        for node_elem in elements:
+            try:
+                folder = Folder(node_elem)
+                self.folders[node.address] = folder
+            except Exception as e:
+                debug(f"Error parsing folder: {e}")
+                continue
+        
+        return self.nodes, self.groups, self.folders

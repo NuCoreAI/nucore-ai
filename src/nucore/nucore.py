@@ -42,7 +42,9 @@ class NuCore:
 
         self.name = collection_name     
         self.nucore_api = nucore_api
-        self.nodes = [] 
+        self.nodes = {}
+        self.groups = {}
+        self.folders = {} 
         from rag import RAGProcessor
         self.rag_processor = RAGProcessor(collection_path, collection_name, embedder_url=embedder_url, reranker_url=reranker_url)
         self.profile = Profile(timestamp="", families=[])
@@ -98,7 +100,7 @@ class NuCore:
             raise NuCoreError("No nodes loaded.")
         from rag import DeviceRagFormatter
         device_rag_formatter = DeviceRagFormatter(indent_str=" ", prefix="-")
-        return device_rag_formatter.format(nodes=self.nodes) 
+        return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders) 
     
     def format_tools(self):
         """
@@ -192,7 +194,7 @@ class NuCore:
         if root == None:
             return None
         
-        self.nodes = self.profile.map_nodes(root) 
+        self.nodes, self.groups, self.folders = self.profile.map_nodes(root) 
 
         return self.nodes
         

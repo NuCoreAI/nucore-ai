@@ -265,14 +265,14 @@ class IoXWrapper(NuCoreBackendAPI):
         response=None
         try:
             program_content = {
-                'routine': unquote(program)
+                'routine': program
             }
             headers = {
                 "Content-Type": "application/json"
             }
             #temporarily remove the port if present
             self.base_url="http://localhost:5000"
-            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+            response = self.put(f'/api/ai/trigger', body=unquote(json.dumps(program_content)), headers=headers)
         except Exception as ex:
             print (ex)
         

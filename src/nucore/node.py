@@ -1,9 +1,9 @@
 from textwrap import indent
 from dataclasses import dataclass, field
-from .nodedef import NodeDef, Property
+from .nodedef import Property
 from .nucore_error import NuCoreError
 import xml.etree.ElementTree as ET
-
+from .node_base import NodeBase
 
 @dataclass
 class TypeInfo:
@@ -12,30 +12,50 @@ class TypeInfo:
 
 
 @dataclass
-class Node:
-    flag: int
-    nodeDefId: str
-    address: str
-    name: str
-    family: int
-    instance: int
-    hint: str
-    type: str
-    enabled: bool
-    deviceClass: int
-    wattage: int
-    dcPeriod: int
-    startDelay: int
-    endDelay: int
-    pnode: str
-    node_def: NodeDef = None
+class Node (NodeBase):
+    type: str = field(default=None)
+    deviceClass: int = field(default=0)
+    wattage: int = field(default=0)
+    dcPeriod: int = field(default=0)
+    startDelay: int = field(default=0)
+    endDelay: int = field(default=0)
+    pnode: str = field(default=None)
     rpnode: str = field(default=None)
     sgid: int = field(default=None)
     typeInfo: list[TypeInfo] = field(default_factory=list)
     properties: dict[str, Property] = field(default_factory=dict) 
-    parent: str = field(default=None)
     custom: dict = field(default=None)
     devtype: dict = field(default=None)
+
+    def __init__(self, node_elem:ET):
+        super().__init__(node_elem)
+        self.type=node_elem.find("./type").text if node_elem.find("./type") is not None else None
+        self.deviceClass=int(node_elem.find("./deviceClass").text) if node_elem.find("./deviceClass") is not None else None
+        self.wattage=int(node_elem.find("./wattage").text) if node_elem.find("./wattage") is not None else None
+        self.dcPeriod=int(node_elem.find("./dcPeriod").text) if node_elem.find("./dcPeriod") is not None else None
+        self.startDelay=int(node_elem.find("./startDelay").text) if node_elem.find("./startDelay") is not None else None
+        self.endDelay=int(node_elem.find("./endDelay").text) if node_elem.find("./endDelay") is not None else None
+        self.pnode=node_elem.find("./pnode").text if node_elem.find("./pnode") is not None else None
+        self.rpnode=node_elem.find("./rpnode").text if node_elem.find("./rpnode") is not None else None
+        self.sgid=int(node_elem.find("./sgid").text) if node_elem.find("./sgid") is not None else None
+
+        property_elems = node_elem.findall("./property")
+        self.properties = {}
+        for p_elem in property_elems:
+            prop = Property(
+                id=p_elem.get("id"),
+                value=p_elem.get("value"),
+                formatted=p_elem.get("formatted"),
+                uom=p_elem.get("uom"),
+                prec=int(p_elem.get("prec")) if p_elem.get("prec") else None,
+                name=p_elem.get("name"),
+            )
+            self.properties[prop.id] = prop 
+
+        typeinfo_elems = node_elem.findall("./typeInfo/t")
+        self.typeInfo = [ TypeInfo(t.get("id"), t.get("val")) for t in typeinfo_elems ]
+        self.custom=node_elem.find("./custom").attrib if node_elem.find("./custom") is not None else None
+        self.devtype=node_elem.find("./devtype").attrib if node_elem.find("./devtype") is not None else None
 
     def __str__(self):
         return "\n".join(
