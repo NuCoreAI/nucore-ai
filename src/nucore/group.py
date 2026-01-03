@@ -37,3 +37,6 @@ class Group(NodeBase):
                 self.members.append(GroupMember(address=address, type=type))
                 members_added = True
         return members_added
+
+    def __hash__(self):
+        return hash(self.address)  # or another unique identifier

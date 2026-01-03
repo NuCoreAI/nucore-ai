@@ -45,6 +45,14 @@ class Family:
     name: str
     instances: list[Instance]
 
+@dataclass
+class RuntimeProfile:
+    """
+    Holds runtime information about nodedefs used in the profile and link to thier nodes
+    """
+    nodedef: NodeDef
+    nodes: set[Node] = field(default_factory=set) 
+
 
 @dataclass
 class Profile:
@@ -53,6 +61,7 @@ class Profile:
     information about families and instances.
     """
     timestamp: str = "" 
+    runtime_profiles: dict[str, RuntimeProfile] = field(default_factory=dict)
     families: list[Family] = field(default_factory=list)
     nodes:  dict = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
@@ -280,7 +289,15 @@ class Profile:
                 node.node_def = self.lookup.get(f"{node.node_def_id}.{node.family}.{node.instance}")
                 if not node.node_def:
                     debug(f"[WARN] No NodeDef found for: {node.node_def_id}")
-
+                else:
+                    #register node in nodedef
+                    if node.node_def.id not in self.runtime_profiles:
+                        self.runtime_profiles[node.node_def.id] = RuntimeProfile(nodedef=node.node_def, nodes={node})
+                    else:
+                        try:
+                            self.runtime_profiles[node.node_def.id].nodes.add(node)
+                        except Exception as e:
+                            pass #probably duplicate node
             if is_group:
                 self.groups[node.address] = node
             else :
@@ -296,4 +313,4 @@ class Profile:
                 debug(f"Error parsing folder: {e}")
                 continue
         
-        return self.nodes, self.groups, self.folders
+        return self.runtime_profiles, self.nodes, self.groups, self.folders

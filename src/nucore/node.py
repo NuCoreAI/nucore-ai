@@ -104,3 +104,6 @@ class Node (NodeBase):
         if xml is None:
             raise NuCoreError("xml is mandatory.")
         return ET.fromstring(xml) 
+    
+    def __hash__(self):
+        return hash(self.address)  # or another unique identifier

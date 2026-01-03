@@ -29,7 +29,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _get_system_prompt(self):
         # Assuming this code is inside your_package/module.py
         system_prompt = None
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt")
+        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.profile.prompt")
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt

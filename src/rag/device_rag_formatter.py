@@ -1,4 +1,10 @@
 # format rag 
+"""
+Device RAG Formatter
+Formats device information into a structured text format suitable for RAG processing.
+Each device is represented with its properties and commands in a clear, hierarchical manner.
+The top level is a device and therefore, profiles/editors are repeated for devices of the same nodedef.
+"""
 
 import re
 from nucore import NodeProperty, Node

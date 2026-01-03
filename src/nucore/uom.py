@@ -439,7 +439,7 @@ PREDEFINED_UOMS = {
         name="",
     ),
     "68": UOMEntry(
-        id="68", description="Thermostat fan mode", label="", name=""
+        id="68", description="Thermostat fan mode", label="Fan Mode", name=""
     ),
     "69": UOMEntry(
         id="69",

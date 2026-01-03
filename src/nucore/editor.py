@@ -13,27 +13,18 @@ class EditorSubsetRange:
     subset: str
     names: dict = field(default_factory=dict)
 
-    def json(self):
-        description = "Subset of allowed values" 
-        out = {
-            "uom": f"{self.uom.label} = {self.uom.description}",
-            "description": description,
-        }
-        for s in self.subset.split(","):
-            s = s.strip()
-            if "-" in s:
-                # It's a range 'a-b'
-                out[f"{s}"]=[
-                    { f'"{k}"' : v }
-                      for k, v in self.names.items()
-                ]
-            else:
-                # Single value
-                val_name = self.names.get(s)
-                out[f"{s}"]= val_name
+    def write_description(self, writer):
+        with writer.block():
+            writer.write(f"- uom:{self.uom.label if self.uom.label else ' '} uom_id={self.uom.id}")
+            with writer.block():
+                writer.write(f"precision:0")
+                names = self.get_names()
+                if names:
+                    writer.write("enums:")
+                    with writer.block():
+                        for name in names:
+                            writer.write(f"- {name}")
 
-        return out
-    
     def get_description(self):
         """
         Returns a description of the subset.
@@ -84,24 +75,23 @@ class EditorMinMaxRange:
     step: float = None
     names: dict = field(default_factory=dict)
 
-    def json(self):
-        if self.uom.id == "25":
-            label = "Discrete values"
-        else:
-            label = "Range"
-        description = f"{label}: between {self.min} and {self.max} {self.uom}"
-        out = {
-            "uom": f"{self.uom.label} = {self.uom.description}",
-            "description": description,
-        }
-        if self.step:
-            out["steps"]=self.step
-        if self.names:
-            out["mappings"] = [
-                {
-                    k: v
-                } for k, v in self.names.items()]
-        return out 
+    def write_description(self, writer):
+        with writer.block():
+            writer.write(f"- uom:{self.uom.label if self.uom.label else ' '} uom_id={self.uom.id}")
+            with writer.block():
+                if self.min is not None:
+                    writer.write(f"min:{self.min}")
+                if self.max is not None:
+                    writer.write(f"max:{self.max}")
+                writer.write(f"precision:{self.prec if self.prec else 0}")
+                if self.step is not None:
+                    writer.write(f"step:{self.step}")
+                names = self.get_names()
+                if names:
+                    writer.write("enums:")
+                    with writer.block():
+                        for name in names:
+                            writer.write(f"- {name}")
 
     def get_description(self):
         """
@@ -135,8 +125,10 @@ class Editor:
     id: str
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
 
-    def json(self):
-        return {
-            "id": self.id,
-            "ranges": [r.json() for r in self.ranges]
-        }
+    def write_descriptions(self, writer):
+        if len(self.ranges) == 0:
+            return
+        with writer.block():
+            writer.write(f"ranges:")
+            for r in self.ranges:
+                r.write_description(writer) 
