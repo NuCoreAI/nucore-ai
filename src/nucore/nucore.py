@@ -1,6 +1,7 @@
 # This class manages nodes/profiles/programs in the nucore platform
 
 
+import base64
 import json
 import logging
 import xml.etree.ElementTree as ET
@@ -48,7 +49,7 @@ class NuCore:
         self.runtime_profiles = {}
         from rag import RAGProcessor
         self.rag_processor = RAGProcessor(collection_path, collection_name, embedder_url=embedder_url, reranker_url=reranker_url)
-        self.profile = Profile(timestamp="", families=[])
+        self.profile = Profile(timestamp="", families=[], shared_enums=nucore_api.get_shared_enums())
 
     def __load_profile__(self, profile_path:str=None):
         """Load profile from the specified path or URL.
@@ -103,7 +104,8 @@ class NuCore:
 #        device_rag_formatter = DeviceRagFormatter(indent_str=" ", prefix="-")
         from rag import ProfileRagFormatter
         device_rag_formatter = ProfileRagFormatter()
-        return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+        #return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+        return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders ) 
     
     def format_tools(self):
         """
@@ -217,6 +219,12 @@ class NuCore:
         return self.rag_processor.query(query_text, num_results, rerank=rerank)
 
     async def send_commands(self, commands:list):
+        for cmd in commands:
+            if "device" in cmd:
+                #device ids are in base64 encoded, decode it
+                device_id = cmd["device"]
+                device_id = base64.b64decode(device_id).decode('utf-8')
+                cmd["device"] = device_id
         response = self.nucore_api.send_commands(commands)
         if response is None:
             raise NuCoreError("Failed to send commands.")
@@ -241,6 +249,12 @@ class NuCore:
                         continue
                     if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
                         continue
+                    device_id = condition.get("device", None)
+                    if device_id is None:
+                        continue
+                    # device ids are in base64 encoded, decode it
+                    device_id = base64.b64decode(device_id).decode('utf-8')
+                    condition["device"] = device_id
                     uom_id = condition.get("uom", None)
                     precision = condition.get("precision", None)
                     value = condition.get("value", None)
@@ -252,6 +266,11 @@ class NuCore:
             thens = routine.get("then", None)
             if thens is not None and len (thens) > 0:
                 for then in thens:
+                    device_id = then.get("device", None)
+                    if device_id is not None:
+                        # device ids are in base64 encoded, decode it
+                        device_id = base64.b64decode(device_id).decode('utf-8')
+                        then["device"] = device_id
                     parameters = then.get("parameters", None)
                     if parameters is not None:
                         for param in parameters:
@@ -266,6 +285,11 @@ class NuCore:
             elses = routine.get("else", None)
             if elses is not None and len (elses) > 0:
                 for else_ in elses:
+                    device_id = else_.get("device", None)
+                    if device_id is not None:
+                        # device ids are in base64 encoded, decode it
+                        device_id = base64.b64decode(device_id).decode('utf-8')
+                        else_["device"] = device_id
                     parameters = else_.get("parameters", None)
                     if parameters is not None:
                         for param in parameters:
@@ -301,6 +325,10 @@ class NuCore:
             NuCoreError: If the device_id is empty or if the response cannot be parsed.
         """
         # Use nucoreAPI to fetch properties
+        if not device_id:
+            raise NuCoreError("Device ID is empty.")
+        # Decode base64 encoded device_id
+        device_id = base64.b64decode(device_id).decode('utf-8')
         properties = self.nucore_api.get_properties(device_id)
         if properties is None:
             raise NuCoreError(f"Failed to get properties for device {device_id}.")
@@ -318,7 +346,8 @@ class NuCore:
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-
+        #device id is base64 encoded, decode it
+        device_id = base64.b64decode(device_id).decode('utf-8')
         node = self.nodes.get(device_id, None)  # Return None if device_id not found
         return node.name if node.name else device_id
 

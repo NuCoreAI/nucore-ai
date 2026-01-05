@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from .uom import UOMEntry, supported_uoms
 
+REFERENCE_DELIMITER = "REFERENCE"
 
 @dataclass
 class EditorSubsetRange:
@@ -8,6 +9,7 @@ class EditorSubsetRange:
     Defines a discrete set of allowed values for an editor range,
     using spans (e.g., '0-5') and individual values (e.g., '7,9').
     """
+
 
     uom: UOMEntry = field(metadata={"choices": supported_uoms})
     subset: str
@@ -52,12 +54,12 @@ class EditorSubsetRange:
                 # It's a range 'a-b'
                 #names.append(f"between {s}")
                 for k, v in self.names.items():
-                    names.append(f"{k}:{v}")
+                    names.append(f"{k}: {v}")
             else:
                 # Single value
                 val_name = self.names.get(s)
                 if val_name:
-                    names.append(f"{s}:{val_name}")
+                    names.append(f"{s}: {val_name}")
                 else:
                     names.append(s)
         return names
@@ -112,7 +114,7 @@ class EditorMinMaxRange:
         names = []
         if self.names:
             for k, v in self.names.items():
-                names.append(f"{k}:{v}")
+                names.append(f"{k}: {v}")
         return names
 
 @dataclass
@@ -123,12 +125,39 @@ class Editor:
     """
 
     id: str
+    is_reference: bool 
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
 
     def write_descriptions(self, writer):
-        if len(self.ranges) == 0:
+        if len(self.ranges) == 0: 
             return
         with writer.block():
-            writer.write(f"ranges:")
+            writer.write(f"editors id={self.id}:")
             for r in self.ranges:
-                r.write_description(writer) 
+                r.write_description(writer)
+
+    def write_descriptions_with_ref(self, writer):
+        """
+        Write descriptions, handling references - EXPERIMENTAL
+        
+        :param self: Description
+        :param writer: Description
+        """
+        if self.is_reference:
+            with writer.block():
+                writer.write(f"editors id={REFERENCE_DELIMITER}: {self.id}")
+            return
+        if len(self.ranges) == 0: 
+            return
+        with writer.block():
+            writer.write(f"editors id={self.id}:")
+            for r in self.ranges:
+                r.write_description(writer)
+
+    def write_prompt_section(self, writer):
+        if len(self.ranges) == 0: 
+            return
+        with writer.block():
+            writer.write(f"===REFERENCE id={self.id}===")
+            for r in self.ranges:
+                r.write_description(writer)  

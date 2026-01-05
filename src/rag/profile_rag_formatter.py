@@ -6,18 +6,19 @@ Each profile is represented with its properties and commands in a clear, hierarc
 The top level is a profile and therefore, profiles/editors are not repeated for devices of the same nodedef. 
 """
 
-import re
 from nucore import NodeProperty, Node
 
 from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from nucore import Node, Group, Folder, RuntimeProfile, NodeHierarchy
-
-#since LLMs are dumb when it comes to whitespaces, are going to url encode device ids
-from urllib.parse import quote
+import base64
 
 def encode_id(id:str)->str:
-    return quote(id, safe='')
+    # encode to base64 to make it URL safe
+    if not id:
+        return ""
+    return base64.b64encode(id.encode('utf-8')).decode('utf-8')
+
 
 PROFILE_HEADER = "Profile"
 DEVICE_HEADER = "Device"
@@ -58,7 +59,7 @@ class RagChunk:
         }
 
 class ProfileRagFormatter(RAGFormatter):
-    def __init__(self, indent_str: str = "  ", prefix: str = ""):
+    def __init__(self, indent_str: str = " ", prefix: str = ""):
         self.lines = []
         self.level = 0
         self.indent_str = indent_str
@@ -141,6 +142,10 @@ class ProfileRagFormatter(RAGFormatter):
         self.add_device_section(node, parent)
 
     def format_profile_first(self, profile:RuntimeProfile):
+        """
+        Format the profile with profile first, then list of supported devices.
+        :param profile: with a list of supported devices 
+        """
         if profile is None or profile.nodedef is None or not isinstance(profile, RuntimeProfile):
             raise ValueError("Invalid runtime profile provided to format")
 
@@ -149,18 +154,22 @@ class ProfileRagFormatter(RAGFormatter):
         with self.block():
             self.write(f"- id={profile.nodedef.id}")
             with self.block():
-                self.write("Properties:")
-                for prop in profile.nodedef.properties:
-                    self.add_property(prop)
-                self.write("Accept Commands:")
-                for cmd in profile.nodedef.cmds.accepts:
-                    self.add_command(cmd)
-                self.write("Sends Commands:")
-                for cmd in profile.nodedef.cmds.sends:
-                    self.add_command(cmd)
-                self.write("Devices:")
-                for node in profile.nodes:
-                    self.add_node(node)
+                if len(profile.nodedef.properties) > 0:
+                    self.write("Properties:")
+                    for prop in profile.nodedef.properties:
+                        self.add_property(prop)
+                if len(profile.nodedef.cmds.accepts) > 0:
+                    self.write("Accept Commands:")
+                    for cmd in profile.nodedef.cmds.accepts:
+                        self.add_command(cmd)
+                if len(profile.nodedef.cmds.sends) > 0:
+                    self.write("Sends Commands:")
+                    for cmd in profile.nodedef.cmds.sends:
+                        self.add_command(cmd)
+                if len(profile.nodes) > 0:
+                    self.write("Devices:")
+                    for node in profile.nodes:
+                        self.add_node(node)
 
         chunk.end_index = len(self.lines) - 1   
         chunk.nodes = profile.nodes
@@ -169,6 +178,10 @@ class ProfileRagFormatter(RAGFormatter):
         self.rag_chunks.append(chunk) 
 
     def format_device_first(self, profile:RuntimeProfile):
+        """
+        Format the profile with devices first (Supported Devices), then shared features.
+        :param profile: profile with a list of supported devices 
+        """
         if profile is None or profile.nodedef is None or not isinstance(profile, RuntimeProfile):
             raise ValueError("Invalid runtime profile provided to format")
 
@@ -195,6 +208,37 @@ class ProfileRagFormatter(RAGFormatter):
         chunk.properties = list(profile.nodedef.properties)
         self.rag_chunks.append(chunk) 
 
+    def format_per_device(self, node:Node):
+        """
+        Format the profile per device, with devices as atomic units with their own properties/commands/editors. 
+        
+        :param node: the node to format
+        """
+        if node is None or not isinstance(node, Node):
+            raise ValueError("Invalid runtime profile provided to format")
+
+        chunk = RagChunk(node.address, len(self.lines))
+        self.write(DEVICE_SECTION_HEADER)   
+        self.add_node(node)
+        
+        with self.block():
+            if node.node_def:
+                self.write("Properties:")
+                for prop in node.node_def.properties: 
+                    self.add_property(prop)
+                self.write("Accept Commands:")
+                for cmd in node.node_def.cmds.accepts:
+                    self.add_command(cmd)
+                self.write("Sends Commands:")
+                for cmd in node.node_def.cmds.sends:
+                    self.add_command(cmd)
+
+        chunk.end_index = len(self.lines) - 1   
+        chunk.nodes = [ node ] 
+        chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
+        chunk.properties = list(node.node_def.properties)
+        self.rag_chunks.append(chunk) 
+
     def format(self, **kwargs)->RAGData:
         """
         Convert the formatted profiles into a list of RAG documents.
@@ -206,29 +250,38 @@ class ProfileRagFormatter(RAGFormatter):
         :return: RAGData object containing the formatted documents.
         :raises ValueError: if no profiles are provided or if profiles is not a list. 
         """
-        if not "profiles" in kwargs:
-            raise ValueError("No profiles provided to format")
-        if not isinstance(kwargs["profiles"], dict):
-            raise ValueError("Profiles must be a dictionary")
+        self.profiles = None
+        self.nodes = None
+        self.groups = None
+        self.folders = None
+        if "profiles" in kwargs:
+            self.profiles = kwargs["profiles"]
+            if not isinstance(self.profiles, dict): 
+                raise ValueError("Profiles must be a dictionary")
         if not "nodes" in kwargs:
             raise ValueError("No nodes provided to format")
-        if not isinstance(kwargs["nodes"], dict):
-            raise ValueError("Nodes must be a dict")
-        if not "groups" in kwargs:
-            raise ValueError("No groups provided to format")
-        if not isinstance(kwargs["groups"], dict):
-            raise ValueError("Groups must be a dict")
-        if not "folders" in kwargs:
-            raise ValueError("No folders provided to format")
-        if not isinstance(kwargs["folders"], dict):
-            raise ValueError("Folders must be a dict")
         self.nodes = kwargs["nodes"]
-        self.groups = kwargs["groups"]
-        self.folders = kwargs["folders"]
+        if not isinstance(self.nodes, dict):
+            raise ValueError("Nodes must be a dict")
 
-        profiles = kwargs["profiles"]
-        for profile in profiles.values():
-            self.format_device_first(profile)
+        if "groups" in kwargs:
+            self.groups = kwargs["groups"]
+            if not isinstance(self.groups, dict):
+                raise ValueError("Groups must be a dictionary")
+        
+        if "folders" in kwargs:
+            self.folders = kwargs["folders"]
+            if not isinstance(self.folders, dict):
+                raise ValueError("Folders must be a dict")
+
+        if self.profiles is not None:
+            for profile in self.profiles.values():
+                self.format_device_first(profile)
+        else:
+            if self.nodes is None or self.groups is None:
+                raise ValueError("Insufficient data to format profile RAG (need both nodes and groups).")
+            for node in self.nodes.values():
+                self.format_per_device(node)
             
         rag_docs:RAGData = RAGData()
         for chunk in self.rag_chunks:

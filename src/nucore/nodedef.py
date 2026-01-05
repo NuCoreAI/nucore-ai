@@ -11,8 +11,20 @@ class Property:
     value: str
     formatted: str
     uom: str
+    uom_name: str = field(default=None)
     prec: int = field(default=None)
     name: str = field(default=None)
+
+    def __str__(self):
+        return {
+            "id": self.id,
+            "value": self.value,
+            "formatted": self.formatted,
+            "uom": self.uom,
+            "uom_name": self.uom_name,
+            "prec": self.prec,
+            "name": self.name
+        }
 
 
 @dataclass

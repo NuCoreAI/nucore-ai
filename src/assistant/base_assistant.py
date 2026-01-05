@@ -91,25 +91,6 @@ def get_parser_args():
     )
     return parser.parse_args()
 
-def normalize_number_spacing(full_response:str, text: str) -> str:
-    """
-    Ensure a space exists between letters/symbols and numbers.
-    Safe for temperature units, percentages, and common abbreviations.
-    """
-    if full_response is not None:
-        before_delta= len(full_response) - len(text)
-        before_delta_text = full_response[before_delta-1]
-
-        if full_response.endswith(text) and before_delta_text not in ['%', '°', '$'] and text[0].isdigit():
-            text = " " + text
-    # Letter or symbol followed by digit → add space
-    text = re.sub(r'([a-zA-Z°%])(\d)', r'\1 \2', text)
-
-    # Digit followed by letter or symbol → add space
-    text = re.sub(r'(\d)([a-zA-Z%])', r'\1 \2', text)
-
-    return text
-
 class NuCoreBaseAssistant(ABC):
     def __init__(self, args):
         #prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt") 
@@ -119,6 +100,7 @@ class NuCoreBaseAssistant(ABC):
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.config = AIConfig() 
         self.system_prompt = self._get_system_prompt()
+        self.tool_prompt = self._get_tools_prompt()
         self.nuCore = NuCore(
             collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
             collection_name="nucore.assistant",
@@ -201,7 +183,7 @@ class NuCoreBaseAssistant(ABC):
         responses = []
         for routine in routines:
             responses.append(await self.nuCore.create_automation_routine(routine))
-        text="rephrase_in_natural_language_\""
+        text="rephrase_tool_results: \""
 
         if len(responses)>0:
             for i in range (len(responses)):
@@ -243,12 +225,14 @@ class NuCoreBaseAssistant(ABC):
             if prop_id:
                 prop = properties.get(prop_id)
                 if text is None:
-                    text = "rephrase_in_natural_language_\" "
+                    text = "rephrase_tool_results: \""
                 if prop:
-                    #text = f"rephrase_in_natural_language_\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
-                    text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}\n"
+                    #text = f"rephrase_tool_results\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
+                    text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}"
+                    #text += f"{device_name}: {json.dumps(prop.json())}\n"
                     #await self.send_response(text, True, websocket)
                 else:
+                    text +=  f"Property {prop_id} not found for device {device_name}"
                     print( f"Property {prop_id} not found for device {device_name}")
             else:
                 print(f"No property ID provided for device {device_name}")
@@ -262,20 +246,16 @@ class NuCoreBaseAssistant(ABC):
         if not responses or len(responses) == 0:
             await self.send_response("Assistant didn't return anything", True, websocket)
             return None
-        if not websocket:
-            print(responses)
-            return responses
         if isinstance(responses, list):
-            output="rephrase_in_natural_language_\""
+            output=f"rephrase_tool_results: results of the {len(responses)} commands:\""
             for i in range(len(responses)):
                 response = responses[i]
-                original_message = original_messages[i] if original_messages and i < len(original_messages) else " "
-                output += f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)} - {original_message}\n"
-
+            #    original_message = original_messages[i] if original_messages and i < len(original_messages) else " "
+                output += f"\n{i+1} -> {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
             output+="\""
             await self.process_customer_input(output, websocket=websocket, text_only=True)
         else:
-            await self.process_customer_input(f"rephrase_in_natural_language_\"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, text_only=True)
+            await self.process_customer_input(f"rephrase_tool_results: \"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, text_only=True)
 
         return responses
 
@@ -296,8 +276,9 @@ class NuCoreBaseAssistant(ABC):
                 return await self.send_commands(tool_call.get("args"), websocket)
             elif type == "Routines":
                 return await self.create_automation_routines(tool_call.get("args"), websocket)
+
         except Exception as e:
-            print(f"Error processing tool call: {e}")
+            print(f"Error processing tool call: {e} {tool_call}")
             
         return None
 
@@ -392,7 +373,6 @@ class NuCoreBaseAssistant(ABC):
             self.message_history = []
             self.device_docs = device_docs
 
-        sprompt = self.system_prompt.strip()
 
         query = query.strip()
         if not query:
@@ -402,14 +382,20 @@ class NuCoreBaseAssistant(ABC):
         if query.startswith("?"):
             query = "\n"+query[1:].strip()
         
+        sprompt = self.system_prompt.strip()
         user_content = f"USER QUERY:{query}"
         if len(self.message_history) == 0 :
+            sprompt += "\n\n"+self.tool_prompt.strip()+"\n\n" #+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
                 self.message_history.append({"role": "system", "content": sprompt})
-            user_content = f"DEVICE STRUCTURE:\n\n{device_docs}\n\n{user_content}"
+                
+            user_content = f"────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
+            #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
             if self.debug_mode:
-                with open("/tmp/device_docs.txt", "w") as f:
-                    f.write(device_docs)
+                with open("/tmp/nucore.prompt.txt", "w") as f:
+                    f.write(sprompt)
+                with open("/tmp/nucore.prompt.txt", "a") as f:
+                    f.write(user_content)
         # Add user message to history
         self.message_history.append({"role": "user", "content": user_content})
             
@@ -430,6 +416,15 @@ class NuCoreBaseAssistant(ABC):
         :return: True if the system prompt should be included, False otherwise.
         """
         return True
+    
+    @abstractmethod
+    def _get_tools_prompt(self) -> str:
+        """
+        Returns the tools prompt to be included in the system prompt.
+        This is for models that do not support tool calls natively.
+        :return: The tools prompt as a string.
+        """
+        return "" 
 
     @abstractmethod
     async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool)-> str:

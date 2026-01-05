@@ -9,7 +9,7 @@ import asyncio, argparse
 from nucore import NuCore 
 
 from openai import AsyncOpenAI
-from base_assistant import NuCoreBaseAssistant, get_parser_args, normalize_number_spacing
+from base_assistant import NuCoreBaseAssistant, get_parser_args 
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -33,6 +33,14 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt
+
+    def _get_tools_prompt(self):
+        # Assuming this code is inside your_package/module.py
+        tools_prompt = ""
+#        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.tools.prompt")
+#        with open(prompts_path, 'r', encoding='utf-8') as f:
+#            tools_prompt = f.read().strip()
+        return tools_prompt
     
     def _sub_init(self):
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -77,9 +85,8 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                         if text_only or self.debug_mode:
                             await self.send_response(f"\r\n***\r\n", False, websocket)
                     first_line = False
-                    normalized_event_delta = normalize_number_spacing(full_response, event.delta)
                     if text_only or self.debug_mode:
-                        await self.send_response(f"{normalized_event_delta}", False, websocket)
+                        await self.send_response(f"{event.delta}", False, websocket)
             # End of response
                 elif event.type == "response.completed":
                     if full_response is not None and full_response != "":

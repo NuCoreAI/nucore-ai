@@ -5,6 +5,8 @@ import requests
 import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
+
+from .shared_enums import SharedEnumsBase
 from .nodedef import Property
 from .uom import PREDEFINED_UOMS, UNKNOWN_UOM
 
@@ -109,3 +111,13 @@ class NuCoreBackendAPI(ABC):
             str: The response from the backend for the uploaded program.
         """
         pass
+
+    @abstractmethod
+    def get_shared_enums(self) -> SharedEnumsBase: 
+        """
+        Get shared enumerations from the backend.
+        
+        Returns:
+            SharedEnumsBase: An instance of SharedEnumsBase containing shared enumerations.
+        """
+        return None

@@ -6,6 +6,7 @@ Each device is represented with its properties and commands in a clear, hierarch
 The top level is a device and therefore, profiles/editors are repeated for devices of the same nodedef.
 """
 
+import base64
 import re
 from nucore import NodeProperty, Node
 
@@ -13,11 +14,6 @@ from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from nucore import Node, Group, Folder
 
-#since LLMs are dumb when it comes to whitespaces, are going to url encode device ids
-from urllib.parse import quote
-
-def encode_id(id:str)->str:
-    return quote(id, safe='')
 
 DEVICE_HEADER="Device"
 GROUP_HEADER="Group"

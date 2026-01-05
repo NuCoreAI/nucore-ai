@@ -929,7 +929,7 @@ PREDEFINED_UOMS = {
 
 
 def get_uom_by_id(uom_id):
-    return PREDEFINED_UOMS.get(uom_id)
+    return PREDEFINED_UOMS.get(uom_id, None)
 
 
 supported_uoms = list(PREDEFINED_UOMS.values())

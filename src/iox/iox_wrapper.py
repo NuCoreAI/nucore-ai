@@ -1,13 +1,16 @@
 import json
-from urllib.parse import unquote 
 import requests, xml.etree.ElementTree as ET
 import sys
 import os
 import websockets, base64
+
+from nucore.shared_enums import SharedEnumsBase
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_backend_api import NuCoreBackendAPI
 from nucore.nodedef import Property
+from nucore.uom import get_uom_by_id 
 import xml.etree.ElementTree as ET
+from .iox_shared_enums import IoXSharedEnums
 
 class IoXWrapper(NuCoreBackendAPI):
     ''' 
@@ -26,6 +29,7 @@ class IoXWrapper(NuCoreBackendAPI):
             password (str): The password for ISY authentication (optional).
         """
         super().__init__()  # Initialize parent with no parameters
+        self.shared_enums: SharedEnumsBase = IoXSharedEnums()
         if poly:
             # import only in case we are running in polglot context since 
             # udi_interface redirects standard input/output to polyglot LOGGER
@@ -139,6 +143,7 @@ class IoXWrapper(NuCoreBackendAPI):
             root = ET.fromstring(response.text)
             property_elems = root.findall(".//property")
             properties = {}
+            
             for p_elem in property_elems:
                 prop = Property(
                     id=p_elem.get("id"),
@@ -190,8 +195,6 @@ class IoXWrapper(NuCoreBackendAPI):
             device_id = command.get("device") or command.get("device_id")
             if not device_id:
                 raise ValueError("No device ID found in command")
-            #device_ids are url encoded. decode them
-            device_id = unquote(device_id)
             command_id = command.get("command") or command.get("command_id")
             if not command_id:
                 raise ValueError("No command ID found in command")
@@ -272,7 +275,7 @@ class IoXWrapper(NuCoreBackendAPI):
             }
             #temporarily remove the port if present
             self.base_url="http://localhost:5000"
-            response = self.put(f'/api/ai/trigger', body=unquote(json.dumps(program_content)), headers=headers)
+            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
         except Exception as ex:
             print (ex)
         
@@ -364,4 +367,13 @@ class IoXWrapper(NuCoreBackendAPI):
             print(f"Failed to subscribe to events: {str(ex)}")
             return False
         return True
+    
+    def get_shared_enums(self) -> SharedEnumsBase: 
+        """
+        Get shared enumerations from the IoX device.
+        
+        Returns:
+            SharedEnumsBase: An instance of SharedEnumsBase containing shared enumerations.
+        """
+        return self.shared_enums
     

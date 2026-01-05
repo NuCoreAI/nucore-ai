@@ -10,8 +10,9 @@ from .node_base import node_is_group
 from .node import Node
 from .group import Group
 from .folder import Folder
-from .editor import EditorMinMaxRange, EditorSubsetRange
+from .editor import EditorMinMaxRange, EditorSubsetRange, REFERENCE_DELIMITER
 from .uom import get_uom_by_id
+from .shared_enums import SharedEnumsBase
 import json
 import logging
 
@@ -62,11 +63,12 @@ class Profile:
     """
     timestamp: str = "" 
     runtime_profiles: dict[str, RuntimeProfile] = field(default_factory=dict)
+    lookup: dict = field(default_factory=dict)
     families: list[Family] = field(default_factory=list)
     nodes:  dict = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
     folders: dict = field(default_factory=dict)
-    lookup: dict = field(default_factory=dict)
+    shared_enums: SharedEnumsBase = None 
     
 
     def load_from_file(self, profile_path:str):
@@ -92,6 +94,11 @@ class Profile:
                     self.lookup[f"{nodedef.id}.{family.id}.{instance.id}"] = nodedef
 
     def __build_editor__(self, edict) -> Editor:
+        is_shared = self.shared_enums and self.shared_enums.is_shared(edict["id"])
+
+        if is_shared and self.shared_enums.is_set(edict["id"]):
+            return
+
         ranges = []
         for rng in edict.get("ranges", []):
             uom_id = rng["uom"]
@@ -118,8 +125,11 @@ class Profile:
                 )
             else:
                 debug(f"Range must have either min/max or subset: {rng}")
-        
-        return Editor(id=edict["id"], ranges=ranges)
+         
+        editor = Editor(id=edict["id"], is_reference=is_shared, ranges=ranges)
+        if is_shared:
+            self.shared_enums.set_editor(edict["id"], editor)
+        return editor
     
     def __parse_profile__(self, raw):
         """Build Profile from dict, with type/checking and lookups"""
@@ -139,7 +149,8 @@ class Profile:
                     if "id" not in edict:
                         debug("Editor missing 'id'")
                         continue
-                    editors_dict[edict["id"]] = self.__build_editor__(edict)
+                    if edict["id"] not in editors_dict:
+                        editors_dict[edict["id"]] = self.__build_editor__(edict)
                 # Build LinkDefs
                 linkdefs = []
                 for ldict in i.get("linkdefs", []):
