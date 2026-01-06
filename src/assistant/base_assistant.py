@@ -5,11 +5,19 @@ from abc import ABC, abstractmethod
 import re,os
 import json
 import argparse
+from typing import Tuple
 
 from nucore import NuCore 
 from iox import IoXWrapper
 from importlib.resources import files
 from config import AIConfig
+from utils import JSONDuplicateDetector 
+
+import threading
+import queue
+import time
+from dataclasses import dataclass
+
 
 def get_data_directory(parent:str, subdir:str) -> str:
     """
@@ -91,6 +99,15 @@ def get_parser_args():
     )
     return parser.parse_args()
 
+@dataclass
+class LLMQueueElement:
+    query:str
+    num_rag_results:int
+    rerank:bool
+    websocket:any
+    text_only:bool
+
+
 class NuCoreBaseAssistant(ABC):
     def __init__(self, args):
         #prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt") 
@@ -119,10 +136,36 @@ class NuCoreBaseAssistant(ABC):
             raise ValueError("Model URL is required to initialize NuCoreAssistant")
         self.__model_url__ = model_url
         self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
+        self._sub_init() #for subclass specific initialization
+        ## Queue processing setup 
+        self.request_queue = queue.Queue()
+        self.worker_thread = None
+        self.running = False
+        self.is_busy = False
+        
         print (self.__model_url__)
         self.device_docs = None
         self.nuCore.load()
-        self._sub_init() #for subclass specific initialization
+        self._start_queue_processor()
+
+        self.duplicate_detector = None 
+        check_duplicates, time_window_seconds = self._check_for_duplicate_tool_call()
+        if check_duplicates:
+            self.duplicate_detector = JSONDuplicateDetector(time_window_seconds=time_window_seconds)
+
+    def _start_queue_processor(self):
+        """Start the background worker thread"""
+        if not self.running:
+            self.running = True
+            self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
+            self.worker_thread.start()
+
+    def _stop_queue_processor(self):
+        """Stop the worker thread"""
+        self.running = False
+        self.request_queue.put(None)  # Signal to exit
+        if self.worker_thread:
+            self.worker_thread.join()
 
     @abstractmethod
     def _get_system_prompt(self) -> str:
@@ -183,21 +226,7 @@ class NuCoreBaseAssistant(ABC):
         responses = []
         for routine in routines:
             responses.append(await self.nuCore.create_automation_routine(routine))
-        text="rephrase_tool_results: \""
-
-        if len(responses)>0:
-            for i in range (len(responses)):
-                response=responses[i]
-                routine=routines[i]
-                routine_name = routine.get("name", f"Routine {i+1}")
-                if response.status_code == 200:
-                    text += f"{routine_name} created successfully.\n"
-                else:
-                    text += f"Failed to create {routine_name} with status code {response.status_code}.\n"
-        else:
-            text += "Error: No routines were created.\n"
-        text += "\""
-        await self.process_customer_input(text, websocket=websocket, text_only=True)
+        await self.process_tool_responses(responses, websocket, "routine(s)")
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
@@ -207,7 +236,7 @@ class NuCoreBaseAssistant(ABC):
                 prop_query = prop_query[0]
         except Exception as e:
             pass
-        text = None
+        texts = [] 
         for property in prop_query:
             # Process the property query
             device_id = property.get('device') or property.get('device_id')
@@ -224,44 +253,43 @@ class NuCoreBaseAssistant(ABC):
                 device_name = device_id
             if prop_id:
                 prop = properties.get(prop_id)
-                if text is None:
-                    text = "rephrase_tool_results: \""
                 if prop:
-                    #text = f"rephrase_tool_results\"{prop_name if prop_name else prop_id} for {device_name} is: {prop.formatted if prop.formatted else prop.value}\""
-                    text += f"{device_name}: {prop.formatted if prop.formatted else prop.value}"
-                    #text += f"{device_name}: {json.dumps(prop.json())}\n"
-                    #await self.send_response(text, True, websocket)
+                    texts.append(f"{device_name}: {prop.formatted if prop.formatted else prop.value}")
                 else:
-                    text +=  f"Property {prop_id} not found for device {device_name}"
+                    texts.append(f"Property {prop_id} not found for device {device_name}")
                     print( f"Property {prop_id} not found for device {device_name}")
             else:
                 print(f"No property ID provided for device {device_name}")
 
-        if text is not None:
-            text += "\""
-            await self.process_customer_input(text, websocket=websocket, text_only=True)
+        if texts:
+            await self.process_tool_responses(texts, websocket, "property query(ies)") 
             return  
 
-    async def process_tool_responses(self, responses, websocket, original_messages=None):
+    async def process_tool_responses(self, responses, websocket, type:str):
         if not responses or len(responses) == 0:
             await self.send_response("Assistant didn't return anything", True, websocket)
             return None
+        if type is None:
+            type="request(s)"
+        output=f"rephrase_tool_results: results of the {len(responses)} {type}:\""
         if isinstance(responses, list):
-            output=f"rephrase_tool_results: results of the {len(responses)} commands:\""
             for i in range(len(responses)):
                 response = responses[i]
+                if isinstance(response, str):
+                    output += f"\n{i+1} -> {response}"
+                    continue
             #    original_message = original_messages[i] if original_messages and i < len(original_messages) else " "
                 output += f"\n{i+1} -> {'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
-            output+="\""
-            await self.process_customer_input(output, websocket=websocket, text_only=True)
         else:
-            await self.process_customer_input(f"rephrase_tool_results: \"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}\"", websocket=websocket, text_only=True)
+            output+=f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
 
+        output+="\""
+        await self.process_customer_input(output, websocket=websocket, text_only=True)
         return responses
 
     async def send_commands(self, commands:list, websocket):
         responses = await self.nuCore.send_commands(commands)
-        return await self.process_tool_responses(responses, websocket, original_messages=commands)
+        return await self.process_tool_responses(responses, websocket, "command(s)")
     
     async def process_json_tool_call(self, tool_call:dict, websocket):
         if not tool_call:
@@ -282,21 +310,10 @@ class NuCoreBaseAssistant(ABC):
             
         return None
 
-    def _remove_duplicate_routines(self, routines:list):
-        seen = set()
-        unique_routines = []
-        for routine in routines:
-            routine_tuple = tuple(sorted(routine.items()))
-            if routine_tuple not in seen:
-                seen.add(routine_tuple)
-                unique_routines.append(routine)
-        return unique_routines
-
     async def process_json_tool_calls(self, tool_calls, websocket):
         if isinstance(tool_calls, dict):
             return await self.process_json_tool_call(tool_calls, websocket)
         elif isinstance(tool_calls, list):
-            tool_calls = self._remove_duplicate_routines(tool_calls)
             for tool_call in tool_calls:
                 return await self.process_json_tool_call(tool_call, websocket)
         return None
@@ -309,8 +326,15 @@ class NuCoreBaseAssistant(ABC):
         try:
             #remove markdowns such as ```json ... ```
             full_response = re.sub(r"```json(.*?)```", r"\1", full_response, flags=re.DOTALL).strip()
-            tools = json.loads(full_response)
-            return await self.process_json_tool_calls(tools, websocket)
+            if self.duplicate_detector is None:
+                tools = json.loads(full_response)
+                return await self.process_json_tool_calls(tools, websocket)
+
+            tools = self.duplicate_detector.get_valid_json_objects(full_response, debug_mode=self.debug_mode)
+            for tool in tools:
+                await self.process_json_tool_calls(tool, websocket)
+            #tools = json.loads(full_response)
+            #return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
             if not full_response:
                 return ValueError("Invalid input to process_tool_call")
@@ -330,10 +354,11 @@ class NuCoreBaseAssistant(ABC):
             await websocket.send_text(json.dumps(payload))
         print(message, end="", flush=True)
         return message
+    
 
     async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, text_only:bool=False):
         """
-        Process the customer input using the underlying model with conversation state. 
+        Submits to the queued worker to process the customer input using the underlying model with conversation state. 
         :param query: The customer input to process.
         :param num_rag_results: The number of RAG results to use for the actual query
         :param rerank: Whether to rerank the results.
@@ -344,8 +369,46 @@ class NuCoreBaseAssistant(ABC):
         if not query:
             print("No query provided, exiting ...")
             return None
+        query_element= LLMQueueElement(
+            query=query,
+            num_rag_results=num_rag_results,
+            rerank=rerank,
+            websocket=websocket,
+            text_only=text_only
+        )
+        self.request_queue.put(query_element)
+
+    def _process_queue(self):
+        """Worker thread that processes requests one at a time"""
+        while self.running:
+            try:
+                # Get next request (blocks until available)
+                item = self.request_queue.get()
+
+                if item is None:  # Stop signal
+                    break
+
+                # Process the LLM request
+                import asyncio
+                self.is_busy = True
+                asyncio.run(self._process_customer_queue_element(item))
+                self.is_busy = False
+
+                self.request_queue.task_done()
+            except queue.Empty:
+                continue
         
-        rc = await self.__check_debug_mode__(query, websocket)
+    async def _process_customer_queue_element(self, element:LLMQueueElement):
+        if element is None:
+            return None
+
+        query = element.query
+        num_rag_results = element.num_rag_results
+        rerank = element.rerank
+        websocket = element.websocket
+        text_only = element.text_only
+
+        rc = await self.__check_debug_mode__(element.query, element.websocket)
         if rc:
             return None
 
@@ -437,6 +500,15 @@ class NuCoreBaseAssistant(ABC):
         :return: The full response as a string.
         """
         return None 
+    
+    @abstractmethod
+    def _check_for_duplicate_tool_call(self) -> Tuple[bool, int]:
+        """
+            Abstract method to check for duplicate tool calls. 
+            :return: A tuple (is_duplicate: bool, time_window_seconds: int)
+        """
+        return False, 0 
+
 
     async def main(self, welcome_message:str=None):
         if welcome_message:
@@ -449,6 +521,10 @@ class NuCoreBaseAssistant(ABC):
         
         while True:
             try:
+
+                while self.is_busy or not self.request_queue.empty() :
+                    time.sleep(1)
+
                 user_input = input("\nWhat can I do for you? > " if i==0 else "\n> ").strip()
                 i+=1
 
@@ -459,12 +535,9 @@ class NuCoreBaseAssistant(ABC):
                 if user_input.lower() == 'quit':
                     print("Goodbye!")
                     break
-
-                print(f"\n>>>>>>>>>>\n")
                 await self.process_customer_input(user_input, num_rag_results=3, rerank=False)
-                print ("\n\n<<<<<<<<<<\n")
                 
             except Exception as e:
                 print(f"An error occurred: {e}")
                 continue
-
+            

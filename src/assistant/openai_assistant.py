@@ -4,12 +4,14 @@ import re, os
 import os
 from pathlib import Path
 import json
-import asyncio, argparse
+import asyncio
+from typing import Tuple
 
 from nucore import NuCore 
 
 from openai import AsyncOpenAI
 from base_assistant import NuCoreBaseAssistant, get_parser_args 
+DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS = 5  # 5 seconds
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -41,6 +43,9 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 #        with open(prompts_path, 'r', encoding='utf-8') as f:
 #            tools_prompt = f.read().strip()
         return tools_prompt
+
+    def _check_for_duplicate_tool_call(self) -> Tuple[bool, int]: 
+        return False, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS 
     
     def _sub_init(self):
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -69,6 +74,8 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 #                model="ft:gpt-4.1-mini-2025-04-14:universal-devices:nucore13:Cmy5unf9",
                 # instructions=self.system_prompt,
                 input=self.message_history,
+                max_tool_calls=3,
+                parallel_tool_calls=False,
                 temperature=1.0,
                 stream=True
             )
@@ -76,7 +83,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             async for event in stream:
             # Text chunks as they arrive
                 if event.type == "response.output_text.delta":
-                    if not event.delta or event.delta == "" or event.delta.isspace():
+                    if not event.delta or event.delta == "": # or event.delta.isspace():
                         continue
                     full_response += event.delta
                     if first_line:
@@ -87,6 +94,13 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                     first_line = False
                     if text_only or self.debug_mode:
                         await self.send_response(f"{event.delta}", False, websocket)
+                    if not text_only and len(full_response) > 30:
+                        try:
+                            json.loads(full_response)
+                            await self.process_tool_call(full_response, websocket, None, None)
+                            break 
+                        except json.JSONDecodeError:
+                            pass
             # End of response
                 elif event.type == "response.completed":
                     if full_response is not None and full_response != "":
@@ -95,7 +109,9 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 #                        if self.debug_mode or text_only:
 #                            await self.send_response("\r\n***\r\n", False, websocket)
 #                        else:
-                        await self.send_response("\n", False, websocket)
+                        break
+
+            await self.send_response("\n", False, websocket)
             return full_response
 
         except Exception as e:
