@@ -21,16 +21,30 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt
-    
-    def _sub_init(self):
-        pass
+
+    def _check_for_duplicate_tool_call(self):
+        return False, 0
+
+    def _get_tools_prompt(self):
+        return ""
+
+    async def _sub_init(self):
+        """
+        Warm up the model by sending a dummy request without device structure
+
+        """
+        sprompt = self.system_prompt.strip()
+        self.message_history.append({"role": "system", "content": sprompt})
+        self.message_history.append({"role": "user", "content": "Hello!"})
+        await self._process_customer_input(num_rag_results=0, rerank=False, websocket=None, text_only=True)
+
 
     def _include_system_prompt_in_history(self) -> bool:
         """
         Whether to include the system prompt in the message history.
         :return: True if the system prompt should be included, False otherwise.
         """
-        return True
+        return False #already doing it in warm up --- IGNORE ---
 
     async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool):
         """

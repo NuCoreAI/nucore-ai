@@ -31,7 +31,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _get_system_prompt(self):
         # Assuming this code is inside your_package/module.py
         system_prompt = None
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.profile.prompt")
+        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.device.prompt" if self.prompt_type == "per-device" else "nucore.openai.profile.prompt")
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt
@@ -47,7 +47,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _check_for_duplicate_tool_call(self) -> Tuple[bool, int]: 
         return False, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS 
     
-    def _sub_init(self):
+    async def _sub_init(self):
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     def _include_system_prompt_in_history(self) -> bool:

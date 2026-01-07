@@ -18,6 +18,9 @@ from config import AIConfig
 logger = logging.getLogger(__name__)
 config = AIConfig()
 
+class PromptFormatTypes:
+    DEVICE = "per-device"
+    PROFILE = "shared-features"
 
 
 def debug(msg):
@@ -26,14 +29,13 @@ def debug(msg):
 
 class NuCore:
     """Class to handle nucore backend operations such as loading profiles and nodes."""
-    def __init__(self, collection_path, collection_name:str, nucore_api:NuCoreBackendAPI, embedder_url:str=None, reranker_url:str=None):
+    def __init__(self, collection_path, collection_name:str, nucore_api:NuCoreBackendAPI, embedder_url:str=None, reranker_url:str=None, formatter_type:str=PromptFormatTypes.DEVICE):
         """
         Initialize the NuCore instance with backend API and RAG processor. 
         :param collection_path: The path to the collection file. This is used to store all the embeddings. (mandatory)
         :param collection_name: The name of the collection to be used. This is used to store all the embeddings. (mandatory)
         :param nucore_api: An instance of NuCoreBackendAPI to interact with the backend. (mandatory)
         :param reranker_url (str): The URL of the reranker service. If not provided, reranking will not be performed.
-        :param static_docs_path (str): The path to the static information directory. If not provided, static information will not be included.
         
         Note: Make sure that the collection_path and collection_name are set correctly.
         You will need to call load() after you are ready to use this object
@@ -50,6 +52,7 @@ class NuCore:
         from rag import RAGProcessor
         self.rag_processor = RAGProcessor(collection_path, collection_name, embedder_url=embedder_url, reranker_url=reranker_url)
         self.profile = Profile(timestamp="", families=[], shared_enums=nucore_api.get_shared_enums())
+        self.formatter_type = formatter_type
 
     def __load_profile__(self, profile_path:str=None):
         """Load profile from the specified path or URL.
@@ -100,12 +103,16 @@ class NuCore:
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-#        from rag import DeviceRagFormatter
-#        device_rag_formatter = DeviceRagFormatter(indent_str=" ", prefix="-")
         from rag import ProfileRagFormatter
         device_rag_formatter = ProfileRagFormatter()
-        #return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
-        return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+        if self.formatter_type == PromptFormatTypes.PROFILE:
+            return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+         
+        if self.formatter_type == PromptFormatTypes.DEVICE:
+            return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+        
+        print (f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
+        return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
     
     def format_tools(self):
         """
@@ -136,6 +143,7 @@ class NuCore:
         - include_rag_docs: If True, include RAG documents in the output.
         - tools: If True, include tools in the RAG documents.
         - static_info: If True, include static information in the RAG documents.
+        - static_docs_path: Path to the static information directory.
         - dump: If True, dump the processed RAG documents to a file.
         :raises NuCoreError: If no nodes or profile are loaded.
         :return: Processed RAG documents.
@@ -171,8 +179,10 @@ class NuCore:
         :param kwargs: Optional parameters for loading.
         - profile_path: Path to the profile file. If not provided, will use the configured URL.
         - nodes_path: Path to the nodes XML file. If not provided, will use the configured URL.
+        - static_docs_path: Path to the static information directory.
         - include_rag_docs: If True, include RAG documents in the output.
         - dump: If True, dump the processed RAG documents to a file.
+        - include_profiles: If True, include profiles in the loading process.
         :return: Loaded devices and profiles.
         :raises NuCoreError: If no valid profile or nodes source is provided.
         :raises NuCoreError: If the RAG processor is not initialized.
@@ -182,9 +192,9 @@ class NuCore:
         dump = kwargs.get("dump", False)
         static_docs_path = kwargs.get("static_docs_path", None)
         embed = kwargs.get("embed", False)
+        include_profiles = kwargs.get("include_profiles", True)
 
-        
-        rc = self.load_devices(profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
+        rc = self.load_devices(include_profiles=include_profiles, profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
         if include_rag_docs:
             rc = self.load_rag_docs(dump=dump, static_docs_path=static_docs_path, embed=embed)
         return rc
@@ -350,6 +360,17 @@ class NuCore:
         device_id = base64.b64decode(device_id).decode('utf-8')
         node = self.nodes.get(device_id, None)  # Return None if device_id not found
         return node.name if node.name else device_id
+
+    async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
+        """
+        Subscribe to device events using the nucore API.
+        
+        Args:
+            on_message_callback (callable): Callback function to handle incoming messages.
+            on_connect_callback (callable, optional): Callback function to handle connection events.
+            on_disconnect_callback (callable, optional): Callback function to handle disconnection events.
+        """
+        await self.nucore_api.subscribe_events(on_message_callback, on_connect_callback, on_disconnect_callback)
 
     def __str__(self):
         if not self.profile:

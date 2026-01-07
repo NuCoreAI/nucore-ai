@@ -2,12 +2,13 @@
 
 from abc import ABC, abstractmethod
 
+import asyncio
 import re,os
 import json
 import argparse
 from typing import Tuple
 
-from nucore import NuCore 
+from nucore import NuCore, PromptFormatTypes 
 from iox import IoXWrapper
 from importlib.resources import files
 from config import AIConfig
@@ -97,6 +98,14 @@ def get_parser_args():
         required=False,
         help="The URL of the reranker service. If provided, this should be a valid URL that responds to OpenAI's API requests."
     )
+    parser.add_argument(
+        "--prompt_type",
+        dest="prompt_type",
+        type=str,
+        required=False,
+        default="per-device",
+        help="The type of prompt to use (e.g., 'per-device', 'shared-features', etc.)",
+    )
     return parser.parse_args()
 
 @dataclass
@@ -115,6 +124,7 @@ class NuCoreBaseAssistant(ABC):
         self.message_history = []
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
+        self.prompt_type = args.prompt_type if args.prompt_type else PromptFormatTypes.DEVICE 
         self.config = AIConfig() 
         self.system_prompt = self._get_system_prompt()
         self.tool_prompt = self._get_tools_prompt()
@@ -127,7 +137,8 @@ class NuCoreBaseAssistant(ABC):
                 password=args.password
             ),
             embedder_url=args.embedder_url if args.embedder_url else self.config.getEmbedderURL(),
-            reranker_url=args.reranker_url if args.reranker_url else self.config.getRerankerURL()
+            reranker_url=args.reranker_url if args.reranker_url else self.config.getRerankerURL(),
+            formatter_type=self.prompt_type
         )
         if not self.nuCore:
             raise ValueError("Failed to initialize NuCore. Please check your configuration.")
@@ -136,22 +147,83 @@ class NuCoreBaseAssistant(ABC):
             raise ValueError("Model URL is required to initialize NuCoreAssistant")
         self.__model_url__ = model_url
         self.__model_auth_token__ = args.model_auth_token if args.model_auth_token else None
-        self._sub_init() #for subclass specific initialization
         ## Queue processing setup 
         self.request_queue = queue.Queue()
         self.worker_thread = None
         self.running = False
         self.is_busy = False
         
-        print (self.__model_url__)
         self.device_docs = None
-        self.nuCore.load()
         self._start_queue_processor()
 
         self.duplicate_detector = None 
         check_duplicates, time_window_seconds = self._check_for_duplicate_tool_call()
         if check_duplicates:
             self.duplicate_detector = JSONDuplicateDetector(time_window_seconds=time_window_seconds)
+        self.device_docs_sent = False
+        self.device_structure_changed = True
+        
+        print (self.__model_url__)
+        asyncio.run(self._sub_init()) #for subclass specific initialization
+
+        ## subscribe to get events from devices
+        self.nuCore.subscribe_events(self._on_device_event, self._on_connect_callback, self._on_disconnect_callback)
+
+    async def _refresh_device_structure(self) -> bool:
+        """
+        Refresh device structure if necessary.
+        Check for changes in device structure and update internal state if changes are detected.
+        :return: True if device structure has changed, False otherwise.
+        """
+        if not self.device_structure_changed:
+            return False #already refreshed no need to check again
+        self.device_structure_changed = False 
+
+        device_docs = ""
+        if not self.nuCore.load(include_profiles=True):
+            raise ValueError("Failed to load devices from NuCore. Please check your configuration.")
+
+        rag = self.nuCore.format_nodes()
+        if not rag:
+            raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
+
+        rag_docs = rag["documents"]
+        if not rag_docs:
+            raise ValueError(f"Warning: No documents found in RAG for node {self.nuCore.url}. Skipping.")
+
+        for rag_doc in rag_docs:
+            device_docs += "\n" + rag_doc
+
+#        if self.device_docs is None:
+#            self.device_docs = device_docs
+        self.device_docs = device_docs
+        return True #changed
+
+    async def _on_device_event(self, message:dict):
+        """
+        Callback function to handle device events.
+        What we are looking for are events that change device structure such as device added/removed, property added/removed, etc.
+        :param event: The event data received.
+        """
+        if message is None or 'node' not in message or 'control' not in message:
+            print(f"Received invalid message format {message}")
+            return
+        
+        control = message['control']
+        if control == "_3": #node updated event
+            self.device_structure_changed = True # just to be on the safe side
+
+    async def _on_connect_callback(self):
+        """
+        Callback function to handle connection established event.
+        """
+        self.device_structure_changed = True # just to be on the safe side
+
+    async def _on_disconnect_callback(self):
+        """
+        Callback function to handle disconnection event.
+        """
+        pass
 
     def _start_queue_processor(self):
         """Start the background worker thread"""
@@ -176,7 +248,7 @@ class NuCoreBaseAssistant(ABC):
         pass
 
     @abstractmethod
-    def _sub_init(self):
+    async def _sub_init(self):
         """
         Subclass specific initialization.
         """
@@ -412,30 +484,10 @@ class NuCoreBaseAssistant(ABC):
         if rc:
             return None
 
-        device_docs = ""
-        if not self.nuCore.load_devices(include_profiles=False):
-                raise ValueError("Failed to load devices from NuCore. Please check your configuration.")
-
-        rag = self.nuCore.format_nodes()
-        if not rag:
-            raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
-
-        rag_docs = rag["documents"]
-        if not rag_docs:
-            raise ValueError(f"Warning: No documents found in RAG for node {self.nuCore.url}. Skipping.")
-
-        for rag_doc in rag_docs:
-            device_docs += "\n" + rag_doc
-
-        if self.device_docs is None:
-            self.device_docs = device_docs
-
-        changed = device_docs != self.device_docs
+        changed = await self._refresh_device_structure()
         if changed and len(self.message_history)>0:
             #reset message history if device docs have changed
             self.message_history = []
-            self.device_docs = device_docs
-
 
         query = query.strip()
         if not query:
@@ -447,21 +499,26 @@ class NuCoreBaseAssistant(ABC):
         
         sprompt = self.system_prompt.strip()
         user_content = f"USER QUERY:{query}"
+        if changed or not self.device_docs_sent:        
+            user_content = f"────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{self.device_docs}\n\n{user_content}"
+            self.device_docs_sent = True
+            #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
         if len(self.message_history) == 0 :
             sprompt += "\n\n"+self.tool_prompt.strip()+"\n\n" #+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
                 self.message_history.append({"role": "system", "content": sprompt})
-                
-            user_content = f"────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
-            #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
             if self.debug_mode:
-                with open("/tmp/nucore.prompt.txt", "w") as f:
+                with open("/tmp/nucore.1.prompt.txt", "w") as f:
                     f.write(sprompt)
-                with open("/tmp/nucore.prompt.txt", "a") as f:
+                with open("/tmp/nucore.1.prompt.txt", "a") as f:
                     f.write(user_content)
         # Add user message to history
         self.message_history.append({"role": "user", "content": user_content})
-            
+        if self.debug_mode:
+            with open("/tmp/nucore.prompt.txt", "w") as f:
+                f.write(sprompt)
+            with open("/tmp/nucore.prompt.txt", "a") as f:
+                f.write(user_content)
         try:
             assistant_response = await self._process_customer_input(num_rag_results=num_rag_results, rerank=rerank, websocket=websocket, text_only=text_only)
             if assistant_response is not None:

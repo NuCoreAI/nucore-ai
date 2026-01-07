@@ -15,9 +15,9 @@ from .profile import Profile, Family, Instance
 from .uom import UOMEntry, get_uom_by_id
 from .nucore_error import NuCoreError
 from .shared_enums import SharedEnumsBase  
-from .nucore import NuCore
+from .nucore import NuCore, PromptFormatTypes
 
 __all__ = ["NuCore", "NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreBackendAPI", 
            "Command", "CommandParameter", "Editor", "LinkDef", "RuntimeProfile",
            "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id,
-           "NodeBase", "NodeHierarchy", "NodeTypes", "Group", "GroupMember", "GroupMemberType", "Folder", "SharedEnumsBase"]
+           "NodeBase", "NodeHierarchy", "NodeTypes", "Group", "GroupMember", "GroupMemberType", "Folder", "SharedEnumsBase", "PromptFormatTypes"]

@@ -34,7 +34,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             system_prompt = f.read().strip()
         return system_prompt
     
-    def _sub_init(self):
+    async def _sub_init(self):
         self.client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
 
     def _include_system_prompt_in_history(self) -> bool:

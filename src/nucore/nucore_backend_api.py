@@ -121,3 +121,13 @@ class NuCoreBackendAPI(ABC):
             SharedEnumsBase: An instance of SharedEnumsBase containing shared enumerations.
         """
         return None
+
+    @abstractmethod
+    async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
+        """
+        Subscribe to events
+        :param on_message_callback: function to call when an event is received
+        :param on_connect_callback: function to call when connection is established
+        :param on_disconnect_callback: function to call when connection is lost
+        """
+        pass

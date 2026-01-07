@@ -1,4 +1,3 @@
-from .device_rag_formatter import DeviceRagFormatter
 from .profile_rag_formatter import ProfileRagFormatter
 from .rag_formatter import RAGFormatter
 from .rag_processor import RAGProcessor
@@ -10,6 +9,6 @@ from .rag_db import RAGSQLiteDB, RAGSQLiteDBCollection
 from .embedder import Embedder
 
 
-__all__ = ["DeviceRagFormatter", "ProfileRagFormatter", "RAGSQLiteDB", "RAGSQLiteDBCollection", 
+__all__ = ["ProfileRagFormatter", "RAGSQLiteDB", "RAGSQLiteDBCollection", 
            "RAGFormatter", "RAGProcessor", "Reranker", "StaticInfoRAGFormatter", 
            "ToolsRAGFormatter", "RAGData", "RAGDataItem", "Embedder"]
