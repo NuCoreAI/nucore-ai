@@ -1,3 +1,15 @@
+# Requirements for the NuCore AI project
+#*** IMPORTANT: for  FreeBSD systems
+#* You need hnswlib for both development and deployment but it will try to build everything from source which fails on FreeBSD without extra effort.
+#* Therefore, for FreeBSD systems only, please install hnswlib manually:
+#** pip3 install --no-cache-dir --no-build-isolation hnswlib 
+#** Include the same in the install.sh script used for plugin deployment
+
+#* For development create .venv with access to system site packages:
+#** python -m venv .venv --system-site-packages
+#* For deployment, use the install.sh script provided in the plugin root directory and install these packages:
+#** pip3 install --no-cache-dir --no-build-isolation hnswlib 
+
 requests
 numpy
 httpx
@@ -10,3 +22,5 @@ fastapi
 uvicorn[standard]
 udi_interface
 websockets
+sentence-transformers
+tokenizers

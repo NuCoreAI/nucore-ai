@@ -23,7 +23,9 @@ dependencies = [
  "pytest-asyncio",
  "fastapi",
  "websockets",
- "uvicorn"
+ "uvicorn",
+ "sentence-tranformers",
+ "tokenizers" 
 ]
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
