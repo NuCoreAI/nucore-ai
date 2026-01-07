@@ -7,8 +7,9 @@ from .tools_rag_formatter import ToolsRAGFormatter
 from .rag_data_struct import RAGData
 from .rag_db import RAGSQLiteDB, RAGSQLiteDBCollection
 from .embedder import Embedder
+from .local_embedder import LocalEmbedder
 
 
 __all__ = ["ProfileRagFormatter", "RAGSQLiteDB", "RAGSQLiteDBCollection", 
            "RAGFormatter", "RAGProcessor", "Reranker", "StaticInfoRAGFormatter", 
-           "ToolsRAGFormatter", "RAGData", "RAGDataItem", "Embedder"]
+           "ToolsRAGFormatter", "RAGData", "RAGDataItem", "Embedder", "LocalEmbedder"]

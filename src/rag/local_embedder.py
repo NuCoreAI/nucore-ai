@@ -6,7 +6,7 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from typing import Union, List
 
-class Embedder:
+class LocalEmbedder:
     def __init__(self, model_name: str = 'all-MiniLM-L6-v2', device: str = None, normalize_embeddings: bool = True):
         """
         Initializes the Embedder with a sentence-transformers model.
