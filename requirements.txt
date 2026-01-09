@@ -13,7 +13,6 @@
 requests
 numpy
 httpx
-hnswlib
 APScheduler>=3.10,<4.0
 astral>=2.2
 aiohttp>=3.9

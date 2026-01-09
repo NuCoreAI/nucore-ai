@@ -13,12 +13,7 @@ from .rag_formatter import RAGFormatter
 from nucore import Node, Group, Folder, RuntimeProfile, NodeHierarchy
 import base64
 
-def encode_id(id:str)->str:
-    # encode to base64 to make it URL safe
-    if not id:
-        return ""
-    return base64.b64encode(id.encode('utf-8')).decode('utf-8')
-
+ENCODE_IDS = False # whether to encode ids to make them URL safe
 
 PROFILE_HEADER = "Profile"
 DEVICE_HEADER = "Device"
@@ -66,6 +61,20 @@ class ProfileRagFormatter(RAGFormatter):
         self.prefix = prefix
         self.rag_chunks: list[RagChunk] = []
 
+    @staticmethod
+    def encode_id(id:str)->str:
+        # encode to base64 to make it URL safe
+        if not id:
+            return ""
+        return base64.b64encode(id.encode('utf-8')).decode('utf-8') if ENCODE_IDS else id
+
+    @staticmethod 
+    def decode_id(id:str)->str:
+        if not id:
+            return ""
+        return base64.b64decode(id).decode('utf-8') if ENCODE_IDS else id
+
+
     def write(self, line: str = ""):
         indent = self.indent_str * self.level
         self.lines.append(f"{indent}{line}")
@@ -84,22 +93,22 @@ class ProfileRagFormatter(RAGFormatter):
         return BlockContext(self)
 
     def add_device_section(self, device: Node, parent: Node ):
-        self.write(f"- {device.name} id={encode_id(device.address)}")
+        self.write(f"- {device.name} id={self.encode_id(device.address)}")
         if parent:
             with self.block():
-                self.write(f"Parent: {parent.name} id={encode_id(parent.address)}")
+                self.write(f"Parent: {parent.name} id={self.encode_id(parent.address)}")
 
     def add_group_section(self, group: Group, parent: Node):
-        self.write(f"- {group.name} id={encode_id(group.address)}")
+        self.write(f"- {group.name} id={self.encode_id(group.address)}")
         if parent:
             with self.block():
-                self.write(f"Parent: {parent.name} id={encode_id(parent.address)}")
+                self.write(f"Parent: {parent.name} id={self.encode_id(parent.address)}")
         
     def add_folder_section(self, folder: Folder, parent: Node):
-        self.write(f"- {folder.name} id={encode_id(folder.address)}")
+        self.write(f"- {folder.name} id={self.encode_id(folder.address)}")
         if parent:
             with self.block():
-                self.write(f"Parent: {parent.name} id={encode_id(parent.address)}")
+                self.write(f"Parent: {parent.name} id={self.encode_id(parent.address)}")
 
     def add_property(self, prop: NodeProperty):
         with self.block():
@@ -141,9 +150,10 @@ class ProfileRagFormatter(RAGFormatter):
         parent = self.__get_parent_node__(node)
         self.add_device_section(node, parent)
 
-    def format_profile_first(self, profile:RuntimeProfile):
+    def format_profile_first(self, profile:RuntimeProfile, device_first:bool=False):
         """
         Format the profile with profile first, then list of supported devices.
+        :aram device_first: if true, format devices first then shared features.
         :param profile: with a list of supported devices 
         """
         if profile is None or profile.nodedef is None or not isinstance(profile, RuntimeProfile):
@@ -151,56 +161,28 @@ class ProfileRagFormatter(RAGFormatter):
 
         chunk = RagChunk(profile.nodedef.id, len(self.lines))
         self.write(PROFILE_SECTION_HEADER)   
+        self.write("profile id=" + profile.nodedef.id) 
         with self.block():
-            self.write(f"- id={profile.nodedef.id}")
-            with self.block():
-                if len(profile.nodedef.properties) > 0:
-                    self.write("Properties:")
-                    for prop in profile.nodedef.properties:
-                        self.add_property(prop)
-                if len(profile.nodedef.cmds.accepts) > 0:
-                    self.write("Accept Commands:")
-                    for cmd in profile.nodedef.cmds.accepts:
-                        self.add_command(cmd)
-                if len(profile.nodedef.cmds.sends) > 0:
-                    self.write("Sends Commands:")
-                    for cmd in profile.nodedef.cmds.sends:
-                        self.add_command(cmd)
-                if len(profile.nodes) > 0:
-                    self.write("Devices:")
-                    for node in profile.nodes:
-                        self.add_node(node)
-
-        chunk.end_index = len(self.lines) - 1   
-        chunk.nodes = profile.nodes
-        chunk.cmds = list(profile.nodedef.cmds.sends) + list(profile.nodedef.cmds.accepts)
-        chunk.properties = list(profile.nodedef.properties)
-        self.rag_chunks.append(chunk) 
-
-    def format_device_first(self, profile:RuntimeProfile):
-        """
-        Format the profile with devices first (Supported Devices), then shared features.
-        :param profile: profile with a list of supported devices 
-        """
-        if profile is None or profile.nodedef is None or not isinstance(profile, RuntimeProfile):
-            raise ValueError("Invalid runtime profile provided to format")
-
-        chunk = RagChunk(profile.nodedef.id, len(self.lines))
-        self.write(PROFILE_SECTION_HEADER)   
-        self.write("Supported Devices:")
-        for node in profile.nodes:
-            self.add_node(node)
-        self.write("Shared Features:")
-        with self.block():
-            self.write("Properties:")
-            for prop in profile.nodedef.properties:
-                self.add_property(prop)
-            self.write("Accept Commands:")
-            for cmd in profile.nodedef.cmds.accepts:
-                self.add_command(cmd)
-            self.write("Sends Commands:")
-            for cmd in profile.nodedef.cmds.sends:
-                self.add_command(cmd)
+            if len(profile.nodes) > 0 and device_first:
+                self.write("Supported Devices:")
+                for node in profile.nodes:
+                    self.add_node(node)
+            if len(profile.nodedef.properties) > 0:
+                self.write("Properties:")
+                for prop in profile.nodedef.properties:
+                    self.add_property(prop)
+            if len(profile.nodedef.cmds.accepts) > 0:
+                self.write("Accept Commands:")
+                for cmd in profile.nodedef.cmds.accepts:
+                    self.add_command(cmd)
+            if len(profile.nodedef.cmds.sends) > 0:
+                self.write("Sends Commands:")
+                for cmd in profile.nodedef.cmds.sends:
+                    self.add_command(cmd)
+            if not device_first and len(profile.nodes) > 0:
+                self.write("Supported Devices:")
+                for node in profile.nodes:
+                    self.add_node(node)
 
         chunk.end_index = len(self.lines) - 1   
         chunk.nodes = profile.nodes
@@ -276,7 +258,7 @@ class ProfileRagFormatter(RAGFormatter):
 
         if self.profiles is not None:
             for profile in self.profiles.values():
-                self.format_device_first(profile)
+                self.format_profile_first(profile, device_first=True)
         else:
             if self.nodes is None or self.groups is None:
                 raise ValueError("Insufficient data to format profile RAG (need both nodes and groups).")

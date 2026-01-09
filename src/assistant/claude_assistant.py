@@ -44,11 +44,9 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         """
         return False
 
-    async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool):
+    async def _process_customer_input(self, websocket, text_only:bool):
         """
         Process the customer input using Claude Messages API with conversation state.
-        :param num_rag_results: The number of RAG results to use for the actual query
-        :param rerank: Whether to rerank the results.
         :param websocket: The websocket to send responses to (if any).
         :param text_only: Whether to return text only without processing tool calls
         """

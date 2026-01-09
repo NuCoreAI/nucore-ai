@@ -5,11 +5,11 @@ from .reranker import Reranker
 from .static_info_rag_formatter import StaticInfoRAGFormatter 
 from .tools_rag_formatter import ToolsRAGFormatter
 from .rag_data_struct import RAGData
-from .rag_db import RAGSQLiteDB, RAGSQLiteDBCollection
+from .rag_db import RAGSQLiteDB
 from .embedder import Embedder
 from .local_embedder import LocalEmbedder
 
 
-__all__ = ["ProfileRagFormatter", "RAGSQLiteDB", "RAGSQLiteDBCollection", 
+__all__ = ["ProfileRagFormatter", "RAGSQLiteDB",
            "RAGFormatter", "RAGProcessor", "Reranker", "StaticInfoRAGFormatter", 
            "ToolsRAGFormatter", "RAGData", "RAGDataItem", "Embedder", "LocalEmbedder"]

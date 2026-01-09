@@ -11,13 +11,18 @@ class EditorSubsetRange:
     """
 
 
+    id: str  #editor id
     uom: UOMEntry = field(metadata={"choices": supported_uoms})
     subset: str
     names: dict = field(default_factory=dict)
 
     def write_description(self, writer):
+        uom_label = self.uom.label if self.uom.label else ' '
+        if self.uom.id == "25":
+            uom_label = f"{self.id}_{self.uom.label}"
+
         with writer.block():
-            writer.write(f"- uom:{self.uom.label if self.uom.label else ' '} uom_id={self.uom.id}")
+            writer.write(f"- uom:{uom_label} uom_id={self.uom.id}")
             with writer.block():
                 writer.write(f"precision:0")
                 names = self.get_names()
@@ -26,14 +31,6 @@ class EditorSubsetRange:
                     with writer.block():
                         for name in names:
                             writer.write(f"- {name}")
-
-    def get_description(self):
-        """
-        Returns a description of the subset.
-        """
-        #desc = f"Enum of Unit {self.uom.label}"
-        desc = f"uom={self.uom.label},uom_id={self.uom.id},precision=0"
-        return desc
 
     def get_names(self):
         """
@@ -69,7 +66,7 @@ class EditorMinMaxRange:
     """
     Defines a continuous range with min, max, precision, and step attributes.
     """
-
+    id: str  #editor id
     uom: UOMEntry = field(metadata={"choices": supported_uoms})
     min: float
     max: float
@@ -95,18 +92,6 @@ class EditorMinMaxRange:
                         for name in names:
                             writer.write(f"- {name}")
 
-    def get_description(self):
-        """
-        Returns a description of the range.
-        """
-        #desc = f"Range {self.min} to {self.max} Unit {self.uom.label} [uom id={self.uom.id}]"
-        desc = f"uom={self.uom.label},uom_id={self.uom.id},min={self.min},max={self.max}"
-        if self.step:
-            desc += f",step={self.step}"
-        desc += f",precision={self.prec if self.prec else 0}"
-
-        return desc
-    
     def get_names(self):
         """
         Returns a dictionary of names for the range.
@@ -129,14 +114,6 @@ class Editor:
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
 
     def write_descriptions(self, writer):
-        if len(self.ranges) == 0: 
-            return
-        with writer.block():
-            writer.write(f"editors id={self.id}:")
-            for r in self.ranges:
-                r.write_description(writer)
-
-    def write_descriptions_with_ref(self, writer):
         """
         Write descriptions, handling references - EXPERIMENTAL
         
@@ -145,7 +122,7 @@ class Editor:
         """
         if self.is_reference:
             with writer.block():
-                writer.write(f"editors id={REFERENCE_DELIMITER}: {self.id}")
+                writer.write(f"editors id={REFERENCE_DELIMITER} id={self.id}")
             return
         if len(self.ranges) == 0: 
             return
@@ -158,6 +135,6 @@ class Editor:
         if len(self.ranges) == 0: 
             return
         with writer.block():
-            writer.write(f"===REFERENCE id={self.id}===")
+            writer.write(f"\n==={REFERENCE_DELIMITER} editor id={self.id}===")
             for r in self.ranges:
                 r.write_description(writer)  

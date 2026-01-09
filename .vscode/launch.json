@@ -19,20 +19,6 @@
             "justMyCode": false
         },
         {
-            "name": "LAN-assistant", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "src/assistant/generic_assistant.py",
-            "console": "integratedTerminal",
-            "args": [
-               "--url=http://192.168.6.134:8080" ,
-               "--username=admin",
-               "--password=admin",
-               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
-            ],
-            "justMyCode": false
-        },
-        {
             "name": "LAN-chat", 
             "type": "debugpy",
             "request": "launch",
@@ -90,7 +76,7 @@
             "justMyCode": false
         },
         {
-            "name": "openai-assistant", 
+            "name": "openai-assistant --embedder_url=all-MiniLM-L6-v2", 
             "type": "debugpy",
             "request": "launch",
             "program": "src/assistant/openai_assistant.py",
@@ -99,7 +85,22 @@
                "--url=http://192.168.6.134:8080" ,
                "--username=admin",
                "--password=admin",
-               "--prompt_type=per-device"
+               "--prompt_type=shared-features",
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "LAN-assistant", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/generic_assistant.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--url=http://192.168.6.134:8080" ,
+               "--username=admin",
+               "--password=admin",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
+               "--prompt_type=shared-features",
             ],
             "justMyCode": false
         },

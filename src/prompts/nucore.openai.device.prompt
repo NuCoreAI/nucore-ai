@@ -51,7 +51,7 @@ IMPORTANT (strict):
 ────────────────────────────────
 # JSON MECHANICAL RULES (ABSOLUTE)
 
-Output must be strict JSON
+Tools Output must be strict JSON
 
 - Start with { and end with } and stop
 - No trailing commas
@@ -114,7 +114,7 @@ Rules:
 - uom:
     - If the customer does not provide a unit for the value, use the default uom_id for parameters.
     - If the customer provides a unit for the value, match the unit to a supported uom for that parameter and use its uom_id. If one is not found:
-    - give the customer a list of supported uoms and request for clarification 
+    - Give the customer a list of supported uoms and request for clarification 
 
 ## 3. Routines — Automations
 {"tool":"Routines","args":[

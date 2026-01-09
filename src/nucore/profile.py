@@ -109,6 +109,7 @@ class Profile:
             if "min" in rng and "max" in rng:
                 ranges.append(
                     EditorMinMaxRange(
+                        id=edict["id"],
                         uom=uom,
                         min=rng["min"],
                         max=rng["max"],
@@ -120,7 +121,7 @@ class Profile:
             elif "subset" in rng:
                 ranges.append(
                     EditorSubsetRange(
-                        uom=uom, subset=rng["subset"], names=rng.get("names", {})
+                        id=edict["id"], uom=uom, subset=rng["subset"], names=rng.get("names", {})
                     )
                 )
             else:

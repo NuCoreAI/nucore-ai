@@ -37,6 +37,9 @@ class AIConfig:
         self.__embedding_model_params__ = "--embeddings --pooling mean -ub 2048"
         self.__embedding_model_server_args__ = f"-m {os.path.join(self.__models_path__,self.__embedding_model__)} --host {self.__embedding_host__} --port {self.__embedding_port__} {self.__embedding_model_params__}"
 
+        self.__tools_path__ = os.path.join(install_dir, "tools")
+        self.__static_info_path__ = os.path.join(install_dir, "static_info")
+
 
     def getLLMModel(self, model:str=None):
         if not model:
@@ -64,5 +67,11 @@ class AIConfig:
 
     def getEmbedderURL(self):
         return self.__embedding_url__
+    
+    def getToolsPath(self):
+        return self.__tools_path__
+    
+    def getStaticInfoPath(self):
+        return self.__static_info_path__
 
     

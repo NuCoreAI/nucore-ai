@@ -2,9 +2,12 @@
 # This module provides functionality to embed documents for retrieval-augmented generation (RAG) tasks.
 # It uses sentence-transformers library for local embedding with support for various pre-trained models.
 
-from sentence_transformers import SentenceTransformer
 import numpy as np
-from typing import Union, List
+from typing import Union, List, TYPE_CHECKING
+
+# Lazy import - only load heavy dependencies when actually needed
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 class LocalEmbedder:
     def __init__(self, model_name: str = 'all-MiniLM-L6-v2', device: str = None, normalize_embeddings: bool = True):
@@ -19,8 +22,13 @@ class LocalEmbedder:
         :param device: Device to run the model on ('cuda', 'cpu', or None for auto-detection)
         :param normalize_embeddings: Whether to normalize embeddings to unit length
         """
+        # Lazy import - only import when creating instance
+        from sentence_transformers import SentenceTransformer
+        
         self.model_name = model_name
         self.normalize_embeddings = normalize_embeddings
+        # SentenceTransformer automatically caches to ~/.cache/huggingface/
+        # First run downloads, subsequent runs load from cache
         self.model = SentenceTransformer(model_name, device=device)
         
     def embed_document(self, document: Union[str, List[str]]):

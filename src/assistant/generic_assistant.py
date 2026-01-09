@@ -17,7 +17,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _get_system_prompt(self):
         # Assuming this code is inside your_package/module.py
         system_prompt = None
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.profile.prompt")
+        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.qwen.profile.prompt")
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt
@@ -33,10 +33,11 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         Warm up the model by sending a dummy request without device structure
 
         """
-        sprompt = self.system_prompt.strip()
-        self.message_history.append({"role": "system", "content": sprompt})
-        self.message_history.append({"role": "user", "content": "Hello!"})
-        await self._process_customer_input(num_rag_results=0, rerank=False, websocket=None, text_only=True)
+        pass
+#        sprompt = self.system_prompt.strip()
+#        self.message_history.append({"role": "system", "content": sprompt})
+#        self.message_history.append({"role": "user", "content": "Hello!"})
+#        await self._process_customer_input(websocket=None, text_only=True)
 
 
     def _include_system_prompt_in_history(self) -> bool:
@@ -44,13 +45,11 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         Whether to include the system prompt in the message history.
         :return: True if the system prompt should be included, False otherwise.
         """
-        return False #already doing it in warm up --- IGNORE ---
+        return True #already doing it in warm up --- IGNORE ---
 
-    async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool):
+    async def _process_customer_input(self, websocket, text_only:bool):
         """
         Process the customer input using OpenAI Responses API with conversation state.
-        :param num_rag_results: The number of RAG results to use for the actual query
-        :param rerank: Whether to rerank the results.
         :param websocket: The websocket to send responses to (if any).
         :param text_only: Whether to return text only without processing tool calls
         """

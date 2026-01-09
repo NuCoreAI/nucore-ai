@@ -13,6 +13,9 @@ from nucore import get_uom_by_id
 from nucore import NuCoreBackendAPI 
 from nucore import NuCoreError
 from config import AIConfig
+from rag import RAGProcessor
+from rag import ProfileRagFormatter
+from rag.model_preloader import start_preload 
 
 
 logger = logging.getLogger(__name__)
@@ -42,15 +45,14 @@ class NuCore:
         """
         if not collection_name or not collection_path:
             raise NuCoreError("collection_name/path are mandatory parameters.")
-
+        start_preload(embedder_url)  # Start preloading the model in the background
         self.name = collection_name     
         self.nucore_api = nucore_api
         self.nodes = {}
         self.groups = {}
         self.folders = {} 
         self.runtime_profiles = {}
-        from rag import RAGProcessor
-        self.rag_processor = RAGProcessor(collection_path, collection_name, embedder_url=embedder_url, reranker_url=reranker_url)
+        self.rag_processor = RAGProcessor(collection_path, collection_name, reranker_url=reranker_url)
         self.profile = Profile(timestamp="", families=[], shared_enums=nucore_api.get_shared_enums())
         self.formatter_type = formatter_type
 
@@ -96,6 +98,13 @@ class NuCore:
         
         raise NuCoreError("No valid nodes source provided.")
     
+    def is_rag_enabled(self): 
+        """
+        Check if RAG (Retrieval-Augmented Generation) is enabled by verifying if the RAG processor is initialized.
+        :return: True if RAG processor is initialized, False otherwise.
+        """
+        return self.rag_processor.get_embedder() is not None
+    
     def format_nodes(self):
         """
         Format nodes for fine tuning or other purposes 
@@ -103,7 +112,6 @@ class NuCore:
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-        from rag import ProfileRagFormatter
         device_rag_formatter = ProfileRagFormatter()
         if self.formatter_type == PromptFormatTypes.PROFILE:
             return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
@@ -123,7 +131,7 @@ class NuCore:
             raise NuCoreError("No profile loaded.")
         from rag import ToolsRAGFormatter
         tools_rag_formatter = ToolsRAGFormatter(indent_str=" ", prefix="-")
-        return tools_rag_formatter.format(tools_path=config.getToolsFile())
+        return tools_rag_formatter.format(tools_path=config.getToolsPath())
     
     def format_static_info(self, path:str):
         """
@@ -140,7 +148,6 @@ class NuCore:
         Load RAG documents from the specified nodes and profile.
         :param kwargs: Optional parameters for formatting.
         - embed: If True, embed the RAG documents.
-        - include_rag_docs: If True, include RAG documents in the output.
         - tools: If True, include tools in the RAG documents.
         - static_info: If True, include static information in the RAG documents.
         - static_docs_path: Path to the static information directory.
@@ -164,12 +171,11 @@ class NuCore:
             if static_info_rag_docs:
                 all_docs += static_info_rag_docs
 
-        processed_docs = all_docs
-        if embed:
-            processed_docs = self.rag_processor.process(all_docs)
+        if embed and self.rag_processor.get_embedder() is not None:
+            self.rag_processor.process(all_docs)
         if dump:
             self.rag_processor.dump()
-        return processed_docs
+        return all_docs
 
 
     def load(self, **kwargs):
@@ -213,7 +219,7 @@ class NuCore:
 
         return self.nodes
         
-    def query(self, query_text:str, num_results=5, rerank=True):
+    def rag_query(self, query_text:str, num_results=5, rerank=True):
         """
         Query the loaded nodes and profiles using the RAG processor.
         :param query_text: The query string to search for.
@@ -223,8 +229,9 @@ class NuCore:
         :raises NuCoreError: If the RAG processor is not initialized.
         :raises NuCoreError: If the query fails. 
         """
-        if not self.rag_processor:
-            raise NuCoreError("RAG processor is not initialized.")
+        if not self.rag_processor or self.rag_processor.get_embedder() is None:
+            print("RAG processor is not initialized.")
+            return None
         
         return self.rag_processor.query(query_text, num_results, rerank=rerank)
 
@@ -233,8 +240,7 @@ class NuCore:
             if "device" in cmd:
                 #device ids are in base64 encoded, decode it
                 device_id = cmd["device"]
-                device_id = base64.b64decode(device_id).decode('utf-8')
-                cmd["device"] = device_id
+                cmd["device"] = ProfileRagFormatter.decode_id(device_id)
         response = self.nucore_api.send_commands(commands)
         if response is None:
             raise NuCoreError("Failed to send commands.")
@@ -254,6 +260,10 @@ class NuCore:
             if ifs is not None and len (ifs) > 0:
                 for if_ in ifs:
                     op = list(if_.keys())[0]
+                    if op == 'not':
+                        condition = if_.pop('not')
+                        if_['!=']= condition
+                        continue 
                     condition = if_[op]
                     if not isinstance(condition, dict):
                         continue
@@ -263,7 +273,7 @@ class NuCore:
                     if device_id is None:
                         continue
                     # device ids are in base64 encoded, decode it
-                    device_id = base64.b64decode(device_id).decode('utf-8')
+                    device_id = ProfileRagFormatter.decode_id(device_id)
                     condition["device"] = device_id
                     uom_id = condition.get("uom", None)
                     precision = condition.get("precision", None)
@@ -279,7 +289,7 @@ class NuCore:
                     device_id = then.get("device", None)
                     if device_id is not None:
                         # device ids are in base64 encoded, decode it
-                        device_id = base64.b64decode(device_id).decode('utf-8')
+                        device_id = ProfileRagFormatter.decode_id(device_id)
                         then["device"] = device_id
                     parameters = then.get("parameters", None)
                     if parameters is not None:
@@ -298,7 +308,7 @@ class NuCore:
                     device_id = else_.get("device", None)
                     if device_id is not None:
                         # device ids are in base64 encoded, decode it
-                        device_id = base64.b64decode(device_id).decode('utf-8')
+                        device_id = ProfileRagFormatter.decode_id(device_id)
                         else_["device"] = device_id
                     parameters = else_.get("parameters", None)
                     if parameters is not None:
@@ -338,7 +348,7 @@ class NuCore:
         if not device_id:
             raise NuCoreError("Device ID is empty.")
         # Decode base64 encoded device_id
-        device_id = base64.b64decode(device_id).decode('utf-8')
+        device_id = ProfileRagFormatter.decode_id(device_id)
         properties = self.nucore_api.get_properties(device_id)
         if properties is None:
             raise NuCoreError(f"Failed to get properties for device {device_id}.")
@@ -357,7 +367,7 @@ class NuCore:
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
         #device id is base64 encoded, decode it
-        device_id = base64.b64decode(device_id).decode('utf-8')
+        device_id = ProfileRagFormatter.decode_id(device_id)
         node = self.nodes.get(device_id, None)  # Return None if device_id not found
         return node.name if node.name else device_id
 

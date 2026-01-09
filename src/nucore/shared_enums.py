@@ -60,7 +60,7 @@ class SharedEnumsBase(ABC):
         for enum_id in self.shared_enums:
             if self.is_set(enum_id):
                 self.shared_enums[enum_id].write_prompt_section(self)
-                out += "\n\n".join(self.lines)
+                out += "\n".join(self.lines)
                 self.lines = []
         return out  
 

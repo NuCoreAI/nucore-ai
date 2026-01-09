@@ -29,7 +29,8 @@ class ToolsRAGFormatter(RAGFormatter):
         tools_path=kwargs["tools_path"] if "tools_path" in kwargs else None 
         
         if not Path(tools_path).exists():
-            raise FileNotFoundError(f"Tools file not found: {tools_path}")
+            print(f"Tools file not found: {tools_path}")
+            return None
 
         with open(tools_path, "r") as f:
             tools_data = json.load(f)

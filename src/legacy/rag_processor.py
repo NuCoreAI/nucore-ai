@@ -22,7 +22,7 @@ class RAGProcessor:
         
         path = os.path.join(collection_path, f"{collection_name}_db")
 
-        self.db = RAGSQLiteDB(path)
+        self.db = RAGSQLiteDB(path=path)
         if not self.db:
             raise ValueError(f"Failed to connect to the database at {path}")
         self.collectoin_data: RAGData = None
@@ -53,13 +53,102 @@ class RAGProcessor:
             print("Nothing changed ... ")
             return 
         
-        self.db.refresh(ids=collection_data["ids"], embeddings=collection_data["embeddings"], 
+        self.db.upsert(ids=collection_data["ids"], vectors =collection_data["embeddings"], 
             documents=collection_data["documents"], metadatas=collection_data["metadatas"])
 
-        self.collectoin_data = collection_data 
+        self.collection_data = collection_data 
         return collection_data
 
-    def query(self, query_text:str, n_results:int=5, rerank=False):
+    def __compare_documents__(self, collection_data:RAGData):
+        """
+        Compares the collection data with the existing collection.
+        Returns a dictionary with the differences.
+        """
+        if not collection_data or not isinstance(collection_data, RAGData):
+            raise ValueError("Collection data must be a non-empty dictionary")
+
+        if "documents" not in collection_data or "ids" not in collection_data or "metadatas" not in collection_data:
+
+            raise ValueError("Collection data must contain 'documents', 'ids', and 'metadatas' keys")   
+
+        existing_collection = None
+        if self.collection_data is None: 
+            existing_collection = self.db.get(include=["ids", "documents"])
+            self.collection_data = RAGData()
+            self.collection_data["ids"] = existing_collection.get("ids", [])
+            self.collection_data["documents"] = existing_collection.get("documents", [])
+            
+        existing_ids = existing_collection.get("ids", [])
+
+        
+        new_ids = set(collection_data.get("ids", []))
+        existing_ids_set = set(existing_ids)
+        added_ids = new_ids - existing_ids_set
+        unchanged_indexes = []
+        removed_ids = existing_ids_set - new_ids
+
+        for existing_id in existing_ids:
+            existing_assets = self.collection.get(ids=[existing_id], include=["documents", "metadatas"])
+            if not existing_assets or len(existing_assets["documents"]) == 0:
+                print(f"ID {existing_id} exists in the collection but has no associated documents")
+                continue
+
+            existing_document= existing_assets["documents"][0]
+
+            index=0
+            for id in collection_data["ids"]:
+                if id == existing_id:
+                    if collection_data["documents"][index] == existing_document:
+                        unchanged_indexes.append(index)
+                        break
+                index += 1
+
+        return {
+            "added": list(added_ids),
+            "unchanged": unchanged_indexes,
+            "removed": list(removed_ids)
+        }
+    
+    def compare_documents_update_collection(self, documents:RAGData):
+        """
+        Compare the documents in the collection with the provided documents.
+        Returns a dictionary with added, changed, and removed IDs.
+        Those that removed or changed will be updated in the collection.
+        """
+        if not self.get_embedder(): 
+            return None
+        if not documents or not isinstance(documents, RAGData):
+            raise ValueError("Documents must be a non-empty list")
+        
+        results = self.__compare_documents__(documents)
+        if not results:
+            print("No results found in the collection")
+            return None
+        
+        #don't care about added
+        # added = results.get("added") 
+        unchanged = results.get("unchanged") 
+        removed = results.get("removed")
+
+        if removed and len(removed) > 0:
+            self.remove(removed)
+
+        result: RAGData = RAGData() 
+
+        for i in range(len(documents["ids"])):
+            if i in unchanged:
+                continue
+            doc_content = documents["documents"][i]
+            embedding = self.get_embedder().embed_document(doc_content)
+            if embedding is not None:
+                result["documents"].append(doc_content)
+                result["embeddings"].append(embedding)
+                result["metadatas"].append(documents["metadatas"][i])
+                result["ids"].append(documents["ids"][i])
+
+        return self.add_update(result)
+
+    def query(self, query_text:str, n_results:int=5, rerank=True):
         """
         Queries the collection with the given text and returns the top n results.
         :param query_text: The text to query the collection with.
@@ -80,7 +169,7 @@ class RAGProcessor:
             print("Failed to embed query text")
             return None
 
-        results = self.db.query(
+        results = self.collection.query(
             query_embeddings=query_embedding,
             n_results=n_results,
             include=["documents", "metadatas", "distances", "relevance_scores"]
@@ -93,9 +182,6 @@ class RAGProcessor:
         print(f"\n\n*********************Top {n_results} Query Results (Before Reranker):********************\n")
         for i in range(n_results):
             print(f"{i+1}. {results['ids'][0][i]} - {results['distances'][0][i]} - {results['relevance_scores'][0][i] if 'relevance_scores' in results else None}")
-            print("<-->")
-            print(f"Document: {results['documents'][0][i]}\n")
-            print("<-->")
             i+=1
         print("\n\n***************************************************************\n\n")
          
@@ -145,36 +231,31 @@ class RAGProcessor:
         if not rag_docs:
             raise ValueError("RAG documents are not set")
 
-        for i in range(len(rag_docs['documents'])):
-            # Add "passage: " prefix for asymmetric semantic search (matches "query: " prefix in queries)
-            doc_text = f"passage: {rag_docs['documents'][i]}"
-            rag_docs['embeddings'][i]=self.get_embedder().embed_document(doc_text)
-        
-        return self.add_update(rag_docs)
+        return self.compare_documents_update_collection(rag_docs)
     
     def remove(self, ids:list):
         """
-        Removes documents from the database by their IDs.
-        :param ids: A list of IDs to remove from the database.
+        Removes documents from the collection by their IDs.
+        :param ids: A list of IDs to remove from the collection.
         :return: The result of the removal operation.
         """
         if not ids or not isinstance(ids, list):
             raise ValueError("IDs must be a non-empty list")
         
-        return self.db.delete(ids=ids)
+        return self.collection.delete(ids=ids)
     
     def dump(self):
         """
-        Dumps the database data to the console.
+        Dumps the collection data to the console.
         :return: None
         """
-        if not self.db:
-            print("No database found")
+        if not self.collection:
+            print("No collection found")
             return
         
-        documents = self.db.get(include=["documents", "metadatas"])
+        documents = self.collection.get(include=["documents", "metadatas"])
         if not documents or "documents" not in documents or len(documents["documents"]) == 0:
-            print("No documents found in the database")
+            print("No documents found in the collection")
             return
         
         for i, doc in enumerate(documents["documents"]):

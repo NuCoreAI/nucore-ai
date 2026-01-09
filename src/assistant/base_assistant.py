@@ -89,7 +89,10 @@ def get_parser_args():
         dest="embedder_url",
         type=str,
         required=False,
-        help="The URL of the embedder service. If provided, this should be a valid URL that responds to OpenAI's API requests."
+        help="Embedder to use. \
+              If nothing provided, then default local embedder will be used.\
+              If a model name is provided, it will be used as the local embedder model downloaded at runtime from hg.\
+              If a URL is provided, it should be a valid URL that responds to OpenAI's API requests."
     )
     parser.add_argument(
         "--reranker_url",
@@ -136,8 +139,8 @@ class NuCoreBaseAssistant(ABC):
                 username=args.username,
                 password=args.password
             ),
-            embedder_url=args.embedder_url if args.embedder_url else self.config.getEmbedderURL(),
-            reranker_url=args.reranker_url if args.reranker_url else self.config.getRerankerURL(),
+            embedder_url=args.embedder_url, 
+            reranker_url=args.reranker_url, 
             formatter_type=self.prompt_type
         )
         if not self.nuCore:
@@ -153,7 +156,7 @@ class NuCoreBaseAssistant(ABC):
         self.running = False
         self.is_busy = False
         
-        self.device_docs = None
+        self.rags = None
         self._start_queue_processor()
 
         self.duplicate_detector = None 
@@ -162,7 +165,6 @@ class NuCoreBaseAssistant(ABC):
             self.duplicate_detector = JSONDuplicateDetector(time_window_seconds=time_window_seconds)
         self.device_docs_sent = False
         self.device_structure_changed = True
-        
         print (self.__model_url__)
         asyncio.run(self._sub_init()) #for subclass specific initialization
 
@@ -179,25 +181,28 @@ class NuCoreBaseAssistant(ABC):
             return False #already refreshed no need to check again
         self.device_structure_changed = False 
 
-        device_docs = ""
         if not self.nuCore.load(include_profiles=True):
             raise ValueError("Failed to load devices from NuCore. Please check your configuration.")
 
-        rag = self.nuCore.format_nodes()
-        if not rag:
+        self.rags= self.nuCore.load_rag_docs(embed=True, tools=True, static_info=True)
+        #rag = self.nuCore.format_nodes()
+        if not self.rags:
             raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
+        return True
+        
+    def _get_device_docs(self, rags)->str:
+        if rags == None:
+            rags = self.rags
 
-        rag_docs = rag["documents"]
+        rag_docs = rags["documents"]
         if not rag_docs:
             raise ValueError(f"Warning: No documents found in RAG for node {self.nuCore.url}. Skipping.")
-
+        device_docs = ""
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
 
-#        if self.device_docs is None:
-#            self.device_docs = device_docs
-        self.device_docs = device_docs
-        return True #changed
+        return device_docs
+
 
     async def _on_device_event(self, message:dict):
         """
@@ -491,20 +496,22 @@ class NuCoreBaseAssistant(ABC):
 
         query = query.strip()
         if not query:
-            await self.send_response("No query provided, exiting ...", True, websocket)
+            await self.send_response("No query provided, ...", True, websocket)
             return None
 
-        if query.startswith("?"):
-            query = "\n"+query[1:].strip()
-        
         sprompt = self.system_prompt.strip()
+
+        rags = None
+        if self.nuCore.is_rag_enabled()and num_rag_results > 0:
+            rags = self.nuCore.rag_query(query, num_results=num_rag_results, rerank=rerank)
+        
         user_content = f"USER QUERY:{query}"
         if changed or not self.device_docs_sent:        
-            user_content = f"────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{self.device_docs}\n\n{user_content}"
+            user_content = f"\n────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{self._get_device_docs(rags)}\n\n{user_content}"
             self.device_docs_sent = True
             #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
         if len(self.message_history) == 0 :
-            sprompt += "\n\n"+self.tool_prompt.strip()+"\n\n" #+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
+            sprompt += "\n\n"+self.tool_prompt.strip()+"\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
                 self.message_history.append({"role": "system", "content": sprompt})
             if self.debug_mode:
@@ -520,7 +527,7 @@ class NuCoreBaseAssistant(ABC):
             with open("/tmp/nucore.prompt.txt", "a") as f:
                 f.write(user_content)
         try:
-            assistant_response = await self._process_customer_input(num_rag_results=num_rag_results, rerank=rerank, websocket=websocket, text_only=text_only)
+            assistant_response = await self._process_customer_input(websocket=websocket, text_only=text_only)
             if assistant_response is not None:
                 self.message_history.append({"role": "assistant", "content": assistant_response})
         except Exception as e:
@@ -547,10 +554,8 @@ class NuCoreBaseAssistant(ABC):
         return "" 
 
     @abstractmethod
-    async def _process_customer_input(self, num_rag_results:int, rerank:bool, websocket, text_only:bool)-> str:
+    async def _process_customer_input(self, websocket, text_only:bool)-> str:
         """
-        :param num_rag_results: The number of RAG results to use for the actual query
-        :param rerank: Whether to rerank the results.
         :param websocket: The websocket to send responses to (if any).
         :param text_only: Whether to return text only without processing tool calls
         Process the customer input using the underlying model with conversation state.
@@ -592,7 +597,7 @@ class NuCoreBaseAssistant(ABC):
                 if user_input.lower() == 'quit':
                     print("Goodbye!")
                     break
-                await self.process_customer_input(user_input, num_rag_results=3, rerank=False)
+                await self.process_customer_input(user_input, num_rag_results=10, rerank=False)
                 
             except Exception as e:
                 print(f"An error occurred: {e}")
