@@ -10,11 +10,12 @@ from .editor import Editor
 
 class SharedEnumsBase(ABC):
     
-    def __init__(self, shared_enums: dict[Editor]):
+    def __init__(self, shared_enums: dict[Editor], json_output: bool ):
         self.shared_enums = shared_enums
         self.level = 0 
         self.lines = [] 
         self.indent_str = " "
+        self.json_output = json_output
     
     def is_shared(self, enum_id: str) -> bool:
         return enum_id in self.shared_enums
@@ -48,9 +49,9 @@ class SharedEnumsBase(ABC):
         if not self.is_shared(enum_id):
             return None
         if is_for_prompt:
-            self.shared_enums[enum_id].write_prompt_section(self)
+            self.shared_enums[enum_id].write_prompt_section(self, self.json_output)
         else:
-            self.shared_enums[enum_id].write_description(self)
+            self.shared_enums[enum_id].write_description(self, self.json_output)
         out = "\n".join(self.lines)
         self.lines = []
         return out
@@ -59,7 +60,7 @@ class SharedEnumsBase(ABC):
         out = ""
         for enum_id in self.shared_enums:
             if self.is_set(enum_id):
-                self.shared_enums[enum_id].write_prompt_section(self)
+                self.shared_enums[enum_id].write_prompt_section(self, self.json_output)
                 out += "\n".join(self.lines)
                 self.lines = []
         return out  

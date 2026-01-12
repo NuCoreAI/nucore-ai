@@ -18,7 +18,7 @@ class IoXWrapper(NuCoreBackendAPI):
         It only works if the customer gives explicit permission for the plugin to access IoX directly
     '''
 
-    def __init__(self, poly=None, base_url=None, username=None, password=None):
+    def __init__(self, json_output:bool, poly=None, base_url=None, username=None, password=None):
         """
         Initializes the IoXWrapper instance.
         Either use poly to get ISY info or provide base_url, username, and password directly.
@@ -28,8 +28,8 @@ class IoXWrapper(NuCoreBackendAPI):
             username (str): The username for ISY authentication (optional).
             password (str): The password for ISY authentication (optional).
         """
-        super().__init__()  # Initialize parent with no parameters
-        self.shared_enums: SharedEnumsBase = IoXSharedEnums()
+        super().__init__(json_output)  # Initialize parent with no parameters
+        self.shared_enums: SharedEnumsBase = IoXSharedEnums(json_output=json_output)
         if poly:
             # import only in case we are running in polglot context since 
             # udi_interface redirects standard input/output to polyglot LOGGER

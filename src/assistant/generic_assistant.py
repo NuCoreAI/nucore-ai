@@ -46,7 +46,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         :return: True if the system prompt should be included, False otherwise.
         """
         return True #already doing it in warm up --- IGNORE ---
-
+    
     async def _process_customer_input(self, websocket, text_only:bool):
         """
         Process the customer input using OpenAI Responses API with conversation state.
@@ -56,14 +56,15 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 
         try:
             full_response = ""
+            first_line=True
             
             payload={
                 "messages": self.message_history,
                 "stream": True,
                 'cache_prompt':True,
                 "n_keep": -1,
-                "temperature": 0.0,
-                "max_tokens": 32000,
+                "temperature": 0.1,
+                "max_tokens": 130000,
             }
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", self.__model_url__, timeout=100, json=payload, headers={
@@ -77,6 +78,10 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                         return None
                     else:
                         async for line in response.aiter_lines():
+                            if first_line:
+                                if text_only or self.debug_mode:
+                                    await self.send_response(f"\r\n", False, websocket)
+                                first_line = False
                             if line.startswith("data: "):
                                 token_data = line[len(b"data: "):]
                                 try:
@@ -94,9 +99,10 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                                         await self.send_response(token_data, False, websocket if self.debug_mode else None)
                                     full_response += token_data
 
-            if full_response is not None:
-                if not text_only:
-                    await self.process_tool_call(full_response, websocket, None, None)
+#            if full_response is not None:
+#                tool_call = self._get_tool_call(full_response)
+#                if tool_call is not None and not text_only:
+#                    await self.process_tool_call(tool_call, websocket, None, None)
 
             return full_response
 
@@ -104,7 +110,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             print(f"An error occurred while processing the customer input: {e}")
             import traceback
             traceback.print_exc()
-        return None 
+        return None
 
 if __name__ == "__main__":
     args = get_parser_args()

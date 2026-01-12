@@ -109,6 +109,14 @@ def get_parser_args():
         default="per-device",
         help="The type of prompt to use (e.g., 'per-device', 'shared-features', etc.)",
     )
+    parser.add_argument(
+        "--json_output",
+        dest="json_output",
+        type=bool,
+        required=False,
+        default=False,
+        help="Whether to output in JSON format (true/false)",
+    )
     return parser.parse_args()
 
 @dataclass
@@ -131,13 +139,15 @@ class NuCoreBaseAssistant(ABC):
         self.config = AIConfig() 
         self.system_prompt = self._get_system_prompt()
         self.tool_prompt = self._get_tools_prompt()
+        self.json_output= args.json_output if args.json_output else False
         self.nuCore = NuCore(
             collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
             collection_name="nucore.assistant",
             nucore_api=IoXWrapper(
                 base_url=args.url,
                 username=args.username,
-                password=args.password
+                password=args.password,
+                json_output=self.json_output
             ),
             embedder_url=args.embedder_url, 
             reranker_url=args.reranker_url, 
@@ -168,8 +178,6 @@ class NuCoreBaseAssistant(ABC):
         print (self.__model_url__)
         asyncio.run(self._sub_init()) #for subclass specific initialization
 
-        ## subscribe to get events from devices
-        self.nuCore.subscribe_events(self._on_device_event, self._on_connect_callback, self._on_disconnect_callback)
 
     async def _refresh_device_structure(self) -> bool:
         """
@@ -183,6 +191,9 @@ class NuCoreBaseAssistant(ABC):
 
         if not self.nuCore.load(include_profiles=True):
             raise ValueError("Failed to load devices from NuCore. Please check your configuration.")
+
+        ## subscribe to get events from devices
+        await self.nuCore.subscribe_events(self._on_device_event, self._on_connect_callback, self._on_disconnect_callback)
 
         self.rags= self.nuCore.load_rag_docs(embed=True, tools=True, static_info=True)
         #rag = self.nuCore.format_nodes()
@@ -203,6 +214,36 @@ class NuCoreBaseAssistant(ABC):
 
         return device_docs
 
+    def _get_tool_call(self, full_response:str) -> bool:
+        if not full_response:
+            return None
+        try:
+            full_response = full_response.strip()
+            # Pattern 1: Extract JSON from markdown code blocks (```json ... ```)
+            pattern_markdown = r'```json\s*(\{\s*"tool"\s*:.*?\})\s*(?:```|$)'
+            match = re.search(pattern_markdown, full_response, flags=re.DOTALL)
+            if match is not None:
+                #extract the json part
+                full_response = match.group(1).strip()
+            # Pattern 2: Extract raw JSON objects with "tool" key (no markdown wrapper)
+            match = re.search(r'\{\s*"tool"\s*:', full_response)
+            if not match:
+                return None
+            start = match.start()
+            brace_count = 0
+            
+            # Track braces to find matching closing brace
+            for i, char in enumerate(full_response[start:], start):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_str = full_response[start:i+1]
+                        return json_str
+        except Exception as e:
+            print(f"Error extracting tool call JSON: {e}")
+        return None
 
     async def _on_device_event(self, message:dict):
         """
@@ -348,7 +389,7 @@ class NuCoreBaseAssistant(ABC):
             return None
         if type is None:
             type="request(s)"
-        output=f"rephrase_tool_results: results of the {len(responses)} {type}:\""
+        output=f"Here are the results of the last {len(responses)} {type}:\""
         if isinstance(responses, list):
             for i in range(len(responses)):
                 response = responses[i]
@@ -360,7 +401,7 @@ class NuCoreBaseAssistant(ABC):
         else:
             output+=f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
 
-        output+="\""
+        output+=".Now, rephrase them in NATURAL LANGUAGE. NOT A TOOL CALL. Then reset your mode.\""
         await self.process_customer_input(output, websocket=websocket, text_only=True)
         return responses
 
@@ -395,14 +436,17 @@ class NuCoreBaseAssistant(ABC):
                 return await self.process_json_tool_call(tool_call, websocket)
         return None
 
-    async def process_tool_call(self,full_response:str, websocket, begin_marker, end_marker):
+    async def process_llm_response(self,full_response:str, websocket, begin_marker, end_marker):
         if not full_response: 
             return None
 
         tools = None
         try:
             #remove markdowns such as ```json ... ```
-            full_response = re.sub(r"```json(.*?)```", r"\1", full_response, flags=re.DOTALL).strip()
+            full_response = self._get_tool_call(full_response)
+            if not full_response:
+                return None
+            #full_response = re.sub(r"```json(.*?)```", r"\1", full_response, flags=re.DOTALL).strip()
             if self.duplicate_detector is None:
                 tools = json.loads(full_response)
                 return await self.process_json_tool_calls(tools, websocket)
@@ -414,7 +458,7 @@ class NuCoreBaseAssistant(ABC):
             #return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
             if not full_response:
-                return ValueError("Invalid input to process_tool_call")
+                return ValueError("Invalid input to process_llm_response")
             else:
                 print(f"Error parsing tool call JSON: {ex}")
                 return None
@@ -529,6 +573,7 @@ class NuCoreBaseAssistant(ABC):
         try:
             assistant_response = await self._process_customer_input(websocket=websocket, text_only=text_only)
             if assistant_response is not None:
+                await self.process_llm_response(assistant_response, websocket, None, None)
                 self.message_history.append({"role": "assistant", "content": assistant_response})
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")

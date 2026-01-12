@@ -112,7 +112,7 @@ class NuCore:
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-        device_rag_formatter = ProfileRagFormatter()
+        device_rag_formatter = ProfileRagFormatter(json_output=self.nucore_api.json_output)
         if self.formatter_type == PromptFormatTypes.PROFILE:
             return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
          

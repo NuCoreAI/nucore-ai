@@ -16,7 +16,7 @@ class EditorSubsetRange:
     subset: str
     names: dict = field(default_factory=dict)
 
-    def write_description(self, writer):
+    def write_description(self, writer, json_output: bool = False):
         uom_label = self.uom.label if self.uom.label else ' '
         if self.uom.id == "25":
             uom_label = f"{self.id}_{self.uom.label}"
@@ -74,7 +74,7 @@ class EditorMinMaxRange:
     step: float = None
     names: dict = field(default_factory=dict)
 
-    def write_description(self, writer):
+    def write_description(self, writer, json_output: bool = False):
         with writer.block():
             writer.write(f"- uom:{self.uom.label if self.uom.label else ' '} uom_id={self.uom.id}")
             with writer.block():
@@ -113,7 +113,7 @@ class Editor:
     is_reference: bool 
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
 
-    def write_descriptions(self, writer):
+    def write_descriptions(self, writer, json_output: bool = False):
         """
         Write descriptions, handling references - EXPERIMENTAL
         
@@ -129,12 +129,12 @@ class Editor:
         with writer.block():
             writer.write(f"editors id={self.id}:")
             for r in self.ranges:
-                r.write_description(writer)
+                r.write_description(writer, json_output=json_output)
 
-    def write_prompt_section(self, writer):
+    def write_prompt_section(self, writer, json_output: bool = False):
         if len(self.ranges) == 0: 
             return
         with writer.block():
             writer.write(f"\n==={REFERENCE_DELIMITER} editor id={self.id}===")
             for r in self.ranges:
-                r.write_description(writer)  
+                r.write_description(writer, json_output=json_output)  
