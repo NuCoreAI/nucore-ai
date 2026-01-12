@@ -310,6 +310,7 @@ class Profile:
                             self.runtime_profiles[node.node_def.id].nodes.add(node)
                         except Exception as e:
                             pass #probably duplicate node
+                    node.node_def.process_shared_editors(self.shared_enums)
             if is_group:
                 self.groups[node.address] = node
             else :

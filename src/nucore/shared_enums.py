@@ -16,12 +16,23 @@ class SharedEnumsBase(ABC):
         self.lines = [] 
         self.indent_str = " "
         self.json_output = json_output
+        self.runtime_shared_enums = []
     
     def is_shared(self, enum_id: str) -> bool:
         return enum_id in self.shared_enums
     
     def is_set(self, enum_id: str) -> bool:
         return self.is_shared(enum_id) and self.shared_enums[enum_id] is not None
+    
+    def set_shared_at_runtime(self, enum_id: str):
+        if not self.is_shared(enum_id):
+            print(f"Enum ID {enum_id} is not shared.")
+            return
+        if enum_id not in self.runtime_shared_enums:
+            self.runtime_shared_enums.append(enum_id)
+    
+    def is_shared_at_runtime(self, enum_id: str) -> bool:
+        return enum_id in self.runtime_shared_enums
     
     def set_editor(self, enum_id: str, editor: Editor):
         if not self.is_shared(enum_id):
@@ -46,7 +57,7 @@ class SharedEnumsBase(ABC):
         self.lines.append(f"{indent}{line}")
 
     def get_enum_names(self, enum_id: str, is_for_prompt: bool) -> str:
-        if not self.is_shared(enum_id):
+        if not self.is_shared_at_runtime(enum_id):
             return None
         if is_for_prompt:
             self.shared_enums[enum_id].write_prompt_section(self, self.json_output)
@@ -58,7 +69,7 @@ class SharedEnumsBase(ABC):
     
     def get_all_enum_sections(self) -> str:
         out = ""
-        for enum_id in self.shared_enums:
+        for enum_id in self.runtime_shared_enums:
             if self.is_set(enum_id):
                 self.shared_enums[enum_id].write_prompt_section(self, self.json_output)
                 out += "\n".join(self.lines)

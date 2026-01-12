@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from .editor import Editor
 from .cmd import Command
 from .linkdef import LinkDef
+from .shared_enums import SharedEnumsBase
 
 #the actual node property that maps to 
 @dataclass
@@ -97,4 +98,21 @@ class NodeDef:
                 s.append(textwrap.indent(str(cmd), "  - "))
 
         return "\n".join(s)
+    
+    def process_shared_editors(self, shared: SharedEnumsBase):
+        for prop in self.properties:
+            if prop.editor is not None:
+                if prop.editor.is_reference:
+                    shared.set_shared_at_runtime(prop.editor.id)
+        
+        for cmd in self.cmds.sends:
+            for param in cmd.parameters:
+                if param.editor is not None:
+                    if param.editor.is_reference:
+                        shared.set_shared_at_runtime(param.editor.id)
 
+        for cmd in self.cmds.accepts:
+            for param in cmd.parameters:
+                if param.editor is not None:
+                    if param.editor.is_reference:
+                        shared.set_shared_at_runtime(param.editor.id)
