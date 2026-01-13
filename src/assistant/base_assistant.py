@@ -300,6 +300,94 @@ class NuCoreBaseAssistant(ABC):
         """
         pass
 
+    @abstractmethod 
+    def _get_max_context_size(self) ->int:
+        """
+        Get the maximum context size for the model.
+        :return: The maximum context size as an integer.
+        """
+        return 32000
+
+    def _estimate_tokens(self, text:str) -> int:
+        """
+        Estimate the number of tokens in a given text.
+        :param text: The text to estimate tokens for.
+        :return: Estimated number of tokens.
+        """
+        if not text:
+            return 0
+        # Simple estimation: 1 token per 4 characters (this is a rough estimate)
+        return len(text) // 4 + 50  # adding buffer
+
+    
+    def _trim_message_history(self, tokens_per_turn=2000, response_buffer=4000):
+        """
+        Trim message_history to stay within context limits.
+        Preserves: system message, first user message (with device structure), and recent conversation.
+        """
+        if len(self.message_history) <= 2:
+            return
+        
+        # Calculate tokens used by system and first user message
+        system_tokens = 0 
+        first_user_tokens = 0
+
+        idx = 0
+        if idx < len(self.message_history) and self.message_history[idx]["role"] == "system":
+            system_tokens = self._estimate_tokens(self.message_history[idx]["content"])
+            idx += 1
+        
+        idx = 1
+        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
+            first_user_tokens = self._estimate_tokens(self.message_history[idx]["content"])
+        
+        # Calculate available tokens for conversation history
+        reserved_tokens = system_tokens + first_user_tokens + response_buffer
+        available_tokens = self._get_max_context_size() - reserved_tokens
+        max_turns = max(1, available_tokens // tokens_per_turn)
+        
+        # Get messages to keep
+        system_msg = self.message_history[0] if self.message_history[0]["role"] == "system" else None
+        first_user_msg = None
+        conversation_msgs = []
+        
+        idx = 1 if system_msg else 0
+        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
+            first_user_msg = self.message_history[idx]
+            idx += 1
+        
+        conversation_msgs = self.message_history[idx:]
+        
+        # Keep only the most recent turns
+        max_messages = max_turns * 2
+        if len(conversation_msgs) > max_messages:
+            conversation_msgs = conversation_msgs[-max_messages:]
+        
+        # Rebuild
+        self.message_history = []
+        if system_msg:
+            self.message_history.append(system_msg)
+        if first_user_msg:
+            self.message_history.append(first_user_msg)
+        self.message_history.extend(conversation_msgs)
+
+    async def _trim_and_redo_last_message(self, websocket, text_only:bool):
+        """
+            Preserve the last user message, trim, add it back to message history and redo the last request
+        """
+        if len(self.message_history) == 0:
+            return
+        
+
+        last_user_message = None 
+        # Remove last user message
+        if self.message_history[-1]["role"] == "user":
+            last_user_message = self.message_history.pop()
+
+        self.message_history = []
+        # now redo the request
+        await self.process_customer_input(last_user_message["content"], websocket=websocket, text_only=text_only)
+
     async def __check_debug_mode__(self, query, websocket):
         """
         Check if the query is a debug command and process it accordingly.
@@ -401,7 +489,7 @@ class NuCoreBaseAssistant(ABC):
         else:
             output+=f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
 
-        output+=".Now, rephrase them in NATURAL LANGUAGE. NOT A TOOL CALL. Then reset your mode.\""
+        output+=".Now, rephrase in brief NATURAL LANGUAGE. **NO JSON OUTPUT**. **NO DETAILS**\""
         await self.process_customer_input(output, websocket=websocket, text_only=True)
         return responses
 
@@ -548,9 +636,9 @@ class NuCoreBaseAssistant(ABC):
         rags = None
         if self.nuCore.is_rag_enabled()and num_rag_results > 0:
             rags = self.nuCore.rag_query(query, num_results=num_rag_results, rerank=rerank)
-        
-        user_content = f"USER QUERY:{query}"
-        if changed or not self.device_docs_sent:        
+         
+        user_content = f"USER QUERY:{query}" if not query.startswith("USER QUERY:") else query
+        if changed or not self.device_docs_sent or len(self.message_history) == 0:        
             user_content = f"\n────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{self._get_device_docs(rags)}\n\n{user_content}"
             self.device_docs_sent = True
             #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
@@ -563,6 +651,8 @@ class NuCoreBaseAssistant(ABC):
                     f.write(sprompt)
                 with open("/tmp/nucore.1.prompt.txt", "a") as f:
                     f.write(user_content)
+
+       # self._trim_message_history()
         # Add user message to history
         self.message_history.append({"role": "user", "content": user_content})
         if self.debug_mode:

@@ -218,8 +218,12 @@ class ProfileRagFormatter(RAGFormatter):
 
         chunk.end_index = len(self.lines) - 1   
         chunk.nodes = [ node ] 
-        chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
-        chunk.properties = list(node.node_def.properties)
+        if node.node_def:
+            chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
+            chunk.properties = list(node.node_def.properties)
+        else:
+            chunk.cmds = []
+            chunk.properties = []   
         self.rag_chunks.append(chunk) 
 
     def format(self, **kwargs)->RAGData:

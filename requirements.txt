@@ -21,5 +21,3 @@ fastapi
 uvicorn[standard]
 udi_interface
 websockets
-sentence-transformers
-tokenizers

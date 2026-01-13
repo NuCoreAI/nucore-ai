@@ -23,8 +23,6 @@ dependencies = [
  "fastapi",
  "websockets",
  "uvicorn",
- "sentence-tranformers",
- "tokenizers" 
 ]
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 

@@ -69,7 +69,12 @@ nvidia-smi
 ```
 
 ## The Model
-You are going to be using a finetuned version of Qwen2.5-Coder-7B [here](https://huggingface.co/mkohanim/nucore.11)
+Qwen3-Instruct-4b-Q4M.gguf
+
+### Command
+```shell
+build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/qwen3-instruct-4b.q4.gguf  -c 64000 --port 8013 --host 0.0.0.0 -t 15 --n-gpu-layers 50 --batch-size 8192
+```
 
 ## Testing
 For testing, you can either use a live eisy or use example profiles/nodes [here](https://github.com/NuCoreAI/ai-workflow)

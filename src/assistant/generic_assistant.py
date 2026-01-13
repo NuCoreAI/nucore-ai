@@ -3,6 +3,7 @@ import json
 import httpx
 import asyncio
 from base_assistant import NuCoreBaseAssistant, get_parser_args
+from nucore import PromptFormatTypes 
 
 
 """
@@ -16,11 +17,18 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 
     def _get_system_prompt(self):
         # Assuming this code is inside your_package/module.py
-        system_prompt = None
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.qwen.profile.prompt")
+        system_prompt = "nucore.qwen.profile.prompt" if self.prompt_type == PromptFormatTypes.PROFILE else "nucore.qwen.device.prompt"
+        prompts_path = os.path.join(os.getcwd(), "src", "prompts", system_prompt)
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt
+
+    def _get_max_context_size(self) ->int:
+        """
+        Get the maximum context size for the model.
+        :return: The maximum context size as an integer.
+        """
+        return 32768
 
     def _check_for_duplicate_tool_call(self):
         return False, 0
@@ -64,7 +72,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 'cache_prompt':True,
                 "n_keep": -1,
                 "temperature": 0.1,
-                "max_tokens": 130000,
+                "max_tokens": 32000,
             }
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", self.__model_url__, timeout=100, json=payload, headers={
@@ -75,6 +83,18 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                         return None
                     elif response.status_code == 500:
                         print(f"Internal server error. Please try again later (most probably the authorization token is invalid or expired).")
+                        return None
+                    elif response.status_code == 400:
+                        error_detail = await response.aread()
+                        try:
+                            error_details = json.loads(error_detail.decode('utf-8'))
+                            type = error_details.get("error", "").get("type", "")
+                            if type == "exceed_context_size_error":
+                                print(f"reached max context size limit, trimming history ...")
+                                await self._trim_and_redo_last_message(websocket=websocket, text_only=text_only)
+                        except json.JSONDecodeError:
+                            pass
+                        print(f"Bad request: {error_detail.decode('utf-8')}")
                         return None
                     else:
                         async for line in response.aiter_lines():
