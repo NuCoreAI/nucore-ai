@@ -159,12 +159,14 @@ Template:
   The JSON template for the tool is always:
   {"tool":"<TOOL NAME>","args":[
       {
-          /**tool specific arg 1, 
+          /** tool specific arg 1 **/
       },
       {
-          /**tool specific arg 2, 
+          /** tool specific arg 2 **/
       },
-      ...  /** more tool specific args**/
+      {
+        /** more tool specific args **/
+      }
     ]
   }
 
@@ -196,9 +198,9 @@ Rules:
       "parameters":[
         {"id":<param_id">,"value":<customer_value>,"uom":<uom_id>,"precision":<precision>}
       ]
-    }
+    },
     {
-      /** more commands**/
+      /** more commands **/
     }
   ]
 }
