@@ -516,7 +516,7 @@ Once resolved, use the returned date with schedule form #4 or #13 to create the 
 - `category`: exactly one of: `Jewish`, `Christian`, `Hindu`, `Muslim`, `Buddhist`, `Sikh`, `Federal`, `Canada`, `Unknown`
 - `event_name`: normalize event name and fix typos
   Examples: "RoshHasana" → "Rosh Hashanah", "Ym Kiper" → "Yom Kippur", "Xmas" → "Christmas"
-- `year`: integer year for the event (default to current year if not specified)
+- `year`: integer year for the event (default to *current* if not provided) 
 - `time_reference`: optional timing modifier from user query
   Examples: "sunset", "sunrise", "evening", "morning", "18:00", "erev", "yom" 
   Leave empty if user didn't specify timing

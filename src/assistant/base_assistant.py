@@ -377,7 +377,6 @@ class NuCoreBaseAssistant(ABC):
         """
         if len(self.message_history) == 0:
             return
-        
 
         last_user_message = None 
         # Remove last user message
@@ -652,7 +651,7 @@ class NuCoreBaseAssistant(ABC):
                 with open("/tmp/nucore.1.prompt.txt", "a") as f:
                     f.write(user_content)
 
-       # self._trim_message_history()
+        self._trim_message_history()
         # Add user message to history
         self.message_history.append({"role": "user", "content": user_content})
         if self.debug_mode:

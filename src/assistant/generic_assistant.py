@@ -28,7 +28,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         Get the maximum context size for the model.
         :return: The maximum context size as an integer.
         """
-        return 32768
+        return 64000
 
     def _check_for_duplicate_tool_call(self):
         return False, 0
@@ -71,8 +71,8 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 "stream": True,
                 'cache_prompt':True,
                 "n_keep": -1,
-                "temperature": 0.1,
-                "max_tokens": 32000,
+                "temperature": 0.0,
+                "max_tokens": 13000,
             }
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", self.__model_url__, timeout=100, json=payload, headers={

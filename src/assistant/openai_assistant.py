@@ -11,6 +11,8 @@ from nucore import NuCore
 
 from openai import AsyncOpenAI
 from base_assistant import NuCoreBaseAssistant, get_parser_args 
+from nucore import PromptFormatTypes 
+
 DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS = 5  # 5 seconds
 
 
@@ -28,11 +30,19 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def __init__(self, args):
         super().__init__(args)
 
+    def _get_max_context_size(self) ->int:
+        """
+        Get the maximum context size for the model.
+        :return: The maximum context size as an integer.
+        """
+        return 64000
+
     def _get_system_prompt(self):
         # Assuming this code is inside your_package/module.py
         system_prompt = None
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.qwen.profile.prompt")
-#        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.device.prompt" if self.prompt_type == "per-device" else "nucore.openai.profile.prompt")
+        system_prompt = "nucore.openai.profile.prompt" if self.prompt_type == PromptFormatTypes.PROFILE else "nucore.openai.device.prompt"
+
+        prompts_path = os.path.join(os.getcwd(), "src", "prompts", system_prompt) 
         with open(prompts_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read().strip()
         return system_prompt
@@ -96,15 +106,15 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                     if not text_only and len(full_response) > 30:
                         try:
                             json.loads(full_response)
-                            await self.process_tool_call(full_response, websocket, None, None)
+                            #await self.process_tool_call(full_response, websocket, None, None)
                             break 
                         except json.JSONDecodeError:
                             pass
             # End of response
                 elif event.type == "response.completed":
                     if full_response is not None and full_response != "":
-                        if not text_only:
-                           await self.process_tool_call(full_response, websocket, None, None)
+#                        if not text_only:
+#                           await self.process_tool_call(full_response, websocket, None, None)
 #                        if self.debug_mode or text_only:
 #                            await self.send_response("\r\n***\r\n", False, websocket)
 #                        else:
