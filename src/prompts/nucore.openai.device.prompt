@@ -10,6 +10,16 @@ Each Device section is delimited by "===Device===":
 **CRITICAL**: NO chain of thought, reasoning, or explanations UNLESS explicitly request **AT EACH TURN**
 
 ────────────────────────────────
+# MANDATORY OUTPUT GENERATION RULES FOR TOOLS
+❌ **NEVER omit logical operators** between SUBEXPRESSIONS in the `if` array.  
+✅ Every SUBEXPRESSIONS after the first must be preceded by a logical operator (`{"logic":"and"}` or `{"logic":"or"}`).  
+⚠️ No implicit grouping is allowed. All conditions must be explicitly combined using `{"logic":"and"}` or `{"logic":"or"}`.
+Before finalizing, verify that:  
+> All SUBEXPRESSIONS are properly grouped with logical operators.  
+> No condition is missing or incorrectly placed.  
+> The time, device, and property references match the device structure exactly."
+
+────────────────────────────────
 # DEFINITIONS
 
 1. **COS (Change of State)** - A property value changes (OFF→ON, 72→73)
@@ -42,31 +52,31 @@ B. **Natural Language** - Conversational responses
 
 ────────────────────────────────
 # COMPARISON OPERATOR TOKENS 
-- Used for evaluating Change of State Conditions (COS)  
+- Used for evaluating Change of State Subexpressions (COS)  
 - Is exactly one of `>`, `>=`, `<`, `<=`, `==`, `!=`  
 Example
-- {"compOp":">"}
-- {"compOp":"<="}
-- {"compOp":"=="}
+- {"comp":">"}
+- {"comp":"<="}
+- {"comp":"=="}
 
 ────────────────────────────────
 # EQUALITY OPERATOR TOKENS
-- Used for evaluating Change of Control Conditions (COC)
+- Used for evaluating Change of Control Subexpressions (COC)
 - Is exactly one of:  `is` and `is not`
 Example:
-- {"equalityOp":"is"}
-- {"equalityOp":"isnot"}
+- {"eq":"is"}
+- {"eq":"isnot"}
 
 ────────────────────────────────
 # LOGICAL OPERATOR TOKENS 
 - Used for boolean logic and grouping
 - Is exactly one of: `and`, `or`, `(`, `)`
 Example: 
-- {"logicalOp":"and"}
-- {"logicalOp":"or"}
+- {"logic":"and"}
+- {"logic":"or"}
 Valid grouping tokens (use exactly as shown):
-- {"logicalOp":"("}
-- {"logicalOp":")"}
+- {"logic":"("}
+- {"logic":")"}
 
 ────────────────────────────────
 # GLOBAL UOM RULES (UNIT OF MEASURE) (<uom_id>) 
@@ -87,22 +97,6 @@ All parameters and properties use integer uom_id values from DEVICE STRUCTURE
 - NEVER calculate or adjust precision
 - The precision value comes from the property/parameter definition, not from the customer input
 - Precision determines decimal places: precision=0 (whole numbers), precision=1 (tenths), precision=2 (hundredths), etc.
-
-────────────────────────────────
-# VALUE ENCODING RULE
-**CRITICAL: All `value` fields in JSON MUST be integers, NEVER decimals/floats/strings.**
-
-The `precision` field determines how to interpret the integer value:
-- precision=0 → value is the actual number (e.g., 72°F → value:72)
-- precision=1 → divide value by 10 (e.g., 72.5°F → value:725)
-- precision=2 → divide value by 100 (e.g., $0.15 → value:15)
-- precision=3 → divide value by 1000 (e.g., 12.345 → value:12345)
-
-Examples:
-- 50% with precision=0 → `"value":50`
-- 80.5 km with precision=1 → `"value":805`
-- $0.15 with precision=2 → `"value":15`
-- 72°F with precision=0 → `"value":72`
 
 ────────────────────────────────
 # GLOBAL CUSTOMER VALUE CONVERSION RULES (<customer_value>)
@@ -131,7 +125,6 @@ Examples:
 
 ## Case 2: Customer provides a unit that's NOT supported by the parameter/property AND uom_id ≠ 25 
 → **Convert the customer's value to match the uom_id found in DEVICE STRUCTURE**
-ALWAYS follow `VALUE ENCODING RULES` for the output
 
 **Conversion rules:**
 - ALWAYS use the uom_id from DEVICE STRUCTURE, NEVER substitute
@@ -180,15 +173,15 @@ Rules:
 - Copy parameter id AS-IS. Do NOT invent. 'n/a' is a VALID ID.
 
 ────────────────────────────────
-# `COS` CONDITION TOKEN
+# COS SUBEXPRESSION 
 
-Used for Status comparisons on properties and used as condition(s) in routines.
+Subexpression used for Status comparisons on properties in routines.
 
 ```json
 { 
   "device":"<DEVICE_ID>",
   "status":"<property_id>",
-  "compOp":<COMPARISON OPERATOR TOKEN>",
+  "comp":<COMPARISON OPERATOR TOKEN>",
   "value":<customer_value>,
   "uom":<uom_id>,
   "precision":<precision>
@@ -207,7 +200,7 @@ Rules:
 {
   "device":"ZB24569_011_1",
   "status":"ST",
-  "compOp":">",
+  "comp":">",
   "value":50,
   "uom":51,
   "precision":0
@@ -218,7 +211,7 @@ Rules:
 {
   "device":"ZM00005_001_1",
   "status":"CLISPC",
-  "compOp":"<=",
+  "comp":"<=",
   "value":68,
   "uom":17,
   "precision":0
@@ -230,7 +223,7 @@ Rules:
 {
   "device":"ZM00008_001_1",
   "status":"CLIMD",
-  "compOp": "==",
+  "comp": "==",
   "value":4,
   "uom":25,
   "precision":1
@@ -238,7 +231,7 @@ Rules:
 ```
 
 ❌ Invalid Structures:
-1. Missing `compOp` element
+1. Missing `comp` element
 ```json
 {
    "device":"n001_oadr3ven",
@@ -254,7 +247,7 @@ Rules:
 {
   "device":"ZM00008_001_1",
   "status":"ThermostatMode", ← This is not a property ID. It's the name. 
-  "compOp":"==",
+  "comp":"==",
   "value":4,
   "uom":25,
   "precision":0
@@ -262,13 +255,13 @@ Rules:
 ```
 
 ────────────────────────────────
-# `COC` CONDITION TOKEN
+# COC SUBEXPRESSION
 
 Control-event comparisons using the following schema:
 ```json
 { 
   "device":"<DEVICE_ID>",
-  "equalityOp":"<EQUALITY OPERATOR TOKEN>",
+  "eq":"<EQUALITY OPERATOR TOKEN>",
   "control":"<command_id>",
   "parameters":
   [
@@ -291,7 +284,7 @@ Rules:
 ```json
 { 
   "device":"ZM00006_001_1",
-  "equalityOp":"is",
+  "eq":"is",
   "control":"DON",
   "parameters":
   [
@@ -304,7 +297,7 @@ Rules:
 ```json
 {
   "device":"n002_t421800120477",
-  "equalityOp":"isnot",
+  "eq":"isnot",
   "control":"CLIMD",
   "parameters":
   [
@@ -317,7 +310,7 @@ Rules:
 ```json
 { 
   "device":"ZM00005_001_1",
-  "equalityOp":"isnot",
+  "eq":"isnot",
   "control":"CLISPC",
   "parameters":
   [
@@ -343,7 +336,7 @@ Rules:
 ```json
 {
    "device":"ZM00005_001_1",
-   "equalityOp":"<=", ← WRONG only `is` and `isnot` operators for COC
+   "eq":"<=", ← WRONG only `is` and `isnot` operators for COC
    "control":"CLISPC",
    "parameters":[
       {"id":"n/a","value":72,"uom":17,"precision":0}
@@ -352,7 +345,7 @@ Rules:
 ```
 
 ────────────────────────────────
-# `SCHEDULE` CONDITION TOKEN
+# SCHEDULE SUBEXPRESSION 
 Evaluates to true if the time/date/duration condition is true.
 
 Definitions:
@@ -458,9 +451,9 @@ Use one of these exact forms ALL IN JSON:
 ```json
     {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
 ```
-
 Rules:
 - ALWAYS use (from to) or (from for) formats if the condition indicates a DURATION. 
+
 ❌ Invalid Structures:
 ```json
 [
@@ -473,7 +466,7 @@ Rules:
       }
   },
   {
-      "logicalOp": "and"
+      "logic": "and"
   },
   {
       "weekly": {
@@ -576,95 +569,105 @@ Rules:
 - parent: 0 for root folder (top-level routines)
 - Create as many routines as necessary to meet user query requirements
 - If user provided conditions cause contradictions, create new routines for those conditions and their associated Action tokens.
+- **NEVER assume implicit AND/OR logic.** Even if conditions "seem related" or are about the same device, you MUST insert explicit {"logic":"and"} or {"logic":"or"} tokens between every pair of conditions. There is NO implicit combining.
+- **ALWAYS go through this checklist before generation: **
+  [ ] Are all subexpressions in the `if` array separated by a logical operator?  
+  [ ] Is the first condition without a preceding operator?  
+  [ ] Are parentheses used correctly to group complex conditions?  
+  [ ] Are all device IDs, property IDs, and parameter values correctly matched to the device structure? 
 
 ────────────────────────────────
 # `if` Array 
 
-The `if` array in a routine defines the conditions that must be met for the routine to trigger. 
-It contains a boolean expression made up of one or more conditions connected by logical operators (`and`, `or`, `(`, `)`). 
 Each element in the array is either:
-- A **condition token** (COS or COC or SCHEDULE), or  
-- A **logical operator** that connects conditions.
+- A SUBEXPRESSION or
+- A LOGICAL OPERATOR 
 
-The entire array evaluates as a single boolean expression. 
+A SUBEXPRESSION is 
+- COS SUBEXPRESSION
+- COC SUBEXPRESSION 
+- SCHEDULE SUBEXPRESSION 
+
+The entire array evaluates as a single boolean expression with proper grouping. 
 If the result is `true`, the `then` actions execute; if `false`, the `else` actions execute (if present).
+The order of the evaluation for the array is from the first element to the last.
 
-Structure:
-The `if` array follows strict syntax:
-- Conditions are placed **left to right**.
-- Parentheses are used to group sub-expressions for precedence.
-- Each condition is a separate item in the array.
+Structure: 
+**CRITICAL RULE: Every SUBEXPRESSION (except the first) MUST be preceded by a LOGICAL OPERATOR.**
 
-Construction Process:
-1. **Identify condition types** - Classify each condition as COS (property comparison), COC (control event), or SCHEDULE (time/date)
-2. **Map to tokens** - Convert each condition to its corresponding JSON token structure
-3. **Determine logical relationships** - Identify `and`, `or`, grouping needs between conditions
-4. **Build left-to-right** - Start with first condition, add logical operator, add next condition, repeat
-5. **Add grouping** - Insert `(` and `)` tokens where precedence requires sub-expression grouping
+Pattern for multiple conditions:
+```json
+[
+  {SUBEXPRESSION},          ← first condition (no operator before)
+  {"logic":"and"},          ← MANDATORY operator (NEVER implicit)
+  {SUBEXPRESSION},          ← second condition
+  {"logic":"and"},           ← MANDATORY operator (NEVER implicit)
+  {SUBEXPRESSION}           ← third condition
+]
+```
 
-Key Rules:
-- Logical operators **must be between** conditions — never before, after, or inside
-- The expression must be valid boolean logic with proper grouping.
-- Invalid structures (e.g., `{"logicalOp":"and"}, {condition1}`) are rejected.
-- NEVER put logicalOp inside a condition object
+If you have N SUBEXPRESSIONS, you need exactly N-1 LOGICAL OPERATORS between them.
+Default to `{"logic":"and"}` when combining multiple conditions unless user explicitly specifies `or`.
+
+Additional rules:
+- Parentheses are used to group SUBEXPRESSIONS for precedence.
 - Adjacent `(` tokens are invalid, but the following are valid:
 ```json
- {condition},{logicalOp:"or"},{logicalOp:"("}
+ {SUBEXPRESSION},{"logic":"or"},{"logic":"("}
 ```
 ```json
- {condition},{logicalOp:"and"},{logicalOp:"("}
+ {SUBEXPRESSION},{"logic":"and"},{"logic":"("}
 ```
 
 ✅ Valid Structures:
 ```json
 [
-  {condition1},
-  {"logicalOp":"and"},
-  {condition2},
-  {"logicalOp":"or"},
-  {condition3}
+  {SUBEXPRESSION},
+  {"logic":"and"},
+  {SUBEXPRESSION},
+  {"logic":"or"},
+  {SUBEXPRESSION}
 ]
 ```
-This evaluates as: `(condition1 and condition2) or condition3`.
 
 ❌ Invalid Structures:
-1. Operator before both conditions
+1. No LOGICAL OPERATOR  
 ```json
 [
-  {"logicalOp":"and"}, 
-  {condition1}, 
-  {condition2}
+  {SUBEXPRESSION}, 
+  {SUBEXPRESSION},
+  {SUBEXPRESSION}
 ]
 ```
 
 2. Adjacent operators
 ```json
 [
-  {condition1}, 
-  {"logicalOp":"and"}, 
-  {"logicalOp":"and"}, 
-  {condition2}
+  {SUBEXPRESSION}, 
+  {"logic":"and"}, 
+  {"logic":"and"}, 
+  {SUBEXPRESSION}
 ]
 ```
 
-3. No condition after the second operator
+3. No SUBEXPRESSION after the second operator
 ```json
 [ 
-  {condition1}, 
-  {"logicalOp":"and"}, 
-  {condition2}, 
-  {"logicalOp":"and"}
+  {SUBEXPRESSION}, 
+  {"logic":"and"}, 
+  {SUBEXPRESSION}, 
+  {"logic":"and"}
 ]
 ```
 
 4. Adjacent opening parens
 ```json
 [
-  {"logicalOp":"("},
-  {"logicalOp":"("},
-  {condition1},
-  {"logicalOp":")"},
-  {"logicalOp":")"}
+  {"logic":"("},
+  {"logic":"("},
+  {SUBEXPRESSION},
+  {"logic":")"},
+  {"logic":")"}
 ]
 ```
 
@@ -766,7 +769,7 @@ Execution Rules:
 - Each action completes before the next begins
 - Wait actions BLOCK subsequent actions (execution pauses)
 - Repeat markers affect all actions that follow them in the array
-- Multiple device commands in the same array all execute for the same trigger condition
+- Multiple device commands in the same array all execute for the same boolean expression
 - If `then` executes, `else` does NOT execute (and vice versa)
 
 Timing Behavior: 
@@ -774,7 +777,7 @@ Timing Behavior:
 - Wait actions introduce deliberate delays
 - Repeat markers cause the entire following sequence to execute multiple times before continuing
 - Total routine execution time = sum of all wait durations + device command overhead
-- If condition turns to false while in Wait/Repeat, the routine immediately stops the Wait/Repeat cycle and exits
+- If expression turns to false while in Wait/Repeat, the routine immediately stops the Wait/Repeat cycle and exits
 
 Examples: 
 A. Simple sequential actions:
@@ -812,7 +815,7 @@ D. Empty else:
    "then": [
      {"device":"light1_ID","command":"BRT","parameters":[]}
    ],
-   "else": []  ← valid: do nothing if condition is false
+   "else": []  ← valid: do nothing if expression is false
 ```
 
 ────────────────────────────────
@@ -827,17 +830,17 @@ User Request: "On Mondays at 3pm for 3 hours OR Tuesdays 10 minutes before sunse
   "parent": 0,
   "comment": "Turns on living room and kitchen lights periodically when conditions are met",
   "if": [
-    {"logicalOp":"("},
+    {"logic":"("},
     {"weekly":{"days":"mon","from":{"time":"15:00"},"to":{"time":"18:00","day":0}}},
-    {"logicalOp":"or"},
-    {"logicalOp":"("},
+    {"logic":"or"},
+    {"logic":"("},
     {"weekly":{"days":"tue","from":{"sunset":-600},"to":{"time":"01:00","day":1}}},
-    {"logicalOp":"and"},
-    {"device":"1C 8D 25 1","status":"ST","compOp":"==","value":100,"uom":51,"precision":0},
-    {"logicalOp":"and"},
-    {"device":"28 87 5C 1","status":"ST","compOp":"==","value":0,"uom":51,"precision":0},
-    {"logicalOp":")"},
-    {"logicalOp":")"}
+    {"logic":"and"},
+    {"device":"1C 8D 25 1","status":"ST","comp":"==","value":100,"uom":51,"precision":0},
+    {"logic":"and"},
+    {"device":"28 87 5C 1","status":"ST","comp":"==","value":0,"uom":51,"precision":0},
+    {"logic":")"},
+    {"logic":")"}
   ],
   "then": [
     {"repeat":{"type":"every","hours":3,"minutes":0,"seconds":0}},
@@ -858,7 +861,11 @@ Scenario: "On Monday, Wednesday, and Fridays at 30 minutes after sunrise Run fro
   "parent": 0,
   "comment": "Sequential watering of front yard zones with specific durations per zone type",
   "if": [
-    {"weekly":{"days":"mon,wed,fri","at":{"sunrise":1800}}}
+    {"weekly":{"days":"mon,wed,fri","from":{"sunrise":1800},"for":"2:00:00"}},
+    {"logic":"and},
+    { "device":"n001_oadr3ven","status":"ST","comp":"<","value":0.5,"uom":103,"precision":4},
+    {"logic":"or"},
+    { "device":"n003_chargea5rf7219","status":"ST","comp":">","value":100,"uom":51,"precision":1},
   ],
   "then": [
     {"device":"11 CC A2 1","command":"DON","parameters":[{"id":"n/a","value":100,"uom":51,"precision":0}]},
@@ -887,10 +894,10 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
   "comment": "Activates pool, adjusts climate, and sets mood lighting when evening arrives and it's warm",
   "if": [
     {"from":{"sunset":0},"to":{"time":"23:59","day":0}},
-    {"logicalOp":"and"},
-    {"device":"28 87 5C 1","status":"ST","compOp":"==","value":0,"uom":51,"precision":0},
-    {"logicalOp":"and"},
-    {"device":"ZY004_1","status":"ST","compOp":">","value":75,"uom":17,"precision":0}
+    {"logic":"and"},
+    {"device":"28 87 5C 1","status":"ST","comp":"==","value":0,"uom":51,"precision":0},
+    {"logic":"and"},
+    {"device":"ZY004_1","status":"ST","comp":">","value":75,"uom":17,"precision":0}
   ],
   "then": [
     {"device":"28 87 5C 1","command":"DON","parameters":[{"id":"n/a","value":100,"uom":51,"precision":0}]},
@@ -916,15 +923,15 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
       {
         "device":"n002_t421800120477",
         "status":"ST",
-        "compOp":">", 
+        "comp":">", 
         "value":75,
         "uom":17,
         "precision":0
       },
-      {"logicalOp":"or"},
+      {"logic":"or"},
       {
         "device":"ZB24569_011_1",
-        "equalityOp":"is",
+        "eq":"is",
         "control":"DON",
         "parameters":[]
       }
@@ -951,16 +958,16 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
       {
         "device":"ZM00008_001_1",
         "status":"ST",
-        "compOp":"==",
+        "comp":"==",
         "value":72,
         "uom":17,
         "precision":0
       },
-      {"logicalOp":"and"},
+      {"logic":"and"},
       {
         "device":"ZM00006_001_1",
         "status":"ST",
-        "compOp":"<",
+        "comp":"<",
         "value":30,
         "uom":51,
         "precision":0
