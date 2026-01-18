@@ -1,0 +1,93 @@
+{
+    "name": "Car Charging and Pool Control Based on Price and Miles",
+    "enabled": true,
+    "parent": 0,
+    "comment": "Charges car fully if miles > 100 and price < 50 cents, else turns off pool and charges to 80%. Active Mon, Thu evenings.",
+    "if": [
+        {
+            "weekly": {
+                "days": "mon,thu",
+                "from": {
+                    "sunset": 300
+                }
+            }
+        },
+        {
+            "logicalOp": "and"
+        },
+        {
+            "weekly": {
+                "days": "mon,thu",
+                "to": {
+                    "sunrise": -600,
+                    "day": 1
+                }
+            }
+        },
+        {
+            "logicalOp": "and"
+        },
+        {
+            "device": "ZY004_1",
+            "status": "Miles",
+            "compOp": ">",
+            "value": 100,
+            "uom": 51,
+            "precision": 0
+        },
+        {
+            "logicalOp": "and"
+        },
+        {
+            "device": "ZY004_1",
+            "status": "Price",
+            "compOp": "<",
+            "value": 0.5,
+            "uom": 104,
+            "precision": 2
+        }
+    ],
+    "then": [
+        {
+            "device": "ZY004_1",
+            "command": "ChargeTarget",
+            "parameters": [
+                {
+                    "id": "n/a",
+                    "value": 100,
+                    "uom": 51,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "device": "ZY004_1",
+            "command": "StartCharging",
+            "parameters": []
+        }
+    ],
+    "else": [
+        {
+            "device": "28 87 5C 1",
+            "command": "DOF",
+            "parameters": []
+        },
+        {
+            "device": "ZY004_1",
+            "command": "ChargeTarget",
+            "parameters": [
+                {
+                    "id": "n/a",
+                    "value": 80,
+                    "uom": 51,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "device": "ZY004_1",
+            "command": "StopCharging",
+            "parameters": []
+        }
+    ]
+}

@@ -259,29 +259,26 @@ class NuCore:
             ifs = routine.get("if", None)
             if ifs is not None and len (ifs) > 0:
                 for if_ in ifs:
-                    op = list(if_.keys())[0]
-                    if op == 'not':
-                        condition = if_.pop('not')
-                        if_['!=']= condition
-                        continue 
-                    condition = if_[op]
-                    if not isinstance(condition, dict):
-                        continue
-                    if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
-                        continue
-                    device_id = condition.get("device", None)
-                    if device_id is None:
-                        continue
-                    # device ids are in base64 encoded, decode it
-                    device_id = ProfileRagFormatter.decode_id(device_id)
-                    condition["device"] = device_id
-                    uom_id = condition.get("uom", None)
-                    precision = condition.get("precision", None)
-                    value = condition.get("value", None)
-                    if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
-                        continue
-                    value = value * (10 ** precision)
-                    condition["value"] = int(value)
+                    keys = list(if_.keys())
+                    if "comp" in keys or "eq" in keys:
+                        condition = if_
+                        if not isinstance(condition, dict):
+                            continue
+                        if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
+                            continue
+                        device_id = condition.get("device", None)
+                        if device_id is None:
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        condition["device"] = device_id
+                        uom_id = condition.get("uom", None)
+                        precision = condition.get("precision", None)
+                        value = condition.get("value", None)
+                        if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
+                            continue
+                        value = value * (10 ** precision)
+                        condition["value"] = int(value)
             
             thens = routine.get("then", None)
             if thens is not None and len (thens) > 0:

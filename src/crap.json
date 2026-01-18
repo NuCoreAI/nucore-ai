@@ -1,44 +1,57 @@
 {
-    "name": "Smart Charging & Pool Control",
+    "name": "Charging Control Based on Price and Range",
     "enabled": true,
     "parent": 0,
-    "comment": "Starts charging and activates pool/fan on weekdays 9am-5:15pm when price < $0.50 and range < 50 miles. Otherwise stops charging, reduces charge limit to 50, and turns off pool and fan.",
+    "comment": "Control charging and pool based on driving range and price during specified time and days",
     "if": [
         {
-            "and": 1
-        },
-        {
-            "<": {
-                "device": "n001_oadr3ven",
-                "status": "ST",
-                "value": 5000,
-                "uom": 103,
-                "precision": 4
-            }
-        },
-        {
-            "<": {
-                "device": "n003_chargea5rf7219",
-                "status": "GV4",
-                "value": 50,
-                "uom": 116,
-                "precision": 0
-            }
-        },
-        {
             "weekly": {
-                "days": "mon,tue,wed,thu,fri",
+                "days": "mon,thu",
                 "from": {
-                    "time": "09:00"
+                    "sunset": 300
                 },
                 "to": {
-                    "time": "17:15",
-                    "day": 0
+                    "sunrise": -600,
+                    "day": 1
                 }
             }
+        },
+        {
+            "logicalOp": "and"
+        },
+        {
+            "device": "n003_chargea5rf7219",
+            "status": "GV4",
+            "compOp": ">",
+            "value": 100,
+            "uom": 116,
+            "precision": 0
+        },
+        {
+            "logicalOp": "and"
+        },
+        {
+            "device": "n001_oadr3ven",
+            "status": "ST",
+            "compOp": "<",
+            "value": 50,
+            "uom": 103,
+            "precision": 4
         }
     ],
     "then": [
+        {
+            "device": "n003_chargea5rf7219",
+            "command": "BATPERCENT",
+            "parameters": [
+                {
+                    "id": "n/a",
+                    "value": 1000,
+                    "uom": 51,
+                    "precision": 1
+                }
+            ]
+        },
         {
             "device": "n003_chargea5rf7219",
             "command": "CHARGECTRL",
@@ -50,45 +63,26 @@
                     "precision": 0
                 }
             ]
-        },
-        {
-            "device": "n003_chargea5rf7219",
-            "command": "SETBATCHPERCENT",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 90,
-                    "uom": 51,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "ZY003_1",
-            "command": "DON",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 100,
-                    "uom": 78,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "ZM00003_001_1",
-            "command": "DON",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 100,
-                    "uom": 51,
-                    "precision": 0
-                }
-            ]
         }
     ],
     "else": [
+        {
+            "device": "ZY003_1",
+            "command": "DOF",
+            "parameters": []
+        },
+        {
+            "device": "n003_chargea5rf7219",
+            "command": "BATPERCENT",
+            "parameters": [
+                {
+                    "id": "n/a",
+                    "value": 800,
+                    "uom": 51,
+                    "precision": 1
+                }
+            ]
+        },
         {
             "device": "n003_chargea5rf7219",
             "command": "CHARGECTRL",
@@ -97,42 +91,6 @@
                     "id": "n/a",
                     "value": 0,
                     "uom": 25,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "n003_chargea5rf7219",
-            "command": "SETBATCHPERCENT",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 50,
-                    "uom": 51,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "ZY003_1",
-            "command": "DOF",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 100,
-                    "uom": 78,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "ZM00003_001_1",
-            "command": "DOF",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 100,
-                    "uom": 51,
                     "precision": 0
                 }
             ]
