@@ -97,9 +97,9 @@ build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/qwen3-instru
 1. For now, you will need an [eisy hardware] (https://www.universal-devices.com/product/eisy-home-r2/)
 2. Clone this repo anywhere
 3. There are three assistant types that use the same codebase:
-src/assistant/generic_assistant -> uses local/edge LLM (qwen)
-src/assistant/openai_assistant -> uses OpenAI (you need an API Key) 
-src/assistant/claude_assistant -> uses Clause (you need an API Key) 
+* src/assistant/generic_assistant.py -> uses local/edge LLM (qwen)
+* src/assistant/openai_assistant.py -> uses OpenAI (you need an API Key) 
+* src/assistant/claude_assistant.py -> uses Clause (you need an API Key) 
 
 All have the same parameters:
 
