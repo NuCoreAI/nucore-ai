@@ -15,9 +15,11 @@ git clone https://github.com/NuCoreAI/nucore-ai.git
 ## Using Frontier LLMs
 * Create a directory called ```secrets``` in the root of this project
 * Create the following two files in this directory
-1. "__init__.py" - an empty file
-2. "keys.py" 
-In keys.py, put your API KEYs in this format:
+```shell
+mkdir __init__.py
+mkdir keys.py
+```
+* In keys.py, put your API KEYs in this format:
 
 ```python
 OPENAI_API_KEY="sk-proj-xxxx-your-api-key" (for OpenAI)
