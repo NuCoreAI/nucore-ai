@@ -664,6 +664,7 @@ class NuCoreBaseAssistant(ABC):
             if assistant_response is not None:
                 await self.process_llm_response(assistant_response, websocket, None, None)
                 self.message_history.append({"role": "assistant", "content": assistant_response})
+            self.send_response("\n\n", True, websocket)
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
             import traceback
