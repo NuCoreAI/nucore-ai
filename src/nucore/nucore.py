@@ -15,6 +15,7 @@ from nucore import NuCoreError
 from config import AIConfig
 from rag import RAGProcessor
 from rag import ProfileRagFormatter
+from rag import MinimalRagFormatter
 from rag.model_preloader import start_preload 
 
 
@@ -112,7 +113,8 @@ class NuCore:
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-        device_rag_formatter = ProfileRagFormatter(json_output=self.nucore_api.json_output)
+        #device_rag_formatter = ProfileRagFormatter(json_output=self.nucore_api.json_output)
+        device_rag_formatter = MinimalRagFormatter(json_output=self.nucore_api.json_output)
         if self.formatter_type == PromptFormatTypes.PROFILE:
             return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
          
@@ -121,17 +123,6 @@ class NuCore:
         
         print (f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
         return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
-    
-    def format_tools(self):
-        """
-        Format tools for fine tuning or other purposes.
-        :return: List of formatted tools.
-        """
-        if not self.profile:
-            raise NuCoreError("No profile loaded.")
-        from rag import ToolsRAGFormatter
-        tools_rag_formatter = ToolsRAGFormatter(indent_str=" ", prefix="-")
-        return tools_rag_formatter.format(tools_path=config.getToolsPath())
     
     def format_static_info(self, path:str):
         """
@@ -148,7 +139,6 @@ class NuCore:
         Load RAG documents from the specified nodes and profile.
         :param kwargs: Optional parameters for formatting.
         - embed: If True, embed the RAG documents.
-        - tools: If True, include tools in the RAG documents.
         - static_info: If True, include static information in the RAG documents.
         - static_docs_path: Path to the static information directory.
         - dump: If True, dump the processed RAG documents to a file.
@@ -158,13 +148,8 @@ class NuCore:
         device_rag_docs = self.format_nodes()
         embed = kwargs.get("embed", False) 
         all_docs = device_rag_docs
-        tools = kwargs.get("tools", False)
         static_path = kwargs.get("static_docs_path", False)
         dump = kwargs.get("dump", False)
-        if tools: 
-            tools_rag_docs = self.format_tools()
-            if tools_rag_docs:
-                all_docs += tools_rag_docs
 
         if static_path: 
             static_info_rag_docs = self.format_static_info(static_path)

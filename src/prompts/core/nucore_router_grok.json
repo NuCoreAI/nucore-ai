@@ -1,0 +1,67 @@
+{
+  "name": "nucore_router_tool",
+  "description": "Results from searching the device database for relevant devices based on user query",
+  "parameters": {
+    "type": "object",
+    "required": ["intent", "keywords", "devices"],
+    "properties": {
+      "intent": {
+        "type": "string",
+        "enum": [
+          "command_control",
+          "routine_automation",
+          "real_time_status",
+          "query_information"
+        ],
+        "description": "Primary intent of the user query: command_control (immediate device actions), routine_automation (scheduled/conditional logic), real_time_status (query current state), query_information (device capabilities/info)"
+      },
+      "keywords": {
+        "type": "array",
+        "description": "Extracted keywords from user query (excluding stop words and schedule terms)",
+        "items": {
+          "type": "object",
+          "required": ["keyword", "reasoning"],
+          "properties": {
+            "keyword": {
+              "type": "string",
+              "description": "The extracted keyword or phrase"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Brief explanation of why this keyword is relevant"
+            }
+          }
+        }
+      },
+      "devices": {
+        "type": "array",
+        "description": "Matched devices ranked by relevance score",
+        "items": {
+          "type": "object",
+          "required": ["device_id", "score", "matched_terms", "reasoning"],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "The unique device identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score (higher is better)"
+            },
+            "matched_terms": {
+              "type": "array",
+              "description": "List of terms that matched from the device's comma-separated list",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Brief explanation of why this device is relevant"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -15,13 +15,10 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def __init__(self, args):
         super().__init__(args)
 
-    def _get_system_prompt(self):
+    def _get_prompt_config_path(self):
         # Assuming this code is inside your_package/module.py
-        system_prompt = "nucore.qwen.profile.prompt" if self.prompt_type == PromptFormatTypes.PROFILE else "nucore.qwen.device.prompt"
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", system_prompt)
-        with open(prompts_path, 'r', encoding='utf-8') as f:
-            system_prompt = f.read().strip()
-        return system_prompt
+        system_prompt =  "qwen_profile_config.json" if self.prompt_type == PromptFormatTypes.PROFILE else "qwen_config.json"
+        return os.path.join(os.getcwd(), "src", "prompts", system_prompt)
 
     def _get_max_context_size(self) ->int:
         """
@@ -32,9 +29,6 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 
     def _check_for_duplicate_tool_call(self):
         return False, 0
-
-    def _get_tools_prompt(self):
-        return ""
 
     async def _sub_init(self):
         """
@@ -68,11 +62,13 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             
             payload={
                 "messages": self.message_history,
+                "tools": self.orchestrator.get_router_tools(),
                 "stream": True,
                 'cache_prompt':True,
                 "n_keep": -1,
                 "temperature": 0.0,
-                "max_tokens": 13000,
+                "top_p": 1.0,
+            #    "max_tokens": 13000,
             }
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", self.__model_url__, timeout=100, json=payload, headers={
@@ -104,20 +100,31 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                                 first_line = False
                             if line.startswith("data: "):
                                 token_data = line[len(b"data: "):]
+                                data=None
                                 try:
                                     finish_reason = json.loads(token_data.strip())['choices'][0]['finish_reason']
-                                    if finish_reason == "stop":
+                                    if finish_reason == "stop" or finish_reason == "tool_calls":
                                         break
-                                    token_data = json.loads(token_data.strip())['choices'][0]['delta'].get('content', '')
+                                    data = json.loads(token_data.strip())['choices'][0]['delta'].get('content', '')
+                                    if (not data):
+                                        try:
+                                            data = json.loads(token_data.strip())['choices'][0]['delta'].get('tool_calls', '')
+                                            if data:
+                                                tool_calls = data[0]
+                                                if tool_calls: 
+                                                    function = tool_calls.get("function")
+                                                    data = function.get("arguments")
+                                        except json.JSONDecodeError:
+                                            pass
                                 except json.JSONDecodeError:
                                     continue
-                                if token_data:
+                                if data:
                                     # Print the token data as it arrives
-                                    if isinstance(token_data, bytes):
-                                        token_data = token_data.decode("utf-8")
+                                    if isinstance(data, bytes):
+                                        data = data.decode("utf-8")
                                     if text_only or self.debug_mode:
-                                        await self.send_response(token_data, False, websocket if self.debug_mode else None)
-                                    full_response += token_data
+                                        await self.send_response(data, False, websocket if self.debug_mode else None)
+                                    full_response += data
 
 #            if full_response is not None:
 #                tool_call = self._get_tool_call(full_response)

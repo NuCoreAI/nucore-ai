@@ -1,0 +1,92 @@
+{
+  "llm": "gpt-4.1-mini",
+  "version": "1.0.0",
+  "description": "OpenAI LLM prompt configuration for NuCore smart-home assistant",
+
+  "modules":
+  [
+    {
+        "name": "definitions",
+        "description": "Core NuCore definitions and terminology",
+        "path": "common/definitions.md", 
+        "template_key": "<<nucore_definitions>>"
+    },
+    {
+        "name": "security",
+        "description": "Security validation and sanitization prompts",
+        "path": "common/security.md", 
+        "template_key": "<<nucore_security_rules>>"
+    },
+    {
+        "name": "common",
+        "description": "Common NuCore concepts/rules for command/control/automations",  
+        "path": "common/common.md",
+        "template_key": "<<nucore_common_rules>>"
+    }
+  ],
+
+  "agents": [
+        {
+            "name": "command_control_status",
+            "description": "Command, control, and realtime status agent for immediate device actions",
+            "prompt": "agents/command_control_status.md",
+            "intents_to_tools": [
+                {
+                    "intent": "command_control",
+                    "tools":[
+                        {
+                            "path": "tools/command_control.json"
+                        }
+                    ]
+                },
+                {
+                    "intent": "real_time_status",
+                    "tools":[
+                        {
+                            "path": "tools/real_time_status.json"
+                        }
+                    ]
+                }
+            ],
+            "include": [
+                "definitions",
+                "security",
+                "common"
+            ]
+        },
+        {
+            "name": "routine_automation",
+            "description": "Automation and scheduling prompts for conditional logic",
+            "prompt": "agents/routine_automation.md",
+            "intents_to_tools": [
+                {
+                    "intent": "routine_automation",
+                    "tools":[
+                        {
+                            "path": "tools/routine_automation.json"
+                        }
+                    ]
+                }
+            ],
+            "include": [
+                "definitions",
+                "security",
+                "common"
+            ]
+        }
+    ],
+
+    "router": {
+        "description": "Core router and definitions for device discovery",
+        "path": "core/nucore_router.md",
+        "tools": [
+            {
+                "name": "nucore_router_tool",
+                "path": "core/nucore_router_openai.json"
+            }
+        ],
+        "include": [
+            "definitions"
+        ]
+  }
+}

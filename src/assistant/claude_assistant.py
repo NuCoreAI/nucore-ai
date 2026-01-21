@@ -1,15 +1,13 @@
 # implement claude assistant using Messages API
 
-import re, os
+import os
 import os
 from pathlib import Path
-import json
-import asyncio, argparse
-
-from nucore import NuCore 
+import asyncio
+from typing import Tuple
 
 from anthropic import AsyncAnthropic
-from base_assistant import NuCoreBaseAssistant, get_parser_args
+from base_assistant import NuCoreBaseAssistant, get_parser_args, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -26,14 +24,20 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def __init__(self, args):
         super().__init__(args)
 
-    def _get_system_prompt(self):
+    def _get_max_context_size(self) ->int:
+        """
+        Get the maximum context size for the model.
+        :return: The maximum context size as an integer.
+        """
+        return 64000
+    def _get_prompt_config_path(self):
         # Assuming this code is inside your_package/module.py
-        system_prompt = None
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt")
-        with open(prompts_path, 'r', encoding='utf-8') as f:
-            system_prompt = f.read().strip()
-        return system_prompt
-    
+        system_prompt="claude_config.json"
+        return os.path.join(os.getcwd(), "src", "prompts", system_prompt)
+
+    def _check_for_duplicate_tool_call(self) -> Tuple[bool, int]: 
+        return False, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS 
+ 
     async def _sub_init(self):
         self.client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
 
@@ -61,7 +65,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 model="claude-sonnet-4-20250514",
                 max_tokens=16000,
                 temperature=1.0,
-                system=self.system_prompt,
+                tools=self.orchestrator.get_router_tools(),
                 messages=self.message_history
             ) as stream:
                 first_line = True
@@ -80,10 +84,11 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                                 if text_only or self.debug_mode:
                                     await self.send_response(f"\r\n***\r\n", False, websocket)
                             first_line = False
-                            
-                            if text_only or self.debug_mode:
+                        elif event.delta.type == "input_json":
+                            delta_text=event.delta.partial_json
+                            if self.debug_mode:
                                 await self.send_response(f"{delta_text}", False, websocket)
-                    
+                            full_response += delta_text
                     elif event.type == "message_stop":
                         if full_response:
                             if not text_only:
