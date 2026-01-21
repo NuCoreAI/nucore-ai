@@ -13,12 +13,14 @@ from iox import IoXWrapper
 from importlib.resources import files
 from config import AIConfig
 from utils import JSONDuplicateDetector 
+from prompts import PromptOrchestrator
 
 import threading
 import queue
 import time
 from dataclasses import dataclass
 
+DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS = 5  # 5 seconds
 
 def get_data_directory(parent:str, subdir:str) -> str:
     """
@@ -137,8 +139,7 @@ class NuCoreBaseAssistant(ABC):
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.prompt_type = args.prompt_type if args.prompt_type else PromptFormatTypes.DEVICE 
         self.config = AIConfig() 
-        self.system_prompt = self._get_system_prompt()
-        self.tool_prompt = self._get_tools_prompt()
+        self.orchestrator = PromptOrchestrator(self._get_prompt_config_path())
         self.json_output= args.json_output if args.json_output else False
         self.nuCore = NuCore(
             collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
@@ -286,10 +287,9 @@ class NuCoreBaseAssistant(ABC):
             self.worker_thread.join()
 
     @abstractmethod
-    def _get_system_prompt(self) -> str:
+    def _get_prompt_config_path(self) -> str:
         """
-        Load the system prompt from the prompts file.
-        :return: The system prompt as a string.
+        :return: The path to the prompt configuration file.
         """
         pass
 
@@ -630,7 +630,7 @@ class NuCoreBaseAssistant(ABC):
             await self.send_response("No query provided, ...", True, websocket)
             return None
 
-        sprompt = self.system_prompt.strip()
+        sprompt = self.orchestrator.get_router_prompt().strip()
 
         rags = None
         if self.nuCore.is_rag_enabled()and num_rag_results > 0:
@@ -638,11 +638,13 @@ class NuCoreBaseAssistant(ABC):
          
         user_content = f"USER QUERY:{query}" if not query.startswith("USER QUERY:") else query
         if changed or not self.device_docs_sent or len(self.message_history) == 0:        
-            user_content = f"\n────────────────────────────────\n\n# DEVICE STRUCTURE\n\n{self._get_device_docs(rags)}\n\n{user_content}"
+            user_content = f"\n{self._get_device_docs(rags)}\n\n{user_content}"
             self.device_docs_sent = True
             #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
         if len(self.message_history) == 0 :
-            sprompt += "\n\n"+self.tool_prompt.strip()+"\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
+            #append shared enums to system prompt
+            print ("FIX ME ... REMOVE FOR ROUTER")
+            sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
                 self.message_history.append({"role": "system", "content": sprompt})
             if self.debug_mode:
@@ -679,15 +681,6 @@ class NuCoreBaseAssistant(ABC):
         """
         return True
     
-    @abstractmethod
-    def _get_tools_prompt(self) -> str:
-        """
-        Returns the tools prompt to be included in the system prompt.
-        This is for models that do not support tool calls natively.
-        :return: The tools prompt as a string.
-        """
-        return "" 
-
     @abstractmethod
     async def _process_customer_input(self, websocket, text_only:bool)-> str:
         """

@@ -7,13 +7,11 @@ import json
 import asyncio
 from typing import Tuple
 
-from nucore import NuCore 
 
 from openai import AsyncOpenAI
-from base_assistant import NuCoreBaseAssistant, get_parser_args 
+from base_assistant import NuCoreBaseAssistant, get_parser_args, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS
 from nucore import PromptFormatTypes 
 
-DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS = 5  # 5 seconds
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -37,23 +35,10 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         """
         return 64000
 
-    def _get_system_prompt(self):
+    def _get_prompt_config_path(self):
         # Assuming this code is inside your_package/module.py
-        system_prompt = None
-        system_prompt = "nucore.openai.profile.prompt" if self.prompt_type == PromptFormatTypes.PROFILE else "nucore.openai.device.prompt"
-
-        prompts_path = os.path.join(os.getcwd(), "src", "prompts", system_prompt) 
-        with open(prompts_path, 'r', encoding='utf-8') as f:
-            system_prompt = f.read().strip()
-        return system_prompt
-
-    def _get_tools_prompt(self):
-        # Assuming this code is inside your_package/module.py
-        tools_prompt = ""
-#        prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.tools.prompt")
-#        with open(prompts_path, 'r', encoding='utf-8') as f:
-#            tools_prompt = f.read().strip()
-        return tools_prompt
+        system_prompt = "openai_profile_config.json" if self.prompt_type == PromptFormatTypes.PROFILE else "openai_config.json"
+        return os.path.join(os.getcwd(), "src", "prompts", system_prompt)
 
     def _check_for_duplicate_tool_call(self) -> Tuple[bool, int]: 
         return False, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS 
@@ -86,12 +71,29 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 max_tool_calls=3,
                 parallel_tool_calls=False,
                 temperature=1.0,
+                tools=self.orchestrator.get_router_tools(),
                 stream=True
             )
             first_line = True 
+            function_args = ""
             async for event in stream:
             # Text chunks as they arrive
-                if event.type == "response.output_text.delta":
+                if event.type == "response.function_call_arguments.delta":
+                    # Accumulate function arguments
+                    function_args += event.delta
+                    full_response += event.delta
+                    if self.debug_mode:
+                        await self.send_response(f"{event.delta}", False, websocket)
+                    # Function call completed
+                elif event.type == "response.function_call_arguments.done":
+                    # event.name contains the function name
+                    # event.arguments contains complete JSON string
+                    try:
+                        #function_name = event.name
+                        function_args = json.loads(event.arguments)
+                    except json.JSONDecodeError:
+                        pass
+                elif event.type == "response.output_text.delta":
                     if not event.delta or event.delta == "": # or event.delta.isspace():
                         continue
                     full_response += event.delta
