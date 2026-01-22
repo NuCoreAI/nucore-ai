@@ -4,6 +4,7 @@ import httpx
 import asyncio
 from base_assistant import NuCoreBaseAssistant, get_parser_args
 from nucore import PromptFormatTypes 
+from prompt_mgr import NuCorePrompt
 
 
 """
@@ -49,9 +50,10 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         """
         return True #already doing it in warm up --- IGNORE ---
     
-    async def _process_customer_input(self, websocket, text_only:bool):
+    async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:
         """
         Process the customer input using OpenAI Responses API with conversation state.
+        :param prompt: The prompt object containing message history and other details.
         :param websocket: The websocket to send responses to (if any).
         :param text_only: Whether to return text only without processing tool calls
         """
@@ -61,8 +63,8 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             first_line=True
             
             payload={
-                "messages": self.message_history,
-                "tools": self.orchestrator.get_router_tools(),
+                "messages": prompt.message_history,
+                "tools": prompt.tools,
                 "stream": True,
                 'cache_prompt':True,
                 "n_keep": -1,

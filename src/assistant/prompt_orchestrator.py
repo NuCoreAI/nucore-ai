@@ -6,26 +6,9 @@ Orchestrates the complete prompt system: routing, intent processing, module inje
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple
-from dataclasses import dataclass
-
-
-@dataclass
-class NuCorePrompt:
-    """
-    Encapsulates a complete NuCore agent prompt with all context.
-    
-    Attributes:
-        prompt: The fully resolved agent prompt string
-        tools: List of tool schemas for this intent
-        intent: The intent name (e.g., 'command_control', 'routine_automation')
-        keywords: List of extracted keyword dictionaries from router
-        devices: List of matched device dictionaries with scores from router
-    """
-    prompt: str
-    tools: List[dict]
-    intent: str
-    keywords: List[dict]
-    devices: List[dict]
+from dataclasses import dataclass, field
+from rag import RAGData
+from prompt_mgr import NuCorePrompt, ROUTER_INTENT
 
 
 class PromptOrchestrator:
@@ -39,12 +22,12 @@ class PromptOrchestrator:
     - Manages router configuration
     
     Workflow:
-    1. Router determines intent using get_router_prompt() and get_router_tools()
+    1. Router determines intent using _get_router_prompt()
     2. Call process_intent(intent) with the determined intent
     3. Get back fully resolved agent prompt + tools for that intent
     """
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, max_context_size: int = 64000):
         """
         Initialize the loader with a configuration file.
         
@@ -52,6 +35,9 @@ class PromptOrchestrator:
         """
         self.config_path = Path(config_path)
         self.base_dir = self.config_path.parent
+        self.full_rags: RAGData = None
+        self.summary_rags: RAGData = None
+        self.max_context_size: int = max_context_size
         
         # Load the configuration
         with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -76,6 +62,7 @@ class PromptOrchestrator:
                 # Cache for loaded file contents
         self._file_cache: Dict[str, str] = {}
         self._module_cache: Dict[str, str] = {}
+        self._prompt_cache: Dict[str, NuCorePrompt] = {}  # Cache NuCorePrompt by intent
         
         # Build intent-to-agent mapping
         self._intent_map = self._build_intent_map()
@@ -215,19 +202,59 @@ class PromptOrchestrator:
         
         return tools
     
-    def process_intent(self, router_result: dict) -> NuCorePrompt:
+    def _get_rags_from_intent(self, devices: List[dict]) -> RAGData:
         """
-        Process the router tool's output and return a complete NuCore prompt package.
+        Get RAGData for the matched devices in the intent.
         
-        This is the main entry point after the router tool returns its results.
+        :param devices: List of device dictionaries from router result
+        :return: RAGData object containing only the matched devices
+        """
+        if not self.full_rags:
+            return RAGData()
+        
+        matched_device_ids = {d['device_id'] for d in devices}
+        full_rags = self.full_rags
+        filtered_documents = []
+
+        for idx, id_ in enumerate(full_rags["ids"]):
+            if id_ in matched_device_ids:
+                filtered_documents.append(full_rags["documents"][idx])
+
+        filtered_rags = RAGData()
+        filtered_rags["documents"] = filtered_documents
+        
+        return filtered_rags
+
+    def set_max_context_size(self, size:int):
+        self.max_context_size = size
+    
+    def set_full_rags(self, rags:RAGData):
+        # full device rags with all properties and commands
+        self.full_rags = rags
+
+    def set_summary_rags(self, rags:RAGData):
+        # device rags
+        self.summary_rags = rags
+    
+    def get_prompt(self, router_result: dict=None) -> NuCorePrompt:
+        """
+        Gets a NuCorePrompt based on user query or router result.
+        if router_result is None, returns the router_prompt, otherwise returns the intent prompt.
+
+        Uses cached prompt/tools if already built for this intent, only updating
+        keywords, devices, and message_history.
         
         :param router_result: The JSON object returned by nucore_router_tool, containing:
                              - intent: The determined intent name
                              - keywords: Extracted keywords
                              - devices: Matched devices with scores
-        :return: NuCorePrompt object with prompt, tools, intent, keywords, and devices
+        :param message_history: Optional conversation message history
+        :return: NuCorePrompt object with prompt, tools, intent, keywords, devices, and message_history
         :raises ValueError: If intent is not found in router_result or config
         """
+        if router_result is None:
+            return self._get_router_prompt()
+
         # Extract intent from router result
         intent = router_result.get('intent')
         if not intent:
@@ -236,6 +263,19 @@ class PromptOrchestrator:
         if intent not in self._intent_map:
             raise ValueError(f"Intent '{intent}' not found. Available: {list(self._intent_map.keys())}")
         
+        # Extract keywords and devices from router result
+        keywords = router_result.get('keywords', [])
+        devices = router_result.get('devices', [])
+        
+        # Check if we have a cached prompt/tools for this intent
+        if intent in self._prompt_cache:
+            cached = self._prompt_cache[intent]
+            # Update dynamic fields only
+            cached.keywords = keywords
+            cached.devices = self._get_rags_from_intent(devices)
+            return cached
+        
+        # Not cached - build it
         intent_config = self._intent_map[intent]
         agent = intent_config['agent']
         tool_configs = intent_config['tools']
@@ -246,25 +286,32 @@ class PromptOrchestrator:
         # Load all tools for this intent
         tools = self._load_tools(tool_configs)
         
-        # Extract keywords and devices from router result
-        keywords = router_result.get('keywords', [])
-        devices = router_result.get('devices', [])
-        
-        # Return NuCorePrompt object
-        return NuCorePrompt(
+        # Create and cache the NuCorePrompt
+        nucore_prompt = NuCorePrompt(
             prompt=prompt,
             tools=tools,
             intent=intent,
             keywords=keywords,
-            devices=devices
+            max_context_size=self.max_context_size
         )
-    
-    def get_router_prompt(self) -> str:
-        """
-        Get the router prompt with all includes resolved.
+        nucore_prompt.set_device_rags(self._get_rags_from_intent(devices))
         
-        :return: Complete router prompt
+        self._prompt_cache[intent] = nucore_prompt
+        return nucore_prompt
+    
+    def _get_router_prompt(self) -> NuCorePrompt:
         """
+        Get the router prompt with all includes resolved as a NuCorePrompt object.
+        Uses caching - builds once, reuses on subsequent calls.
+        
+        :return: NuCorePrompt object for the router
+        """
+        # Check cache first
+        if ROUTER_INTENT in self._prompt_cache:
+            cached = self._prompt_cache[ROUTER_INTENT]
+            return cached
+        
+        # Not cached - build it
         router_config = self.config.get('router')
         if not router_config:
             raise ValueError("'router' section not found in config")
@@ -294,20 +341,22 @@ class PromptOrchestrator:
             
             content = content.replace(template_key, module_content)
         
-        return content
-    
-    def get_router_tools(self) -> List[dict]:
-        """
-        Get the router tool schemas.
-        
-        :return: List of router tool schemas
-        """
-        router_config = self.config.get('router')
-        if not router_config:
-            raise ValueError("'router' section not found in config")
-        
+        # Load router tools
         tool_configs = router_config.get('tools', [])
-        return self._load_tools(tool_configs)
+        tools = self._load_tools(tool_configs)
+        
+        # Create and cache the router NuCorePrompt
+        router_prompt = NuCorePrompt(
+            prompt=content,
+            tools=tools,
+            intent=ROUTER_INTENT,
+            keywords=[],
+            max_context_size=self.max_context_size
+        )
+        router_prompt.set_device_rags(self.summary_rags)
+        
+        self._prompt_cache[ROUTER_INTENT] = router_prompt
+        return router_prompt
     
     def get_available_intents(self) -> List[str]:
         """
@@ -346,10 +395,7 @@ if __name__ == "__main__":
     print("\n" + "="*80)
     print("ROUTER PHASE:")
     print("="*80)
-    router_prompt = orchestrator.get_router_prompt()
-    router_tools = orchestrator.get_router_tools()
-    print(f"Router prompt length: {len(router_prompt)} chars")
-    print(f"Router tools: {len(router_tools)}")
+    router_prompt = orchestrator._get_router_prompt()
     
     # Simulate router tool output
     router_result = {

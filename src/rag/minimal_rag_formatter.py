@@ -1,7 +1,7 @@
 """
 Minimal RAG Formatter
-Outputs devices in ultra-compact comma-separated format for LLM matching.
-Format: device_id: device name, property names, command names, all enumerations
+Outputs devices in ultra-compact delimited format for LLM matching.
+Format: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
 """
 
 from nucore import Node, Group, Folder, RuntimeProfile
@@ -11,8 +11,8 @@ from .rag_formatter import RAGFormatter
 
 class MinimalRagFormatter(RAGFormatter):
     """
-    Generates minimal comma-separated device representations.
-    Each line: device_id: device_name, properties, commands, enums
+    Generates minimal delimited device representations.
+    Each line: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
     """
     
     def __init__(self,json_output:bool=False):
@@ -37,13 +37,11 @@ class MinimalRagFormatter(RAGFormatter):
         return enums
 
     def _format_node(self, node: Node) -> str:
-        """Format a single node into comma-separated string."""
+        """Format a single node into delimited string with sections."""
         if not node or not node.node_def:
             return f"{node.address}: {node.name}"
         
-        items = [node.name]  # Start with device name
-        
-        # Collect property names
+        # Collect property names and their enums
         property_names = []
         property_enums = []
         
@@ -54,7 +52,7 @@ class MinimalRagFormatter(RAGFormatter):
             if prop.editor:
                 property_enums.extend(self._collect_enum_values(prop.editor))
         
-        # Collect command names
+        # Collect command names and their parameter enums
         command_names = []
         command_enums = []
         
@@ -71,21 +69,28 @@ class MinimalRagFormatter(RAGFormatter):
             if cmd.name:
                 command_names.append(cmd.name)
         
-        # Combine all items: name, properties, commands, enums
-        items.extend(property_names)
-        items.extend(command_names)
-        items.extend(property_enums)
-        items.extend(command_enums)
-        
-        # Remove duplicates while preserving order
+        # Combine all enums and remove duplicates
+        all_enums = property_enums + command_enums
+        unique_enums = []
         seen = set()
-        unique_items = []
-        for item in items:
-            if item not in seen:
-                seen.add(item)
-                unique_items.append(item)
+        for enum in all_enums:
+            if enum not in seen:
+                seen.add(enum)
+                unique_enums.append(enum)
         
-        return f"{node.address}: {', '.join(unique_items)}"
+        # Build delimited string
+        parts = [node.name]
+        
+        if property_names:
+            parts.append(f"props: {', '.join(property_names)}")
+        
+        if command_names:
+            parts.append(f"cmds: {', '.join(command_names)}")
+        
+        if unique_enums:
+            parts.append(f"enums: {', '.join(unique_enums)}")
+        
+        return f"{node.address}: {' | '.join(parts)}"
 
     def _format_profile(self, profile: RuntimeProfile) -> list[str]:
         """Format all devices in a profile."""
@@ -149,7 +154,7 @@ class MinimalRagFormatter(RAGFormatter):
         
         :param profiles: optional, dictionary of profiles to format
         :param nodes: optional, dictionary of nodes to format directly
-        :return: String with one device per line in comma-separated format
+        :return: String with one device per line in delimited format
         """
         rag_data = self.format(**kwargs)
         if rag_data.documents:
