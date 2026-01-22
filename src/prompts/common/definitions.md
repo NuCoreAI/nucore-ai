@@ -13,5 +13,4 @@
 `COS (Change of State)`  is an event resulting from change in property value (OFF→ON, 72→73)
 `COC (Change of Control)` is an event resulting from physical control of a device, even if state does not change (captured via Sends Commands)
 `Enum` is an enumerated list of permissible values for `properties` and `parameters`
-
-
+`Plugin` is akin to an app on smart phones. It **plugs into** NuCore and extends NuCore's features/functionalities. 

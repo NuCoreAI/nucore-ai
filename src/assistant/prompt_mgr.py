@@ -1,0 +1,140 @@
+"""
+NuCore Prompt  ... encapsulates prompt and tool management for NuCore agents.
+"""
+
+from typing import List
+from dataclasses import dataclass, field
+from rag import RAGData
+
+ROUTER_INTENT = '__router__'  # Special intent name for router
+
+
+@dataclass
+class NuCorePrompt:
+    """
+    Encapsulates a complete NuCore agent prompt with all context.
+    
+    Attributes:
+        prompt: The fully resolved agent prompt string
+        tools: List of tool schemas for this intent
+        intent: The intent name (e.g., 'command_control', 'routine_automation')
+        keywords: List of extracted keyword dictionaries from router
+        devices: List of matched device dictionaries with scores from router
+        message_history: Optional list of prior messages for context
+    """
+    prompt: str = None
+    tools: List[dict] =  None
+    intent: str = None
+    keywords: List[dict] = None 
+    rags: RAGData = None 
+    message_history: List[dict] = field(default_factory=list)
+    device_docs_sent : bool = False
+    max_context_size: int = 64000
+
+    def is_router(self) -> bool:
+        """
+        Check if this prompt is for the router intent.
+        
+        :return: True if router intent, False otherwise
+        """
+        return self.intent == ROUTER_INTENT
+
+    def add_history(self, history:dict):
+        """
+        Append a message to the message history.
+        
+        """
+        self.message_history.append(history)
+    
+    def clear_history(self):
+        """
+        Clear the message history.
+        """
+        self.message_history = []
+        self.device_docs_sent = False
+
+    def set_device_rags(self, rags:RAGData):
+        new_device_docs = self._get_device_docs(rags)
+        if self.rags:
+            existing_device_docs = self._get_device_docs(self.rags)
+            if new_device_docs != existing_device_docs:
+                self.clear_history()
+        self.rags = rags
+
+    def get_device_docs(self)->str:
+        return self._get_device_docs(self.rags)
+
+    def _get_device_docs(self, rags:RAGData)->str:
+        if rags == None:
+            return "" 
+
+        rag_docs = rags["documents"]
+        if not rag_docs:
+            raise ValueError(f"Warning: No documents found in RAG. Skipping.")
+        device_docs = ""
+        for rag_doc in rag_docs:
+            device_docs += "\n" + rag_doc
+
+        return device_docs
+
+    def _estimate_tokens(self, text:str) -> int:
+        """
+        Estimate the number of tokens in a given text.
+        :param text: The text to estimate tokens for.
+        :return: Estimated number of tokens.
+        """
+        if not text:
+            return 0
+        # Simple estimation: 1 token per 4 characters (this is a rough estimate)
+        return len(text) // 4 + 50  # adding buffer
+
+    def trim_message_history(self, tokens_per_turn=2000, response_buffer=4000):
+        """
+        Trim message_history to stay within context limits.
+        Preserves: system message, first user message (with device structure), and recent conversation.
+        """
+        if len(self.message_history) <= 2:
+            return
+        
+        # Calculate tokens used by system and first user message
+        system_tokens = 0 
+        first_user_tokens = 0
+
+        idx = 0
+        if idx < len(self.message_history) and self.message_history[idx]["role"] == "system":
+            system_tokens = self._estimate_tokens(self.message_history[idx]["content"])
+            idx += 1
+        
+        idx = 1
+        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
+            first_user_tokens = self._estimate_tokens(self.message_history[idx]["content"])
+        
+        # Calculate available tokens for conversation history
+        reserved_tokens = system_tokens + first_user_tokens + response_buffer
+        available_tokens = self.max_context_size - reserved_tokens
+        max_turns = max(1, available_tokens // tokens_per_turn)
+        
+        # Get messages to keep
+        system_msg = self.message_history[0] if self.message_history[0]["role"] == "system" else None
+        first_user_msg = None
+        conversation_msgs = []
+        
+        idx = 1 if system_msg else 0
+        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
+            first_user_msg = self.message_history[idx]
+            idx += 1
+        
+        conversation_msgs = self.message_history[idx:]
+        
+        # Keep only the most recent turns
+        max_messages = max_turns * 2
+        if len(conversation_msgs) > max_messages:
+            conversation_msgs = conversation_msgs[-max_messages:]
+        
+        # Rebuild
+        self.message_history = []
+        if system_msg:
+            self.message_history.append(system_msg)
+        if first_user_msg:
+            self.message_history.append(first_user_msg)
+        self.message_history.extend(conversation_msgs)

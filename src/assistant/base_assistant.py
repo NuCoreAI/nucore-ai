@@ -13,7 +13,8 @@ from iox import IoXWrapper
 from importlib.resources import files
 from config import AIConfig
 from utils import JSONDuplicateDetector 
-from prompts import PromptOrchestrator
+from prompt_orchestrator import PromptOrchestrator
+from prompt_mgr import NuCorePrompt
 
 import threading
 import queue
@@ -128,18 +129,18 @@ class LLMQueueElement:
     rerank:bool
     websocket:any
     text_only:bool
+    router_result:dict=None
 
 
 class NuCoreBaseAssistant(ABC):
     def __init__(self, args):
         #prompts_path = os.path.join(os.getcwd(), "src", "prompts", "nucore.openai.prompt") 
         self.debug_mode = True
-        self.message_history = []
         if not args:
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.prompt_type = args.prompt_type if args.prompt_type else PromptFormatTypes.DEVICE 
         self.config = AIConfig() 
-        self.orchestrator = PromptOrchestrator(self._get_prompt_config_path())
+        self.orchestrator = PromptOrchestrator(self._get_prompt_config_path(), self._get_max_context_size())
         self.json_output= args.json_output if args.json_output else False
         self.nuCore = NuCore(
             collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
@@ -174,11 +175,9 @@ class NuCoreBaseAssistant(ABC):
         check_duplicates, time_window_seconds = self._check_for_duplicate_tool_call()
         if check_duplicates:
             self.duplicate_detector = JSONDuplicateDetector(time_window_seconds=time_window_seconds)
-        self.device_docs_sent = False
         self.device_structure_changed = True
         print (self.__model_url__)
         asyncio.run(self._sub_init()) #for subclass specific initialization
-
 
     async def _refresh_device_structure(self) -> bool:
         """
@@ -200,21 +199,10 @@ class NuCoreBaseAssistant(ABC):
         #rag = self.nuCore.format_nodes()
         if not self.rags:
             raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
+        self.orchestrator.set_full_rags(self.rags)
+        self.orchestrator.set_summary_rags(self.nuCore.format_nodes_summary())
         return True
         
-    def _get_device_docs(self, rags)->str:
-        if rags == None:
-            rags = self.rags
-
-        rag_docs = rags["documents"]
-        if not rag_docs:
-            raise ValueError(f"Warning: No documents found in RAG for node {self.nuCore.url}. Skipping.")
-        device_docs = ""
-        for rag_doc in rag_docs:
-            device_docs += "\n" + rag_doc
-
-        return device_docs
-
     def _get_tool_call(self, full_response:str) -> bool:
         if not full_response:
             return None
@@ -229,7 +217,9 @@ class NuCoreBaseAssistant(ABC):
             # Pattern 2: Extract raw JSON objects with "tool" key (no markdown wrapper)
             match = re.search(r'\{\s*"tool"\s*:', full_response)
             if not match:
-                return None
+                match = re.search(r'\{\s*"intent"\s*:', full_response)
+                if not match:
+                    return None
             start = match.start()
             brace_count = 0
             
@@ -307,85 +297,6 @@ class NuCoreBaseAssistant(ABC):
         :return: The maximum context size as an integer.
         """
         return 32000
-
-    def _estimate_tokens(self, text:str) -> int:
-        """
-        Estimate the number of tokens in a given text.
-        :param text: The text to estimate tokens for.
-        :return: Estimated number of tokens.
-        """
-        if not text:
-            return 0
-        # Simple estimation: 1 token per 4 characters (this is a rough estimate)
-        return len(text) // 4 + 50  # adding buffer
-
-    
-    def _trim_message_history(self, tokens_per_turn=2000, response_buffer=4000):
-        """
-        Trim message_history to stay within context limits.
-        Preserves: system message, first user message (with device structure), and recent conversation.
-        """
-        if len(self.message_history) <= 2:
-            return
-        
-        # Calculate tokens used by system and first user message
-        system_tokens = 0 
-        first_user_tokens = 0
-
-        idx = 0
-        if idx < len(self.message_history) and self.message_history[idx]["role"] == "system":
-            system_tokens = self._estimate_tokens(self.message_history[idx]["content"])
-            idx += 1
-        
-        idx = 1
-        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
-            first_user_tokens = self._estimate_tokens(self.message_history[idx]["content"])
-        
-        # Calculate available tokens for conversation history
-        reserved_tokens = system_tokens + first_user_tokens + response_buffer
-        available_tokens = self._get_max_context_size() - reserved_tokens
-        max_turns = max(1, available_tokens // tokens_per_turn)
-        
-        # Get messages to keep
-        system_msg = self.message_history[0] if self.message_history[0]["role"] == "system" else None
-        first_user_msg = None
-        conversation_msgs = []
-        
-        idx = 1 if system_msg else 0
-        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
-            first_user_msg = self.message_history[idx]
-            idx += 1
-        
-        conversation_msgs = self.message_history[idx:]
-        
-        # Keep only the most recent turns
-        max_messages = max_turns * 2
-        if len(conversation_msgs) > max_messages:
-            conversation_msgs = conversation_msgs[-max_messages:]
-        
-        # Rebuild
-        self.message_history = []
-        if system_msg:
-            self.message_history.append(system_msg)
-        if first_user_msg:
-            self.message_history.append(first_user_msg)
-        self.message_history.extend(conversation_msgs)
-
-    async def _trim_and_redo_last_message(self, websocket, text_only:bool):
-        """
-            Preserve the last user message, trim, add it back to message history and redo the last request
-        """
-        if len(self.message_history) == 0:
-            return
-
-        last_user_message = None 
-        # Remove last user message
-        if self.message_history[-1]["role"] == "user":
-            last_user_message = self.message_history.pop()
-
-        self.message_history = []
-        # now redo the request
-        await self.process_customer_input(last_user_message["content"], websocket=websocket, text_only=text_only)
 
     async def __check_debug_mode__(self, query, websocket):
         """
@@ -495,13 +406,29 @@ class NuCoreBaseAssistant(ABC):
     async def send_commands(self, commands:list, websocket):
         responses = await self.nuCore.send_commands(commands)
         return await self.process_tool_responses(responses, websocket, "command(s)")
+
+    async def process_json_intent_call(self, intent_call:dict, websocket):
+        """
+        Process JSON intent call.
+        :param intent_call: The intent call dictionary.
+        :return: True if the intent call was processed, False otherwise.
+        """
+        intent = intent_call.get("intent")
+        if intent is None:
+            return False # let the actual tool handle it
+        print (f"Processing intent call for intent: {intent}")
+        # now we need to use the orchestrator to get device information, prompt, and tools for this intent
+        return True
     
     async def process_json_tool_call(self, tool_call:dict, websocket):
         if not tool_call:
             return None
+
+        if await self.process_json_intent_call(tool_call, websocket):
+            return None #handled as intent call
         try:
             type = tool_call.get("tool")
-            if not type:
+            if type is None:
                 return None
             elif type == "PropsQuery":
                 return await self.process_property_query(tool_call.get("args"), websocket)
@@ -523,7 +450,7 @@ class NuCoreBaseAssistant(ABC):
                 return await self.process_json_tool_call(tool_call, websocket)
         return None
 
-    async def process_llm_response(self,full_response:str, websocket, begin_marker, end_marker):
+    async def process_llm_response(self, user_query:str, full_response:str, websocket, begin_marker, end_marker):
         if not full_response: 
             return None
 
@@ -533,7 +460,7 @@ class NuCoreBaseAssistant(ABC):
             full_response = self._get_tool_call(full_response)
             if not full_response:
                 return None
-            #full_response = re.sub(r"```json(.*?)```", r"\1", full_response, flags=re.DOTALL).strip()
+            
             if self.duplicate_detector is None:
                 tools = json.loads(full_response)
                 return await self.process_json_tool_calls(tools, websocket)
@@ -564,7 +491,7 @@ class NuCoreBaseAssistant(ABC):
         return message
     
 
-    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, text_only:bool=False):
+    async def process_customer_input(self, query:str, num_rag_results=5, rerank=True, websocket=None, text_only:bool=False, router_result:dict=None):
         """
         Submits to the queued worker to process the customer input using the underlying model with conversation state. 
         :param query: The customer input to process.
@@ -582,8 +509,10 @@ class NuCoreBaseAssistant(ABC):
             num_rag_results=num_rag_results,
             rerank=rerank,
             websocket=websocket,
-            text_only=text_only
+            text_only=text_only,
+            router_result=router_result
         )
+
         self.request_queue.put(query_element)
 
     def _process_queue(self):
@@ -615,57 +544,66 @@ class NuCoreBaseAssistant(ABC):
         rerank = element.rerank
         websocket = element.websocket
         text_only = element.text_only
+        router_result = element.router_result
 
         rc = await self.__check_debug_mode__(element.query, element.websocket)
         if rc:
             return None
-
-        changed = await self._refresh_device_structure()
-        if changed and len(self.message_history)>0:
-            #reset message history if device docs have changed
-            self.message_history = []
+        
+        await self._refresh_device_structure()
+        
+        prompt = self.orchestrator.get_prompt(router_result)
+        if not prompt:
+            raise ValueError("Failed to get prompt from orchestrator")
+        
+        if not query and not router_result: 
+            raise ValueError("No query or router result provided, cannot proceed")
 
         query = query.strip()
         if not query:
             await self.send_response("No query provided, ...", True, websocket)
             return None
 
-        sprompt = self.orchestrator.get_router_prompt().strip()
-
-        rags = None
-        if self.nuCore.is_rag_enabled()and num_rag_results > 0:
-            rags = self.nuCore.rag_query(query, num_results=num_rag_results, rerank=rerank)
+        ############ MUST BE IMPLEMENTED LATER IN THE ROUTER ############
+        #rags = None
+        #if self.nuCore.is_rag_enabled()and num_rag_results > 0:
+        #    rags = self.nuCore.rag_query(query, num_results=num_rag_results, rerank=rerank)
+        #################################################################
          
         user_content = f"USER QUERY:{query}" if not query.startswith("USER QUERY:") else query
-        if changed or not self.device_docs_sent or len(self.message_history) == 0:        
-            user_content = f"\n{self._get_device_docs(rags)}\n\n{user_content}"
-            self.device_docs_sent = True
+        if not prompt.device_docs_sent or len(prompt.message_history) == 0:        
+            user_content = f"\n{prompt.get_device_docs()}\n\n{user_content}"
+            prompt.device_docs_sent = True
             #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
-        if len(self.message_history) == 0 :
+
+        sprompt = prompt.prompt
+        sprompt = sprompt.strip()
+
+        if len(prompt.message_history) == 0 :
             #append shared enums to system prompt
-            print ("FIX ME ... REMOVE FOR ROUTER")
-            sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
+            if not prompt.is_router():
+                sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
-                self.message_history.append({"role": "system", "content": sprompt})
+                prompt.add_history({"role": "system", "content": sprompt})
             if self.debug_mode:
                 with open("/tmp/nucore.1.prompt.txt", "w") as f:
                     f.write(sprompt)
                 with open("/tmp/nucore.1.prompt.txt", "a") as f:
                     f.write(user_content)
 
-        self._trim_message_history()
+        prompt.trim_message_history()
         # Add user message to history
-        self.message_history.append({"role": "user", "content": user_content})
+        prompt.add_history({"role": "user", "content": user_content})
         if self.debug_mode:
             with open("/tmp/nucore.prompt.txt", "w") as f:
                 f.write(sprompt)
             with open("/tmp/nucore.prompt.txt", "a") as f:
                 f.write(user_content)
         try:
-            assistant_response = await self._process_customer_input(websocket=websocket, text_only=text_only)
+            assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
             if assistant_response is not None:
-                await self.process_llm_response(assistant_response, websocket, None, None)
-                self.message_history.append({"role": "assistant", "content": assistant_response})
+                await self.process_llm_response(query, assistant_response, websocket, None, None)
+                prompt.add_history({"role": "assistant", "content": assistant_response})
             await self.send_response("\n\n", True, websocket)
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
@@ -682,8 +620,9 @@ class NuCoreBaseAssistant(ABC):
         return True
     
     @abstractmethod
-    async def _process_customer_input(self, websocket, text_only:bool)-> str:
+    async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:
         """
+        :prompt: The prompt object containing message history and other details.
         :param websocket: The websocket to send responses to (if any).
         :param text_only: Whether to return text only without processing tool calls
         Process the customer input using the underlying model with conversation state.

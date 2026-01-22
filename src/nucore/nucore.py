@@ -13,9 +13,7 @@ from nucore import get_uom_by_id
 from nucore import NuCoreBackendAPI 
 from nucore import NuCoreError
 from config import AIConfig
-from rag import RAGProcessor
-from rag import ProfileRagFormatter
-from rag import MinimalRagFormatter
+from rag import RAGProcessor, RAGFormatter, ProfileRagFormatter, MinimalRagFormatter
 from rag.model_preloader import start_preload 
 
 
@@ -105,16 +103,18 @@ class NuCore:
         :return: True if RAG processor is initialized, False otherwise.
         """
         return self.rag_processor.get_embedder() is not None
-    
-    def format_nodes(self):
+
+
+    def _format_nodes(self, device_rag_formatter:RAGFormatter):
         """
-        Format nodes for fine tuning or other purposes 
-        :return: List of formatted nodes.
+        Summary list of nodes to reduce the context window size: 
+        :return: List of summary formatted nodes.
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-        #device_rag_formatter = ProfileRagFormatter(json_output=self.nucore_api.json_output)
-        device_rag_formatter = MinimalRagFormatter(json_output=self.nucore_api.json_output)
+        if not device_rag_formatter:
+            raise NuCoreError("No device rag formatter provided.")
+
         if self.formatter_type == PromptFormatTypes.PROFILE:
             return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
          
@@ -123,6 +123,26 @@ class NuCore:
         
         print (f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
         return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
+
+    def format_nodes(self):
+        """
+        Format nodes for fine tuning or other purposes 
+        :return: List of formatted nodes.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        device_rag_formatter = ProfileRagFormatter(json_output=self.nucore_api.json_output)
+        return self._format_nodes(device_rag_formatter)
+
+    def format_nodes_summary(self):
+        """
+        Format nodes for fine tuning or other purposes 
+        :return: List of formatted nodes.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        device_rag_formatter = MinimalRagFormatter(json_output=self.nucore_api.json_output)
+        return self._format_nodes(device_rag_formatter)
     
     def format_static_info(self, path:str):
         """

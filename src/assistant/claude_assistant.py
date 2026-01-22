@@ -8,6 +8,7 @@ from typing import Tuple
 
 from anthropic import AsyncAnthropic
 from base_assistant import NuCoreBaseAssistant, get_parser_args, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS
+from prompt_mgr import NuCorePrompt
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -48,9 +49,10 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         """
         return False
 
-    async def _process_customer_input(self, websocket, text_only:bool):
+    async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:
         """
         Process the customer input using Claude Messages API with conversation state.
+        :param prompt: The prompt object containing message history and other details.
         :param websocket: The websocket to send responses to (if any).
         :param text_only: Whether to return text only without processing tool calls
         """
