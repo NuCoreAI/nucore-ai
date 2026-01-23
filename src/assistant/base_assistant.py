@@ -346,7 +346,8 @@ class NuCoreBaseAssistant(ABC):
 
     async def process_property_query(self, prop_query:list, websocket):
         if not prop_query or len(prop_query) == 0:
-            return "No property query provided"
+            print("No property query provided")
+            return None
         try:
             if isinstance(prop_query[0], list): 
                 prop_query = prop_query[0]
@@ -379,7 +380,7 @@ class NuCoreBaseAssistant(ABC):
 
         if texts:
             await self.process_tool_responses(texts, websocket, "property query(ies)") 
-            return  
+        return True 
 
     async def process_tool_responses(self, responses, websocket, type:str):
         if not responses or len(responses) == 0:
@@ -417,7 +418,6 @@ class NuCoreBaseAssistant(ABC):
         if intent is None:
             return False # let the actual tool handle it
         
-        print (f"Processing intent call for intent: {intent}")
         return await self.process_customer_input(user_query, websocket=websocket, text_only=False, router_result=intent_call)
     
     async def process_json_tool_call(self, user_query:str, tool_call:dict, websocket):
@@ -425,7 +425,7 @@ class NuCoreBaseAssistant(ABC):
             return None
 
         if await self.process_json_intent_call(user_query, tool_call, websocket):
-            return None #handled as intent call
+            return "intent processed"  
         try:
             type = tool_call.get("tool")
             if type is None:
@@ -451,28 +451,43 @@ class NuCoreBaseAssistant(ABC):
         return None
 
     async def process_llm_response(self, user_query:str, full_response:str, websocket, begin_marker, end_marker):
+        '''
+        Process the LLM response to extract and handle tool calls or text.
+        
+        :param user_query: The original user query. 
+        :param full_response: The full response from the LLM
+        :param websocket: The websocket connection to send responses
+        :param begin_marker: The marker indicating the beginning of the relevant response section
+        :param end_marker: The marker indicating the end of the relevant response section
+        : returns to keep the connection open (it's a tool call) false otherwise 
+        '''
         if not full_response: 
-            return None
+            return False
 
         tools = None
         try:
             #remove markdowns such as ```json ... ```
             full_response = self._get_tool_call(full_response)
             if not full_response:
-                return None
+                return False
             
             if self.duplicate_detector is None:
                 tools = json.loads(full_response)
-                return await self.process_json_tool_calls(user_query, tools, websocket)
+                rc = await self.process_json_tool_calls(user_query, tools, websocket) is not None
+                return rc
 
             tools = self.duplicate_detector.get_valid_json_objects(full_response, debug_mode=self.debug_mode)
+            error_count = 0
             for tool in tools:
-                await self.process_json_tool_calls(user_query, tool, websocket)
+                if await self.process_json_tool_calls(user_query, tool, websocket) is None:
+                    error_count+=1
+                    continue
+            return error_count == 0
             #tools = json.loads(full_response)
             #return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
             if not full_response:
-                return ValueError("Invalid input to process_llm_response")
+                return f("Invalid input to process_llm_response")
             else:
                 print(f"Error parsing tool call JSON: {ex}")
                 return None
@@ -481,6 +496,9 @@ class NuCoreBaseAssistant(ABC):
         if not message:
             return None
         if websocket:
+            if websocket.client_state.name != "CONNECTED":
+                print("WebSocket is not connected. Cannot send message.")
+                return None
             payload={
                 "sender": "bot",
                 "message": message,
@@ -514,6 +532,7 @@ class NuCoreBaseAssistant(ABC):
         )
 
         self.request_queue.put(query_element)
+        return True
 
     def _process_queue(self):
         """Worker thread that processes requests one at a time"""
@@ -569,10 +588,14 @@ class NuCoreBaseAssistant(ABC):
         #if self.nuCore.is_rag_enabled()and num_rag_results > 0:
         #    rags = self.nuCore.rag_query(query, num_results=num_rag_results, rerank=rerank)
         #################################################################
+
+        #if query starts with "USER QUERY:", remove USER QUERY and use the actual query
+        if query.startswith("USER QUERY:"):
+            query = query[len("USER QUERY:"):].strip()
          
-        user_content = f"USER QUERY:{query}" if not query.startswith("USER QUERY:") else query
+        user_content = NuCorePrompt.get_user_query_section(query)
         if len(prompt.message_history) == 0 or not prompt.is_router():        
-            user_content = f"{prompt.get_device_docs()}\n\n{user_content}"
+            user_content = f"{prompt.get_device_docs()}\n{user_content}"
 
         sprompt = prompt.prompt
         sprompt = sprompt.strip()
@@ -584,25 +607,25 @@ class NuCoreBaseAssistant(ABC):
             if self._include_system_prompt_in_history():
                 prompt.add_history({"role": "system", "content": sprompt})
             if self.debug_mode:
-                with open("/tmp/nucore.1.prompt.txt", "w") as f:
+                with open("/tmp/nucore.prompt.txt", "w") as f:
                     f.write(sprompt)
-                with open("/tmp/nucore.1.prompt.txt", "a") as f:
-                    f.write(user_content)
 
         prompt.trim_message_history()
         # Add user message to history
         prompt.add_history({"role": "user", "content": user_content})
         if self.debug_mode:
-            with open("/tmp/nucore.prompt.txt", "w") as f:
-                f.write(sprompt)
             with open("/tmp/nucore.prompt.txt", "a") as f:
                 f.write(user_content)
         try:
             assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
+            keep_open = True
             if assistant_response is not None:
-                await self.process_llm_response(query, assistant_response, websocket, None, None)
+                keep_open = await self.process_llm_response(query, assistant_response, websocket, None, None)
                 prompt.add_history({"role": "assistant", "content": assistant_response})
-            await self.send_response("\n\n", True, websocket)
+            else:
+                keep_open = False
+            if websocket and (text_only or (not keep_open)):
+                await self.send_response("\n", True, websocket)
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
             import traceback

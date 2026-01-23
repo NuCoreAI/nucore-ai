@@ -64,6 +64,4 @@ For each user query:
 - **No matches?** Ask for clarification 
 - **Ambiguous?** Ask for clarification 
 
-────────────────────────────────
-# DEVICE DATABASE
-Below is the complete device list: 
+
