@@ -7,7 +7,22 @@ from dataclasses import dataclass, field
 from rag import RAGData
 
 ROUTER_INTENT = '__router__'  # Special intent name for router
+ROUTER_DEVICE_SECTION = '''
+────────────────────────────────
+# DEVICE DATABASE
 
+'''
+AGENT_DEVICE_SECTION = '''
+────────────────────────────────
+# DEVICE STRUCTURE
+
+'''
+
+USER_QUERY_SECTION = '''
+────────────────────────────────
+# USER QUERY 
+
+'''
 
 @dataclass
 class NuCorePrompt:
@@ -29,6 +44,16 @@ class NuCorePrompt:
     rags: RAGData = None 
     message_history: List[dict] = field(default_factory=list)
     max_context_size: int = 64000
+
+    @staticmethod
+    def get_user_query_section(user_query:str)-> str:
+        """
+        Get the formatted user query section.
+        
+        :param user_query: The user's query string
+        :return: Formatted user query section string
+        """
+        return f"{USER_QUERY_SECTION}{user_query}\n"
 
     def is_router(self) -> bool:
         """
@@ -54,6 +79,7 @@ class NuCorePrompt:
     def search_history(self, role:str, content_substr:str)->bool:
         """
         Search message history for a message with given role and content substring.
+        ##AND MOVE TO THE END OF THE HISTORY SO THAT THE LLM SEES IT LAST (REFRESH ATTENTION)##
         
         :param role: Role to search for (e.g., 'user', 'assistant')
         :param content_substr: Substring to search within message content
@@ -61,6 +87,8 @@ class NuCorePrompt:
         """
         for msg in self.message_history:
             if msg["role"] == role and content_substr in msg["content"]:
+                self.message_history.remove(msg)
+                self.message_history.append(msg)
                 return True
         return False    
 
@@ -102,7 +130,7 @@ class NuCorePrompt:
         rag_docs = rags["documents"]
         if not rag_docs:
             return "" 
-        device_docs = ""
+        device_docs = ROUTER_DEVICE_SECTION if self.is_router() else AGENT_DEVICE_SECTION 
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
 

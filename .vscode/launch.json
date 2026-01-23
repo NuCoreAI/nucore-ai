@@ -29,7 +29,7 @@
                "--username=admin",
                "--password=admin",
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
-               "--prompt_type=shared-features",
+               "--prompt_type=per-device",
             ],
             "justMyCode": false
         },
