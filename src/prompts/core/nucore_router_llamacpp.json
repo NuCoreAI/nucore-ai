@@ -12,10 +12,9 @@
           "enum": [
             "command_control",
             "routine_automation",
-            "real_time_status",
-            "query_information"
+            "real_time_status"
           ],
-          "description": "Primary intent of the user query: command_control (immediate device actions), routine_automation (scheduled/conditional logic), real_time_status (query current state), query_information (device capabilities/info)"
+          "description": "Primary intent of the user query: command_control (immediate device actions), routine_automation (scheduled/conditional logic), real_time_status (query current state)"
         },
         "devices": {
           "type": "array",

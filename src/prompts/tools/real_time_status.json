@@ -1,0 +1,39 @@
+{
+  "type": "function",
+  "function": {
+    "name": "real_time_status_tool",
+    "description": "Query current value of device property (what is, show me, check)",
+    "parameters": {
+      "type": "object",
+      "required": ["tool","args"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "const": "PropsQuery",
+          "description": "The tool name indicating the type of operation to perform"
+        },
+        "args": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "device": {
+                        "type": "string",
+                        "description": "The Device ID (id) for the device in DEVICE STRUCTURE."
+                    },
+                    "property": {
+                        "type": "string",
+                        "description": "The Property ID (id) for the for the device in DEVICE STRUCTURE."
+                    },
+                    "property_name": {
+                        "type": ["string", "null"],
+                        "description": "The Property Name for the for the device in DEVICE STRUCTURE."
+                    }
+                },
+                "required": ["device", "property"]
+            }
+        }
+      }
+    }
+  }
+}

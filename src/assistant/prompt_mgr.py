@@ -28,7 +28,6 @@ class NuCorePrompt:
     keywords: List[dict] = None 
     rags: RAGData = None 
     message_history: List[dict] = field(default_factory=list)
-    device_docs_sent : bool = False
     max_context_size: int = 64000
 
     def is_router(self) -> bool:
@@ -51,18 +50,50 @@ class NuCorePrompt:
         Clear the message history.
         """
         self.message_history = []
-        self.device_docs_sent = False
+
+    def search_history(self, role:str, content_substr:str)->bool:
+        """
+        Search message history for a message with given role and content substring.
+        
+        :param role: Role to search for (e.g., 'user', 'assistant')
+        :param content_substr: Substring to search within message content
+        :return: True if found, False otherwise
+        """
+        for msg in self.message_history:
+            if msg["role"] == role and content_substr in msg["content"]:
+                return True
+        return False    
 
     def set_device_rags(self, rags:RAGData):
-        new_device_docs = self._get_device_docs(rags)
-        if self.rags:
-            existing_device_docs = self._get_device_docs(self.rags)
-            if new_device_docs != existing_device_docs:
-                self.clear_history()
+        if self.is_router():
+            new_device_docs = self._get_device_docs(rags)
+            if self.rags:
+                existing_device_docs = self._get_device_docs(self.rags)
+                if new_device_docs != existing_device_docs:
+                    self.clear_history()
         self.rags = rags
 
     def get_device_docs(self)->str:
-        return self._get_device_docs(self.rags)
+        """
+        Searches for the device id (rag[id]) in message_history for items where the role is 'user'. 
+        If found, that document is ignored, otherwise it's added to the list of documents to be returned. 
+        :return: Concatenated string of device documents that have not been sent yet. 
+        :rtype: str
+        """
+        if self.rags == None:
+            return ""
+        if self.is_router():
+            return self._get_device_docs(self.rags)
+
+        not_sent_rags=RAGData(documents=[], ids=[])
+        for idx, id_ in enumerate(self.rags["ids"]):
+            device_id=f"id={id_}"
+            if self.search_history("user", device_id):
+                continue 
+            not_sent_rags.add_document(self.rags["documents"][idx], self.rags["embeddings"][idx] , id_, self.rags["metadatas"][idx])
+
+        return self._get_device_docs(not_sent_rags)
+    
 
     def _get_device_docs(self, rags:RAGData)->str:
         if rags == None:
@@ -70,7 +101,7 @@ class NuCorePrompt:
 
         rag_docs = rags["documents"]
         if not rag_docs:
-            raise ValueError(f"Warning: No documents found in RAG. Skipping.")
+            return "" 
         device_docs = ""
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
