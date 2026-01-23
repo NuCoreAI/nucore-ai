@@ -407,7 +407,7 @@ class NuCoreBaseAssistant(ABC):
         responses = await self.nuCore.send_commands(commands)
         return await self.process_tool_responses(responses, websocket, "command(s)")
 
-    async def process_json_intent_call(self, intent_call:dict, websocket):
+    async def process_json_intent_call(self, user_query:str, intent_call:dict, websocket):
         """
         Process JSON intent call.
         :param intent_call: The intent call dictionary.
@@ -416,15 +416,15 @@ class NuCoreBaseAssistant(ABC):
         intent = intent_call.get("intent")
         if intent is None:
             return False # let the actual tool handle it
+        
         print (f"Processing intent call for intent: {intent}")
-        # now we need to use the orchestrator to get device information, prompt, and tools for this intent
-        return True
+        return await self.process_customer_input(user_query, websocket=websocket, text_only=False, router_result=intent_call)
     
-    async def process_json_tool_call(self, tool_call:dict, websocket):
+    async def process_json_tool_call(self, user_query:str, tool_call:dict, websocket):
         if not tool_call:
             return None
 
-        if await self.process_json_intent_call(tool_call, websocket):
+        if await self.process_json_intent_call(user_query, tool_call, websocket):
             return None #handled as intent call
         try:
             type = tool_call.get("tool")
@@ -442,12 +442,12 @@ class NuCoreBaseAssistant(ABC):
             
         return None
 
-    async def process_json_tool_calls(self, tool_calls, websocket):
+    async def process_json_tool_calls(self, user_query:str, tool_calls, websocket):
         if isinstance(tool_calls, dict):
-            return await self.process_json_tool_call(tool_calls, websocket)
+            return await self.process_json_tool_call(user_query, tool_calls, websocket)
         elif isinstance(tool_calls, list):
             for tool_call in tool_calls:
-                return await self.process_json_tool_call(tool_call, websocket)
+                return await self.process_json_tool_call(user_query, tool_call, websocket)
         return None
 
     async def process_llm_response(self, user_query:str, full_response:str, websocket, begin_marker, end_marker):
@@ -463,11 +463,11 @@ class NuCoreBaseAssistant(ABC):
             
             if self.duplicate_detector is None:
                 tools = json.loads(full_response)
-                return await self.process_json_tool_calls(tools, websocket)
+                return await self.process_json_tool_calls(user_query, tools, websocket)
 
             tools = self.duplicate_detector.get_valid_json_objects(full_response, debug_mode=self.debug_mode)
             for tool in tools:
-                await self.process_json_tool_calls(tool, websocket)
+                await self.process_json_tool_calls(user_query, tool, websocket)
             #tools = json.loads(full_response)
             #return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
@@ -571,10 +571,8 @@ class NuCoreBaseAssistant(ABC):
         #################################################################
          
         user_content = f"USER QUERY:{query}" if not query.startswith("USER QUERY:") else query
-        if not prompt.device_docs_sent or len(prompt.message_history) == 0:        
-            user_content = f"\n{prompt.get_device_docs()}\n\n{user_content}"
-            prompt.device_docs_sent = True
-            #user_content = f"\n\n# DEVICE STRUCTURE\n\n{device_docs}\n\n{user_content}"
+        if len(prompt.message_history) == 0 or not prompt.is_router():        
+            user_content = f"{prompt.get_device_docs()}\n\n{user_content}"
 
         sprompt = prompt.prompt
         sprompt = sprompt.strip()

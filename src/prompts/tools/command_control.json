@@ -1,0 +1,61 @@
+{
+  "type": "function",
+  "function": {
+    "name": "command_control_tool",
+    "description": "Send commands to devices to control their behavior (set, change, turn on, turn off)",
+    "parameters": {
+      "type": "object",
+      "required": ["tool","args"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "const": "Commands",
+          "description": "The tool name indicating the type of operation to perform"
+        },
+        "args": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "device": {
+                        "type": "string",
+                        "description": "The Device ID (id) for the device in DEVICE STRUCTURE."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "The Command ID (id) for the Accept Command for the device in DEVICE STRUCTURE."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                            "type": ["string", "null"],
+                            "description": "The unique identifier (id) for the parameter from for the command from DEVICE STRUCTURE. If none, use n/a"
+                            },
+                            "value": {
+                            "type": ["number"],
+                            "description": "Always a number. See **GLOBAL CUSTOMER VALUE CONVERSION RULES**."
+                            },
+                            "uom": {
+                            "type": ["string", "null"],
+                            "description": "The uom_id for the parameter from DEVICE STRUCTURE. See **GLOBAL UOM RULES**" 
+                            },
+                            "precision": {
+                            "type": ["integer", "null"],
+                            "description": "The precision for the parameter value."
+                            }
+                        },
+                        "required": ["id", "value", "uom", "precision"]
+                        },
+                        "description": "List of parameters for the command."
+                    }
+                },
+                "required": ["device", "command", "parameters"]
+            }
+        }
+      }
+    }
+  }
+}

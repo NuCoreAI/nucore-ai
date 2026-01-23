@@ -214,15 +214,12 @@ class PromptOrchestrator:
         
         matched_device_ids = {d['device_id'] for d in devices}
         full_rags = self.full_rags
-        filtered_documents = []
+        filtered_rags = RAGData(documents=[], ids=[]) 
 
         for idx, id_ in enumerate(full_rags["ids"]):
             if id_ in matched_device_ids:
-                filtered_documents.append(full_rags["documents"][idx])
+                filtered_rags.add_document(full_rags["documents"][idx], full_rags["embeddings"][idx] , id_, full_rags["metadatas"][idx])
 
-        filtered_rags = RAGData()
-        filtered_rags["documents"] = filtered_documents
-        
         return filtered_rags
 
     def set_max_context_size(self, size:int):
@@ -272,7 +269,7 @@ class PromptOrchestrator:
             cached = self._prompt_cache[intent]
             # Update dynamic fields only
             cached.keywords = keywords
-            cached.devices = self._get_rags_from_intent(devices)
+            cached.set_device_rags(self._get_rags_from_intent(devices))
             return cached
         
         # Not cached - build it
