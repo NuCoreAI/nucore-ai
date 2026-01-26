@@ -1,0 +1,486 @@
+{
+    "name": "Charging Info",
+    "id": "n003_chargea5rf7219",
+    "parent": {
+        "name": "Batmobile",
+        "id": "n003_controller"
+    },
+    "Properties": [
+        {
+            "name": "Node Connected",
+            "id": "ST",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Closed",
+                        "1": "Open",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown"
+                    }
+                },
+                {
+                    "uom": "%",
+                    "uom_id": 51,
+                    "min": 0.0,
+                    "max": 100.0,
+                    "precision": 1
+                }
+            ]
+        },
+        {
+            "name": "Fast Charger",
+            "id": "GV1",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No",
+                        "1": "Yes",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charge Port",
+            "id": "GV2",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Closed",
+                        "1": "Open",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charger Port Latch",
+            "id": "GV3",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Disengaged",
+                        "1": "Engaged",
+                        "2": "Blocking",
+                        "4": "SNA?",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown/Not Connected"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Estimated Range",
+            "id": "GV4",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                },
+                {
+                    "uom": "Kilometer",
+                    "uom_id": 83,
+                    "min": 0,
+                    "max": 800,
+                    "precision": 0
+                },
+                {
+                    "uom": "Miles",
+                    "uom_id": 116,
+                    "min": 0,
+                    "max": 500,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "name": "Charge current requestmax",
+            "id": "GV5",
+            "editors": [
+                {
+                    "uom": "Amps",
+                    "uom_id": 1,
+                    "min": 0.0,
+                    "max": 300.0,
+                    "precision": 1
+                },
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charging State",
+            "id": "GV6",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Not Connected",
+                        "1": "Connected",
+                        "2": "Starting",
+                        "3": "Charging",
+                        "4": "Stopped",
+                        "5": "Complete",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charging Requested",
+            "id": "GV7",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Pending",
+                        "1": "Requested",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charging Power",
+            "id": "GV8",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                },
+                {
+                    "uom": "Kilowatts",
+                    "uom_id": 30,
+                    "min": 0.0,
+                    "max": 300.0,
+                    "precision": 1
+                }
+            ]
+        },
+        {
+            "name": "Battery Charge Target",
+            "id": "GV9",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Closed",
+                        "1": "Open",
+                        "97": "Data Invalid",
+                        "98": "98",
+                        "99": "Unknown"
+                    }
+                },
+                {
+                    "uom": "%",
+                    "uom_id": 51,
+                    "min": 0.0,
+                    "max": 100.0,
+                    "precision": 1
+                }
+            ]
+        },
+        {
+            "name": "Charger voltage",
+            "id": "GV10",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                },
+                {
+                    "uom": "Volts",
+                    "uom_id": 72,
+                    "min": 0.0,
+                    "max": 800.0,
+                    "precision": 1
+                }
+            ]
+        },
+        {
+            "name": "Charge current request",
+            "id": "GV11",
+            "editors": [
+                {
+                    "uom": "Amps",
+                    "uom_id": 1,
+                    "min": 0.0,
+                    "max": 300.0,
+                    "precision": 1
+                },
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charger actual current",
+            "id": "GV12",
+            "editors": [
+                {
+                    "uom": "Amps",
+                    "uom_id": 1,
+                    "min": 0.0,
+                    "max": 300.0,
+                    "precision": 1
+                },
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Time to full charge",
+            "id": "GV14",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                },
+                {
+                    "uom": "Minute",
+                    "uom_id": 44,
+                    "min": 0,
+                    "max": 44640,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "name": "Charge energy added",
+            "id": "GV15",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "No Value",
+                        "1": "Unknown",
+                        "97": "Data Invalid",
+                        "98": "Not Enabled",
+                        "99": "Not Reported"
+                    }
+                },
+                {
+                    "uom": "kWh",
+                    "uom_id": 33,
+                    "min": 0.0,
+                    "max": 300.0,
+                    "precision": 1
+                }
+            ]
+        },
+        {
+            "name": "Time of car last update",
+            "id": "GV19",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "99": "Unknown"
+                    }
+                },
+                {
+                    "uom": "Unix Timestamp",
+                    "uom_id": 151,
+                    "min": 1737400000,
+                    "max": 9999999999,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "name": "Last Command Status",
+            "id": "GV21",
+            "editors": [
+                {
+                    "uom": "Enum",
+                    "uom_id": 25,
+                    "precision": 0,
+                    "enums": {
+                        "0": "Offline",
+                        "1": "OK",
+                        "4": "Failed - Too many calls",
+                        "5": "Error",
+                        "97": "Data Invalid",
+                        "99": "Unknown"
+                    }
+                }
+            ]
+        }
+    ],
+    "Accept Commands": [
+        {
+            "name": "Charge Port Control",
+            "id": "CHARGEPORT",
+            "parameters": [
+                {
+                    "name": "n/a",
+                    "id": "n/a",
+                    "editors": [
+                        {
+                            "uom": "Enum",
+                            "uom_id": 25,
+                            "precision": 0,
+                            "enums": {
+                                "0": "Close",
+                                "1": "Open"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Charging Control",
+            "id": "CHARGECTRL",
+            "parameters": [
+                {
+                    "name": "n/a",
+                    "id": "n/a",
+                    "editors": [
+                        {
+                            "uom": "Enum",
+                            "uom_id": 25,
+                            "precision": 0,
+                            "enums": {
+                                "0": "Stop",
+                                "1": "Start"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Set Battery Charge Target",
+            "id": "BATPERCENT",
+            "parameters": [
+                {
+                    "name": "n/a",
+                    "id": "n/a",
+                    "editors": [
+                        {
+                            "uom": "%",
+                            "uom_id": 51,
+                            "min": 0.0,
+                            "max": 100.0,
+                            "precision": 1
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Set Max Charge Current",
+            "id": "CHARGEAMPS",
+            "parameters": [
+                {
+                    "name": "n/a",
+                    "id": "n/a",
+                    "editors": [
+                        {
+                            "uom": "Amps",
+                            "uom_id": 1,
+                            "min": 0.0,
+                            "max": 300.0,
+                            "precision": 1
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "Send Commands": []
+}

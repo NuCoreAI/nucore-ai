@@ -29,6 +29,7 @@
                         "type": "array",
                         "items": {
                         "type": "object",
+                        "description": "A parameter for the command. If no parameters defined, leave empty",
                         "properties": {
                             "id": {
                             "type": ["string", "null"],

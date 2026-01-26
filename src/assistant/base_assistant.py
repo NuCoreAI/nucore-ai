@@ -583,6 +583,7 @@ class NuCoreBaseAssistant(ABC):
             await self.send_response("No query provided, ...", True, websocket)
             return None
 
+        prompt.trim_message_history()
         ############ MUST BE IMPLEMENTED LATER IN THE ROUTER ############
         #rags = None
         #if self.nuCore.is_rag_enabled()and num_rag_results > 0:
@@ -593,13 +594,10 @@ class NuCoreBaseAssistant(ABC):
         if query.startswith("USER QUERY:"):
             query = query[len("USER QUERY:"):].strip()
          
-        user_content = NuCorePrompt.get_user_query_section(query)
-        if len(prompt.message_history) == 0 or not prompt.is_router():        
-            user_content = f"{prompt.get_device_docs()}\n{user_content}"
-
         sprompt = prompt.prompt
         sprompt = sprompt.strip()
 
+        add_device_docs = False
         if len(prompt.message_history) == 0 :
             #append shared enums to system prompt
             if not prompt.is_router():
@@ -607,14 +605,20 @@ class NuCoreBaseAssistant(ABC):
             if self._include_system_prompt_in_history():
                 prompt.add_history({"role": "system", "content": sprompt})
             if self.debug_mode:
-                with open("/tmp/nucore.prompt.txt", "w") as f:
+                with open("/tmp/nucore.prompt.md", "w") as f:
+                    f.write("----- SYSTEM PROMPT -----\n")
                     f.write(sprompt)
+            add_device_docs=True
 
-        prompt.trim_message_history()
+        user_content = NuCorePrompt.get_user_query_section(query)
+        if add_device_docs or not prompt.is_router():        
+            user_content = f"{prompt.get_device_docs()}\n{user_content}"
+            add_device_docs=False
+
         # Add user message to history
         prompt.add_history({"role": "user", "content": user_content})
         if self.debug_mode:
-            with open("/tmp/nucore.prompt.txt", "a") as f:
+            with open("/tmp/nucore.prompt.md", "a") as f:
                 f.write(user_content)
         try:
             assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
