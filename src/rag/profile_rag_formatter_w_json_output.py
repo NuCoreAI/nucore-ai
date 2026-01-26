@@ -97,7 +97,6 @@ class ProfileRagFormatter(RAGFormatter):
         line=(f"{{\"name\":\"{device.name}\",\"id\":\"{self.encode_id(device.address)}\"")
         if parent:
             line+=(f",\"parent\":{{\"name\":\"{parent.name}\",\"id\":\"{self.encode_id(parent.address)}\"}}")
-        line+=("}")
         if comma:
             line+=","
         self.write(line)
@@ -157,7 +156,7 @@ class ProfileRagFormatter(RAGFormatter):
     
     def add_property_json(self, prop: NodeProperty, comma:bool):
         with self.block():
-            line=(f"{{\"name\":\"{prop.name}\",\"id\":\"{self.encode_id(prop.id)}\",")
+            line=(f"{{\"name\":\"{prop.name}\",\"id\":\"{self.encode_id(prop.id)}\"")
             if prop.editor and prop.editor.ranges:
                 line += prop.editor.get_json_descriptions()
         line += ("}")
@@ -183,7 +182,7 @@ class ProfileRagFormatter(RAGFormatter):
                 for i, param in enumerate(command.parameters):
                     line+=(f"{{\"name\":\"{param.name if param.name else 'n/a'}\",\"id\":\"{self.encode_id(param.id) if param.id else 'n/a'}\"")
                     if param.editor and param.editor.ranges:
-                        line+=","+param.editor.get_json_descriptions()
+                        line+=param.editor.get_json_descriptions()
                     line+=("}")
                     if i < len(command.parameters) - 1:
                         line+=","
@@ -297,7 +296,7 @@ class ProfileRagFormatter(RAGFormatter):
         chunk.properties = list(profile.nodedef.properties)
         self.rag_chunks.append(chunk) 
 
-    def format_per_device(self, node:Node):
+    def format_per_device(self, node:Node, comma:bool=False):
         """
         Format the profile per device, with devices as atomic units with their own properties/commands/editors. 
         
@@ -308,24 +307,42 @@ class ProfileRagFormatter(RAGFormatter):
 
         chunk = RagChunk(node.address, len(self.lines))
         self.write(DEVICE_SECTION_HEADER)   
-        self.add_node(node)
-        
+        if self.json_output:
+            self.write("```json") 
+        self.add_node(node, True)
         with self.block():
             if node.node_def:
-                self.write("Properties:")
-                for prop in node.node_def.properties: 
-                    self.add_property(prop)
-                self.write("Accept Commands:")
-                for cmd in node.node_def.cmds.accepts:
-                    self.add_command(cmd)
-                self.write("Sends Commands:")
-                for cmd in node.node_def.cmds.sends:
-                    self.add_command(cmd)
-
+                if self.json_output:
+                    self.write("\"Properties\":[")
+                else:
+                    self.write("Properties:")
+                for idx, prop in enumerate(node.node_def.properties): 
+                    self.add_property(prop, self.json_output and idx < len(node.node_def.properties) - 1)
+                if self.json_output:
+                    self.write("],\"Accept Commands\":[")
+                else:
+                    self.write("Accept Commands:")
+                for idx, cmd in enumerate(node.node_def.cmds.accepts):
+                    self.add_command(cmd, self.json_output and idx < len(node.node_def.cmds.accepts) - 1)
+                if self.json_output:
+                    self.write("],\"Send Commands\":[")
+                else:
+                    self.write("Sends Commands:")
+                for idx, cmd in enumerate(node.node_def.cmds.sends):
+                    self.add_command(cmd, self.json_output and idx < len(node.node_def.cmds.sends) - 1)
+                if self.json_output:
+                    self.write("]")
+        if self.json_output:
+            self.write("}\n```") 
         chunk.end_index = len(self.lines) - 1   
-        chunk.nodes = [ node ] 
-        chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
-        chunk.properties = list(node.node_def.properties)
+        chunk.nodes = [ node ]
+        if node.node_def:
+            chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
+            chunk.properties = list(node.node_def.properties)
+        else:
+            chunk.cmds = []
+            chunk.properties = []    
+
         self.rag_chunks.append(chunk) 
 
     def format(self, **kwargs)->RAGData:
@@ -369,8 +386,8 @@ class ProfileRagFormatter(RAGFormatter):
         else:
             if self.nodes is None or self.groups is None:
                 raise ValueError("Insufficient data to format profile RAG (need both nodes and groups).")
-            for node in self.nodes.values():
-                self.format_per_device(node)
+            for idx, node in enumerate(self.nodes.values()):
+                self.format_per_device(node, comma= idx < len(self.nodes) -1)
             
         rag_docs:RAGData = RAGData()
         for chunk in self.rag_chunks:

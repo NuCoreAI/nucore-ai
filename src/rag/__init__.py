@@ -1,4 +1,4 @@
-from .profile_rag_formatter import ProfileRagFormatter
+from .profile_rag_formatter_w_json_output import ProfileRagFormatter
 from .minimal_rag_formatter import MinimalRagFormatter
 from .rag_formatter import RAGFormatter
 from .rag_processor import RAGProcessor

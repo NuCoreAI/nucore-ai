@@ -2,6 +2,7 @@
 NuCore Prompt  ... encapsulates prompt and tool management for NuCore agents.
 """
 
+import re
 from typing import List
 from dataclasses import dataclass, field
 from rag import RAGData
@@ -79,17 +80,15 @@ class NuCorePrompt:
     def search_history(self, role:str, content_substr:str)->bool:
         """
         Search message history for a message with given role and content substring.
-        ##AND MOVE TO THE END OF THE HISTORY SO THAT THE LLM SEES IT LAST (REFRESH ATTENTION)##
+        return True if exists otherwise False.
         
         :param role: Role to search for (e.g., 'user', 'assistant')
         :param content_substr: Substring to search within message content
         :return: True if found, False otherwise
         """
         for msg in self.message_history:
-            if msg["role"] == role and content_substr in msg["content"]:
-                self.message_history.remove(msg)
-                self.message_history.append(msg)
-                return True
+            if msg["role"] == role and content_substr in msg["content"]: 
+                    return True
         return False    
 
     def set_device_rags(self, rags:RAGData):
@@ -115,9 +114,9 @@ class NuCorePrompt:
 
         not_sent_rags=RAGData(documents=[], ids=[])
         for idx, id_ in enumerate(self.rags["ids"]):
-            device_id=f"id={id_}"
+            device_id=f"\"id\":\"{id_}\""
             if self.search_history("user", device_id):
-                continue 
+                continue
             not_sent_rags.add_document(self.rags["documents"][idx], self.rags["embeddings"][idx] , id_, self.rags["metadatas"][idx])
 
         return self._get_device_docs(not_sent_rags)
