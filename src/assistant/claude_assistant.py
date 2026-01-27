@@ -25,12 +25,6 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def __init__(self, args):
         super().__init__(args)
 
-    def _get_max_context_size(self) ->int:
-        """
-        Get the maximum context size for the model.
-        :return: The maximum context size as an integer.
-        """
-        return 64000
     def _get_prompt_config_path(self):
         # Assuming this code is inside your_package/module.py
         system_prompt="claude_config.json"

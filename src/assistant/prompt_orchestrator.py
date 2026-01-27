@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from dataclasses import dataclass, field
 from rag import RAGData
-from prompt_mgr import NuCorePrompt, ROUTER_INTENT
+from prompt_mgr import NuCorePrompt, ROUTER_INTENT, DEFAULT_MAX_CONTEXT_SIZE, DEFAULT_TOKENS_PER_MESSAGE
 
 
 class PromptOrchestrator:
@@ -27,7 +27,7 @@ class PromptOrchestrator:
     3. Get back fully resolved agent prompt + tools for that intent
     """
     
-    def __init__(self, config_path: str, max_context_size: int = 64000):
+    def __init__(self, config_path: str):
         """
         Initialize the loader with a configuration file.
         
@@ -37,13 +37,13 @@ class PromptOrchestrator:
         self.base_dir = self.config_path.parent
         self.full_rags: RAGData = None
         self.summary_rags: RAGData = None
-        self.max_context_size: int = max_context_size
         
         # Load the configuration
         with open(self.config_path, 'r', encoding='utf-8') as f:
             self.config = json.load(f)
                 # Get LLM provider name and determine tool format
         self.llm_provider = self.config.get('llm', 'unknown').lower()
+        self.max_context_size: int = self.config.get('max_context_size', DEFAULT_MAX_CONTEXT_SIZE) 
         
         # Map LLM to tool format suffix
         self.tool_format_map = {
@@ -78,9 +78,11 @@ class PromptOrchestrator:
         for agent in self.config.get('agents', []):
             for intent_config in agent.get('intents_to_tools', []):
                 intent = intent_config['intent']
+                tokens_per_message = intent_config.get('tokens_per_message', DEFAULT_TOKENS_PER_MESSAGE)
                 intent_map[intent] = {
                     'agent': agent,
-                    'tools': intent_config.get('tools', [])
+                    'tools': intent_config.get('tools', []),
+                    'tokens_per_message': tokens_per_message
                 }
         
         return intent_map
@@ -222,9 +224,6 @@ class PromptOrchestrator:
 
         return filtered_rags
 
-    def set_max_context_size(self, size:int):
-        self.max_context_size = size
-    
     def set_full_rags(self, rags:RAGData):
         # full device rags with all properties and commands
         self.full_rags = rags
@@ -289,7 +288,8 @@ class PromptOrchestrator:
             tools=tools,
             intent=intent,
             keywords=keywords,
-            max_context_size=self.max_context_size
+            max_context_size=self.max_context_size,
+            tokens_per_message=intent_config['tokens_per_message']  
         )
         nucore_prompt.set_device_rags(self._get_rags_from_intent(devices))
         
@@ -340,6 +340,7 @@ class PromptOrchestrator:
         
         # Load router tools
         tool_configs = router_config.get('tools', [])
+        tokens_per_message = router_config.get('tokens_per_message', DEFAULT_TOKENS_PER_MESSAGE)
         tools = self._load_tools(tool_configs)
         
         # Create and cache the router NuCorePrompt
@@ -348,7 +349,8 @@ class PromptOrchestrator:
             tools=tools,
             intent=ROUTER_INTENT,
             keywords=[],
-            max_context_size=self.max_context_size
+            max_context_size=self.max_context_size,
+            tokens_per_message=tokens_per_message
         )
         router_prompt.set_device_rags(self.summary_rags)
         
