@@ -14,7 +14,7 @@ from importlib.resources import files
 from config import AIConfig
 from utils import JSONDuplicateDetector 
 from prompt_orchestrator import PromptOrchestrator
-from prompt_mgr import NuCorePrompt
+from prompt_mgr import NuCorePrompt, REPHRASE_INSTRUCTION
 
 import threading
 import queue
@@ -392,7 +392,7 @@ class NuCoreBaseAssistant(ABC):
         else:
             output+=f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
 
-        output+=".Now, rephrase in brief NATURAL LANGUAGE. **NO JSON OUTPUT**. **NO DETAILS**\""
+        output+=f". {REPHRASE_INSTRUCTION}\""
         await self.process_customer_input(output, websocket=websocket, text_only=True)
         return responses
 
@@ -479,7 +479,7 @@ class NuCoreBaseAssistant(ABC):
             #return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
             if not full_response:
-                return f("Invalid input to process_llm_response")
+                return ("Invalid input to process_llm_response")
             else:
                 print(f"Error parsing tool call JSON: {ex}")
                 return None
@@ -562,8 +562,11 @@ class NuCoreBaseAssistant(ABC):
             return None
         
         await self._refresh_device_structure()
-        
-        prompt = self.orchestrator.get_prompt(router_result)
+
+        if REPHRASE_INSTRUCTION in query:
+            prompt = self.orchestrator.get_last_prompt()
+        else:
+            prompt = self.orchestrator.get_prompt(router_result)
         if not prompt:
             raise ValueError("Failed to get prompt from orchestrator")
         
@@ -575,7 +578,6 @@ class NuCoreBaseAssistant(ABC):
             await self.send_response("No query provided, ...", True, websocket)
             return None
 
-        prompt.trim_message_history()
         ############ MUST BE IMPLEMENTED LATER IN THE ROUTER ############
         #rags = None
         #if self.nuCore.is_rag_enabled()and num_rag_results > 0:
@@ -595,7 +597,7 @@ class NuCoreBaseAssistant(ABC):
             if not prompt.is_router():
                 sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
-                prompt.add_history({"role": "system", "content": sprompt})
+                prompt.add_history("system",  sprompt)
             if self.debug_mode:
                 with open("/tmp/nucore.prompt.md", "w") as f:
                     f.write("----- SYSTEM PROMPT -----\n")
@@ -608,7 +610,7 @@ class NuCoreBaseAssistant(ABC):
             add_device_docs=False
 
         # Add user message to history
-        prompt.add_history({"role": "user", "content": user_content})
+        prompt.add_history("user", user_content)
         if self.debug_mode:
             with open("/tmp/nucore.prompt.md", "a") as f:
                 f.write(user_content)
@@ -616,8 +618,8 @@ class NuCoreBaseAssistant(ABC):
             assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
             keep_open = True
             if assistant_response is not None:
+                prompt.add_history("assistant", assistant_response)
                 keep_open = await self.process_llm_response(query, assistant_response, websocket, None, None)
-                prompt.add_history({"role": "assistant", "content": assistant_response})
             else:
                 keep_open = False
             if websocket and (text_only or (not keep_open)):
