@@ -7,6 +7,9 @@ from typing import List
 from dataclasses import dataclass, field
 from rag import RAGData
 
+DEFAULT_MAX_CONTEXT_SIZE = 32000
+DEFAULT_TOKENS_PER_MESSAGE = 2600
+
 ROUTER_INTENT = '__router__'  # Special intent name for router
 ROUTER_DEVICE_SECTION = '''
 ────────────────────────────────
@@ -37,6 +40,8 @@ class NuCorePrompt:
         keywords: List of extracted keyword dictionaries from router
         devices: List of matched device dictionaries with scores from router
         message_history: Optional list of prior messages for context
+        max_context_size: Maximum token context size for the model
+        tokens_per_message: Estimated tokens used per message in conversation
     """
     prompt: str = None
     tools: List[dict] =  None
@@ -44,7 +49,8 @@ class NuCorePrompt:
     keywords: List[dict] = None 
     rags: RAGData = None 
     message_history: List[dict] = field(default_factory=list)
-    max_context_size: int = 64000
+    max_context_size: int = DEFAULT_MAX_CONTEXT_SIZE
+    tokens_per_message: int = DEFAULT_TOKENS_PER_MESSAGE
 
     @staticmethod
     def get_user_query_section(user_query:str)-> str:
@@ -146,7 +152,7 @@ class NuCorePrompt:
         # Simple estimation: 1 token per 4 characters (this is a rough estimate)
         return len(text) // 4 + 50  # adding buffer
 
-    def trim_message_history(self, tokens_per_turn=2000, response_buffer=4000):
+    def trim_message_history(self):
         """
         Trim message_history to stay within context limits.
         Preserves: system message, first user message (with device structure), and recent conversation.
@@ -168,9 +174,9 @@ class NuCorePrompt:
             first_user_tokens = self._estimate_tokens(self.message_history[idx]["content"])
         
         # Calculate available tokens for conversation history
-        reserved_tokens = system_tokens + first_user_tokens + response_buffer
+        reserved_tokens = system_tokens + first_user_tokens + self.tokens_per_message
         available_tokens = self.max_context_size - reserved_tokens
-        max_turns = max(1, available_tokens // tokens_per_turn)
+        max_turns = max(1, available_tokens // self.tokens_per_message)
         
         # Get messages to keep
         system_msg = self.message_history[0] if self.message_history[0]["role"] == "system" else None
@@ -196,3 +202,7 @@ class NuCorePrompt:
         if first_user_msg:
             self.message_history.append(first_user_msg)
         self.message_history.extend(conversation_msgs)
+        # if the last message is from "assistant", we must remove it otherwise LLM will get confused and thinks that it already responded.
+        if self.message_history and self.message_history[-1]["role"] == "assistant":
+            self.message_history = self.message_history[:-1]
+        

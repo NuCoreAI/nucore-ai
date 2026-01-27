@@ -140,7 +140,7 @@ class NuCoreBaseAssistant(ABC):
             raise ValueError("Arguments are required to initialize NuCoreAssistant")
         self.prompt_type = args.prompt_type if args.prompt_type else PromptFormatTypes.DEVICE 
         self.config = AIConfig() 
-        self.orchestrator = PromptOrchestrator(self._get_prompt_config_path(), self._get_max_context_size())
+        self.orchestrator = PromptOrchestrator(self._get_prompt_config_path())
         self.json_output= args.json_output if args.json_output else False
         self.nuCore = NuCore(
             collection_path=args.collection_path if args.collection_path else os.path.join(os.path.expanduser("~"), ".nucore_db"),
@@ -289,14 +289,6 @@ class NuCoreBaseAssistant(ABC):
         Subclass specific initialization.
         """
         pass
-
-    @abstractmethod 
-    def _get_max_context_size(self) ->int:
-        """
-        Get the maximum context size for the model.
-        :return: The maximum context size as an integer.
-        """
-        return 32000
 
     async def __check_debug_mode__(self, query, websocket):
         """
