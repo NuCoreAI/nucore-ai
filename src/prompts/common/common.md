@@ -36,7 +36,7 @@ All parameters and properties use integer uom_id values from DEVICE STRUCTURE
 - NEVER use string uom values
 
 ────────────────────────────────
-# PRECISION SPECIFICATION
+# GLOBAL PRECISION RULES
 - Copy precision value EXACTLY from DEVICE STRUCTURE editor
 - NEVER calculate or adjust precision
 - The precision value comes from the property/parameter definition, not from the customer input

@@ -1,0 +1,65 @@
+{
+  "type": "function",
+  "function": {
+    "name": "routine_automation_tool",
+    "description": "Automation/optimization routines based on device status and conditions",
+    "parameters": {
+      "type": "object",
+      "required": ["tool","args"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "const": "Routine",
+          "description": "The tool name indicating the type of operation to perform"
+        },
+        "args": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name":{
+                        "type": "string",
+                        "description": "The name of the routine"
+                    },
+                    "parent":{
+                        "type": "integer",
+                        "const": 0, 
+                        "description": "The parent routine ID if this is a subroutine, else null"
+                    },
+                    "enabled":{
+                        "type": "boolean",
+                        "const": true,
+                        "description": "Whether the routine is enabled or disabled"
+                    },
+                    "comment":{
+                        "type": "string",
+                        "description": "A short description for what this routine does"
+                    },
+                    "if": {
+                        "type": "array",
+                        "description": "An array of subexpressions connected by logical operators",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "then": {
+                        "type": "array",
+                        "description": "Array of actions to execute when the conditions are evaluated to true.",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "else": {
+                        "type": "array",
+                        "description": "Array of actions to execute when the conditions are evaluated to true.",
+                        "items": {
+                            "type": "object"
+                        }
+                    }
+            },
+            "required": ["name", "parent", "enabled", "if", "then", "else"],
+            "additionalProperties": false
+        }
+      }
+   }
+}}}
