@@ -28,6 +28,8 @@ USER_QUERY_SECTION = '''
 
 '''
 
+REPHRASE_INSTRUCTION = '''Now rephrase in brief NATURAL LANGUAGE. **NO JSON OUTPUT**. **NO DETAILS**\n'''
+
 @dataclass
 class NuCorePrompt:
     """
@@ -70,12 +72,13 @@ class NuCorePrompt:
         """
         return self.intent == ROUTER_INTENT
 
-    def add_history(self, history:dict):
+    def add_history(self, role:str, content:str):
         """
         Append a message to the message history.
         
         """
-        self.message_history.append(history)
+        self.trim_message_history(content)
+        self.message_history.append({"role": role, "content": content})
     
     def clear_history(self):
         """
@@ -152,7 +155,7 @@ class NuCorePrompt:
         # Simple estimation: 1 token per 4 characters (this is a rough estimate)
         return len(text) // 4 + 50  # adding buffer
 
-    def trim_message_history(self):
+    def trim_message_history(self, content_to_add:str):
         """
         Trim message_history to stay within context limits.
         Preserves: system message, first user message (with device structure), and recent conversation.
@@ -172,37 +175,39 @@ class NuCorePrompt:
         idx = 1
         if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
             first_user_tokens = self._estimate_tokens(self.message_history[idx]["content"])
-        
-        # Calculate available tokens for conversation history
-        reserved_tokens = system_tokens + first_user_tokens + self.tokens_per_message
+
+        #minimum tokens already used
+        reserved_tokens = system_tokens + first_user_tokens 
+        if reserved_tokens >= self.max_context_size:
+            # Can't fit anything, keep only system and first user message
+            self.message_history = self.message_history[:2]
+            return
+        new_content_tokens = self._estimate_tokens(content_to_add)
+        reserved_tokens += new_content_tokens
+        if reserved_tokens >= self.max_context_size:
+            # Can't fit anything, keep only system and first user message
+            self.message_history = self.message_history[:2]
+            return
+        #otherwise trim conversation history using this algorithm:
         available_tokens = self.max_context_size - reserved_tokens
-        max_turns = max(1, available_tokens // self.tokens_per_message)
-        
+
         # Get messages to keep
-        system_msg = self.message_history[0] if self.message_history[0]["role"] == "system" else None
-        first_user_msg = None
-        conversation_msgs = []
-        
-        idx = 1 if system_msg else 0
-        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
-            first_user_msg = self.message_history[idx]
-            idx += 1
-        
-        conversation_msgs = self.message_history[idx:]
-        
-        # Keep only the most recent turns
-        max_messages = max_turns * 2
-        if len(conversation_msgs) > max_messages:
-            conversation_msgs = conversation_msgs[-max_messages:]
+        sys_messages = self.message_history[:2]
+        history_messages = [] # in reversed order
+        # Start from from the bottom to the 2nd element (ignoring system and first user)
+        for idx, message in enumerate(reversed(self.message_history[2:]), start=2):
+            token_count = self._estimate_tokens(message["content"])
+            available_tokens -= token_count 
+            max_turns = max(1, available_tokens // self.tokens_per_message)
+            if max_turns < 2:
+                # ignore it
+                available_tokens += token_count
+                continue
+            history_messages.append(message)
         
         # Rebuild
         self.message_history = []
-        if system_msg:
-            self.message_history.append(system_msg)
-        if first_user_msg:
-            self.message_history.append(first_user_msg)
+        self.message_history.extend(sys_messages)
+        conversation_msgs = list(reversed(history_messages))
         self.message_history.extend(conversation_msgs)
-        # if the last message is from "assistant", we must remove it otherwise LLM will get confused and thinks that it already responded.
-        if self.message_history and self.message_history[-1]["role"] == "assistant":
-            self.message_history = self.message_history[:-1]
         

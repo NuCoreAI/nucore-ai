@@ -10,7 +10,7 @@
         "tool": {
           "type": "string",
           "const": "Routines",
-          "description": "The tool name indicating the type of operation to perform"
+          "description": "NuCore tool hooking to perform automation and optimization routines based on device status and conditions"
         },
         "args": {
             "type": "array",

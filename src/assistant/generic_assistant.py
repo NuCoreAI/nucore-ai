@@ -30,10 +30,6 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 
         """
         pass
-#        sprompt = self.system_prompt.strip()
-#        self.message_history.append({"role": "system", "content": sprompt})
-#        self.message_history.append({"role": "user", "content": "Hello!"})
-#        await self._process_customer_input(websocket=None, text_only=True)
 
 
     def _include_system_prompt_in_history(self) -> bool:

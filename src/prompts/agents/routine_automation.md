@@ -267,7 +267,11 @@ Specifies a time or schedule condition.
 - `OFFSET`: is an integer offset in seconds. Negative values are before sunrise, positive values are after sunrise, and 0 is exact sunrise.
   MUST convert to seconds: 1 minute = 60 seconds, 10 minutes = 600 seconds, 1 hour = 3600 seconds
   Examples: "10 minutes before sunset" = {"sunset":-600}, "30 minutes after sunrise" = {"sunrise":1800}
-- `OFFSET_DAYS`: is an integer >= 0 for the number of days of duration after the start time. 0 = today, 1 = next day (tomorrow), 2 = two days from now (day after tomorrow), and so on.
+- `OFFSET_DAYS`: is an integer >= 0 for the number of days of duration after the start time. 
+ * 0 = today
+ * 1 = `next day` (tomorrow)
+ * 2 = `two days` from now (day after tomorrow), 
+ * and so on.
 - `days`: any subset of sun,mon,tue,wed,thu,fri,sat all lowercase with no spaces in between
 - `HH`: 2 digit hour
 - `MM`: 2 digit minutes
@@ -276,85 +280,296 @@ Specifies a time or schedule condition.
 
 Use one of these exact forms ALL IN JSON:
 
-1. **At a specific time once daily:**
+## 1. At a Specific Time (and date) 
+### Schema
+```json
+{
+    "type": "object",
+    "description": "Schedule subexpression - **at** a specific time **every day** or a **specific datetime**", 
+    "properties": {
+        "at": {
+            "type": "object",
+            "oneOf": [
+            {
+                "type": "object",
+                "description": "Specific time **every day**",
+                "properties": {
+                    "time": {"type": "string", "description": "format HH:MM:SS in 24-hour time"}
+                }
+            },
+            {
+                "type":"object",
+                "description": "sunrise with offset in seconds **every day**",
+                "properties": {
+                    "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunrise time" }
+                }
+            },
+            {
+                "type":"object",
+                "description": "sunset with offset in seconds **every day**",
+                "properties": {
+                    "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                }
+            }
+        ],
+        "date": { "type": "string", "description": "Date in YYYY/MM/DD format. If provided, the time is for that specific date. If omitted, the time is for everyday." }
+        }
+    },
+    "required": ["at"],
+    "minProperties": 1,
+    "additionalProperties": false
+}
+```
+### Instance Structures:
+- At a specific time once daily:
 ```json
    {"at":{"time":"<HH>:<MM>"} }
 ```
 
-2. **At sunrise +/- offset seconds daily:**
+- At sunrise +/- offset seconds daily:
 ```json
    {"at":{"sunrise":<OFFSET>} }
 ```
 
-3. **At sunset +/- offset seconds daily:**
+- At sunset +/- offset seconds daily:
 ```json
    {"at":{"sunset":<OFFSET>} }
 ```
 
-4. **At a specific time and date:**
+- At a specific time and date:
 ```json
    {"at":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
 ```
 
-5. **Weekly at a specific time on specific day(s):**
+## 2. Weekly at a Specific Time and on Specific Days 
+### Schema
+```json
+{
+    "type": "object",
+    "description": "Weekly schedule subexpression at specific time on specific days",
+    "properties": {
+        "weekly": {
+        "type": "object",
+        "properties": {
+            "days": { "type": "string", "description": "any subset of sun,mon,tue,wed,thu,fri,sat all lowercase with no spaces in between"},
+            "at": {
+                "type": "object",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "description": "Specific time on days defined by `days`",
+                        "properties": {
+                            "time": { "type": "string", "description": "format HH:MM:SS in 24-hour time" }
+                        }
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunrise with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunrise time" }
+                        }
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunset with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                        }
+                    }
+                ]
+            }
+        },
+        "minProperties": 1,
+        "additionalProperties": false,
+        "required": ["days","at"]
+        }
+    },
+    "required": ["weekly"],
+    "additionalProperties": false
+}
+```
+### Instance Structures
+
+- Weekly at a specific time on specific day(s):
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"time":"<HH>:<MM>"}} }
 ```
-
-6. **Weekly at sunrise +/- offset seconds on specific day(s):**
+- Weekly at sunrise +/- offset seconds on specific day(s):
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"sunrise":<OFFSET>}} }
 ```
-
-7. **Weekly at sunset +/- offset seconds on specific day(s):**
+- Weekly at sunset +/- offset seconds on specific day(s):
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"sunset":<OFFSET>}} }
 ```
 
-8. **Duration (from to) with start and end time:**
+## 3. Weekly Durations Using `from` Start-time `to` End-time with `day` boundaries (next day, two days from now, etc.)
+### Schema
 ```json
-    {"from":{"time":"<HH>:<MM>"},"to":{"time":"<HH>:<MM>","day":<OFFSET_DAYS>} }
+{
+    "type": "object",
+    "description": "Weekly schedule subexpression for a **duration** using **from/to** and **day** to signify day boundaries (next day, etc.)",
+    "properties": {
+        "weekly": {
+        "type": "object",
+        "properties": {
+            "days": { "type": "string", "description": "any subset of sun,mon,tue,wed,thu,fri,sat all lowercase with no spaces in between"},
+            "from": {
+                "type": "object",
+                "oneOf": [
+                    {
+                        "type":"object",
+                        "description": "Specific time on days defined by `days`",
+                        "properties": {
+                            "time": { "type": "string", "description": "format HH:MM:SS in 24-hour time" }
+                        }
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunrise with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunrise time" }
+                        }
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunset with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                        }
+                    }
+                ]
+            },
+            "to": {
+                "type": "object",
+                "oneOf": [
+                    {
+                        "type":"object",
+                        "description": "Specific time on days defined by `days`",
+                        "properties": { 
+                            "time": { "type": "string", "description": "format HH:MM:SS in 24-hour time" }}
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunrise with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunrise time" }
+                        }
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunset with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                        }
+                    }
+                ]
+            },
+            "day": { "type": "integer", "description": "is an integer >= 0 for the number of days of duration after the start time. 0 = today, 1 = next day (tomorrow), 2 = two days from now (day after tomorrow), and so on."
+            }
+        },
+        "additionalProperties": false,
+        "required": ["days","from", "to","day"]
+        }
+    }
+}
 ```
-
-9. **Duration (from to) with day offset:**
+### Instance Structures:
+- Duration from sunrise to sunset with day offset 
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"sunrise":<OFFSET>},"to":{"sunset":<OFFSET>,"day":<OFFSET_DAYS>} }}
 ```
+- Duration from sunrise to sunrise with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"sunrise":<OFFSET>},"to":{"sunrise":<OFFSET>,"day":<OFFSET_DAYS>} }}
 ```
+- Duration from sunset to sunrise with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"sunset":<OFFSET>},"to":{"sunrise":<OFFSET>,"day":<OFFSET_DAYS>} }}
 ```
+- Duration from sunset to sunset with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"sunset":<OFFSET>},"to":{"sunset":<OFFSET>,"day":<OFFSET_DAYS>} }}
 ```
+- Duration from sunrise to a specific time with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"sunrise":<OFFSET>},"to":{"time":"<HH>:<MM>","day":<OFFSET_DAYS>} }}
 ```
+- Duration from sunset to a specific time with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","from":{"sunset":<OFFSET>},"to":{"time":"<HH>:<MM>","day":<OFFSET_DAYS>} }}
 ```
-
-10. **Duration (from to) with start time and end at sunrise or sunset with day offset:**
+- Duration from specific time to sunrise with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat", "from":{"time":"<HH>:<MM>"},"to":{"sunrise":<OFFSET>,"day":<OFFSET_DAYS> } }}
 ```
+- Duration from specific time to sunset with day offset (next day, two days from now, etc.)
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat", "from":{"time":"<HH>:<MM>"},"to":{"sunset":<OFFSET>,"day":<OFFSET_DAYS> } }}
 ```
 
-11. **Duration (from for) with start time *for* a duration :**
+## 4. Weekly Durations Using `from` Start-time `for` a `period` of Time 
+### Schema
+```json
+{
+    "type": "object",
+    "description": "Weekly schedule subexpression for a **period** using **from/for**" ,
+    "properties": {
+        "weekly": {
+        "type": "object",
+        "properties": {
+            "days": { "type": "string", "description": "any subset of sun,mon,tue,wed,thu,fri,sat all lowercase with no spaces in between"},
+            "from": {
+                "type": "object",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "description": "Specific time on days defined by `days`",
+                        "properties": {
+                            "time": { "type": "string", "description": "format HH:MM:SS in 24-hour time"}
+                        }
+                    },
+                    {
+                        "type":"object", 
+                        "description": "sunrise with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunrise time" }
+                        }
+                    },
+                    {
+                        "type":"object",
+                        "description": "sunset with offset in seconds on days defined by `days`",
+                        "properties": {
+                            "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                        }
+                    }
+                ]
+            },
+            "for": { "type": "object", "description": "Duration in HH:MM:SS format",
+                "properties": {
+                    "hours": { "type": "integer", "description": "number of hours in the duration. 0 if not provided" },
+                    "minutes": { "type": "integer", "description": "number of minutes in the duration. 0 if not provided" },
+                    "seconds": { "type": "integer", "description": "number of seconds in the duration. 0 if not provided" }
+            }
+        }
+        },
+        "additionalProperties": false,
+        "required": ["days","from","for"]
+        }
+    }
+}
+```
+
+### Instance Structures
+- Duration with start time *for* a priod:
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat", "from":{"time":"<HH>:<MM>"},"for":{"hours":<HH>,"minutes":<MM>,"seconds":<SS>} }}
 ```
-
-12. **Duration (from for) from a specific time/date *for* a duration:**
+- Duration from a specific time/date *for* a priod:
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat", "from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"for":{"hours":<HH>,"minutes":<MM>,"seconds":<SS>} }}
 ```
-   
-13. **Duration (from for) with sunrise or sunset start time *for* a duration :**
+- Duration from sunrise or sunset *for* a period :**
 ```json
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat", "from":{"sunrise":<OFFSET>},"for":{"hours":<HH>,"minutes":<MM>,"seconds":<SS>} }}
 ```
@@ -362,13 +577,86 @@ Use one of these exact forms ALL IN JSON:
    {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat", "from":{"sunset":<OFFSET>},"for":{"hours":<HH>,"minutes":<MM>,"seconds":<SS>} }} 
 ```
 
-14. **Duration (from to) from a specific time/date to another specific time/date
+## 5. Duration Spanning `from` Start-time and Date  `to` End-time and Date
+### Schema
+```json
+{
+    "type": "object",
+    "description": "Schedule subexpression for a **duration** spanning dates and times", 
+    "properties": {
+        "from": {
+            "type": "object",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "description": "Specific time",
+                    "properties": {
+                        "time": { "type": "string", "description": "format HH:MM:SS in 24-hour time" }
+                    }
+                },
+                {
+                    "type":"object",
+                    "description": "sunrise with offset in seconds",
+                    "properties": {
+                        "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunrise time" }
+                    }
+                },
+                {
+                    "type":"object",
+                    "description": "sunset with offset in seconds",
+                    "properties": {
+                        "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                    }
+                }
+            ],
+            "date": { "type": "string", "description": "Date in YYYY/MM/DD format. If provided, the time is for that specific date. If omitted, the time is for everyday." }
+        },
+        "to": {
+            "type": "object",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "description": "Specific time",
+                    "properties": {
+                        "time": { "type": "string", "description": "format HH:MM:SS in 24-hour time" }
+                    }
+                },
+                {
+                    "type":"object",
+                    "description": "sunrise with offset in seconds",
+                    "properties": {
+                        "sunrise": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                    }
+                },
+                {
+                    "type":"object",
+                    "description": "sunset with offset in seconds",
+                    "properties": {
+                        "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
+                    }
+                }
+            ],
+            "date": { "type": "string", "description": "Date in YYYY/MM/DD format. If provided, the time is for that specific date. If omitted, the time is for everyday." }
+        }
+    },
+    "additionalProperties": false,
+    "required": ["from","to"]
+}
+```
+### Instance Structures:
+- Duration from a specific time/date to another specific time/date:
 ```json
     {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
 ```
+```json
+    {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"to":{"sunrise":<OFFSET>,"date":"<YYYY/MM/DD>"} }
+```
+```json
+    {"from":{"sunrise":<OFFSET>,"date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
+```
 
 ## Rules:
-- ALWAYS use (from to) or (from for) formats if the condition indicates a DURATION. 
+- **Always** use (from to) or (from for) formats if the condition indicates a DURATION. 
 
 ## ❌ Invalid Structures:
 ```json

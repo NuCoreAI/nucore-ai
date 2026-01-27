@@ -66,6 +66,7 @@ class PromptOrchestrator:
         
         # Build intent-to-agent mapping
         self._intent_map = self._build_intent_map()
+        self.last_prompt = None
     
     def _build_intent_map(self) -> Dict[str, dict]:
         """
@@ -231,6 +232,9 @@ class PromptOrchestrator:
     def set_summary_rags(self, rags:RAGData):
         # device rags
         self.summary_rags = rags
+
+    def get_last_prompt(self)->NuCorePrompt:
+        return self.last_prompt if self.last_prompt else self._get_router_prompt()
     
     def get_prompt(self, router_result: dict=None) -> NuCorePrompt:
         """
@@ -269,6 +273,8 @@ class PromptOrchestrator:
             # Update dynamic fields only
             cached.keywords = keywords
             cached.set_device_rags(self._get_rags_from_intent(devices))
+            self.last_prompt = cached
+            print (f"\n****\nUsing cached prompt/tools for intent '{intent}'\n****\n")
             return cached
         
         # Not cached - build it
@@ -294,6 +300,7 @@ class PromptOrchestrator:
         nucore_prompt.set_device_rags(self._get_rags_from_intent(devices))
         
         self._prompt_cache[intent] = nucore_prompt
+        self.last_prompt = nucore_prompt
         return nucore_prompt
     
     def _get_router_prompt(self) -> NuCorePrompt:

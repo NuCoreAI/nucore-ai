@@ -10,7 +10,7 @@
         "tool": {
           "type": "string",
           "const": "Commands",
-          "description": "The tool name indicating the type of operation to perform"
+          "description": "NuCore tool hooking to send commands to devices to control their behavior"
         },
         "args": {
             "type": "array",
@@ -19,21 +19,22 @@
                 "properties": {
                     "device": {
                         "type": "string",
-                        "description": "The Device ID (id) for the device in DEVICE STRUCTURE."
+                        "description": "The **id** for the **device** in DEVICE STRUCTURE."
                     },
                     "command": {
                         "type": "string",
-                        "description": "The Command ID (id) for the Accept Command for the device in DEVICE STRUCTURE."
+                        "description": "The **id** for the **Accept Command** for the **device** in DEVICE STRUCTURE."
                     },
                     "parameters": {
+                        "description": "List of parameters for the command.",
                         "type": "array",
                         "items": {
                         "type": "object",
-                        "description": "A parameter for the command. If no parameters defined, leave empty",
+                        "description": "A parameter for the **command**. If no parameters defined, leave empty",
                         "properties": {
                             "id": {
                             "type": ["string", "null"],
-                            "description": "The unique identifier (id) for the parameter from for the command from DEVICE STRUCTURE. If none, use n/a"
+                            "description": "The **id** for the parameter from for the **command**. If none, use n/a"
                             },
                             "value": {
                             "type": ["number"],
@@ -41,7 +42,7 @@
                             },
                             "uom": {
                             "type": ["string", "null"],
-                            "description": "The uom_id for the parameter from DEVICE STRUCTURE. See **GLOBAL UOM RULES**" 
+                            "description": "Must use the **uom_id** for the parameter from DEVICE STRUCTURE." 
                             },
                             "precision": {
                             "type": ["integer", "null"],
@@ -49,11 +50,10 @@
                             }
                         },
                         "required": ["id", "value", "uom", "precision"]
-                        },
-                        "description": "List of parameters for the command."
+                        }
                     }
                 },
-                "required": ["device", "command", "parameters"]
+                "required": ["device", "command"]
             }
         }
       }
