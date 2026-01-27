@@ -9,7 +9,7 @@
       "properties": {
         "tool": {
           "type": "string",
-          "const": "Routine",
+          "const": "Routines",
           "description": "The tool name indicating the type of operation to perform"
         },
         "args": {
