@@ -41,7 +41,7 @@
                             "description": "Always a number. See **GLOBAL CUSTOMER VALUE CONVERSION RULES**."
                             },
                             "uom": {
-                            "type": ["string", "null"],
+                            "type": "integer",
                             "description": "Must use the **uom_id** for the parameter from DEVICE STRUCTURE." 
                             },
                             "precision": {

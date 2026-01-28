@@ -9,16 +9,16 @@
       "properties": {
         "intent": {
           "type": "string",
+          "description": "Primary intent of the user query. See **`intent` DETERMINATION RULES**",
           "enum": [
             "command_control",
             "routine_automation",
             "real_time_status"
-          ],
-          "description": "Primary intent of the user query: command_control (immediate device actions), routine_automation (scheduled/conditional logic), real_time_status (query current state)"
+          ]
         },
         "devices": {
           "type": "array",
-          "description": "Analyze user query and map to relevant devices under DEVICE DATABASE and return matched devices ranked by relevance score",
+          "description": "See **DEVICE SELECTION RULES**",
           "items": {
             "type": "object",
             "required": ["device_id", "score"],
@@ -29,7 +29,7 @@
               },
               "score": {
                 "type": "number",
-                "description": "Relevance score (higher is better)"
+                "description": "Relevance score **from 0.0 to 1.0 inclusive** (higher is better)"
               }
             }
           }

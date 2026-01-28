@@ -20,7 +20,7 @@ class EditorSubsetRange:
         """
         Returns a JSON description of the subset.
         """
-        out = f"{{\"uom\":\"{self.uom.label if self.uom.label else ' '}\",\"uom_id\":{self.uom.id}"
+        out = f"{{\"uom\":{self.uom.id if self.uom.id else 0 },\"uom_label\":\"{self.uom.label if self.uom.label else ' '}\""
         out += f",\"precision\":0"
         names = self.get_json_names()
         if names:
@@ -126,7 +126,7 @@ class EditorMinMaxRange:
         """
         Returns a JSON description of the range.
         """
-        out = f"{{\"uom\":\"{self.uom.label if self.uom.label else ' '}\",\"uom_id\":{self.uom.id}"
+        out = f"{{\"uom\":{self.uom.id if self.uom.id else 0 },\"uom_label\":\"{self.uom.label if self.uom.label else ' '}\""
         out += f",\"min\":{self.min},\"max\":{self.max},\"precision\":{self.prec if self.prec else 0}"
         if self.step is not None:
             out += f",\"step\":{self.step}"

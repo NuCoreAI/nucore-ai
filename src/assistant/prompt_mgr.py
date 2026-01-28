@@ -9,6 +9,7 @@ from rag import RAGData
 
 DEFAULT_MAX_CONTEXT_SIZE = 32000
 DEFAULT_TOKENS_PER_MESSAGE = 2600
+DEFAULT_SCORE_THRESHOLD = 0.7
 
 ROUTER_INTENT = '__router__'  # Special intent name for router
 ROUTER_DEVICE_SECTION = '''
@@ -30,6 +31,9 @@ USER_QUERY_SECTION = '''
 
 REPHRASE_INSTRUCTION = '''Now rephrase in brief NATURAL LANGUAGE. **NO JSON OUTPUT**. **NO DETAILS**\n'''
 
+
+LOG_STARTED: bool = False
+
 @dataclass
 class NuCorePrompt:
     """
@@ -44,6 +48,7 @@ class NuCorePrompt:
         message_history: Optional list of prior messages for context
         max_context_size: Maximum token context size for the model
         tokens_per_message: Estimated tokens used per message in conversation
+        score_threshold: Minimum score threshold for including device documents
     """
     prompt: str = None
     tools: List[dict] =  None
@@ -53,16 +58,18 @@ class NuCorePrompt:
     message_history: List[dict] = field(default_factory=list)
     max_context_size: int = DEFAULT_MAX_CONTEXT_SIZE
     tokens_per_message: int = DEFAULT_TOKENS_PER_MESSAGE
+    score_threshold: float = DEFAULT_SCORE_THRESHOLD
 
-    @staticmethod
-    def get_user_query_section(user_query:str)-> str:
+    def add_user_query_section(self, user_query:str):
         """
-        Get the formatted user query section.
+        add the formatted user query section. a
+        includes device docs
         
         :param user_query: The user's query string
         :return: Formatted user query section string
         """
-        return f"{USER_QUERY_SECTION}{user_query}\n"
+        user_content = f"{self.get_device_docs()}\n{USER_QUERY_SECTION}\n{user_query}"
+        self.add_history("user", user_content + "\n") 
 
     def is_router(self) -> bool:
         """
@@ -77,8 +84,16 @@ class NuCorePrompt:
         Append a message to the message history.
         
         """
-        self.trim_message_history(content)
-        self.message_history.append({"role": role, "content": content})
+        payload={"role": role, "content": content}
+        if len(self.message_history) < 2:
+            self.message_history.append(payload)
+            self._debug_output(payload)
+            return
+        self.trim_message_history(payload)
+        if role == "user":
+            #update device docs
+            self.message_history[1] = payload
+        self._debug_output(payload)
     
     def clear_history(self):
         """
@@ -107,6 +122,7 @@ class NuCorePrompt:
                 existing_device_docs = self._get_device_docs(self.rags)
                 if new_device_docs != existing_device_docs:
                     self.clear_history()
+
         self.rags = rags
 
     def get_device_docs(self)->str:
@@ -118,18 +134,18 @@ class NuCorePrompt:
         """
         if self.rags == None:
             return ""
-        if self.is_router():
-            return self._get_device_docs(self.rags)
+        return self._get_device_docs(self.rags)
+        #if self.is_router():
+        #    return self._get_device_docs(self.rags)
 
-        not_sent_rags=RAGData(documents=[], ids=[])
-        for idx, id_ in enumerate(self.rags["ids"]):
-            device_id=f"\"id\":\"{id_}\""
-            if self.search_history("user", device_id):
-                continue
-            not_sent_rags.add_document(self.rags["documents"][idx], self.rags["embeddings"][idx] , id_, self.rags["metadatas"][idx])
+        #not_sent_rags=RAGData(documents=[], ids=[])
+        #for idx, id_ in enumerate(self.rags["ids"]):
+        #    device_id=f"\"id\":\"{id_}\""
+        #    if self.search_history("user", device_id):
+        #        continue
+        #    not_sent_rags.add_document(self.rags["documents"][idx], self.rags["embeddings"][idx] , id_, self.rags["metadatas"][idx])
 
-        return self._get_device_docs(not_sent_rags)
-    
+        #return self._get_device_docs(not_sent_rags)
 
     def _get_device_docs(self, rags:RAGData)->str:
         if rags == None:
@@ -144,18 +160,20 @@ class NuCorePrompt:
 
         return device_docs
 
-    def _estimate_tokens(self, text:str) -> int:
+    def _estimate_tokens(self, message:dict) -> int:
         """
         Estimate the number of tokens in a given text.
         :param text: The text to estimate tokens for.
         :return: Estimated number of tokens.
         """
-        if not text:
+        if not message:
             return 0
+        #convert dict to string
+        text = str(message)
         # Simple estimation: 1 token per 4 characters (this is a rough estimate)
         return len(text) // 4 + 50  # adding buffer
 
-    def trim_message_history(self, content_to_add:str):
+    def trim_message_history(self, content_to_add:dict):
         """
         Trim message_history to stay within context limits.
         Preserves: system message, first user message (with device structure), and recent conversation.
@@ -169,12 +187,12 @@ class NuCorePrompt:
 
         idx = 0
         if idx < len(self.message_history) and self.message_history[idx]["role"] == "system":
-            system_tokens = self._estimate_tokens(self.message_history[idx]["content"])
+            system_tokens = self._estimate_tokens(self.message_history[idx])
             idx += 1
         
         idx = 1
         if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
-            first_user_tokens = self._estimate_tokens(self.message_history[idx]["content"])
+            first_user_tokens = self._estimate_tokens(self.message_history[idx])
 
         #minimum tokens already used
         reserved_tokens = system_tokens + first_user_tokens 
@@ -196,7 +214,7 @@ class NuCorePrompt:
         history_messages = [] # in reversed order
         # Start from from the bottom to the 2nd element (ignoring system and first user)
         for idx, message in enumerate(reversed(self.message_history[2:]), start=2):
-            token_count = self._estimate_tokens(message["content"])
+            token_count = self._estimate_tokens(message)
             available_tokens -= token_count 
             max_turns = max(1, available_tokens // self.tokens_per_message)
             if max_turns < 2:
@@ -211,3 +229,16 @@ class NuCorePrompt:
         conversation_msgs = list(reversed(history_messages))
         self.message_history.extend(conversation_msgs)
         
+    def set_debug_mode(self, debug:bool):
+        self.debug_mode = debug
+
+    def _debug_output(self, message:dict):
+        if not self.debug_mode or not message:
+            return
+        global LOG_STARTED
+        file_modifier="w" if not LOG_STARTED else "a"
+        LOG_STARTED = True 
+        
+        with open("/tmp/nucore.prompt.md", file_modifier) as f:
+            f.write(f"################ {message['role'].upper()} MESSAGE: ```{self.intent}```\n\n")
+            f.write(str(message["content"]))

@@ -1,146 +1,185 @@
 {
-    "name": "Charge and Climate Control",
-    "parent": 0,
-    "enabled": true,
-    "if": [
+    "name": "Matter Dimmer",
+    "id": "ZM00006_001_1",
+    "Properties": [
         {
-            "weekly": {
-                "days": "mon,thu",
-                "from": {
-                    "sunset": -300
+            "name": "Status",
+            "id": "ST",
+            "editors": [
+                {
+                    "uom": 51,
+                    "uom_label": "%",
+                    "precision": 0,
+                    "enums": {
+                        "0": "Off"
+                    }
                 },
-                "to": {
-                    "sunrise": 600,
-                    "day": 1
-                }
-            }
-        },
-        {
-            "logic": "and"
-        },
-        {
-            "device": "n003_chargea5rf7219",
-            "status": "ST",
-            "comp": ">",
-            "value": 1000,
-            "uom": 51,
-            "precision": 1
-        },
-        {
-            "logic": "or"
-        },
-        {
-            "device": "n001_oadr3ven",
-            "status": "ST",
-            "comp": "<",
-            "value": 5000,
-            "uom": 103,
-            "precision": 4
-        }
-    ],
-    "then": [
-        {
-            "device": "n003_chargea5rf7219",
-            "command": "BATPERCENT",
-            "parameters": [
                 {
-                    "id": "n/a",
-                    "value": 1000,
+                    "uom": 100,
+                    "uom_label": "Level",
+                    "min": 0,
+                    "max": 254,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "name": "On Level",
+            "id": "OL",
+            "editors": [
+                {
                     "uom": 51,
+                    "uom_label": "%",
+                    "precision": 0,
+                    "enums": {
+                        "0": "Off"
+                    }
+                },
+                {
+                    "uom": 100,
+                    "uom_label": "Level",
+                    "min": 0,
+                    "max": 254,
+                    "precision": 0
+                }
+            ]
+        },
+        {
+            "name": "Ramp Rate",
+            "id": "RR",
+            "editors": [
+                {
+                    "uom": 58,
+                    "uom_label": "seconds",
+                    "min": 0.0,
+                    "max": 6553.0,
                     "precision": 1
                 }
             ]
         },
         {
-            "device": "n003_chargea5rf7219",
-            "command": "CHARGECTRL",
-            "parameters": [
+            "name": "Responding",
+            "id": "ERR",
+            "editors": [
                 {
-                    "id": "n/a",
-                    "value": 1,
                     "uom": 25,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "ZM00005_001_1",
-            "command": "CLISPC",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 72,
-                    "uom": 17,
-                    "precision": 0
-                }
-            ]
-        },
-        {
-            "device": "ZM00008_001_1",
-            "command": "CLISPC",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 72,
-                    "uom": 17,
-                    "precision": 0
+                    "uom_label": "Enum",
+                    "precision": 0,
+                    "enums": {
+                        "0": "True",
+                        "1": "False"
+                    }
                 }
             ]
         }
     ],
-    "else": [
+    "Accept Commands": [
         {
-            "device": "ZY003_1",
-            "command": "DOF",
-            "parameters": []
-        },
-        {
-            "device": "n003_chargea5rf7219",
-            "command": "BATPERCENT",
+            "name": "On",
+            "id": "DON",
             "parameters": [
                 {
+                    "name": "n/a",
                     "id": "n/a",
-                    "value": 800,
-                    "uom": 51,
-                    "precision": 1
+                    "editors": [
+                        {
+                            "uom": 51,
+                            "uom_label": "%",
+                            "precision": 0,
+                            "enums": {
+                                "0": "Off"
+                            }
+                        },
+                        {
+                            "uom": 100,
+                            "uom_label": "Level",
+                            "min": 0,
+                            "max": 254,
+                            "precision": 0
+                        }
+                    ]
+                },
+                {
+                    "name": "Ramp Rate",
+                    "id": "RR",
+                    "editors": [
+                        {
+                            "uom": 58,
+                            "uom_label": "seconds",
+                            "min": 0.0,
+                            "max": 6553.0,
+                            "precision": 1
+                        }
+                    ]
                 }
             ]
         },
         {
-            "device": "n003_chargea5rf7219",
-            "command": "CHARGECTRL",
+            "name": "Off",
+            "id": "DOF"
+        },
+        {
+            "name": "Fast On",
+            "id": "DFON"
+        },
+        {
+            "name": "Fast Off",
+            "id": "DFOF"
+        },
+        {
+            "name": "Toggle",
+            "id": "TOGGLE"
+        },
+        {
+            "name": "On Level",
+            "id": "OL",
             "parameters": [
                 {
+                    "name": "n/a",
                     "id": "n/a",
-                    "value": 0,
-                    "uom": 25,
-                    "precision": 0
+                    "editors": [
+                        {
+                            "uom": 51,
+                            "uom_label": "%",
+                            "precision": 0,
+                            "enums": {
+                                "0": "Off"
+                            }
+                        },
+                        {
+                            "uom": 100,
+                            "uom_label": "Level",
+                            "min": 0,
+                            "max": 254,
+                            "precision": 0
+                        }
+                    ]
                 }
             ]
         },
         {
-            "device": "ZM00005_001_1",
-            "command": "CLISPC",
+            "name": "Ramp Rate",
+            "id": "RR",
             "parameters": [
                 {
+                    "name": "n/a",
                     "id": "n/a",
-                    "value": 75,
-                    "uom": 17,
-                    "precision": 0
+                    "editors": [
+                        {
+                            "uom": 58,
+                            "uom_label": "seconds",
+                            "min": 0.0,
+                            "max": 6553.0,
+                            "precision": 1
+                        }
+                    ]
                 }
             ]
         },
         {
-            "device": "ZM00008_001_1",
-            "command": "CLISPC",
-            "parameters": [
-                {
-                    "id": "n/a",
-                    "value": 75,
-                    "uom": 17,
-                    "precision": 0
-                }
-            ]
+            "name": "Query",
+            "id": "QUERY"
         }
-    ]
+    ],
+    "Send Commands": []
 }

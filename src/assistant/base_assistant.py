@@ -380,7 +380,7 @@ class NuCoreBaseAssistant(ABC):
             return None
         if type is None:
             type="request(s)"
-        output=f"Here are the results of the last {len(responses)} {type}:\""
+        output=f"Here are the results of the last {len(responses)} {type}:\n"
         if isinstance(responses, list):
             for i in range(len(responses)):
                 response = responses[i]
@@ -392,7 +392,7 @@ class NuCoreBaseAssistant(ABC):
         else:
             output+=f"{'successful' if response.status_code == 200 else 'failed with status code ' + str(response.status_code)}"
 
-        output+=f". {REPHRASE_INSTRUCTION}\""
+        output+=f".\n {REPHRASE_INSTRUCTION}"
         await self.process_customer_input(output, websocket=websocket, text_only=True)
         return responses
 
@@ -587,38 +587,25 @@ class NuCoreBaseAssistant(ABC):
         #if query starts with "USER QUERY:", remove USER QUERY and use the actual query
         if query.startswith("USER QUERY:"):
             query = query[len("USER QUERY:"):].strip()
-         
+
+        prompt.set_debug_mode(self.debug_mode) 
         sprompt = prompt.prompt
         sprompt = sprompt.strip()
 
-        add_device_docs = False
         if len(prompt.message_history) == 0 :
             #append shared enums to system prompt
             if not prompt.is_router():
                 sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             if self._include_system_prompt_in_history():
                 prompt.add_history("system",  sprompt)
-            if self.debug_mode:
-                with open("/tmp/nucore.prompt.md", "w") as f:
-                    f.write("----- SYSTEM PROMPT -----\n")
-                    f.write(sprompt)
-            add_device_docs=True
 
-        user_content = NuCorePrompt.get_user_query_section(query)
-        if add_device_docs or not prompt.is_router():        
-            user_content = f"{prompt.get_device_docs()}\n{user_content}"
-            add_device_docs=False
-
-        # Add user message to history
-        prompt.add_history("user", user_content)
-        if self.debug_mode:
-            with open("/tmp/nucore.prompt.md", "a") as f:
-                f.write(user_content)
+        prompt.add_user_query_section(query) #includes device docs
+        
         try:
             assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
             keep_open = True
             if assistant_response is not None:
-                prompt.add_history("assistant", assistant_response)
+                #prompt.add_history("assistant", assistant_response)
                 keep_open = await self.process_llm_response(query, assistant_response, websocket, None, None)
             else:
                 keep_open = False

@@ -49,13 +49,13 @@ Subexpression used for Status comparisons on properties in routines.
   "status":"<property_id>",
   "comp":"<COMPARISON OPERATOR>",
   "value":<customer_value>,
-  "uom":<uom_id>,
+  "uom":<uom>,
   "precision":<precision>
 }
 ```
 ## Rules:
 - **CRITICAL** - Do NOT add any other fields. 
-- uom_id - see GLOBAL UOM RULES 
+- uom - see GLOBAL UOM RULES 
 - property_id - **strict** MUST USE the PROPERTY ID (not name)
 - customer_value - see GLOBAL CUSTOMER VALUE CONVERSION RULES
 
@@ -155,7 +155,7 @@ Checks if a control event occurred (someone physically controlled a device)
           },
           "uom": { 
               "type": "integer",
-              "description": "The uom_id for the parameter from DEVICE STRUCTURE. See **GLOBAL UOM RULES**" 
+              "description": "The **uom** for the parameter. See **GLOBAL UOM RULES**" 
           },
           "precision": { 
               "type": "integer",
@@ -180,7 +180,7 @@ Checks if a control event occurred (someone physically controlled a device)
   "control":"<command_id>",
   "parameters":
   [
-    {"id":"<param_id>", "value":<customer_value>,"uom":<uom_id>,"precision":<precision>}
+    {"id":"<param_id>", "value":<customer_value>,"uom":<uom>,"precision":<precision>}
   ]
 }
 ```
@@ -191,7 +191,7 @@ Checks if a control event occurred (someone physically controlled a device)
 - parameters array only if defined
 - If defined, parameter objects have EXACTLY 4 fields: id, value, uom, precision
 - Copy parameter id AS-IS. Do NOT invent. 'n/a' is a VALID ID. 
-- uom_id - see GLOBAL UOM RULES 
+- uom - see GLOBAL UOM RULES 
 - customer_value - see GLOBAL CUSTOMER VALUE CONVERSION RULES
 
 ## ✅ Valid Structures:
@@ -745,6 +745,7 @@ The order of the evaluation for the array is from the first element to the last.
 
 ## Rules:
 - If you have N SUBEXPRESSIONS, you need exactly N-1 LOGIC OPERATORS between them.
+- **Never** include Schedule Subexpression if time condition/schedule **cannot** be inferred from the user query
 - Default to `{"logic":"and"}` when combining multiple conditions unless user explicitly specifies `or`.
 - Parentheses are used to group SUBEXPRESSIONS for precedence.
 - Adjacent `(` tokens are invalid, but the following are valid:
@@ -870,13 +871,13 @@ Commands that can be **sent** to a device and listed in **Accepted Commands** se
   "command":"<command_id>",
   "parameters":
   [
-    {"id":"<param_id>","value":<customer_value>,"uom":<uom_id>,"precision":<precision>}
+    {"id":"<param_id>","value":<customer_value>,"uom":<uom>,"precision":<precision>}
   ]
 }
 ```
 ## Rules:
 - command_id - must be a valid command listed under the Accepted Commands section for the device
-- uom_id - see GLOBAL UOM RULES 
+- uom - see GLOBAL UOM RULES 
 - customer_value - see GLOBAL CUSTOMER VALUE CONVERSION RULES
 - Parameters only if defined
 - Parameter objects have EXACTLY 4 fields: id, value, uom, precision

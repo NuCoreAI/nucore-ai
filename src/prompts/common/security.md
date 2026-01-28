@@ -120,7 +120,7 @@ Security Bypass:
 **PARAMETER RULES:**
 - All numeric values must be within min/max bounds from DEVICE STRUCTURE
 - All enum values must exist in the enum list from DEVICE STRUCTURE
-- All uom_id values must be integers from the editor definition
+- All **uom** values must be integers from the editor definition
 - String parameters must not contain executable patterns
 - Parameters cannot contain newlines or control characters
 
