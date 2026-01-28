@@ -86,7 +86,8 @@
                "--url=http://192.168.6.149:8080" ,
                "--username=admin",
                "--password=admin",
-               "--prompt_type=per-device"
+               "--prompt_type=per-device",
+               "--json_output=true"
             ],
             "justMyCode": false
         },

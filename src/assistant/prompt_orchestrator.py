@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from dataclasses import dataclass, field
 from rag import RAGData
-from prompt_mgr import NuCorePrompt, ROUTER_INTENT, DEFAULT_MAX_CONTEXT_SIZE, DEFAULT_TOKENS_PER_MESSAGE
+from prompt_mgr import NuCorePrompt, ROUTER_INTENT, DEFAULT_MAX_CONTEXT_SIZE, DEFAULT_TOKENS_PER_MESSAGE, DEFAULT_SCORE_THRESHOLD
 
 
 class PromptOrchestrator:
@@ -214,8 +214,19 @@ class PromptOrchestrator:
         """
         if not self.full_rags:
             return RAGData()
+
+        score_threshold = 0.0
+        if self._get_router_prompt(): 
+            score_threshold = self._get_router_prompt().score_threshold
+
+        matched_device_ids=set()
+        for d in devices:
+            if float(d.get('score', 0)) >= score_threshold:
+                try:
+                    matched_device_ids.add(d['device_id'])
+                except Exception as ex:
+                    pass
         
-        matched_device_ids = {d['device_id'] for d in devices}
         full_rags = self.full_rags
         filtered_rags = RAGData(documents=[], ids=[]) 
 
@@ -348,6 +359,7 @@ class PromptOrchestrator:
         # Load router tools
         tool_configs = router_config.get('tools', [])
         tokens_per_message = router_config.get('tokens_per_message', DEFAULT_TOKENS_PER_MESSAGE)
+        score_threshold = router_config.get('score_threshold', DEFAULT_SCORE_THRESHOLD)
         tools = self._load_tools(tool_configs)
         
         # Create and cache the router NuCorePrompt
@@ -357,7 +369,8 @@ class PromptOrchestrator:
             intent=ROUTER_INTENT,
             keywords=[],
             max_context_size=self.max_context_size,
-            tokens_per_message=tokens_per_message
+            tokens_per_message=tokens_per_message,
+            score_threshold=score_threshold
         )
         router_prompt.set_device_rags(self.summary_rags)
         

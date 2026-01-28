@@ -39,7 +39,7 @@ class MinimalRagFormatter(RAGFormatter):
     def _format_node(self, node: Node) -> str:
         """Format a single node into delimited string with sections."""
         if not node or not node.node_def:
-            return f"{node.address}: {node.name}"
+            return "n/a: `n/a`"
         
         # Collect property names and their enums
         property_names = []
@@ -79,18 +79,18 @@ class MinimalRagFormatter(RAGFormatter):
                 unique_enums.append(enum)
         
         # Build delimited string
-        parts = [node.name]
+        parts = [f"`{node.name}`"]
         
         if property_names:
-            parts.append(f"props: {', '.join(property_names)}")
+            parts.append(f"`props`: {', '.join(property_names)}")
         
         if command_names:
-            parts.append(f"cmds: {', '.join(command_names)}")
+            parts.append(f"`cmds`: {', '.join(command_names)}")
         
         if unique_enums:
-            parts.append(f"enums: {', '.join(unique_enums)}")
+            parts.append(f"`enums`: {', '.join(unique_enums)}")
         
-        return f"{node.address}: {' | '.join(parts)}"
+        return f">>> {node.address}: {' | '.join(parts)}"
 
     def _format_profile(self, profile: RuntimeProfile) -> list[str]:
         """Format all devices in a profile."""
