@@ -81,6 +81,3 @@ All parameters and properties use integer uom values from DEVICE STRUCTURE
 ────────────────────────────────
 # GLOBAL DEVICE INTERACTION RULES 
 - Do not control vehicles unless explicitly requested
-- **Color handling**:
-  - Prefer devices with "color" in name
-  - Prefer XY commands if available

@@ -10,7 +10,7 @@
 `Accepts Commands` define commands that can be sent to the device such as on, off, dim, etc. 
 `Sends Commands` define emitted by the device. (i.e. motion sensed, someone tapping on a keypad button, etc.)
 `Parameters` are extra information provided to Accepts and Sends Commands. The values for parameters are constrained by an `editor`
-`COS (Change of State)`  is an event resulting from change in property value (OFF→ON, 72→73)
+`COS (Change of Property State)` is an event resulting from change in property value (OFF→ON, 72→73)
 `COC (Change of Control)` is an event resulting from physical control of a device, even if state does not change (captured via Sends Commands)
 `Enum` is an enumerated list of permissible values for `properties` and `parameters`
 `Plugin` is akin to an app on smart phones. It **plugs into** NuCore and extends NuCore's features/functionalities. 
