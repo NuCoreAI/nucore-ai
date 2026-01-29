@@ -30,10 +30,10 @@ Devices are formatted with pipe-delimited sections for easy parsing:
 - Each `intent` has a differnet device selection, prioritization, and scoring rules as follows:
 
 ## `command_control` DEVICE SELECTION RULES
+- If there's **color** related **commands** in the user query, give **highest** score to devices that explicitly support **color control** commands
 - Devices with identical relevant commands **must** receive identical scores for the same query
 - Search order: `cmd`, *device_name*, `enums`, `props`
 - Priority: matching keywords, synonyms, then semantic relevance
-- If there's **color** related commands in the user query, give **higher** score to devices that explicitly support **color control** commands
 
 ## `real_time_status` DEVICE SELECTION RULES
 - Devices with identical relevant properties and enums **must** receive identical scores for the same query
