@@ -4,6 +4,7 @@ Outputs devices in ultra-compact delimited format for LLM matching.
 Format: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
 """
 
+import json
 from nucore import Node, Group, Folder, RuntimeProfile
 from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
@@ -21,6 +22,7 @@ class MinimalRagFormatter(RAGFormatter):
         self.nodes = None
         self.groups = None
         self.folders = None
+        self.json_output = json_output
 
     def _collect_enum_values(self, editor) -> list[str]:
         """Extract all enum value labels from an editor."""
@@ -35,11 +37,70 @@ class MinimalRagFormatter(RAGFormatter):
                     if label and label not in enums:
                         enums.append(label)
         return enums
-
-    def _format_node(self, node: Node) -> str:
+    
+    def _format_node_json(self, node: Node) -> dict:
         """Format a single node into delimited string with sections."""
         if not node or not node.node_def:
-            return "n/a: `n/a`"
+            return None 
+
+        out = {
+            "name": node.name,
+            "id": node.address, 
+            "props": [],
+            "cmds": [],
+            "enums": []
+        }
+
+        
+        # Collect property names and their enums
+        property_names = []
+        property_enums = []
+        
+        for prop in node.node_def.properties:
+            if prop.name:
+                property_names.append(prop.name)
+            # Collect enums from property editors
+            if prop.editor:
+                property_enums.extend(self._collect_enum_values(prop.editor))
+        
+        # Collect command names and their parameter enums
+        command_names = []
+        command_enums = []
+        
+        for cmd in node.node_def.cmds.accepts:
+            if cmd.name:
+                command_names.append(cmd.name)
+            # Collect enums from command parameters
+            if cmd.parameters:
+                for param in cmd.parameters:
+                    if param.editor:
+                        command_enums.extend(self._collect_enum_values(param.editor))
+        
+        for cmd in node.node_def.cmds.sends:
+            if cmd.name:
+                command_names.append(cmd.name)
+        
+        # Combine all enums and remove duplicates
+        all_enums = property_enums + command_enums
+        unique_enums = []
+        seen = set()
+        for enum in all_enums:
+            if enum not in seen:
+                seen.add(enum)
+                unique_enums.append(enum)
+
+        out["enums"] = unique_enums
+        out["props"] = property_names
+        out["cmds"] = command_names
+        return out
+
+    def _format_node(self, node: Node):
+        """Format a single node into delimited string with sections."""
+        if not node or not node.node_def:
+            return None 
+        
+        if self.json_output:
+            return self._format_node_json(node)
         
         # Collect property names and their enums
         property_names = []
@@ -79,7 +140,7 @@ class MinimalRagFormatter(RAGFormatter):
                 unique_enums.append(enum)
         
         # Build delimited string
-        parts = [f"`{node.name}`"]
+        parts = [f"\"{node.name}\""]
         
         if property_names:
             parts.append(f"`props`: {', '.join(property_names)}")
@@ -90,20 +151,28 @@ class MinimalRagFormatter(RAGFormatter):
         if unique_enums:
             parts.append(f"`enums`: {', '.join(unique_enums)}")
         
-        return f">>> {node.address}: {' | '.join(parts)}"
+        return f">>> \"{node.address}\" : {' | '.join(parts)} <<<"
 
     def _format_profile(self, profile: RuntimeProfile) -> list[str]:
         """Format all devices in a profile."""
         formatted_lines = []
+        formatted_json = {
+            "devices": []
+        }
         
         if not profile or not profile.nodes:
             return formatted_lines
-        
-        for node in profile.nodes:
+
+         
+        for node in profile.nodes.values():
             line = self._format_node(node)
-            formatted_lines.append(line)
+            if line:
+                if self.json_output:
+                    formatted_json["devices"].append(line)
+                else:
+                    formatted_lines.append(line)
         
-        return formatted_lines
+        return formatted_json if self.json_output else formatted_lines
 
     def format(self, **kwargs) -> RAGData:
         """
@@ -121,30 +190,47 @@ class MinimalRagFormatter(RAGFormatter):
         self.folders = kwargs.get("folders")
         
         all_lines = []
+        all_lines_json = {
+            "devices": []
+        }
+        
         
         # Format from profiles if available
         if self.profiles:
             for profile in self.profiles.values():
-                all_lines.extend(self._format_profile(profile))
+                result = self._format_profile(profile)
+                if self.json_output:
+                    all_lines_json["devices"].extend(result["devices"])
+                else:
+                    all_lines.extend(result)
         
         # Otherwise format from nodes directly
         elif self.nodes:
             for node in self.nodes.values():
                 line = self._format_node(node)
-                all_lines.append(line)
+                if (line):
+                    if self.json_output:
+                        all_lines_json["devices"].append(line)
+                    else:
+                        all_lines.append(line)
         
         # Create RAG data structure
         rag_docs = RAGData()
         
         # Add as single document with all devices
-        if all_lines:
-            content = "\n".join(all_lines)
-            rag_docs.add_document(
-                content,
-                None,  # No embeddings
-                id="minimal_device_list",
-                metadata={"format": "minimal", "device_count": len(all_lines)}
-            )
+        content = "" 
+        if self.json_output:
+            if all_lines_json["devices"]:
+                content = f"```json\n{json.dumps(all_lines_json)}\n```"
+        else:
+            if all_lines:
+                content = "\n".join(all_lines)
+        rag_docs.add_document(
+            content,
+            None,  # No embeddings
+            id="minimal_device_list",
+            metadata={"format": "minimal", "device_count": len(all_lines_json["devices"]) if self.json_output else len(all_lines)}
+        )
         
         return rag_docs
 
