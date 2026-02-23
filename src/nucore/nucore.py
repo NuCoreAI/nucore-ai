@@ -134,14 +134,36 @@ class NuCore:
         device_rag_formatter = ProfileRagFormatter(json_output=self.nucore_api.json_output)
         return self._format_nodes(device_rag_formatter)
 
-    def format_nodes_summary(self):
+    def format_nodes_summary(self, condense_profiles:bool):
         """
         Format nodes for fine tuning or other purposes 
+        :param condense_profiles: If True, condense profiles in the summary to:
+        {
+            "devices": [
+                "Nest Matter Family Room", "Meros Smart Plug", ...
+                ],
+            "cmds": {
+                "Cool Setpoint": [0, 8, 19],
+                "On":            [1, 3, 4, 5, 13, 14, 20, 21],
+                "Brighten":      [3, 14],
+                ...
+            },
+            "props": {
+                "Temperature":   [0, 8, 9, 10, 11],
+                "Mode":          [0, 8, 19],
+                ...
+            },
+            "enums": {
+                "Off":    [0, 3, 4, 8, 13, 14, 19, 20, 21],
+                "On":     [4, 13, 15, 17, 21],
+                ...
+            }
+        }
         :return: List of formatted nodes.
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
-        device_rag_formatter = MinimalRagFormatter(json_output=self.nucore_api.json_output)
+        device_rag_formatter = MinimalRagFormatter(json_output=self.nucore_api.json_output, condense=condense_profiles)
         return self._format_nodes(device_rag_formatter)
     
     def format_static_info(self, path:str):
@@ -261,6 +283,14 @@ class NuCore:
         if not routine:
             raise NuCoreError ("No valid routine provided.")
         try: 
+            out_routine={
+                "name": f"{routine['name']}",
+                "parent": routine['parent'],
+                "enabled": routine['enabled'] ,
+                "if": [],
+                "then": [],
+                "else": []
+            }
             ifs = routine.get("if", None)
             if ifs is not None and len (ifs) > 0:
                 for if_ in ifs:
@@ -274,6 +304,9 @@ class NuCore:
                         device_id = condition.get("device", None)
                         if device_id is None:
                             continue
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None: 
+                            continue
                         # device ids are in base64 encoded, decode it
                         device_id = ProfileRagFormatter.decode_id(device_id)
                         condition["device"] = device_id
@@ -284,12 +317,16 @@ class NuCore:
                             continue
                         value = value * (10 ** precision)
                         condition["value"] = int(value)
+                    out_routine['if'].append(if_)
             
             thens = routine.get("then", None)
             if thens is not None and len (thens) > 0:
                 for then in thens:
                     device_id = then.get("device", None)
                     if device_id is not None:
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None: 
+                            continue
                         # device ids are in base64 encoded, decode it
                         device_id = ProfileRagFormatter.decode_id(device_id)
                         then["device"] = device_id
@@ -304,11 +341,16 @@ class NuCore:
                                 if uom_id is not None and int(uom_id) != 25: 
                                     value = value * (10 ** prec)
                                     param["value"] = value 
+                    out_routine['then'].append(then)
             elses = routine.get("else", None)
             if elses is not None and len (elses) > 0:
                 for else_ in elses:
                     device_id = else_.get("device", None)
                     if device_id is not None:
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None:
+                            #remove this else from elses
+                            continue
                         # device ids are in base64 encoded, decode it
                         device_id = ProfileRagFormatter.decode_id(device_id)
                         else_["device"] = device_id
@@ -323,14 +365,15 @@ class NuCore:
                                 if uom_id is not None and int(uom_id) != 25: 
                                     value = value * (10 ** prec)
                                     param["value"] = value
+                    out_routine['else'].append(else_)
 
         except Exception as e:
             print(f"Failed to process routine: {str(e)}")
             return None
 
         print( "****Routine after processing:") 
-        print(json.dumps(routine, indent=4))
-        response=self.nucore_api.upload_program(routine)
+        print(json.dumps(out_routine, indent=4))
+        response=self.nucore_api.upload_program(out_routine)
         return response
 
     
@@ -372,6 +415,28 @@ class NuCore:
         device_id = ProfileRagFormatter.decode_id(device_id)
         node = self.nodes.get(device_id, None)  # Return None if device_id not found
         return node.name if node.name else device_id
+
+    def get_device_id(self, device_str:str)-> str:
+        """
+        Get the id of a device by a string. It searches id first, if not by name 
+        
+        Args:
+            device_id (str): The ID of the device to get the name for.
+        
+        Returns:
+            str: The name of the device, or None if not found.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        #device id is base64 encoded, decode it
+        node = self.nodes.get(device_str, None)  # Return None if device_id not found
+        if node:
+            return node.address
+
+        for node in self.nodes.values():
+            if node.name == device_str:
+                return node.address
+        return None
 
     async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
         """
