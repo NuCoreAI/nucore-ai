@@ -5,6 +5,8 @@ You are a NuCore smart-home assistant. You are generating a JSON object for a sm
 ────────────────────────────────
 # COS SUBEXPRESSION 
 Subexpression used for Realtime Property Value comparisons in routines.
+- **Always** assume each word in the user query maps to a property unless proven false
+- Subexpressions are atomic. This means that if there are two **related** properties, they must become two distinct subexpressions
 
 ## Schema
 ```json
@@ -59,7 +61,7 @@ Subexpression used for Realtime Property Value comparisons in routines.
 - property_id - **strict** MUST USE the PROPERTY ID (not name)
 - customer_value - see GLOBAL CUSTOMER VALUE CONVERSION RULES
 
-## ✅ Valid Structures:
+## Valid Structures:
 1. Is brightness greater than 50%?
 ```json
 {
@@ -93,7 +95,7 @@ Subexpression used for Realtime Property Value comparisons in routines.
   "precision":1
 }
 ```
-## ❌ Invalid Structures:
+## Invalid Structures:
 1. Missing `comp` element
 ```json
 {
@@ -194,7 +196,7 @@ Checks if a control event occurred (someone physically controlled a device)
 - uom - see GLOBAL UOM RULES 
 - customer_value - see GLOBAL CUSTOMER VALUE CONVERSION RULES
 
-## ✅ Valid Structures:
+## Valid Structures:
 1. Did Light turn on to specific level? 
 ```json
 { 
@@ -234,7 +236,7 @@ Checks if a control event occurred (someone physically controlled a device)
 }
 ```
 
-## ❌ Invalid Structures:
+## Invalid Structures:
 1. Not complying to the schema 
 ```json
 {
@@ -658,7 +660,7 @@ Use one of these exact forms ALL IN JSON:
 ## Rules:
 - **Always** use (from to) or (from for) formats if the condition indicates a DURATION. 
 
-## ❌ Invalid Structures:
+## Invalid Structures:
 
 1. Making two expressions for from/to 
 ```json
@@ -785,7 +787,7 @@ The order of the evaluation for the array is from the first element to the last.
 ]
 ```
 
-## ✅ Valid Structures:
+## Valid Structures:
 ```json
 [
   {<SUBEXPRESSION>},
@@ -796,7 +798,7 @@ The order of the evaluation for the array is from the first element to the last.
 ]
 ```
 
-# ❌ Invalid Structures:
+## Invalid Structures:
 1. No LOGIC OPERATOR  
 ```json
 [
@@ -1345,6 +1347,7 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
 ```
 ────────────────────────────────
 # DEVICE SELECTION RULES
+- Case Insensitive Keyword Match
 - Device selection is the *union* of devices from each part (`if`, `then`, `else`)
 - For the **`if`** Array:
   - Search order: *Properties*, Device Name, Enumerations, *Send Commands* 
