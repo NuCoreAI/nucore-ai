@@ -16,12 +16,13 @@ class MinimalRagFormatter(RAGFormatter):
     Each line: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
     """
     
-    def __init__(self,json_output:bool=False):
+    def __init__(self,json_output:bool=False, condense:bool=False):
         self.lines = []
         self.profiles = None
         self.nodes = None
         self.groups = None
         self.folders = None
+        self.condense = condense
         self.json_output = json_output
 
     def _collect_enum_values(self, editor) -> list[str]:
@@ -216,20 +217,61 @@ class MinimalRagFormatter(RAGFormatter):
         
         # Create RAG data structure
         rag_docs = RAGData()
-        
+
         # Add as single document with all devices
         content = "" 
         if self.json_output:
+            device_count = len(all_lines_json["devices"])  
             if all_lines_json["devices"]:
+                if self.condense:
+                    index = 0
+                    out_condensed = {
+                        "names": [],
+                        "cmds": {},
+                        "props": {},
+                        "enums": {}
+                    }
+                    for device in all_lines_json["devices"]:
+                        device_name = device.get("name", None)
+                        if device_name is not None and device_name not in out_condensed["names"]:
+                            out_condensed["names"].append({device_name: index})
+                        cmds = device.get("cmds", None)
+                        if cmds is not None:
+                            for cmd_name in cmds:
+                                if cmd_name is not None:
+                                    if cmd_name not in out_condensed["cmds"]:
+                                        out_condensed["cmds"][cmd_name] = []
+                                    out_condensed["cmds"][cmd_name].append(index)
+                        props = device.get("props", None)
+                        if props is not None:
+                            for prop_name in props:
+                                if prop_name is not None:
+                                    if prop_name not in out_condensed["props"]:
+                                        out_condensed["props"][prop_name] = []
+                                    out_condensed["props"][prop_name].append(index)
+                        enums = device.get("enums", None)
+                        if enums is not None:
+                            for enum_name in enums:
+                                if enum_name is not None:
+                                    if enum_name not in out_condensed["enums"]:
+                                        out_condensed["enums"][enum_name] = []
+                                    out_condensed["enums"][enum_name].append(index)
+                        
+                        index += 1
+                    all_lines_json = out_condensed
+                
                 content = f"```json\n{json.dumps(all_lines_json)}\n```"
         else:
             if all_lines:
                 content = "\n".join(all_lines)
+                device_count = len(all_lines)
+
+        
         rag_docs.add_document(
             content,
             None,  # No embeddings
             id="minimal_device_list",
-            metadata={"format": "minimal", "device_count": len(all_lines_json["devices"]) if self.json_output else len(all_lines)}
+            metadata={"format": "minimal", "device_count": device_count}
         )
         
         return rag_docs
