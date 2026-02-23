@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "nucore_router_tool",
-    "description": "Results from searching the device database for relevant devices based on user query",
+    "description": "Results from searching the device database for top 10 most relevant devices based on user query",
     "parameters": {
       "type": "object",
       "required": ["intent","devices"],
