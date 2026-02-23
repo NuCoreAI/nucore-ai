@@ -200,7 +200,7 @@ class NuCoreBaseAssistant(ABC):
         if not self.rags:
             raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
         self.orchestrator.set_full_rags(self.rags)
-        self.orchestrator.set_summary_rags(self.nuCore.format_nodes_summary())
+        self.orchestrator.set_summary_rags(self.nuCore.format_nodes_summary(False))
         return True
         
     def _get_tool_call(self, full_response:str) -> bool:
