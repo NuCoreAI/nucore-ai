@@ -12,6 +12,11 @@ from nucore.uom import get_uom_by_id
 import xml.etree.ElementTree as ET
 from .iox_shared_enums import IoXSharedEnums
 
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
 class IoXWrapper(NuCoreBackendAPI):
     ''' 
         Wrapper class for ISY interaction 
@@ -264,7 +269,6 @@ class IoXWrapper(NuCoreBackendAPI):
     def upload_program(self, program:dict):
         if not program:
             return False
-        orig_base_url=self.base_url; 
         response=None
         try:
             program_content = {
@@ -273,13 +277,10 @@ class IoXWrapper(NuCoreBackendAPI):
             headers = {
                 "Content-Type": "application/json"
             }
-            #temporarily remove the port if present
-            self.base_url="http://localhost:5000"
             response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
         except Exception as ex:
             print (ex)
         
-        self.base_url = orig_base_url
         return response
     
 
@@ -354,7 +355,8 @@ class IoXWrapper(NuCoreBackendAPI):
                                     'fmtName': fmtName.text if fmtName is not None else None,
                                     'eventInfo': ET.tostring(eventInfo) if eventInfo is not None else None
                                 }
-                                await on_message_callback(event_data)
+                                if on_message_callback:
+                                    await on_message_callback(event_data)
                             except Exception as ex:
                                 print(f"Failed to process incoming message: {str(ex)}: {message}")
                                 continue

@@ -1,0 +1,60 @@
+{
+    "type": "function",
+    "name": "command_control_tool",
+    "description": "Send commands to devices to control their behavior (set, change, turn on, turn off)",
+    "parameters": {
+      "type": "object",
+      "required": ["tool","args"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": ["Commands"],
+          "description": "NuCore tool hooking to send commands to devices to control their behavior"
+        },
+        "args": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "device": {
+                        "type": "string",
+                        "description": "The **id** for the **device** in DEVICE STRUCTURE."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "The **id** for the **Accept Command** for the **device** in DEVICE STRUCTURE."
+                    },
+                    "parameters": {
+                        "description": "List of parameters for the command.",
+                        "type": "array",
+                        "items": {
+                        "type": "object",
+                        "description": "A parameter for the **command**. If no parameters defined, leave empty",
+                        "properties": {
+                            "id": {
+                            "type": ["string", "null"],
+                            "description": "The **id** for the parameter from for the **command**. If none, use n/a"
+                            },
+                            "value": {
+                            "type": ["number"],
+                            "description": "Always a number. See **GLOBAL CUSTOMER VALUE CONVERSION RULES**."
+                            },
+                            "uom": {
+                            "type": "integer",
+                            "description": "Must use the **uom_id** for the parameter from DEVICE STRUCTURE." 
+                            },
+                            "precision": {
+                            "type": ["integer", "null"],
+                            "description": "The precision for the parameter value."
+                            }
+                        },
+                        "required": ["id", "value", "uom", "precision"]
+                        }
+                    }
+                },
+                "required": ["device", "command"]
+            }
+        }
+      }
+    }
+  }

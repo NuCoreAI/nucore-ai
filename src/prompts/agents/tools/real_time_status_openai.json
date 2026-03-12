@@ -1,0 +1,37 @@
+{
+    "type": "function",
+    "name": "real_time_status_tool",
+    "description": "Query current value of device property (what is, show me, check). **Never** respond from memory or make assumptions",
+    "parameters": {
+      "type": "object",
+      "required": ["tool","args"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "enum": ["PropsQuery"],
+          "description": "NuCore tool hooking to get real-time device property status"
+        },
+        "args": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "device": {
+                        "type": "string",
+                        "description": "The **id** for the **device** in DEVICE STRUCTURE."
+                    },
+                    "property": {
+                        "type": "string",
+                        "description": "The **id** for the for the **property** of the **device** in DEVICE STRUCTURE."
+                    },
+                    "property_name": {
+                        "type": ["string", "null"],
+                        "description": "The **name** for the for the **property** of the **device** in DEVICE STRUCTURE."
+                    }
+                },
+                "required": ["device", "property"]
+            }
+        }
+      }
+    }
+  }

@@ -1,10 +1,11 @@
 # This class manages nodes/profiles/programs in the nucore platform
 
 
-import base64
 import json
 import logging
 import xml.etree.ElementTree as ET
+import threading
+import asyncio
 
 
 from nucore import Profile
@@ -447,7 +448,13 @@ class NuCore:
             on_connect_callback (callable, optional): Callback function to handle connection events.
             on_disconnect_callback (callable, optional): Callback function to handle disconnection events.
         """
-        await self.nucore_api.subscribe_events(on_message_callback, on_connect_callback, on_disconnect_callback)
+        try:
+            threading.Thread(target=asyncio.run, args=(self.nucore_api.subscribe_events(
+                on_message_callback=on_message_callback,
+                on_connect_callback=on_connect_callback,
+                on_disconnect_callback=on_disconnect_callback),)).start()
+        except Exception as ex:
+            print(f"Failed to subscribe to events: {str(ex)}")
 
     def __str__(self):
         if not self.profile:
