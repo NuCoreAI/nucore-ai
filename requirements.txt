@@ -15,6 +15,7 @@
 
 requests
 openai
+anthropic
 numpy
 httpx
 APScheduler>=3.10,<4.0

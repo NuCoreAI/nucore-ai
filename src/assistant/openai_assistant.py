@@ -45,7 +45,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         Whether to include the system prompt in the message history.
         :return: True if the system prompt should be included, False otherwise.
         """
-        return True
+        return True, "system"
 
     async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:
         """

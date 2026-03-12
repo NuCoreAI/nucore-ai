@@ -1,14 +1,13 @@
 # implement claude assistant using Messages API
 
 import os
-import os
 from pathlib import Path
-import asyncio
 from typing import Tuple
-
-from anthropic import AsyncAnthropic
-from base_assistant import NuCoreBaseAssistant, get_parser_args, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS
+import asyncio
+from base_assistant import NuCoreBaseAssistant, get_parser_args
+from nucore import PromptFormatTypes 
 from prompt_mgr import NuCorePrompt
+from anthropic import AsyncAnthropic
 
 
 SECRETS_DIR = Path(os.path.join(os.getcwd(), "secrets") )
@@ -31,7 +30,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
         return os.path.join(os.getcwd(), "src", "prompts", system_prompt)
 
     def _check_for_duplicate_tool_call(self) -> Tuple[bool, int]: 
-        return False, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS 
+        return False, 0 
  
     async def _sub_init(self):
         self.client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
@@ -39,9 +38,11 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _include_system_prompt_in_history(self) -> bool:
         """
         Whether to include the system prompt in the message history.
-        :return: True if the system prompt should be included, False otherwise.
+        :return: 
+            True if the system prompt should be included, False otherwise. 
+            If true, the role to be used. If no role, assume "system"
         """
-        return False
+        return True, "user" #claude messages API does not have system role, so we will include it as user 
 
     async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:
         """
@@ -61,8 +62,8 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 model="claude-sonnet-4-20250514",
                 max_tokens=16000,
                 temperature=1.0,
-                tools=self.orchestrator.get_router_tools(),
-                messages=self.message_history
+                tools=prompt.tools,
+                messages=prompt.message_history
             ) as stream:
                 first_line = True
                 async for event in stream:
@@ -70,7 +71,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                     if event.type == "content_block_delta":
                         if hasattr(event.delta, "text"):
                             delta_text = event.delta.text
-                            if not delta_text or delta_text == "" or delta_text.isspace():
+                            if not delta_text or delta_text == "":# or delta_text.isspace():
                                 continue
                             full_response += delta_text
                             
@@ -79,16 +80,17 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                                     text_only = True
                                 if text_only or self.debug_mode:
                                     await self.send_response(f"\r\n***\r\n", False, websocket)
+                            await self.send_response(delta_text, False, websocket)
                             first_line = False
-                        elif event.delta.type == "input_json":
+                        elif event.delta.type == "input_json_delta":
                             delta_text=event.delta.partial_json
                             if self.debug_mode:
                                 await self.send_response(f"{delta_text}", False, websocket)
                             full_response += delta_text
                     elif event.type == "message_stop":
                         if full_response:
-                            if not text_only:
-                                rc = await self.process_tool_call(full_response, websocket, None, None)
+                       #     if not text_only:
+                       #         rc = await self.process_tool_call(full_response, websocket, None, None)
                             await self.send_response("\n", False, websocket)
             
             return full_response

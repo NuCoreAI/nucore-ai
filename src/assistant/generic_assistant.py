@@ -35,9 +35,11 @@ class NuCoreAssistant(NuCoreBaseAssistant):
     def _include_system_prompt_in_history(self) -> bool:
         """
         Whether to include the system prompt in the message history.
-        :return: True if the system prompt should be included, False otherwise.
+        :return: 
+            True if the system prompt should be included, False otherwise. 
+            If true, the role to be used. If no role, assume "system"
         """
-        return True #already doing it in warm up --- IGNORE ---
+        return True, "system" #already doing it in warm up --- IGNORE ---
     
     async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:
         """

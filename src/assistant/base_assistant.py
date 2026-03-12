@@ -596,8 +596,9 @@ class NuCoreBaseAssistant(ABC):
             #append shared enums to system prompt
             if not prompt.is_router():
                 sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
-            if self._include_system_prompt_in_history():
-                prompt.add_history("system",  sprompt)
+            include_sys, role = self._include_system_prompt_in_history()
+            if include_sys:
+                prompt.add_history(role if role else "system",  sprompt)
 
         prompt.add_user_query_section(query) #includes device docs
         
@@ -621,9 +622,11 @@ class NuCoreBaseAssistant(ABC):
     def _include_system_prompt_in_history(self) -> bool:
         """
         Whether to include the system prompt in the message history.
-        :return: True if the system prompt should be included, False otherwise.
+        :return: 
+            True if the system prompt should be included, False otherwise. 
+            If true, the role to be used. If no role, assume "system"
         """
-        return True
+        return True, "system"
     
     @abstractmethod
     async def _process_customer_input(self, prompt:NuCorePrompt, websocket, text_only:bool)-> str:

@@ -33,17 +33,21 @@
             "intents_to_tools": [
                 {
                     "intent": "command_control",
+                    "tokens_per_message": 8000,
                     "tools":[
                         {
-                            "path": "tools/command_control.json"
+                            "name": "command_control_tool",
+                            "path": "agents/tools/command_control_claude.json"
                         }
                     ]
                 },
                 {
                     "intent": "real_time_status",
+                    "tokens_per_message": 5000,
                     "tools":[
                         {
-                            "path": "tools/real_time_status.json"
+                            "name": "real_time_status_tool",
+                            "path": "agents/tools/real_time_status_claude.json"
                         }
                     ]
                 }
@@ -61,9 +65,11 @@
             "intents_to_tools": [
                 {
                     "intent": "routine_automation",
+                    "tokens_per_message": 25000,
                     "tools":[
                         {
-                            "path": "tools/routine_automation.json"
+                            "name": "routine_automation_tool",
+                            "path": "agents/tools/routine_automation_claude.json"
                         }
                     ]
                 }
@@ -75,10 +81,11 @@
             ]
         }
     ],
-
     "router": {
         "description": "Core router and definitions for device discovery",
         "path": "core/nucore_router.md",
+        "tokens_per_message": 20000,
+        "score_threshold": 0.81,
         "tools": [
             {
                 "name": "nucore_router_tool",
