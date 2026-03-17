@@ -59,10 +59,11 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             # Claude expects alternating user/assistant messages (no "system" role)
             # Create streaming message
             async with self.client.messages.stream(
-                model="claude-sonnet-4-20250514",
-                max_tokens=16000,
+                model=prompt.model,
+                max_tokens=prompt.max_context_size,
                 temperature=1.0,
                 tools=prompt.tools,
+                cache_control={"type": "ephemeral"},
                 messages=prompt.message_history
             ) as stream:
                 first_line = True

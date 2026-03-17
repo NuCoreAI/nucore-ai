@@ -41,6 +41,7 @@ class NuCorePrompt:
     
     Attributes:
         prompt: The fully resolved agent prompt string
+        model: The model to use for this prompt
         tools: List of tool schemas for this intent
         intent: The intent name (e.g., 'command_control', 'routine_automation')
         keywords: List of extracted keyword dictionaries from router
@@ -51,6 +52,7 @@ class NuCorePrompt:
         score_threshold: Minimum score threshold for including device documents
     """
     prompt: str = None
+    model: str = None
     tools: List[dict] =  None
     intent: str = None
     keywords: List[dict] = None 
