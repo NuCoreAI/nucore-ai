@@ -302,6 +302,7 @@ class PromptOrchestrator:
         # Create and cache the NuCorePrompt
         nucore_prompt = NuCorePrompt(
             prompt=prompt,
+            model=self.get_llm_name(),
             tools=tools,
             intent=intent,
             keywords=keywords,
@@ -365,6 +366,7 @@ class PromptOrchestrator:
         # Create and cache the router NuCorePrompt
         router_prompt = NuCorePrompt(
             prompt=content,
+            model=self.get_llm_name(),
             tools=tools,
             intent=ROUTER_INTENT,
             keywords=[],

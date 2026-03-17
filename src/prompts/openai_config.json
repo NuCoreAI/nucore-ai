@@ -2,6 +2,7 @@
   "llm": "gpt-4.1-mini",
   "version": "1.0.0",
   "description": "OpenAI LLM prompt configuration for NuCore smart-home assistant",
+  "max_context_size": 128000,
 
   "modules":
   [

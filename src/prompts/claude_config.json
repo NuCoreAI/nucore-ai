@@ -2,6 +2,7 @@
   "llm": "claude-sonnet-4-20250514",
   "version": "1.0.0",
   "description": "Claude LLM prompt configuration for NuCore smart-home assistant",
+  "max_context_size": 128000,
 
   "modules":
   [
