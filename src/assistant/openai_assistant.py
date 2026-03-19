@@ -60,7 +60,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             
             # Create response - pass previous messages as additional_messages
             stream = await self.client.responses.create(
-                model="gpt-4.1-mini",
+                model=prompt.model,
 #                model="ft:gpt-4.1-mini-2025-04-14:universal-devices:nucore13:Cmy5unf9",
                 # instructions=self.system_prompt,
                 input=prompt.message_history,
@@ -68,6 +68,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 parallel_tool_calls=False,
                 temperature=1.0,
                 tools=prompt.tools,
+                max_tokens=prompt.tokens_per_message,
                 stream=True
             )
             first_line = True 

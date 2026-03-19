@@ -61,6 +61,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
                 "n_keep": -1,
                 "temperature": 0.0,
                 "top_p": 1.0,
+                "max_tokens": prompt.tokens_per_message,
             #    "max_tokens": 13000,
             }
             async with httpx.AsyncClient() as client:

@@ -48,7 +48,7 @@ class DedupeDevices:
             for ed in prop.get("editors", []):
                 yield ed, prop.get("id", ""), prop.get("name", "")
 
-        for section in ("Accept Commands", "Send Commands"):
+        for section in ("Accepts Commands", "Sends Commands"):
             for cmd in device.get(section, []):
                 for param in cmd.get("parameters", []):
                     for ed in param.get("editors", []):
@@ -65,7 +65,7 @@ class DedupeDevices:
                     if key in key_to_name:
                         prop["editors"][i] = {"$ref": key_to_name[key]}
 
-        for section in ("Accept Commands", "Send Commands"):
+        for section in ("Accepts Commands", "Sends Commands"):
             for cmd in device.get(section, []):
                 for param in cmd.get("parameters", []):
                     if "editors" in param:
@@ -150,18 +150,18 @@ class DedupeDevices:
             lines.append('  ]')
 
         # Accept Commands
-        if device.get("Accept Commands"):
-            lines[-1] += ',"Accept Commands":['
-            for i, cmd in enumerate(device["Accept Commands"]):
-                comma = "," if i < len(device["Accept Commands"]) - 1 else ""
+        if device.get("Accepts Commands"):
+            lines[-1] += ',"Accepts Commands":['
+            for i, cmd in enumerate(device["Accepts Commands"]):
+                comma = "," if i < len(device["Accepts Commands"]) - 1 else ""
                 lines.append(f'    {json.dumps(cmd, separators=(",", ":"))}{comma}')
             lines.append('  ]')
 
         # Send Commands
-        if device.get("Send Commands"):
-            lines[-1] += ',"Send Commands":['
-            for i, cmd in enumerate(device["Send Commands"]):
-                comma = "," if i < len(device["Send Commands"]) - 1 else ""
+        if device.get("Sends Commands"):
+            lines[-1] += ',"Sends Commands":['
+            for i, cmd in enumerate(device["Sends Commands"]):
+                comma = "," if i < len(device["Sends Commands"]) - 1 else ""
                 lines.append(f'    {json.dumps(cmd, separators=(",", ":"))}{comma}')
             lines.append('  ]')
 
@@ -174,6 +174,7 @@ class DedupeDevices:
         """Reassemble the ===Collections=== + ===Device=== delimited output."""
         parts = []
         if collections:
+            
             parts.append("===Collections===")
             parts.append("```json")
             # Collections stay pretty-printed since they're the reference definitions

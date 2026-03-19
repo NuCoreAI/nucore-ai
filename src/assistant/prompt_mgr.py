@@ -156,16 +156,17 @@ class NuCorePrompt:
         rag_docs = rags["documents"]
         if not rag_docs:
             return "" 
-        device_docs = ROUTER_DEVICE_SECTION if self.is_router() else AGENT_DEVICE_SECTION 
+        header = ROUTER_DEVICE_SECTION if self.is_router() else AGENT_DEVICE_SECTION 
+        device_docs = ""
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
         if self.is_router():
-            return device_docs
+            return header + device_docs
         
         from rag import DedupeDevices
         deduper = DedupeDevices()
         deduped_docs = deduper.dedupe(device_docs)
-        return deduped_docs
+        return header + deduped_docs
 
         #return device_docs
 
@@ -195,7 +196,7 @@ class NuCorePrompt:
         first_user_tokens = 0
 
         idx = 0
-        if idx < len(self.message_history) and self.message_history[idx]["role"] == "system":
+        if idx < len(self.message_history) and (self.message_history[idx]["role"] == "system" or self.message_history[idx]["role"] == "user"):
             system_tokens = self._estimate_tokens(self.message_history[idx])
             idx += 1
         
@@ -249,5 +250,5 @@ class NuCorePrompt:
         LOG_STARTED = True 
         
         with open("/tmp/nucore.prompt.md", file_modifier) as f:
-            f.write(f"################ {message['role'].upper()} MESSAGE: ```{self.intent}```\n\n")
+            f.write(f"\n\n################\nRole: *{message['role']}*\nIntent: *{self.intent}*\nMessage:\n\n")
             f.write(str(message["content"]))
