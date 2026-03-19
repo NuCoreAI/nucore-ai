@@ -605,7 +605,7 @@ class NuCoreBaseAssistant(ABC):
             assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
             keep_open = True
             if assistant_response is not None:
-                #prompt.add_history("assistant", assistant_response)
+                prompt.add_history("assistant", assistant_response)
                 keep_open = await self.process_llm_response(query, assistant_response, websocket, None, None)
             else:
                 keep_open = False

@@ -60,7 +60,7 @@ class NuCoreAssistant(NuCoreBaseAssistant):
             # Create streaming message
             async with self.client.messages.stream(
                 model=prompt.model,
-                max_tokens=prompt.max_context_size,
+                max_tokens=prompt.tokens_per_message,
                 temperature=1.0,
                 tools=prompt.tools,
                 cache_control={"type": "ephemeral"},

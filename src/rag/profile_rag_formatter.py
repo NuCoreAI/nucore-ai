@@ -266,7 +266,7 @@ class ProfileRagFormatter(RAGFormatter):
                 self.write("],\"accept_commands\":[")
             if len(profile.nodedef.cmds.accepts) > 0:
                 if not self.json_output:
-                    self.write("Accept Commands:")
+                    self.write("Accepts Commands:")
                 for i, cmd in enumerate(profile.nodedef.cmds.accepts):
                     self.add_command(cmd, self.json_output and i < len(profile.nodedef.cmds.accepts) - 1)
             if self.json_output:
@@ -302,7 +302,7 @@ class ProfileRagFormatter(RAGFormatter):
         
         :param node: the node to format
         """
-        if node is None or not isinstance(node, Node):
+        if node is None or not (isinstance(node, Node) or isinstance(node, Group) or isinstance(node, Folder)):
             raise ValueError("Invalid runtime profile provided to format")
 
         chunk = RagChunk(node.address, len(self.lines))
@@ -319,13 +319,13 @@ class ProfileRagFormatter(RAGFormatter):
                 for idx, prop in enumerate(node.node_def.properties): 
                     self.add_property(prop, self.json_output and idx < len(node.node_def.properties) - 1)
                 if self.json_output:
-                    self.write("],\"Accept Commands\":[")
+                    self.write("],\"Accepts Commands\":[")
                 else:
-                    self.write("Accept Commands:")
+                    self.write("Accepts Commands:")
                 for idx, cmd in enumerate(node.node_def.cmds.accepts):
                     self.add_command(cmd, self.json_output and idx < len(node.node_def.cmds.accepts) - 1)
                 if self.json_output:
-                    self.write("],\"Send Commands\":[")
+                    self.write("],\"Sends Commands\":[")
                 else:
                     self.write("Sends Commands:")
                 for idx, cmd in enumerate(node.node_def.cmds.sends):
@@ -388,6 +388,12 @@ class ProfileRagFormatter(RAGFormatter):
             raise ValueError("Insufficient data to format profile RAG (need both nodes and groups).")
         for idx, node in enumerate(self.nodes.values()):
             self.format_per_device(node, comma= idx < len(self.nodes) -1)
+        if len(self.groups) > 0:
+            for idx, group in enumerate(self.groups.values()):
+                self.format_per_device(group, comma= idx < len(self.groups) -1)
+        if len(self.folders) > 0:
+            for idx, folder in enumerate(self.folders.values()):
+                self.format_per_device(folder, comma= idx < len(self.folders) -1)
             
         rag_docs:RAGData = RAGData()
         for chunk in self.rag_chunks:
