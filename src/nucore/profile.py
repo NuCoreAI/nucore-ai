@@ -12,7 +12,6 @@ from .group import Group
 from .folder import Folder
 from .editor import EditorMinMaxRange, EditorSubsetRange, REFERENCE_DELIMITER
 from .uom import get_uom_by_id
-from .shared_enums import SharedEnumsBase
 import json
 import logging
 
@@ -68,7 +67,6 @@ class Profile:
     nodes:  dict = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
     folders: dict = field(default_factory=dict)
-    shared_enums: SharedEnumsBase = None 
     
 
     def load_from_file(self, profile_path:str):
@@ -94,10 +92,6 @@ class Profile:
                     self.lookup[f"{nodedef.id}.{family.id}.{instance.id}"] = nodedef
 
     def __build_editor__(self, edict) -> Editor:
-        is_shared = self.shared_enums and self.shared_enums.is_shared(edict["id"])
-
-        if is_shared and self.shared_enums.is_set(edict["id"]):
-            return
 
         ranges = []
         for rng in edict.get("ranges", []):
@@ -127,9 +121,7 @@ class Profile:
             else:
                 debug(f"Range must have either min/max or subset: {rng}")
          
-        editor = Editor(id=edict["id"], is_reference=is_shared, ranges=ranges)
-        if is_shared:
-            self.shared_enums.set_editor(edict["id"], editor)
+        editor = Editor(id=edict["id"], is_reference=False, ranges=ranges)
         return editor
     
     def __parse_profile__(self, raw):
@@ -310,7 +302,6 @@ class Profile:
                             self.runtime_profiles[node.node_def.id].nodes.add(node)
                         except Exception as e:
                             pass #probably duplicate node
-                    node.node_def.process_shared_editors(self.shared_enums)
             if is_group:
                 self.groups[node.address] = node
             else :

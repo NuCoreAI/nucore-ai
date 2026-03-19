@@ -255,6 +255,7 @@ class NuCoreBaseAssistant(ABC):
         Callback function to handle connection established event.
         """
         self.device_structure_changed = True # just to be on the safe side
+        pass
 
     async def _on_disconnect_callback(self):
         """
@@ -594,8 +595,6 @@ class NuCoreBaseAssistant(ABC):
 
         if len(prompt.message_history) == 0 :
             #append shared enums to system prompt
-            if not prompt.is_router():
-                sprompt += "\n\n"+self.nuCore.nucore_api.get_shared_enums().get_all_enum_sections().strip()
             include_sys, role = self._include_system_prompt_in_history()
             if include_sys:
                 prompt.add_history(role if role else "system",  sprompt)

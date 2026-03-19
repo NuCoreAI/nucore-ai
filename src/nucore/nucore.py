@@ -53,7 +53,7 @@ class NuCore:
         self.folders = {} 
         self.runtime_profiles = {}
         self.rag_processor = RAGProcessor(collection_path, collection_name, reranker_url=reranker_url)
-        self.profile = Profile(timestamp="", families=[], shared_enums=nucore_api.get_shared_enums())
+        self.profile = Profile(timestamp="", families=[])
         self.formatter_type = formatter_type
 
     def __load_profile__(self, profile_path:str=None):

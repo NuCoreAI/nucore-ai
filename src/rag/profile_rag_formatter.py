@@ -380,14 +380,14 @@ class ProfileRagFormatter(RAGFormatter):
             if not isinstance(self.folders, dict):
                 raise ValueError("Folders must be a dict")
 
-        if self.profiles is not None:
-            for profile in self.profiles.values():
-                self.format_profile_first(profile, device_first=True)
-        else:
-            if self.nodes is None or self.groups is None:
-                raise ValueError("Insufficient data to format profile RAG (need both nodes and groups).")
-            for idx, node in enumerate(self.nodes.values()):
-                self.format_per_device(node, comma= idx < len(self.nodes) -1)
+#        if self.profiles is not None:
+#            for profile in self.profiles.values():
+#                self.format_profile_first(profile, device_first=True)
+#        else:
+        if self.nodes is None or self.groups is None:
+            raise ValueError("Insufficient data to format profile RAG (need both nodes and groups).")
+        for idx, node in enumerate(self.nodes.values()):
+            self.format_per_device(node, comma= idx < len(self.nodes) -1)
             
         rag_docs:RAGData = RAGData()
         for chunk in self.rag_chunks:

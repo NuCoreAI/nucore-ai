@@ -4,13 +4,11 @@ import sys
 import os
 import websockets, base64
 
-from nucore.shared_enums import SharedEnumsBase
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_backend_api import NuCoreBackendAPI
 from nucore.nodedef import Property
 from nucore.uom import get_uom_by_id 
 import xml.etree.ElementTree as ET
-from .iox_shared_enums import IoXSharedEnums
 
 
 import urllib3
@@ -34,7 +32,6 @@ class IoXWrapper(NuCoreBackendAPI):
             password (str): The password for ISY authentication (optional).
         """
         super().__init__(json_output)  # Initialize parent with no parameters
-        self.shared_enums: SharedEnumsBase = IoXSharedEnums(json_output=json_output)
         if poly:
             # import only in case we are running in polglot context since 
             # udi_interface redirects standard input/output to polyglot LOGGER
@@ -369,13 +366,4 @@ class IoXWrapper(NuCoreBackendAPI):
             print(f"Failed to subscribe to events: {str(ex)}")
             return False
         return True
-    
-    def get_shared_enums(self) -> SharedEnumsBase: 
-        """
-        Get shared enumerations from the IoX device.
-        
-        Returns:
-            SharedEnumsBase: An instance of SharedEnumsBase containing shared enumerations.
-        """
-        return self.shared_enums
     

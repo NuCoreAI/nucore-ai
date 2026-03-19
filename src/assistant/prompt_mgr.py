@@ -159,8 +159,15 @@ class NuCorePrompt:
         device_docs = ROUTER_DEVICE_SECTION if self.is_router() else AGENT_DEVICE_SECTION 
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
+        if self.is_router():
+            return device_docs
+        
+        from rag import DedupeDevices
+        deduper = DedupeDevices()
+        deduped_docs = deduper.dedupe(device_docs)
+        return deduped_docs
 
-        return device_docs
+        #return device_docs
 
     def _estimate_tokens(self, message:dict) -> int:
         """
