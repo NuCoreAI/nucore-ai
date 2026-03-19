@@ -38,7 +38,7 @@
                     "tools":[
                         {
                             "name": "command_control_tool",
-                            "path": "agents/tools/command_control_openai.json"
+                            "path": "agents/tools/openai/command_control.json"
                         }
                     ]
                 },
@@ -48,7 +48,7 @@
                     "tools":[
                         {
                             "name": "real_time_status_tool",
-                            "path": "agents/tools/real_time_status_openai.json"
+                            "path": "agents/tools/openai/real_time_status.json"
                         }
                     ]
                 }
@@ -70,7 +70,7 @@
                     "tools":[
                         {
                             "name": "routine_automation_tool",
-                            "path": "agents/tools/routine_automation_openai.json"
+                            "path": "agents/tools/openai/routine_automation.json"
                         }
                     ]
                 }
@@ -84,13 +84,13 @@
     ],
     "router": {
         "description": "Core router and definitions for device discovery",
-        "path": "core/nucore_router.md",
+        "path": "agents/router.md",
         "tokens_per_message": 20000,
         "score_threshold": 0.81,
         "tools": [
             {
                 "name": "nucore_router_tool",
-                "path": "core/nucore_router_openai.json"
+                "path": "agents/tools/openai/router.json"
             }
         ],
         "include": [

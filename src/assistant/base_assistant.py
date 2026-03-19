@@ -176,6 +176,7 @@ class NuCoreBaseAssistant(ABC):
         if check_duplicates:
             self.duplicate_detector = JSONDuplicateDetector(time_window_seconds=time_window_seconds)
         self.device_structure_changed = True
+        self.is_subscribed = False
         print (self.__model_url__)
         asyncio.run(self._sub_init()) #for subclass specific initialization
 
@@ -187,13 +188,14 @@ class NuCoreBaseAssistant(ABC):
         """
         if not self.device_structure_changed:
             return False #already refreshed no need to check again
-        self.device_structure_changed = False 
+
+        while not self.is_subscribed:
+        ## subscribe to get events from devices
+            await self.nuCore.subscribe_events(self._on_device_event, self._on_connect_callback, self._on_disconnect_callback)
+            time.sleep(1) # wait a bit for the subscription to be established
 
         if not self.nuCore.load(include_profiles=True):
             raise ValueError("Failed to load devices from NuCore. Please check your configuration.")
-
-        ## subscribe to get events from devices
-        await self.nuCore.subscribe_events(self._on_device_event, self._on_connect_callback, self._on_disconnect_callback)
 
         self.rags= self.nuCore.load_rag_docs(embed=True, tools=True, static_info=True)
         #rag = self.nuCore.format_nodes()
@@ -201,6 +203,7 @@ class NuCoreBaseAssistant(ABC):
             raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
         self.orchestrator.set_full_rags(self.rags)
         self.orchestrator.set_summary_rags(self.nuCore.format_nodes_summary(False))
+        self.device_structure_changed = False 
         return True
         
     def _get_tool_call(self, full_response:str) -> bool:
@@ -254,14 +257,14 @@ class NuCoreBaseAssistant(ABC):
         """
         Callback function to handle connection established event.
         """
+        self.is_subscribed = True
         self.device_structure_changed = True # just to be on the safe side
-        pass
 
     async def _on_disconnect_callback(self):
         """
         Callback function to handle disconnection event.
         """
-        pass
+        self.is_subscribed = False
 
     def _start_queue_processor(self):
         """Start the background worker thread"""
@@ -480,10 +483,10 @@ class NuCoreBaseAssistant(ABC):
             #return await self.process_json_tool_calls(tools, websocket)
         except Exception as ex:
             if not full_response:
-                return ("Invalid input to process_llm_response")
+                return False
             else:
                 print(f"Error parsing tool call JSON: {ex}")
-                return None
+                return False
             
     async def send_response(self, message, is_end=False, websocket=None):
         if not message:
@@ -564,8 +567,10 @@ class NuCoreBaseAssistant(ABC):
         
         await self._refresh_device_structure()
 
+        is_rephrase = False
         if REPHRASE_INSTRUCTION in query:
             prompt = self.orchestrator.get_last_prompt()
+            is_rephrase = True
         else:
             prompt = self.orchestrator.get_prompt(router_result)
         if not prompt:
@@ -593,24 +598,23 @@ class NuCoreBaseAssistant(ABC):
         sprompt = prompt.prompt
         sprompt = sprompt.strip()
 
-        if len(prompt.message_history) == 0 :
-            #append shared enums to system prompt
-            include_sys, role = self._include_system_prompt_in_history()
-            if include_sys:
-                prompt.add_history(role if role else "system",  sprompt)
+        include_sys, role = self._include_system_prompt_in_history()
+        if include_sys:
+            prompt.add_system_message(role if role else "system",  sprompt)
 
-        prompt.add_user_query_section(query) #includes device docs
+        prompt.add_user_query_section(query, is_rephrase) #includes device docs
         
         try:
             assistant_response = await self._process_customer_input(prompt=prompt, websocket=websocket, text_only=text_only)
             keep_open = True
             if assistant_response is not None:
-                prompt.add_history("assistant", assistant_response)
+                prompt.add_assistant_message(assistant_response)
                 keep_open = await self.process_llm_response(query, assistant_response, websocket, None, None)
             else:
                 keep_open = False
             if websocket and (text_only or (not keep_open)):
                 await self.send_response("\n", True, websocket)
+            return assistant_response
         except Exception as e:
             print(f"An error occurred while processing the customer input: {e}")
             import traceback

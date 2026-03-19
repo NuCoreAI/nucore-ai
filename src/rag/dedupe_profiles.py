@@ -246,9 +246,9 @@ class DedupeProfiles:
 
 
         # Report
-        orig_size = len(json.dumps(data))
-        new_size = len(json.dumps(result)) 
-        reduction = (1 - new_size / orig_size) * 100
+        #orig_size = len(json.dumps(data))
+        #new_size = len(json.dumps(result)) 
+        #reduction = (1 - new_size / orig_size) * 100
         #colls = result["shared"]["collections"]
         #enums = result["shared"].get("enums", {})
 
@@ -259,7 +259,7 @@ class DedupeProfiles:
         #print(f"Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
         #print(f"Written to: {output_path}")
 
-        print(f"Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
+        #print(f"Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
         return result
 
 

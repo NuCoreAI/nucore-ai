@@ -61,16 +61,28 @@ class NuCorePrompt:
     max_context_size: int = DEFAULT_MAX_CONTEXT_SIZE
     tokens_per_message: int = DEFAULT_TOKENS_PER_MESSAGE
     score_threshold: float = DEFAULT_SCORE_THRESHOLD
+    system_index : int = None # index of system message in history (if any)
+    device_docs_index : int = None # index of device docs message in history (if any)
 
-    def add_user_query_section(self, user_query:str):
+    def add_user_query_section(self, user_query:str, is_rephrase:bool=False):
         """
         add the formatted user query section. a
         includes device docs
-        
+        We must create two distinct messages so that we can preserve the device docs in the conversation history for future reference by the model. if we merge them into one message, then when the user query changes in the next turn, we lose that information from the conversation history.
+
         :param user_query: The user's query string
+        :param is_rephrase: Flag indicating if this is a rephrase operation
         :return: Formatted user query section string
+
         """
-        user_content = f"{self.get_device_docs()}\n{USER_QUERY_SECTION}\n{user_query}"
+        if not is_rephrase:
+            device_docs = self.get_device_docs()
+            if device_docs and not self.search_history("user", device_docs):
+                if self.device_docs_index is not None:
+                    self.clear_history()
+                self.device_docs_index = self.add_history("user", device_docs)
+
+        user_content = f"\n{USER_QUERY_SECTION}\n{user_query}"
         self.add_history("user", user_content + "\n") 
 
     def is_router(self) -> bool:
@@ -84,24 +96,63 @@ class NuCorePrompt:
     def add_history(self, role:str, content:str):
         """
         Append a message to the message history.
-        
+        :param role: Role of the message (e.g., 'system', 'user', 'assistant')
+        :param content: Content of the message
+        :return the index of the added message in the history (useful for reference)
         """
         payload={"role": role, "content": content}
-        if len(self.message_history) < 2:
-            self.message_history.append(payload)
-            self._debug_output(payload)
-            return
         self.trim_message_history(payload)
-        if role == "user":
-            #update device docs
-            self.message_history[1] = payload
+        self.message_history.append(payload)
         self._debug_output(payload)
+        return len(self.message_history) - 1
     
-    def clear_history(self):
+    def add_system_message(self, role:str, content:str, force_add:bool=False):
+        """
+        Append a system message to the message history. checks for duplicates before adding.
+        :param role: Role of the message (e.g., 'system')
+        :param content: Content of the message
+        :param force_add: If True, add the message even if it already exists in history
+        """
+        if not force_add and self.search_history(role, content):
+            return
+        if self.system_index is not None:
+            #update existing system message
+            self.message_history[self.system_index]["content"] = content
+            self._debug_output(f"Updated system message at index {self.system_index}: \n {content}")
+        else:
+            self.system_index = self.add_history(role, content)
+
+    def add_assistant_message(self, content:str):
+        """
+        Append an assistant message to the message history.
+        :param content: Content of the assistant's message
+        """
+        if not content:
+            return
+        #remove all json code blocks from content before checking for duplicates in history, since assistant responses may include tool response sections that we don't want to consider for duplicate checking. we only want to check the natural language part of the response for duplicates.
+        content_no_json = NuCorePrompt.strip_json(content)
+        if len (content_no_json) > 10: # if the non-json content is very short, then we won't consider it for duplicate checking since it's likely not meaningful enough on its own. this is to avoid false positives in duplicate checking when the assistant response is mostly structured data with very little natural language content.
+            self.add_history("assistant", content)
+
+    def clear_history(self, include_system:bool=False):
         """
         Clear the message history.
         """
-        self.message_history = []
+        if include_system:
+            self.system_index = None
+            self.message_history = []
+        else:
+            #preserve system message if exists
+            sys_message = None
+            if self.system_index is not None and self.system_index < len(self.message_history):
+                sys_message = self.message_history[self.system_index]
+            self.message_history = []
+            if sys_message:
+                self.system_index = 0
+                self.message_history.append(sys_message)
+            else:
+                self.system_index = None
+        self.device_docs_index = None
 
     def search_history(self, role:str, content_substr:str)->bool:
         """
@@ -183,6 +234,39 @@ class NuCorePrompt:
         # Simple estimation: 1 token per 4 characters (this is a rough estimate)
         return len(text) // 4 + 50  # adding buffer
 
+    @staticmethod 
+    def strip_json(text: str) -> str:
+        """Remove all JSON objects ({...}) and arrays ([...]) from a string."""
+        result = []
+        depth = 0
+        in_string = False
+        escape = False
+        for ch in text:
+            if escape:
+                escape = False
+                if depth == 0:
+                    result.append(ch)
+                continue
+            if ch == '\\' and in_string:
+                escape = True
+                if depth == 0:
+                    result.append(ch)
+                continue
+            if ch == '"' and depth > 0:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ('{', '['):
+                depth += 1
+                continue
+            if ch in ('}', ']'):
+                depth -= 1
+                continue
+            if depth == 0:
+                result.append(ch)
+        return ''.join(result)
+
     def trim_message_history(self, content_to_add:dict):
         """
         Trim message_history to stay within context limits.
@@ -195,14 +279,11 @@ class NuCorePrompt:
         system_tokens = 0 
         first_user_tokens = 0
 
-        idx = 0
-        if idx < len(self.message_history) and (self.message_history[idx]["role"] == "system" or self.message_history[idx]["role"] == "user"):
-            system_tokens = self._estimate_tokens(self.message_history[idx])
-            idx += 1
-        
-        idx = 1
-        if idx < len(self.message_history) and self.message_history[idx]["role"] == "user":
-            first_user_tokens = self._estimate_tokens(self.message_history[idx])
+        if self.system_index is not None and self.system_index < len(self.message_history):
+            system_tokens = self._estimate_tokens(self.message_history[self.system_index])
+
+        if self.device_docs_index is not None and self.device_docs_index < len(self.message_history):
+            first_user_tokens = self._estimate_tokens(self.message_history[self.device_docs_index])
 
         #minimum tokens already used
         reserved_tokens = system_tokens + first_user_tokens 
@@ -210,6 +291,7 @@ class NuCorePrompt:
             # Can't fit anything, keep only system and first user message
             self.message_history = self.message_history[:2]
             return
+
         new_content_tokens = self._estimate_tokens(content_to_add)
         reserved_tokens += new_content_tokens
         if reserved_tokens >= self.max_context_size:
@@ -220,7 +302,17 @@ class NuCorePrompt:
         available_tokens = self.max_context_size - reserved_tokens
 
         # Get messages to keep
-        sys_messages = self.message_history[:2]
+        sys_messages = []
+        idx=0
+        if self.system_index is not None and self.system_index < len(self.message_history):
+            sys_messages.append(self.message_history[self.system_index])
+            self.system_index = idx
+            idx+=1
+        if self.device_docs_index is not None and self.device_docs_index < len(self.message_history):
+            sys_messages.append(self.message_history[self.device_docs_index])
+            self.device_docs_index = idx
+            idx+=1
+        
         history_messages = [] # in reversed order
         # Start from from the bottom to the 2nd element (ignoring system and first user)
         for idx, message in enumerate(reversed(self.message_history[2:]), start=2):
@@ -242,7 +334,7 @@ class NuCorePrompt:
     def set_debug_mode(self, debug:bool):
         self.debug_mode = debug
 
-    def _debug_output(self, message:dict):
+    def _debug_output(self, message):
         if not self.debug_mode or not message:
             return
         global LOG_STARTED
@@ -250,5 +342,8 @@ class NuCorePrompt:
         LOG_STARTED = True 
         
         with open("/tmp/nucore.prompt.md", file_modifier) as f:
-            f.write(f"\n\n################\nRole: *{message['role']}*\nIntent: *{self.intent}*\nMessage:\n\n")
-            f.write(str(message["content"]))
+            if isinstance(message, dict):
+                f.write(f"\n\n################\nRole: *{message['role']}*\nIntent: *{self.intent}*\nMessage:\n\n")
+                f.write(str(message["content"]))
+            else:
+                f.write(f"\n\n################\n{str(message)}\n\n")
