@@ -8,8 +8,10 @@ from .rag_data_struct import RAGData
 from .rag_db import RAGSQLiteDB
 from .embedder import Embedder
 from .local_embedder import LocalEmbedder
+from .dedupe_devices import DedupeDevices
+from .dedupe_profiles import DedupeProfiles
 
 
 __all__ = ["ProfileRagFormatter", "MinimalRagFormatter", "RAGSQLiteDB",
            "RAGFormatter", "RAGProcessor", "Reranker", "StaticInfoRAGFormatter", 
-            "RAGData", "RAGDataItem", "Embedder", "LocalEmbedder"]
+            "RAGData", "RAGDataItem", "Embedder", "LocalEmbedder", "DedupeDevices", "DedupeProfiles"]
