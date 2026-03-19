@@ -56,6 +56,80 @@ class DedupeDevices:
 
 
     @staticmethod
+    def _dedupe_commands(modified, collections, used_names, min_occurrences=2):
+        """
+        Group commands that co-occur across devices into shared command collections.
+        Instead of one $ref per command, creates a single collection array of commands
+        shared by multiple devices, so each device references the group + its unique commands.
+        """
+        for section in ("Accepts Commands", "Sends Commands"):
+            # Build a map: command_key -> set of device indices that have it
+            cmd_to_devices = {}
+            cmd_obj = {}
+            for dev_idx, dev in enumerate(modified):
+                for cmd in dev.get(section, []):
+                    key = DedupeDevices.canonical_json(cmd)
+                    if key not in cmd_to_devices:
+                        cmd_to_devices[key] = set()
+                        cmd_obj[key] = cmd
+                    cmd_to_devices[key].add(dev_idx)
+
+            # Group commands by their device signature (frozenset of device indices)
+            sig_to_keys = {}
+            for key, dev_set in cmd_to_devices.items():
+                if len(dev_set) >= min_occurrences:
+                    sig = frozenset(dev_set)
+                    if sig not in sig_to_keys:
+                        sig_to_keys[sig] = []
+                    sig_to_keys[sig].append(key)
+
+            # For each signature group, create a shared collection (ordered by first appearance)
+            sig_to_name = {}
+            for sig, keys in sig_to_keys.items():
+                # Preserve original order: sort keys by first device index, then position in that device
+                first_dev = min(sig)
+                dev_cmds = modified[first_dev].get(section, [])
+                dev_keys_ordered = [DedupeDevices.canonical_json(c) for c in dev_cmds]
+                keys_sorted = sorted(keys, key=lambda k: dev_keys_ordered.index(k) if k in dev_keys_ordered else len(dev_keys_ordered))
+
+                cmd_list = [cmd_obj[k] for k in keys_sorted]
+                prefix = "shared_accepts" if section == "Accepts Commands" else "shared_sends"
+                base = prefix
+                name = base
+                i = 2
+                while name in used_names:
+                    name = f"{base}_{i}"
+                    i += 1
+                used_names.add(name)
+                collections[name] = cmd_list
+                sig_to_name[sig] = name
+
+            # Replace matching commands in each device with a single $ref + remaining unique commands
+            shared_keys = set(cmd_to_devices.keys()) & {k for keys in sig_to_keys.values() for k in keys}
+            for dev_idx, dev in enumerate(modified):
+                if section not in dev:
+                    continue
+                new_cmds = []
+                refs_added = set()
+                for cmd in dev[section]:
+                    key = DedupeDevices.canonical_json(cmd)
+                    if key in shared_keys:
+                        # Find which signature group this command belongs to
+                        for sig, keys in sig_to_keys.items():
+                            if key in keys and dev_idx in sig:
+                                ref_name = sig_to_name[sig]
+                                if ref_name not in refs_added:
+                                    new_cmds.append({"$ref": ref_name})
+                                    refs_added.add(ref_name)
+                                break
+                        else:
+                            new_cmds.append(cmd)  # not in any group for this device
+                    else:
+                        new_cmds.append(cmd)
+                dev[section] = new_cmds
+
+
+    @staticmethod
     def replace_editors(device, key_to_name):
         """Replace editors in-place with {"$ref": name} where applicable."""
         for prop in device.get("Properties", []):
@@ -132,6 +206,9 @@ class DedupeDevices:
             DedupeDevices.replace_editors(d, key_to_name)
             modified.append(d)
 
+        # Phase 4: group shared commands into union collections
+        DedupeDevices._dedupe_commands(modified, collections, used_names, min_occurrences)
+
         return collections, modified
 
     @staticmethod
@@ -191,20 +268,22 @@ class DedupeDevices:
 
 
     def dedupe(self, content:dict)->dict:
+        #with open("/tmp/not-deduped.json", 'w') as f:
+        #    f.write(json.dumps(content, indent=2))
         devices = DedupeDevices.parse_devices(content)
         if not devices:
             print("No devices found.", file=sys.stderr)
             return {}
 
-        print(f"Parsed {len(devices)} devices", file=sys.stderr)
+#        print(f"Parsed {len(devices)} devices", file=sys.stderr)
 
         collections, modified = DedupeDevices._dedupe(devices)
-        print(f"Extracted {len(collections)} shared editor collections", file=sys.stderr)
+#        print(f"Extracted {len(collections)} shared editor collections", file=sys.stderr)
 
         output = DedupeDevices.format_output(collections, modified)
 
-        orig_size = len(content)
-        new_size = len(output)
-        pct = 100 * (orig_size - new_size) / orig_size if orig_size else 0
-        print(f"Size: {orig_size} -> {new_size} bytes ({pct:.1f}% reduction)", file=sys.stderr)
+       # orig_size = len(content)
+       # new_size = len(output)
+       # pct = 100 * (orig_size - new_size) / orig_size if orig_size else 0
+       # print(f"Size: {orig_size} -> {new_size} bytes ({pct:.1f}% reduction)", file=sys.stderr)
         return output
