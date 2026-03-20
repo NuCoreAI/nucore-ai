@@ -301,6 +301,9 @@ class NuCorePrompt:
         #otherwise trim conversation history using this algorithm:
         available_tokens = self.max_context_size - reserved_tokens
 
+        if available_tokens > reserved_tokens:
+            return
+
         # Get messages to keep
         sys_messages = []
         idx=0
