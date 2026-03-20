@@ -18,7 +18,8 @@ class NuCoreAssistant(NuCoreBaseAssistant):
 
     def _get_prompt_config_path(self):
         # Assuming this code is inside your_package/module.py
-        system_prompt =  "qwen_profile_config.json" if self.prompt_type == PromptFormatTypes.PROFILE else "qwen_config.json"
+        #system_prompt =  "qwen_profile_config.json" if self.prompt_type == PromptFormatTypes.PROFILE else "qwen_config.json"
+        system_prompt =  "qwen_config.json" 
         return os.path.join(os.getcwd(), "src", "prompts", system_prompt)
 
     def _check_for_duplicate_tool_call(self):
