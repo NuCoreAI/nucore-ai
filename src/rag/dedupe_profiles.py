@@ -148,11 +148,11 @@ class DedupeProfiles:
         # Build shared section
         shared_section = {
             "_schema": (
-                "This JSON describes device profiles with shared structure to reduce repetition.\n"
+                "This JSON describes device and group profiles with shared structure to reduce repetition.\n"
                 "\n"
                 "TOP-LEVEL KEYS:\n"
                 "  shared    — Lookup tables for collections and enums (defined once, referenced many times)\n"
-                "  profiles  — Array of device profiles, each with props, accepts-cmds, sends-cmds, and devices\n"
+                "  profiles  — Array of device and group profiles, each with props, accepts-cmds, sends-cmds, and devices and group\n"
                 "\n"
                 "SHARED SECTION:\n"
                 "  shared.collections — Named groups of items shared by multiple profiles.\n"

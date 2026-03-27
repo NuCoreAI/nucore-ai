@@ -67,6 +67,11 @@ class NuCoreBackendAPI(ABC):
         pass
 
     @abstractmethod
+    def get_group_links(self):
+        """Get group definitions/links/scenes from the backend."""
+        pass
+
+    @abstractmethod
     def get_properties(self, device_id:str)-> dict[str, Property]:
         """
         Get properties of a device by its ID.

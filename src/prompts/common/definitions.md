@@ -14,3 +14,7 @@
 `COC (Change of Control)` is an event resulting from physical control of a device, even if state does not change (captured via Sends Commands)
 `Enum` is an enumerated list of permissible values for `properties` and `parameters`
 `Plugin` is akin to an app on smart phones. It **plugs into** NuCore and extends NuCore's features/functionalities. 
+`Group` is a logical collection of devices, and provides a structured way to control multiple devices simultaneously. It defines how commands are issued, how devices respond, and whether behavior is executed centrally (via NuCore) or natively device-to-device. A device can participate in a group in one or both roles:
+- **Controller** – Issues commands
+- **Responder** – Reacts to commands
+`Scene` defines how **responders** react when a specific **controller** issues the **On** command. A `Group` in NuCore is always a `Scene` where NuCore is the **controller**, and all its members are Responders. 

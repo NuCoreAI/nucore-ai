@@ -63,6 +63,8 @@ class Profile:
     timestamp: str = "" 
     runtime_profiles: dict[str, RuntimeProfile] = field(default_factory=dict)
     lookup: dict = field(default_factory=dict)
+    instance_lookup: dict = field(default_factory=dict)
+    linkdef_lookup: dict = field(default_factory=dict)
     families: list[Family] = field(default_factory=list)
     nodes:  dict = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
@@ -88,8 +90,11 @@ class Profile:
         """Build a lookup dictionary for quick access to families and instances."""
         for family in self.families:
             for instance in family.instances:
+                self.instance_lookup[f"{family.id}.{instance.id}"] = instance
                 for nodedef in getattr(instance, "nodedefs", []):
                     self.lookup[f"{nodedef.id}.{family.id}.{instance.id}"] = nodedef
+                for linkdef in getattr(instance, "linkdefs", []):
+                    self.linkdef_lookup[f"{linkdef.id}.{family.id}.{instance.id}"] = linkdef
 
     def __build_editor__(self, edict) -> Editor:
 
@@ -265,7 +270,7 @@ class Profile:
             self.timestamp = raw.get("timestamp", "")
         return True
 
-    def map_nodes(self, root):
+    def map_nodes(self, root, groups_root=None):
         """Map nodes from XML root element into Profile's nodes dict."""
         if root == None:
             return None
@@ -278,6 +283,15 @@ class Profile:
         elements = []
         for tag in tag_names:
             elements.extend(root.findall(f'{tag}')) 
+
+        g_links = {}
+        if groups_root is not None:
+            try:
+                groups = groups_root['data']['group']
+                for group in groups:
+                    g_links[group['id']] = group
+            except KeyError as e:
+                debug(f"Error parsing group links: {e}")
 
         for node_elem in elements:
             node_flag=int(node_elem.get("flag"))
@@ -304,8 +318,14 @@ class Profile:
                             pass #probably duplicate node
             if is_group:
                 self.groups[node.address] = node
-            else :
+            else:
                 self.nodes[node.address] = node 
+
+        #now add links for groups
+        for group in self.groups.values():
+            links_root=g_links.get(group.address, None)
+            if links_root is not None:
+                group.add_links(links_root, self.nodes, self.linkdef_lookup) 
         
         elements = root.findall(f'./folder')
 

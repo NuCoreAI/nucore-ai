@@ -1,6 +1,6 @@
 {
   "name": "nucore_router_tool",
-  "description": "Results from searching the device database for top 10 most relevant devices based on user query",
+  "description": "Results from searching the device database for top 10 most relevant devices or groups/scenes based on user query",
   "input_schema": {
     "type": "object",
     "required": ["intent","devices"],
