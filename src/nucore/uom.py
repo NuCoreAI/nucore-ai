@@ -181,7 +181,7 @@ PREDEFINED_UOMS = {
         id="25",
         description="The list index of a value for a given list of values.",
         label="Enum",
-        name="",
+        name="Enum",
     ),
     "26": UOMEntry(
         id="26",

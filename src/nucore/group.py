@@ -87,20 +87,30 @@ class GroupLink:
         try:
             if self.type == Linktype.LINK_TYPE_NATIVE:
                 if len (self.params) > 0:
-                    explanation_lines.append(f"  {index}. `{self.node.name}` is natively activated and set to the following parameters:")
+                    explanation_lines.append(f"  {index+1}. `{self.node.name}` is natively activated and set to the following parameters:")
                     for param in self.params.values():
-                        uom_name = get_uom_by_id(param.uom) if param.uom else ""
-                        explanation_lines.append(f"    - {param.name} is set to {param.val} {uom_name}")
+                        uom = get_uom_by_id(param.uom) if param.uom else ""
+                        out_str=(f"{param.val} {uom.name}")
+                        try:
+                            if uom.name == "Enum":
+                                property = self.node.node_def.properties.get(param.id, None)
+                                if property and property.editor and property.editor.ranges and property.editor.ranges[0].names:
+                                    names = property.editor.ranges[0].names
+                                    param_val = names.get(str(int(param.val)), None)
+                                    out_str=(f"{param_val}")
+                        except Exception as e:
+                            pass
+                        explanation_lines.append(f"    - {param.name} is set to {out_str}")
                 else:
-                    explanation_lines.append(f"  {index}. `{self.node.name}` is natively activated." )
+                    explanation_lines.append(f"  {index+1}. `{self.node.name}` is natively activated." )
             elif self.type == Linktype.LINK_TYPE_DEFAULT:
-                explanation_lines.append(f"  {index}. `{self.node.name}` is sent the same command." )
+                explanation_lines.append(f"  {index+1}. `{self.node.name}` is sent the same command." )
             elif self.type == Linktype.LINK_TYPE_COMMAND:
-                explanation_lines.append(f"  {index}. `{self.node.name}` is sent the unique command specified in the linkdef." )
+                explanation_lines.append(f"  {index+1}. `{self.node.name}` is sent the unique command specified in the linkdef." )
             elif self.type == Linktype.LINK_TYPE_IGNORE:
-                explanation_lines.append(f"  {index}. `{self.node.name}` ignores the command." )
+                explanation_lines.append(f"  {index+1}. `{self.node.name}` ignores the command." )
         except Exception as e:
-            explanation_lines.append(f"  {index}. `{self.node.name}` is linked but an error occurred while explaining the link: {str(e)}")
+            explanation_lines.append(f"  {index+1}. `{self.node.name}` is linked but an error occurred while explaining the link: {str(e)}")
 
         return explanation_lines
 
@@ -179,17 +189,19 @@ class Group(NodeBase):
     def __find_cross_links(self):
         """
         Identify and return any cross-links between members of the group.
-        A cross-link is defined as a link where a member is both a controller and a responder within the same group.
+        Max number of cross links is the total number of members; each member is a controller with links to responders
         """
-        cross_links = []
-        for member_id, member in self.members.items():
+
+        controllers =  []
+        responders = []
+        for member in self.members.values():
+            if member.id == self.address:
+                continue
+            controllers.append(member.name)
             for link in member.links.values():
-                linked_node_id = link.node.address
-                linked_member = self.members.get(linked_node_id, None)
-                if linked_member: 
-                    if (linked_node_id, member_id) not in cross_links:  # Avoid duplicates
-                         cross_links.append((member_id, linked_node_id))
-        return cross_links
+                responders.append(link.node.name)
+        return (controllers, responders)
+
 
     def explain(self):
         """
@@ -209,11 +221,17 @@ class Group(NodeBase):
             else:
                 explanation_lines.append("* Is a collection but does not control anything else.")
 
-#        cross_links = self.__find_cross_links()
-#        if len(cross_links) > 0:
-#            explanation_lines.append("- has the following cross-links between members:")
-#            for member_id, linked_node_id in cross_links:
-#                explanation_lines.append(f"  - {self.members[member_id].name} -> {self.members[linked_node_id].name}")
+        cross_linked_controllers, cross_link_responders = self.__find_cross_links()
+        if len(cross_linked_controllers) > 0:
+           controllers=""
+           for controller in cross_linked_controllers:
+               controllers += f"`{controller}` "
+               if controller != cross_linked_controllers[-1]:
+                   controllers += "and "
+
+           explanation_lines.append(f"* {controllers} are **cross-linked** and control the following members:") 
+           for index, responder in enumerate(cross_link_responders):
+               explanation_lines.append(f"  {index+1}. `{responder}`")
 
         # now let each mmember explain themselves
         for member in self.members.values():
