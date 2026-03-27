@@ -97,6 +97,26 @@ class NuCore:
             return Node.load_from_xml(response)
         
         raise NuCoreError("No valid nodes source provided.")
+
+    def __load_groups_links__(self, groups_path:str=None):
+        """Load group links from the specified path or URL.
+        :param groups_path: Optional path to the JSON file containing group links. If not provided, will use the configured url in constructor.
+        :return: Parsed JSON object containing group links.
+        :raises NuCoreError: If no valid group links source is provided.
+        
+        This method will first try to load groups from a file if `groups_path` is provided, 
+        otherwise it will attempt to load from the configured URL.
+        """
+        if groups_path:
+            return Node.load_from_json(groups_path)
+        
+        if self.nucore_api:
+            response = self.nucore_api.get_group_links()
+            if response is None:
+                raise NuCoreError("Failed to fetch group links from URL.")
+            return Node.load_from_json(response)
+        
+        raise NuCoreError("No valid groups source provided.")
     
     def is_rag_enabled(self): 
         """
@@ -234,7 +254,7 @@ class NuCore:
         return rc
 
     # To have the latest state, we need to load devices only
-    def load_devices(self, include_profiles=True, profile_path:str=None, nodes_path:str=None):
+    def load_devices(self, include_profiles=True, profile_path:str=None, nodes_path:str=None, groups_path:str=None):
         if include_profiles:
             if not self.__load_profile__(profile_path):
                 return None
@@ -242,8 +262,9 @@ class NuCore:
         root = self.__load_nodes__(nodes_path)
         if root == None:
             return None
-        
-        self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root) 
+
+        glinks_root = self.__load_groups_links__(groups_path) 
+        self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root, glinks_root) 
 
         return self.nodes
         

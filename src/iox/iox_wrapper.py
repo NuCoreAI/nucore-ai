@@ -9,6 +9,7 @@ from nucore.nucore_backend_api import NuCoreBackendAPI
 from nucore.nodedef import Property
 from nucore.uom import get_uom_by_id 
 import xml.etree.ElementTree as ET
+from typing import Literal
 
 
 import urllib3
@@ -63,6 +64,23 @@ class IoXWrapper(NuCoreBackendAPI):
             self.password = info['isy_password']
         else:
             self.unauthorized = True
+    
+    def delete(self, path:str):
+        try:
+            path = path if path.startswith("/") else f"/{path}"
+            url=f"{self.base_url}{path}" 
+            # Method 1a: Using auth parameter (simplest)
+            response = requests.delete(
+            url,
+            auth=(self.username, self.password),
+            verify=False
+            )
+            if response.status_code != 200:
+                print (f"invalid url status code = {response.status_code}")
+            return response
+        except Exception as ex:
+            print (f"failed connection {ex}")
+            return None
 
     def get(self, path:str):
         try:
@@ -122,6 +140,20 @@ class IoXWrapper(NuCoreBackendAPI):
         if response == None:
             return None
         return response.text
+
+    def get_group_links(self):
+        """
+        Get all groups/links/scenes from the IoX device.
+        :return: XML response containing all groups/links/scenes.
+        """
+        response = self.get("/api/groups")
+        if response == None or response.status_code != 200:
+            return None
+        try:
+            return response.json()
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON response for group links: {e}")
+            return None
 
     def get_properties(self, device_id:str)-> dict[str, Property]:
         """
@@ -262,6 +294,16 @@ class IoXWrapper(NuCoreBackendAPI):
                         i += 1
             responses.append(self.get(url))
         return responses
+    
+    def get_programs(self):
+        """
+        Get all programs from the IoX device.
+        :return: JSON response containing all programs.
+        """
+        response = self.get("/rest/programs")
+        if response == None:
+            return None
+        return response.json()
 
     def upload_program(self, program:dict):
         if not program:
@@ -279,8 +321,30 @@ class IoXWrapper(NuCoreBackendAPI):
             print (ex)
         
         return response
-    
 
+    def program_ops(self, program_id:str, operation:Literal["remove","runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
+        """
+        Perform an operation on a program.
+        :param program_id: The ID of the program to operate on.
+        :param operation: The operation to perform (e.g., "run", "stop", "enable", "disable", etc.).
+        :return: The response from the server, or False if the program_id is invalid.
+        """
+        if not program_id:
+            return None
+        if operation not in ["remove","runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]:
+            print(f"Invalid operation: {operation}")
+            return None
+        response=None
+        try:
+            if operation == "remove":
+                response = self.delete(f'/api/ai/trigger/{program_id}')
+            else: 
+                response = self.get(f'/rest/programs/{program_id}/{operation}')
+        except Exception as ex:
+            print (ex)
+        
+        return response
+    
     async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
         """
         Subscribe to events

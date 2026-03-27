@@ -217,10 +217,22 @@ class MinimalRagFormatter(RAGFormatter):
             out["sends-cmds"] = node_def.get("sends-cmds", [])
 
         devices = []
+        groups = []
+        folders = []
         for node in profile.nodes:
             if node.address:
-                devices.append({ "id": node.address, "name": node.name})
-        out["devices"] = devices
+                if isinstance(node, Group):
+                    groups.append({ "id": node.address, "name": node.name})
+                elif isinstance(node, Folder):
+                    folders.append({ "id": node.address, "name": node.name})
+                else:
+                    devices.append({ "id": node.address, "name": node.name})
+        if len(devices) > 0:
+            out["devices"] = devices
+        if len(groups) > 0:
+            out["groups"] = groups
+        if len(folders) > 0:
+            out["folders"] = folders
         
         return out
 

@@ -12,7 +12,8 @@ class LinkParameter:
     editor: Editor
     optional: bool = None
     name: str = None
-
+    init_val: str = None
+    init_uom: int = None
 
 @dataclass
 class LinkDef:

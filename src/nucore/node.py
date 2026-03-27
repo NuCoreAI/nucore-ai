@@ -1,3 +1,4 @@
+import json
 from textwrap import indent
 from dataclasses import dataclass, field
 from .nodedef import Property
@@ -103,7 +104,27 @@ class Node (NodeBase):
         """
         if xml is None:
             raise NuCoreError("xml is mandatory.")
-        return ET.fromstring(xml) 
+        try:
+            return ET.fromstring(xml) 
+        except ET.ParseError as e:
+            raise NuCoreError(f"Failed to parse XML: {e}")
+
+    @staticmethod
+    def load_from_json(json_str):
+        """
+        Load nodes from a JSON representation.
+        :param json_str: JSON string containing nodes. (mandatory)
+        :return: Parsed JSON object.
+        :raises NuCoreError: If the JSON is not set or cannot be parsed.
+        """
+        if json_str is None:
+            raise NuCoreError("json_str is mandatory.")
+        if isinstance(json_str, dict):
+            return json_str
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            raise NuCoreError(f"Failed to parse JSON: {e}")
     
     def __hash__(self):
         return hash(self.address)  # or another unique identifier
