@@ -50,7 +50,7 @@ class MinimalRagFormatter(RAGFormatter):
         # Collect property names and their enums
         property_names = []
         
-        for prop in node_def.properties:
+        for prop_id, prop in node_def.properties.items():
             if prop.name:
                 value={f'{prop.name}': []}
             # Collect enums from property editors

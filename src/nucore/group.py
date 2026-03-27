@@ -4,7 +4,7 @@ from enum import member
 from .node_base import NodeBase
 from dataclasses import dataclass, field
 from xml.etree import ElementTree as ET
-from .nucore_error import NuCoreError
+from .uom import get_uom_by_id
 
 class GroupMemberType:
     MEMBER_IS_RESPONDER = 0x00
@@ -36,9 +36,9 @@ class Linktype:
 class LinkParams:
     type: int = field(default=ParamType.PARAM_TYPE_DEVICE)
     id: str = field(default=None) 
+    name: str = field(default=None) 
     val: str = field(default=None)
     uom: int = field(default=None)
-    prec: int = field(default=0)
 
 @dataclass
 class GroupLink:
@@ -54,7 +54,11 @@ class GroupLink:
         for param in params_root:
             id = param.get('id', None)
             if id is None:
-                continue    
+                continue   
+            property = self.node.node_def.properties.get(id, None)
+            if property is None:
+                continue
+
             type = param.get('type', None)
             type = ParamType.PARAM_TYPE_DEVICE if type is None else ParamType.PARAM_TYPE_VARIABLE if type == 'variable' else ParamType.PARAM_TYPE_DEVICE
             val = param.get('val', None)
@@ -63,20 +67,47 @@ class GroupLink:
             value = val.get('value', None)
             if value is None:
                 continue
+            try:
+                value = float(value)
+            except ValueError:
+                continue
             uom = val.get('uom', None)
             if uom is None:
                 continue
             prec = val.get('prec', 0)
             try:
                 prec = int(prec)
+                value = value / (10 ** prec) if prec > 0 else value
             except ValueError:
                 prec = 0
-            self.params[id] = LinkParams(type=type, id=id, val=val, uom=uom, prec=prec)
+            self.params[id] = LinkParams(type=type, id=id, name=property.name, val=value, uom=uom)
 
+    def explain(self, index):
+        explanation_lines = []
+        try:
+            if self.type == Linktype.LINK_TYPE_NATIVE:
+                if len (self.params) > 0:
+                    explanation_lines.append(f"  {index}. `{self.node.name}` is natively activated and set to the following parameters:")
+                    for param in self.params.values():
+                        uom_name = get_uom_by_id(param.uom) if param.uom else ""
+                        explanation_lines.append(f"    - {param.name} is set to {param.val} {uom_name}")
+                else:
+                    explanation_lines.append(f"  {index}. `{self.node.name}` is natively activated." )
+            elif self.type == Linktype.LINK_TYPE_DEFAULT:
+                explanation_lines.append(f"  {index}. `{self.node.name}` is sent the same command." )
+            elif self.type == Linktype.LINK_TYPE_COMMAND:
+                explanation_lines.append(f"  {index}. `{self.node.name}` is sent the unique command specified in the linkdef." )
+            elif self.type == Linktype.LINK_TYPE_IGNORE:
+                explanation_lines.append(f"  {index}. `{self.node.name}` ignores the command." )
+        except Exception as e:
+            explanation_lines.append(f"  {index}. `{self.node.name}` is linked but an error occurred while explaining the link: {str(e)}")
+
+        return explanation_lines
 
 @dataclass
 class GroupMember:
     id: str
+    name: str = field(default=None)
     family: int = field(default=0)
     instance: int = field(default=0)
     type: int = field(default=GroupMemberType.MEMBER_IS_RESPONDER)
@@ -105,7 +136,20 @@ class GroupMember:
                 self.links[node.address] = group_link 
              except Exception as e:
                 continue
+
+    def explain(self, is_nucore_controller=False):    
+        explanation_lines = []
+        if len(self.links) == 0:
+            return explanation_lines
+
+        if is_nucore_controller:    
+            explanation_lines.append(f"* When you activate `{self.name}` scene from the NuCore controller, this is what happens:")
+        else:
+            explanation_lines.append(f"* When you activate `{self.name}`, this is what happens:")
+        for i, link in enumerate(self.links.values()):
+            explanation_lines.extend(link.explain(i))
         
+        return explanation_lines
 
 @dataclass
 class Group(NodeBase):
@@ -114,7 +158,7 @@ class Group(NodeBase):
         super().__init__(node_elem)
         self.members = {}
         #add ourselves as container
-        self.members[self.address] = GroupMember(id=self.address, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=self.family, instance=self.instance)
+        self.members[self.address] = GroupMember(id=self.address, name=self.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=self.family, instance=self.instance)
 
     
     def add_links(self, links_root: dict, nodes:dict, linkdef_lookup: dict) -> bool:
@@ -129,8 +173,55 @@ class Group(NodeBase):
                     node = nodes.get(id, None)
                     if node is None:
                         continue
-                    member = self.members[id] = GroupMember(id=id, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=node.family, instance=node.instance)
+                    member = self.members[id] = GroupMember(id=id, name=node.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=node.family, instance=node.instance)
                 member.add_links(ctrl.get('links', {}), nodes, linkdef_lookup)
+
+    def __find_cross_links(self):
+        """
+        Identify and return any cross-links between members of the group.
+        A cross-link is defined as a link where a member is both a controller and a responder within the same group.
+        """
+        cross_links = []
+        for member_id, member in self.members.items():
+            for link in member.links.values():
+                linked_node_id = link.node.address
+                linked_member = self.members.get(linked_node_id, None)
+                if linked_member: 
+                    if (linked_node_id, member_id) not in cross_links:  # Avoid duplicates
+                         cross_links.append((member_id, linked_node_id))
+        return cross_links
+
+    def explain(self):
+        """
+        Generate a human-readable explanation of the group, its members, and their links.
+        """
+        explanation_lines = []
+        explanation_lines.append(f"# Group `{self.name}`:")
+        if (len(self.members) <= 1):
+            explanation_lines.append("* Is a collection but does not control anything else.")
+            return "\n".join(explanation_lines)
+
+        # let's see if our group is controlling anything at all
+        me = self.members.get(self.address, None)
+        if me is not None and me.type == GroupMemberType.MEMBER_IS_CONTROLLER:
+            if len(me.links) > 0:
+                explanation_lines.extend(me.explain(True))
+            else:
+                explanation_lines.append("* Is a collection but does not control anything else.")
+
+#        cross_links = self.__find_cross_links()
+#        if len(cross_links) > 0:
+#            explanation_lines.append("- has the following cross-links between members:")
+#            for member_id, linked_node_id in cross_links:
+#                explanation_lines.append(f"  - {self.members[member_id].name} -> {self.members[linked_node_id].name}")
+
+        # now let each mmember explain themselves
+        for member in self.members.values():
+            if member.id == self.address:
+                continue
+            explanation_lines.extend(member.explain())
+
+        return "\n".join(explanation_lines)
 
     def __hash__(self):
         return hash(self.address)  # or another unique identifier

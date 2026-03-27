@@ -184,8 +184,8 @@ class Profile:
                 nodedefs = []
                 for ndict in i.get("nodedefs", []):
                     # NodeProperties
-                    props = []
-                    for pdict in ndict.get("properties", []):
+                    props = {} 
+                    for pdict in ndict.get("properties", {}):
                         eid = pdict["editor"]
                         editor = editors_dict.get(eid)
                         if not editor:
@@ -193,14 +193,16 @@ class Profile:
                                 f"Editor '{eid}' not found for property '{pdict.get('id')}' in nodedef '{ndict['id']}'"
                             )
 
-                        props.append(
-                            NodeProperty(
-                                id=pdict.get("id"),
+                        pid=pdict.get("id")
+                        if pid is None:
+                            debug(f"Property missing 'id' in nodedef '{ndict['id']}'")
+                            continue
+                        props[pid]=NodeProperty(
+                                id=pid,
                                 editor=editor,
                                 name=pdict.get("name"),
                                 hide=pdict.get("hide"),
                             )
-                        )
                     # NodeCommands
                     cmds_data = ndict.get("cmds", {})
                     sends = []
@@ -326,6 +328,7 @@ class Profile:
             links_root=g_links.get(group.address, None)
             if links_root is not None:
                 group.add_links(links_root, self.nodes, self.linkdef_lookup) 
+                print(group.explain())
         
         elements = root.findall(f'./folder')
 
