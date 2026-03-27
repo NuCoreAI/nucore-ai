@@ -260,7 +260,7 @@ class ProfileRagFormatter(RAGFormatter):
             if len(profile.nodedef.properties) > 0:
                 if not self.json_output:
                     self.write("Properties:")
-                for i, prop in enumerate(profile.nodedef.properties):
+                for i, (prop_id, prop) in enumerate(profile.nodedef.properties.items()):
                     self.add_property(prop, self.json_output and i < len(profile.nodedef.properties) - 1)
             if self.json_output:
                 self.write("],\"accept_commands\":[")
@@ -316,7 +316,7 @@ class ProfileRagFormatter(RAGFormatter):
                     self.write("\"Properties\":[")
                 else:
                     self.write("Properties:")
-                for idx, prop in enumerate(node.node_def.properties): 
+                for idx, (prop_id, prop) in enumerate(node.node_def.properties.items()): 
                     self.add_property(prop, self.json_output and idx < len(node.node_def.properties) - 1)
                 if self.json_output:
                     self.write("],\"Accepts Commands\":[")
@@ -338,7 +338,7 @@ class ProfileRagFormatter(RAGFormatter):
         chunk.nodes = [ node ]
         if node.node_def:
             chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
-            chunk.properties = list(node.node_def.properties)
+            chunk.properties = list(node.node_def.properties.values())
         else:
             chunk.cmds = []
             chunk.properties = []    
