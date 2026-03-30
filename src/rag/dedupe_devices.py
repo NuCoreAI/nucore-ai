@@ -242,6 +242,10 @@ class DedupeDevices:
                 lines.append(f'    {json.dumps(cmd, separators=(",", ":"))}{comma}')
             lines.append('  ]')
 
+        # Links Info
+        if device.get("Links Info"):
+            lines[-1] += ',"Links Info":' + json.dumps(device["Links Info"], separators=(",", ":"))
+
         lines.append('}')
         return "\n".join(lines)
 

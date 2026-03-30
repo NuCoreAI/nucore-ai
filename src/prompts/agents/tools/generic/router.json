@@ -13,7 +13,8 @@
           "enum": [
             "command_control",
             "routine_automation",
-            "real_time_status"
+            "real_time_status",
+            "group_scene_operations"
           ]
         },
         "devices": {

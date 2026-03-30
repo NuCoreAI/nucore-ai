@@ -1365,6 +1365,7 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
 - `command_control`: Immediate device actions (turn on/off, set value, adjust)
 - `routine_automation`: Scheduled or conditional logic (if-then, schedules, rules)
 - `real_time_status`: Query current value of a device property (what is, show me, check)
+- `group_scene_operations`: Answer any question about groups and scenes, including: their links, features, what they do, how to manage them, and informational queries. Examples: "tell me about [group name]", "what is [group name]", "show me [group name]", "explain [group name]", "what devices are in [group name]" 
 
 ────────────────────────────────
 # IMPORTANT GUIDELINES

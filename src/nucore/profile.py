@@ -324,11 +324,14 @@ class Profile:
                 self.nodes[node.address] = node 
 
         #now add links for groups
+        #json_group=[]
         for group in self.groups.values():
             links_root=g_links.get(group.address, None)
             if links_root is not None:
                 group.add_links(links_root, self.nodes, self.linkdef_lookup) 
-                print(group.explain())
+                #json_group.append(group.explain_json())
+                                
+        #print(json.dumps(json_group))
         
         elements = root.findall(f'./folder')
 
