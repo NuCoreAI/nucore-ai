@@ -11,7 +11,7 @@ from nucore import NodeProperty, Node
 from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from nucore import Node, Group, Folder, RuntimeProfile, NodeHierarchy
-import base64
+import base64, json
 
 ENCODE_IDS = False # whether to encode ids to make them URL safe
 
@@ -333,6 +333,9 @@ class ProfileRagFormatter(RAGFormatter):
                 if self.json_output:
                     self.write("]")
         if self.json_output:
+            if isinstance(node, Group):
+                self.write(", \"Links Info\":")
+                self.write(json.dumps(node.explain_json()))
             self.write("}\n```") 
         chunk.end_index = len(self.lines) - 1   
         chunk.nodes = [ node ]

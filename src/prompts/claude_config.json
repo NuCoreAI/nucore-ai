@@ -81,6 +81,24 @@
                 "security",
                 "common"
             ]
+        },
+        {
+            "name": "group_scene_operations",
+            "description": "Group and scene operations for help and management of scenes and groups.",
+            "prompt": "agents/group_scene_operations.md",
+            "intents_to_tools": [
+                {
+                    "intent": "group_scene_operations",
+                    "tokens_per_message": 25000,
+                    "tools":[
+                    ]
+                }
+            ],
+            "include": [
+                "definitions",
+                "security",
+                "common"
+            ]
         }
     ],
     "router": {

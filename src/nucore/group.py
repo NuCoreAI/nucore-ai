@@ -1,3 +1,5 @@
+from cProfile import label
+
 from .linkdef import LinkDef
 from enum import member
 
@@ -82,6 +84,41 @@ class GroupLink:
                 prec = 0
             self.params[id] = LinkParams(type=type, id=id, name=property.name, val=value, uom=uom)
 
+    def explain_json(self):
+        responder={}
+        label = f"{self.node.name} [address={self.node.address}]"
+        responder[label] = {}
+        try:
+            if self.type == Linktype.LINK_TYPE_NATIVE:
+                if len (self.params) > 0:
+                    responder[label]["link_type"] = "native"
+                    responder[label]["parameters"] = []
+
+                    for param in self.params.values():
+                        uom = get_uom_by_id(param.uom) if param.uom else ""
+                        out_str=(f"{param.val} {uom.name}")
+                        try:
+                            if uom.name == "Enum":
+                                property = self.node.node_def.properties.get(param.id, None)
+                                if property and property.editor and property.editor.ranges and property.editor.ranges[0].names:
+                                    names = property.editor.ranges[0].names
+                                    param_val = names.get(str(int(param.val)), None)
+                                    out_str=(f"{param_val}")
+                        except Exception as e:
+                            pass
+                        plabel = f"{param.name} [id={param.id}]"
+                        responder[label]["parameters"].append({plabel: out_str})
+            elif self.type == Linktype.LINK_TYPE_DEFAULT:
+                responder[label]["link_type"] = "default"
+            elif self.type == Linktype.LINK_TYPE_COMMAND:
+                responder[label]["link_type"] = "command"
+            elif self.type == Linktype.LINK_TYPE_IGNORE:
+                responder[label]["link_type"] = "ignore"
+        except Exception as e:
+            responder[label]["link_type"] = "error occured"
+
+        return responder 
+
     def explain(self, index):
         explanation_lines = []
         try:
@@ -116,7 +153,7 @@ class GroupLink:
 
 @dataclass
 class GroupMember:
-    id: str
+    address: str
     name: str = field(default=None)
     family: int = field(default=0)
     instance: int = field(default=0)
@@ -147,6 +184,18 @@ class GroupMember:
              except Exception as e:
                 continue
 
+    def explain_json(self, group:dict, is_nucore_controller=False):    
+        if len(self.links) == 0:
+            return  
+        responders = []
+        for _, link in enumerate(self.links.values()):
+            if link.node.address == self.address:
+                continue
+            responder = link.explain_json()
+            responders.append(responder)
+
+        return responders
+
     def explain(self, is_nucore_controller=False):    
         explanation_lines = []
         if len(self.links) == 0:
@@ -168,7 +217,7 @@ class Group(NodeBase):
         super().__init__(node_elem)
         self.members = {}
         #add ourselves as container
-        self.members[self.address] = GroupMember(id=self.address, name=self.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=self.family, instance=self.instance)
+        self.members[self.address] = GroupMember(address=self.address, name=self.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=self.family, instance=self.instance)
 
     
     def add_links(self, links_root: dict, nodes:dict, linkdef_lookup: dict) -> bool:
@@ -183,7 +232,7 @@ class Group(NodeBase):
                     node = nodes.get(id, None)
                     if node is None:
                         continue
-                    member = self.members[id] = GroupMember(id=id, name=node.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=node.family, instance=node.instance)
+                    member = self.members[id] = GroupMember(address=id, name=node.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=node.family, instance=node.instance)
                 member.add_links(ctrl.get('links', {}), nodes, linkdef_lookup)
 
     def __find_cross_links(self):
@@ -195,18 +244,79 @@ class Group(NodeBase):
         controllers =  []
         responders = []
         for member in self.members.values():
-            if member.id == self.address:
+            if member.address == self.address:
                 continue
             controllers.append(member.name)
             for link in member.links.values():
                 responders.append(link.node.name)
         return (controllers, responders)
+    
+    def __find_cross_links_json(self):
+        """
+        Identify and return any cross-links between members of the group.
+        Max number of cross links is the total number of members; each member is a controller with links to responders
+        """
 
+        controllers =  []
+        responders = []
+        for member in self.members.values():
+            if member.address == self.address:
+                continue
+            controllers.append({
+                "name": member.name,
+                "address": member.address
+            })
+            for link in member.links.values():
+                responders.append({
+                    "name": link.node.name,
+                    "address": link.node.address
+                })
+        return (controllers, responders)
 
-    def explain(self):
+    
+    def explain_json(self):
+        """
+        LLM friendly explanation of the group, its members, and their links in JSON format. 
+        """
+        group = {
+          #  "id": self.address,
+          #  "name": self.name,
+        }
+
+        if (len(self.members) <= 1):
+            group["nucore_scene_activation"]="This is a collection but does not control anything else"
+            return group
+
+        # let's see if our group is controlling anything at all
+        me = self.members.get(self.address, None)
+        if me is not None and me.type == GroupMemberType.MEMBER_IS_CONTROLLER:
+            if len(me.links) > 0:
+                group["nucore_scene_activation"]=me.explain_json(True)
+            else:
+                group["nucore_scene_activation"]="This is a collection but does not control anything else"
+
+        #cross_linked_controllers, _ = self.__find_cross_links_json()
+        #if len(cross_linked_controllers) > 0:
+        #   group["cross_linked_controllers"]=cross_linked_controllers
+
+        # now let each mmember explain themselves
+        if len (self.members) > 0:
+            controller_activation_map = {} 
+            for member in self.members.values():
+                if member.address == self.address:
+                    continue
+
+                controller_activation_map[f"{member.name} [address={member.address}]"] = member.explain_json(group)
+            group["controller_activation_map"] = controller_activation_map
+
+        return group
+
+    def explain_text(self, is_json=True):
         """
         Generate a human-readable explanation of the group, its members, and their links.
         """
+        if is_json:
+            return self.explain_json()
         explanation_lines = []
         explanation_lines.append(f"# Group `{self.name}`:")
         if (len(self.members) <= 1):
@@ -235,7 +345,7 @@ class Group(NodeBase):
 
         # now let each mmember explain themselves
         for member in self.members.values():
-            if member.id == self.address:
+            if member.address == self.address:
                 continue
             explanation_lines.extend(member.explain())
 
