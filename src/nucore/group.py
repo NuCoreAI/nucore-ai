@@ -56,10 +56,14 @@ class GroupLink:
         for param in params_root:
             id = param.get('id', None)
             if id is None:
-                continue   
-            property = self.node.node_def.properties.get(id, None)
-            if property is None:
-                continue
+                continue  
+
+            property_name = self.linkdef.parameters.get(id, None).name if self.linkdef and self.linkdef.parameters and id in self.linkdef.parameters else None
+
+            if property_name is None:            
+                property = self.node.node_def.properties.get(id, None)
+                if property :
+                    property_name = property.name
 
             type = param.get('type', None)
             type = ParamType.PARAM_TYPE_DEVICE if type is None else ParamType.PARAM_TYPE_VARIABLE if type == 'variable' else ParamType.PARAM_TYPE_DEVICE
@@ -74,15 +78,13 @@ class GroupLink:
             except ValueError:
                 continue
             uom = val.get('uom', None)
-            if uom is None:
-                continue
             prec = val.get('prec', 0)
             try:
                 prec = int(prec)
                 value = value / (10 ** prec) if prec > 0 else value
             except ValueError:
                 prec = 0
-            self.params[id] = LinkParams(type=type, id=id, name=property.name, val=value, uom=uom)
+            self.params[id] = LinkParams(type=type, id=id, name=property_name, val=value, uom=uom)
 
     def explain_json(self):
         responder={}
@@ -95,10 +97,10 @@ class GroupLink:
                     responder[label]["parameters"] = []
 
                     for param in self.params.values():
-                        uom = get_uom_by_id(param.uom) if param.uom else ""
-                        out_str=(f"{param.val} {uom.name}")
+                        uom = get_uom_by_id(param.uom) if param.uom else None
+                        out_str=(f"{param.val} {uom.name}" if uom else f"{param.val}")
                         try:
-                            if uom.name == "Enum":
+                            if uom and uom.name == "Enum":
                                 property = self.node.node_def.properties.get(param.id, None)
                                 if property and property.editor and property.editor.ranges and property.editor.ranges[0].names:
                                     names = property.editor.ranges[0].names
@@ -221,6 +223,8 @@ class Group(NodeBase):
 
     
     def add_links(self, links_root: dict, nodes:dict, linkdef_lookup: dict) -> bool:
+        if self.address == "30263":
+            crap --- now that we get things working the UOMs are not processed.
         if links_root is not None and linkdef_lookup is not None:
             ctrls = links_root.get('ctl', [])
             for ctrl in ctrls:
