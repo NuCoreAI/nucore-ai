@@ -1,6 +1,6 @@
 {
-  "llm": "claude-haiku-4-5-20251001",
-  "llm_2": "claude-sonnet-4-20250514",
+  "llm_2": "claude-haiku-4-5-20251001",
+  "llm": "claude-sonnet-4-20250514",
   "version": "1.0.0",
   "description": "Claude LLM prompt configuration for NuCore smart-home assistant",
   "max_context_size": 200000,

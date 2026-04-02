@@ -30,8 +30,11 @@ class LinkDef:
     name: str = None
     cmd: bool = None
     format: str = None
+    parameters: dict[str, LinkParameter] = field(default_factory=dict)
 
-    parameters: list[LinkParameter] = field(default_factory=list)
+    def add_parameters(self, parameters: list[LinkParameter]):
+        for p in parameters:
+            self.parameters[p.id] = p
 
     def json(self):
         # very limited for now 

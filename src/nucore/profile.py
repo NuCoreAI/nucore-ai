@@ -170,16 +170,17 @@ class Profile:
                                 name=p.get("name"),
                             )
                         )
-                    linkdefs.append(
-                        LinkDef(
-                            id=ldict["id"],
-                            protocol=ldict["protocol"],
-                            name=ldict.get("name"),
-                            cmd=ldict.get("cmd"),
-                            format=ldict.get("format"),
-                            parameters=params,
-                        )
-                    )
+                    
+                    link_def=LinkDef(
+                        id=ldict["id"],
+                        protocol=ldict["protocol"],
+                        name=ldict.get("name"),
+                        cmd=ldict.get("cmd"),
+                        format=ldict.get("format"))
+                    
+                    link_def.add_parameters(params)
+                    linkdefs.append(link_def)
+                
                 # Build NodeDefs
                 nodedefs = []
                 for ndict in i.get("nodedefs", []):
@@ -289,7 +290,7 @@ class Profile:
         g_links = {}
         if groups_root is not None:
             try:
-                groups = groups_root['data']['group']
+                groups = groups_root['data']['groups']
                 for group in groups:
                     g_links[group['id']] = group
             except KeyError as e:
