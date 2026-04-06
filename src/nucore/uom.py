@@ -929,6 +929,11 @@ PREDEFINED_UOMS = {
 
 
 def get_uom_by_id(uom_id):
+    try:
+        if isinstance(uom_id, int):
+            uom_id = str(uom_id)
+    except Exception as e:
+        pass
     return PREDEFINED_UOMS.get(uom_id, None)
 
 
