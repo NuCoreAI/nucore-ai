@@ -1,0 +1,43 @@
+{
+  "name": "routine_ops_tool",
+  "description": "Perform runtime operations on a NuCore routine (enable, disable, run, stop, etc.)",
+  "input_schema": {
+    "type": "object",
+    "required": ["tool", "args"],
+    "properties": {
+      "tool": {
+        "type": "string",
+        "const": "RoutineOps",
+        "description": "NuCore tool for issuing runtime operations on routines"
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The routine ID from ROUTINES RUNTIME DATA. Must match the 'id' field exactly."
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "enable",
+                "disable",
+                "enableRunAtStartup",
+                "disableRunAtStartup",
+                "runThen",
+                "runElse",
+                "stop",
+                "runIf"
+              ],
+              "description": "The operation to perform on the routine."
+            }
+          },
+          "required": ["id", "operation"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

@@ -127,7 +127,7 @@ class IoXWrapper(NuCoreBackendAPI):
         :return: JSON response containing all profiles.
         """
         response = self.get("/rest/profiles")
-        if response == None:
+        if response == None or response.status_code != 200:
             return None
         return response.json()
 
@@ -137,7 +137,7 @@ class IoXWrapper(NuCoreBackendAPI):
         :return: XML response containing all nodes.
         """
         response = self.get("/rest/nodes")
-        if response == None:
+        if response == None or response.status_code != 200:
             return None
         return response.text
 
@@ -295,17 +295,49 @@ class IoXWrapper(NuCoreBackendAPI):
             responses.append(self.get(url))
         return responses
     
-    def get_programs(self):
+    def get_all_routines_summary(self):
         """
-        Get all programs from the IoX device.
-        :return: JSON response containing all programs.
+        Get all the runtime information for routines from the IoX device.
+        :return: JSON response containing all routines.
         """
-        response = self.get("/rest/programs")
-        if response == None:
+        response = self.get("/api/ai/programs")
+        if response == None or response.status_code != 200:
             return None
         return response.json()
 
-    def upload_program(self, program:dict):
+    def get_routine_summary(self, program_id:str):
+        """
+        Get all the runtime information for a specific routine from the IoX device.
+        :param program_id: The ID of the program to retrieve.
+        :return: JSON response containing the routine information.
+        """
+        response = self.get(f"/api/ai/programs/{program_id}")
+        if response == None or response.status_code != 200:
+            return None
+        return response.json()
+
+    def get_all_routines(self):
+        """
+        Get complete information for all routines from the IoX device including their logic, triggers, and actions. 
+        :return: JSON response containing all routines.
+        """
+        response = self.get("/api/ai/triggers")
+        if response == None or response.status_code != 200:
+            return None
+        return response.json()
+    
+    def get_routine(self, program_id:str):
+        """
+        Get complete information for a specific routine from the IoX device including its logic, triggers, and actions. 
+        :param program_id: The ID of the program to retrieve.
+        :return: JSON response containing the routine information.
+        """
+        response = self.get(f"/api/ai/triggers/{program_id}")
+        if response == None or response.status_code != 200:
+            return None
+        return response.json()
+
+    def create_routine(self, program:dict):
         if not program:
             return False
         response=None
@@ -322,7 +354,39 @@ class IoXWrapper(NuCoreBackendAPI):
         
         return response
 
-    def program_ops(self, program_id:str, operation:Literal["remove","runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
+    def update_routine(self, program:dict):
+        if not program:
+            return False
+        response=None
+        try:
+            program_content = {
+                'routine': program
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            response = self.post(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+        except Exception as ex:
+            print (ex)
+        
+        return response
+
+    def delete_routine(self, program_id:str):
+        """
+        Delete a program/routine by its ID.
+        :param program_id: The ID of the program to delete.
+        :return: The response from the server, or False if the program_id is invalid.
+        """
+        if not program_id:
+            return None
+        try:
+            response = self.delete(f'/api/ai/trigger/{program_id}')
+        except Exception as ex:
+            print (ex)
+        
+        return response
+
+    def routine_ops(self, program_id:str, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
         """
         Perform an operation on a program.
         :param program_id: The ID of the program to operate on.
@@ -331,14 +395,10 @@ class IoXWrapper(NuCoreBackendAPI):
         """
         if not program_id:
             return None
-        if operation not in ["remove","runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]:
+        if operation not in ["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]:
             print(f"Invalid operation: {operation}")
             return None
-        response=None
         try:
-            if operation == "remove":
-                response = self.delete(f'/api/ai/trigger/{program_id}')
-            else: 
                 response = self.get(f'/rest/programs/{program_id}/{operation}')
         except Exception as ex:
             print (ex)
