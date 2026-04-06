@@ -92,30 +92,30 @@ class GroupLink:
         responder[label] = {}
         try:
             if self.type == Linktype.LINK_TYPE_NATIVE:
-                if len (self.params) > 0:
-                    responder[label]["link_type"] = "native"
-                    responder[label]["parameters"] = []
-
-                    for param in self.params.values():
-                        uom = get_uom_by_id(param.uom) if param.uom else None
-                        out_str=(f"{param.val} {uom.name}" if uom else f"{param.val}")
-                        try:
-                            if uom and uom.name == "Enum":
-                                property = self.node.node_def.properties.get(param.id, None)
-                                if property and property.editor and property.editor.ranges and property.editor.ranges[0].names:
-                                    names = property.editor.ranges[0].names
-                                    param_val = names.get(str(int(param.val)), None)
-                                    out_str=(f"{param_val}")
-                        except Exception as e:
-                            pass
-                        plabel = f"{param.name} [id={param.id}]"
-                        responder[label]["parameters"].append({plabel: out_str})
+                responder[label]["link_type"] = "native"
             elif self.type == Linktype.LINK_TYPE_DEFAULT:
                 responder[label]["link_type"] = "default"
             elif self.type == Linktype.LINK_TYPE_COMMAND:
                 responder[label]["link_type"] = "command"
             elif self.type == Linktype.LINK_TYPE_IGNORE:
                 responder[label]["link_type"] = "ignore"
+            
+            if len (self.params) > 0:
+                responder[label]["parameters"] = []
+                for param in self.params.values():
+                    uom = get_uom_by_id(param.uom) if param.uom else None
+                    out_str=(f"{param.val} {uom.name}" if uom else f"{param.val}")
+                    try:
+                        if uom and uom.name == "Enum":
+                            property = self.node.node_def.properties.get(param.id, None)
+                            if property and property.editor and property.editor.ranges and property.editor.ranges[0].names:
+                                names = property.editor.ranges[0].names
+                                param_val = names.get(str(int(param.val)), None)
+                                out_str=(f"{param_val}")
+                    except Exception as e:
+                        pass
+                    plabel = f"{param.name} [id={param.id}]"
+                    responder[label]["parameters"].append({plabel: out_str})
         except Exception as e:
             responder[label]["link_type"] = "error occured"
 
@@ -223,8 +223,6 @@ class Group(NodeBase):
 
     
     def add_links(self, links_root: dict, nodes:dict, linkdef_lookup: dict) -> bool:
-        if self.address == "30263":
-            crap --- now that we get things working the UOMs are not processed.
         if links_root is not None and linkdef_lookup is not None:
             ctrls = links_root.get('ctl', [])
             for ctrl in ctrls:
