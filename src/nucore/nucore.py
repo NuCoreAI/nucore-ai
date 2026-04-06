@@ -395,7 +395,7 @@ class NuCore:
 
         print( "****Routine after processing:") 
         print(json.dumps(out_routine, indent=4))
-        response=self.nucore_api.upload_program(out_routine)
+        response=self.nucore_api.create_routine(out_routine)
         return response
 
     

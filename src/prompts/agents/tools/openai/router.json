@@ -13,7 +13,8 @@
           "command_control",
           "routine_automation",
           "real_time_status",
-          "group_scene_operations"
+          "group_scene_operations",
+          "routine_status_ops"
           ]
       },
       "devices": {

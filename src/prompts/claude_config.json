@@ -99,6 +99,28 @@
                 "security",
                 "common"
             ]
+        },
+        {
+            "name": "routine_status_ops",
+            "description": "Routine status operations for monitoring and managing routine states.",
+            "prompt": "agents/routine_status_ops.md",
+            "intents_to_tools": [
+                {
+                    "intent": "routine_status_ops",
+                    "tokens_per_message": 25000,
+                    "tools":[
+                        {
+                            "name": "routine_status_ops_tool",
+                            "path": "agents/tools/claude/routine_status_ops.json"
+                        }
+                    ]
+                }
+            ],
+            "include": [
+                "definitions",
+                "security",
+                "common"
+            ]
         }
     ],
     "router": {

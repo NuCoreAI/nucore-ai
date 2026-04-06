@@ -10,8 +10,10 @@ from .embedder import Embedder
 from .local_embedder import LocalEmbedder
 from .dedupe_devices import DedupeDevices
 from .dedupe_profiles import DedupeProfiles
+from .routine_summary_rag_formatter import RoutineSummaryRagFormatter   
+
 
 
 __all__ = ["ProfileRagFormatter", "MinimalRagFormatter", "RAGSQLiteDB",
            "RAGFormatter", "RAGProcessor", "Reranker", "StaticInfoRAGFormatter", 
-            "RAGData", "RAGDataItem", "Embedder", "LocalEmbedder", "DedupeDevices", "DedupeProfiles"]
+            "RAGData", "RAGDataItem", "Embedder", "LocalEmbedder", "DedupeDevices", "DedupeProfiles", "RoutineSummaryRagFormatter"]
