@@ -1,13 +1,13 @@
 {
   "name": "nucore_router_tool",
-  "description": "Results from searching the device database for top 10 most relevant devices or groups/scenes based on user query",
+  "description": "Results from routing and filtering top candidates based on the detected intent",
   "input_schema": {
     "type": "object",
-    "required": ["intent","devices"],
+    "required": ["intent"],
     "properties": {
       "intent": {
         "type": "string",
-          "description": "Primary intent of the user query. See **`intent` DETERMINATION RULES**",
+        "description": "Primary intent of the user query.",
         "enum": [
           "command_control",
           "routine_automation",
@@ -16,24 +16,57 @@
           "routine_status_ops"
         ]
       },
+      "key": {
+        "type": "string",
+        "description": "The key for the candidates being returned. Such as `devices` and `routines` ",
+        "enum": [
+          "devices",
+          "routines"
+        ]
+      },
       "devices": {
         "type": "array",
-          "description": "See **DEVICE SELECTION RULES**",
+        "description": "Selected device/group/scene candidates for command_control, routine_automation, real_time_status, and group_scene_operations.",
         "items": {
           "type": "object",
-            "required": ["device_id", "score"],
+          "required": ["device_id", "score"],
           "properties": {
             "device_id": {
               "type": "string",
-              "description": "The unique device identifier"
+              "description": "The unique device or group/scene identifier"
             },
             "score": {
               "type": "number",
-                "description": "Relevance score **from 0.0 to 1.0 inclusive** (higher is better)"
-              }
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
             }
-          }
+          },
+          "additionalProperties": false
+        }
+      },
+      "routines": {
+        "type": "array",
+        "description": "Selected routine/folder candidates for routine_status_ops.",
+        "items": {
+          "type": "object",
+          "required": ["routine_id", "score"],
+          "properties": {
+            "routine_id": {
+              "type": "string",
+              "description": "The unique routine/folder identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
         }
       }
-    }
+    },
+    "additionalProperties": false
   }
+}

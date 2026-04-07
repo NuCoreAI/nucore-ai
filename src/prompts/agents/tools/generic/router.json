@@ -2,10 +2,10 @@
   "type": "function",
   "function": {
     "name": "nucore_router_tool",
-    "description": "Results from searching the device database for top 10 most relevant devices based on user query",
+    "description": "Results from routing and filtering top candidates based on the detected intent",
     "parameters": {
       "type": "object",
-      "required": ["intent","devices"],
+      "required": ["intent"],
       "properties": {
         "intent": {
           "type": "string",
@@ -20,7 +20,7 @@
         },
         "devices": {
           "type": "array",
-          "description": "See **DEVICE SELECTION RULES**",
+          "description": "Selected device candidates for intents that operate on devices.",
           "items": {
             "type": "object",
             "required": ["device_id", "score"],
@@ -31,12 +31,80 @@
               },
               "score": {
                 "type": "number",
-                "description": "Relevance score **from 0.0 to 1.0 inclusive** (higher is better)"
+                "description": "Relevance score **from 0.0 to 1.0 inclusive** (higher is better)",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        },
+        "groups": {
+          "type": "array",
+          "description": "Selected group/scene candidates for `group_scene_operations`.",
+          "items": {
+            "type": "object",
+            "required": ["group_id", "score"],
+            "properties": {
+              "group_id": {
+                "type": "string",
+                "description": "The unique group/scene identifier"
+              },
+              "score": {
+                "type": "number",
+                "description": "Relevance score **from 0.0 to 1.0 inclusive** (higher is better)",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        },
+        "routines": {
+          "type": "array",
+          "description": "Selected routine/folder candidates for `routine_status_ops`.",
+          "items": {
+            "type": "object",
+            "required": ["routine_id", "score"],
+            "properties": {
+              "routine_id": {
+                "type": "string",
+                "description": "The unique routine/folder identifier"
+              },
+              "score": {
+                "type": "number",
+                "description": "Relevance score **from 0.0 to 1.0 inclusive** (higher is better)",
+                "minimum": 0,
+                "maximum": 1
               }
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "intent": {
+              "enum": ["command_control", "routine_automation", "real_time_status"]
+            }
+          },
+          "required": ["intent", "devices"]
+        },
+        {
+          "properties": {
+            "intent": {
+              "const": "group_scene_operations"
+            }
+          },
+          "required": ["intent", "groups"]
+        },
+        {
+          "properties": {
+            "intent": {
+              "const": "routine_status_ops"
+            }
+          },
+          "required": ["intent", "routines"]
+        }
+      ]
     }
   }
 }

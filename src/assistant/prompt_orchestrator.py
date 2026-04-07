@@ -35,13 +35,36 @@ class PromptOrchestrator:
         """
         self.config_path = Path(config_path)
         self.base_dir = self.config_path.parent
+        
         self.full_rags: RAGData = None
         self.summary_rags: RAGData = None
+        self.full_routines: dict = None
+        self.summary_routines: dict = None
+
+        common_config_path = self.base_dir / 'common_config.json'
+        if not common_config_path.exists():
+            raise FileNotFoundError(f"Common config file not found at {common_config_path}")
+
+        #load the common config into confi
+        with open(common_config_path, 'r', encoding='utf-8') as f:
+            self.config = json.load(f)
         
         # Load the configuration
         with open(self.config_path, 'r', encoding='utf-8') as f:
-            self.config = json.load(f)
-                # Get LLM provider name and determine tool format
+            llm_config = json.load(f)
+            self.config.update(llm_config)  # Merge LLM-specific config with common config
+            tools_path = self.config.get('tools_path', 'agents/tools')
+            for agent in self.config.get('agents', []):
+                for intent_config in agent.get('intents_to_tools', []):
+                    for tool in intent_config.get('tools', []):
+                        if 'path' in tool:
+                            tool['path'] = tool['path'].replace('<<tools_path>>', tools_path)
+            router = self.config.get('router', {})
+            for tool in router.get('tools', []):
+                if 'path' in tool:
+                    tool['path'] = tool['path'].replace('<<tools_path>>', tools_path)
+        
+        
         self.llm_provider = self.config.get('llm', 'unknown').lower()
         self.max_context_size: int = self.config.get('max_context_size', DEFAULT_MAX_CONTEXT_SIZE) 
         
@@ -57,7 +80,7 @@ class PromptOrchestrator:
             'grok': 'grok',
             'xai': 'grok'
         }
-        
+
         self.tool_suffix = self.tool_format_map.get(self.llm_provider, 'openai')
                 # Cache for loaded file contents
         self._file_cache: Dict[str, str] = {}
@@ -205,11 +228,12 @@ class PromptOrchestrator:
         
         return tools
     
-    def _get_rags_from_intent(self, devices: List[dict]) -> RAGData:
+    def _get_rags_from_intent(self, key, candidates: List[dict]) -> RAGData:
         """
         Get RAGData for the matched devices in the intent.
         
-        :param devices: List of device dictionaries from router result
+        :param key: The key for the candidates being returned. Such as `devices` and `routines`
+        :param candidates: List of candidate dictionaries from router result
         :return: RAGData object containing only the matched devices
         """
         if not self.full_rags:
@@ -219,20 +243,24 @@ class PromptOrchestrator:
         if self._get_router_prompt(): 
             score_threshold = self._get_router_prompt().score_threshold
 
-        matched_device_ids=set()
-        for d in devices:
+        matched_candidate_ids=set()
+        for d in candidates:
             if float(d.get('score', 0)) >= score_threshold:
                 try:
-                    matched_device_ids.add(d['device_id'])
+                    if key == "devices":
+                        matched_candidate_ids.add(d['device_id'])
+                    elif key == "routines":
+                        matched_candidate_ids.add(d['routine_id'])
                 except Exception as ex:
                     pass
         
         full_rags = self.full_rags
         filtered_rags = RAGData(documents=[], ids=[]) 
 
-        for idx, id_ in enumerate(full_rags["ids"]):
-            if id_ in matched_device_ids:
-                filtered_rags.add_document(full_rags["documents"][idx], full_rags["embeddings"][idx] , id_, full_rags["metadatas"][idx])
+        if key == "devices":
+            for idx, id_ in enumerate(full_rags["ids"]):
+                if id_ in matched_candidate_ids:
+                    filtered_rags.add_document(full_rags["documents"][idx], full_rags["embeddings"][idx] , id_, full_rags["metadatas"][idx])
 
         return filtered_rags
 
@@ -253,14 +281,13 @@ class PromptOrchestrator:
         if router_result is None, returns the router_prompt, otherwise returns the intent prompt.
 
         Uses cached prompt/tools if already built for this intent, only updating
-        keywords, devices, and message_history.
+        devices, and message_history.
         
         :param router_result: The JSON object returned by nucore_router_tool, containing:
                              - intent: The determined intent name
-                             - keywords: Extracted keywords
                              - devices: Matched devices with scores
         :param message_history: Optional conversation message history
-        :return: NuCorePrompt object with prompt, tools, intent, keywords, devices, and message_history
+        :return: NuCorePrompt object with prompt, tools, intent, devices, and message_history
         :raises ValueError: If intent is not found in router_result or config
         """
         if router_result is None:
@@ -273,23 +300,22 @@ class PromptOrchestrator:
         
         if intent not in self._intent_map:
             raise ValueError(f"Intent '{intent}' not found. Available: {list(self._intent_map.keys())}")
-        
-        # Extract keywords and devices from router result
-        keywords = router_result.get('keywords', [])
-        devices = router_result.get('devices', [])
+        # Extract key/candidates for backward-compatible fallback path
+        candidate_key = router_result.get('key', 'devices')  # default to 'devices' if not specified
+        candidates = router_result.get(candidate_key, [])
+
+        intent_config = self._intent_map[intent]
         
         # Check if we have a cached prompt/tools for this intent
         if intent in self._prompt_cache:
             cached = self._prompt_cache[intent]
             # Update dynamic fields only
-            cached.keywords = keywords
-            cached.set_device_rags(self._get_rags_from_intent(devices))
+            cached.set_device_rags(self._get_rags_from_intent(candidate_key, candidates))
             self.last_prompt = cached
             print (f"\n****\nUsing cached prompt/tools for intent '{intent}'\n****\n")
             return cached
         
         # Not cached - build it
-        intent_config = self._intent_map[intent]
         agent = intent_config['agent']
         tool_configs = intent_config['tools']
         
@@ -305,11 +331,10 @@ class PromptOrchestrator:
             model=self.get_llm_name(),
             tools=tools,
             intent=intent,
-            keywords=keywords,
             max_context_size=self.max_context_size,
             tokens_per_message=intent_config['tokens_per_message']  
         )
-        nucore_prompt.set_device_rags(self._get_rags_from_intent(devices))
+        nucore_prompt.set_device_rags(self._get_rags_from_intent(candidate_key, candidates))
         
         self._prompt_cache[intent] = nucore_prompt
         self.last_prompt = nucore_prompt
@@ -369,7 +394,6 @@ class PromptOrchestrator:
             model=self.get_llm_name(),
             tools=tools,
             intent=ROUTER_INTENT,
-            keywords=[],
             max_context_size=self.max_context_size,
             tokens_per_message=tokens_per_message,
             score_threshold=score_threshold
@@ -403,76 +427,4 @@ class PromptOrchestrator:
         """
         return self.tool_suffix
 
-
-# Example usage
-if __name__ == "__main__":
-    # Initialize the orchestrator with Qwen configuration
-    orchestrator = PromptOrchestrator("src/prompts/qwen_config.json")
-    
-    print(f"LLM: {orchestrator.get_llm_name()}")
-    print(f"Tool format: {orchestrator.get_tool_format()}")
-    print(f"Available intents: {orchestrator.get_available_intents()}")
-    
-    print("\n" + "="*80)
-    print("ROUTER PHASE:")
-    print("="*80)
-    router_prompt = orchestrator._get_router_prompt()
-    
-    # Simulate router tool output
-    router_result = {
-        "intent": "command_control",
-        "keywords": [
-            {"keyword": "pool", "reasoning": "Pool device control"},
-            {"keyword": "on", "reasoning": "Turn on command"}
-        ],
-        "devices": [
-            {
-                "device_id": "ZY003_1",
-                "score": 6,
-                "matched_terms": ["ZWave Pool", "Pool", "On"],
-                "reasoning": "Matches: pool(2+2) + on(2) = 6pts"
-            }
-        ]
-    }
-    
-    print("\n" + "="*80)
-    print("PROCESSING ROUTER RESULT: command_control")
-    print("="*80)
-    nucore_prompt = orchestrator.process_intent(router_result)
-    print(f"Intent: {nucore_prompt.intent}")
-    print(f"Prompt length: {len(nucore_prompt.prompt)} chars")
-    print(f"Tools loaded: {len(nucore_prompt.tools)}")
-    print(f"Tool names: {[t.get('name', 'unnamed') for t in nucore_prompt.tools]}")
-    print(f"Keywords: {len(nucore_prompt.keywords)}")
-    print(f"Matched devices: {len(nucore_prompt.devices)}")
-    print(f"Device IDs: {[d['device_id'] for d in nucore_prompt.devices]}")
-    
-    # Another example
-    router_result_2 = {
-        "intent": "routine_automation",
-        "keywords": [
-            {"keyword": "range", "reasoning": "EV battery range condition"},
-            {"keyword": "charging", "reasoning": "Start/stop charging control"}
-        ],
-        "devices": [
-            {
-                "device_id": "n003_chargea5rf7219",
-                "score": 14,
-                "matched_terms": ["Charging Info", "Estimated Range"],
-                "reasoning": "Primary device for EV range monitoring"
-            }
-        ]
-    }
-    
-    print("\n" + "="*80)
-    print("PROCESSING ROUTER RESULT: routine_automation")
-    print("="*80)
-    nucore_prompt = orchestrator.process_intent(router_result_2)
-    print(f"Intent: {nucore_prompt.intent}")
-    print(f"Prompt length: {len(nucore_prompt.prompt)} chars")
-    print(f"Tools loaded: {len(nucore_prompt.tools)}")
-    print(f"Tool names: {[t.get('name', 'unnamed') for t in nucore_prompt.tools]}")
-    print(f"Keywords: {len(nucore_prompt.keywords)}")
-    print(f"Matched devices: {len(nucore_prompt.devices)}")
-    print(f"Device IDs: {[d['device_id'] for d in nucore_prompt.devices]}")
 
