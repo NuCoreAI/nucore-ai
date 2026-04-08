@@ -1,0 +1,23 @@
+{
+  "intent": "routine_automation",
+  "description": "Post-router execution for routine automation.",
+  "handler": "handler.py",
+  "previous_dependencies": [
+    "device_filter"
+  ],
+  "routing_examples": [
+    "Turn on the patio lights",
+    "Set hallway thermostat to 71",
+    "What is the garage temperature right now?"
+  ],
+  "router_hints": [
+    "Use this intent for creating or editing routine logic (if-then conditions, schedules, actions, rules).",
+    "This intent expects pre-filtered devices from device_filter."
+  ],
+  "tool_files": [
+    "tool_routine_automation.json"
+  ],
+  "llm_config": {
+    "temperature": 0.1
+  }
+}

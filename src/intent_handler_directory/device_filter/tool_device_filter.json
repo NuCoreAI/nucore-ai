@@ -1,0 +1,32 @@
+{
+  "name": "device_filter",
+  "description": "Results from filtering top candidates based on the user query for downstream intents like command_control and routine_automation.",
+  "input_schema": {
+    "type": "object",
+    "required": ["devices"],
+    "properties": {
+      "devices": {
+        "type": "array",
+        "description": "Selected device/group/scene candidates for command_control, routine_automation, real_time_status, and group_scene_operations.",
+        "items": {
+          "type": "object",
+          "required": ["device_id", "score"],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "The unique device or group/scene identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

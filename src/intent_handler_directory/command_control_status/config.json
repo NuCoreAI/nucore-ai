@@ -1,0 +1,25 @@
+{
+  "intent": "command_control_status",
+  "description": "Post-router execution for command control and realtime status requests.",
+  "handler": "handler.py",
+  "previous_dependencies": [
+    "device_filter"
+  ],
+  "routing_examples": [
+    "Turn on the patio lights",
+    "Set hallway thermostat to 71",
+    "What is the garage temperature right now?"
+  ],
+  "router_hints": [
+    "Use this intent for *Immediate* device actions (turn on/off, set value, adjust) and real time device status checks",
+    "This intent expects pre-filtered devices from device_filter."
+  ],
+  "tool_files": [
+    "tool_command_control.json",
+    "tool_real_time_status.json"
+  ],
+  "llm_override": "claude",
+  "llm_config": {
+    "temperature": 0.1
+  }
+}

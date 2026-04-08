@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+import json
+
+from intent_handler import BaseIntentHandler
+
+
+class RoutineStatusOpsIntentHandler(BaseIntentHandler):
+    def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None):
+        routines_runtime = ""
+
+        if self.backend_api is not None:
+            try:
+                routines = self.backend_api.get_all_routines_summary()
+                if isinstance(routines, str):
+                    routines_runtime = routines
+                elif routines is not None:
+                    routines_runtime = json.dumps(routines, indent=2)
+            except Exception:
+                routines_runtime = ""
+
+        return {
+            "nucore_routines_runtime": routines_runtime,
+        }
+
+    async def handle(self, query, *, route_result=None, framework_context=None):
+        messages = self.build_messages(
+            query,
+            framework_context=framework_context,
+            route_result=route_result,
+        )
+        response = await self.call_llm(messages=messages)
+        return self.as_result(
+            response,
+            route_result=route_result,
+            metadata={
+                "provider": self.get_effective_provider(),
+                "model": self.get_effective_llm_config().get("model"),
+                "tools_loaded": self.get_tool_names(),
+            },
+        )

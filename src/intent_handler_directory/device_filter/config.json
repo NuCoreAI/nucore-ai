@@ -1,0 +1,16 @@
+{
+  "intent": "device_filter",
+  "description": "Select relevant device candidates for downstream execution intents.",
+  "handler": "handler.py",
+  "previous_dependencies": [],
+  "routing_examples": [
+    "Turn off kitchen and dining lights",
+    "What is the humidity in the basement?"
+  ],
+  "router_hints": [
+    "Use as a prerequisite selector for intents that require device candidates."
+  ],
+  "llm_config": {
+    "temperature": 0.0
+  }
+}
