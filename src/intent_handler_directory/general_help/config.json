@@ -1,0 +1,17 @@
+{
+  "intent": "general_help",
+  "description": "Handles broad NuCore help, definitions, and non-execution questions.",
+  "handler": "handler.py",
+  "routing_examples": [
+    "What is a scene in NuCore?",
+    "How do routines work?",
+    "Explain the difference between a device and a group"
+  ],
+  "router_hints": [
+    "Use this when the user wants explanation, guidance, or conceptual help.",
+    "Do not use this for direct execution requests if another intent is a closer match."
+  ],
+  "llm_config": {
+    "temperature": 0.2
+  }
+}

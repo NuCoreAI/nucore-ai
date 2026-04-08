@@ -1,0 +1,46 @@
+{
+  "supported_llms": {
+    "claude": {
+      "provider": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "url": null,
+      "params": {
+        "temperature": 0.2,
+        "max_tokens": 4096,
+        "supports_system_role": false
+      }
+    },
+    "openai": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "url": null,
+      "params": {
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "supports_system_role": true
+      }
+    },
+    "gemini": {
+      "provider": "gemini",
+      "model": "gemini-1.5-flash",
+      "url": null,
+      "params": {
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "supports_system_role": true
+      }
+    },
+    "grok": {
+      "provider": "grok",
+      "model": "grok-3-mini",
+      "url": null,
+      "params": {
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "supports_system_role": true
+      }
+    }
+  },
+  "default_llm": "claude",
+  "router_llm": "claude"
+}

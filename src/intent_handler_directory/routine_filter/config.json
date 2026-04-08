@@ -1,0 +1,16 @@
+{
+  "intent": "routine_filter",
+  "description": "Select relevant routine candidates for downstream routine operations intents.",
+  "handler": "handler.py",
+  "previous_dependencies": [],
+  "routing_examples": [
+    "Disable all irrigation routines",
+    "Which pool routines are enabled?"
+  ],
+  "router_hints": [
+    "Use as a prerequisite selector for intents that operate on routines."
+  ],
+  "llm_config": {
+    "temperature": 0.0
+  }
+}

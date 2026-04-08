@@ -1,0 +1,32 @@
+{
+  "name": "routine_filter",
+  "description": "Results from filtering top candidates based on the user query for downstream intents like routine_status_ops.",
+  "input_schema": {
+    "type": "object",
+    "required": ["routines"],
+    "properties": {
+      "routines": {
+        "type": "array",
+        "description": "Selected routine/folder candidates for routine_status_ops.",
+        "items": {
+          "type": "object",
+          "required": ["routine_id", "score"],
+          "properties": {
+            "routine_id": {
+              "type": "string",
+              "description": "The unique routine/folder identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "intent": "group_scene_operations",
+  "description": "Post-router execution for group and scene operations.",
+  "handler": "handler.py",
+  "previous_dependencies": [
+    "device_filter"
+  ],
+  "routing_examples": [
+    "Turn on the patio lights",
+    "Set hallway thermostat to 71",
+    "What is the garage temperature right now?"
+  ],
+  "router_hints": [
+    "Use this intent to answer any question about *groups* and *scenes*, including: their links, features, what they do, how to manage them, and informational queries. Examples: 'tell me about [group name]', 'what is [group name]', 'show me [group name]', 'explain [group name]', 'what devices are in [group name]'",
+    "This intent expects pre-filtered devices from device_filter."
+  ],
+  "tool_files": [
+  ],
+  "llm_config": {
+    "temperature": 0.1
+  }
+}

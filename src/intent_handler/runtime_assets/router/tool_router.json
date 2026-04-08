@@ -1,0 +1,19 @@
+{
+  "name": "tool_router",
+  "description": "Results from intent detection based on the user query for downstream intent handlers.",
+  "input_schema": {
+    "type": "object",
+    "required": ["intent", "user_query"],
+    "properties": {
+      "intent": {
+        "type": "string",
+        "description": "Primary intent of the user query."
+      },
+      "user_query": {
+        "type": "string",
+        "description": "The original user query."
+      }
+    },
+    "additionalProperties": false
+  }
+}

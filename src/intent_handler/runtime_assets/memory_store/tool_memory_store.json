@@ -1,0 +1,31 @@
+{
+  "name": "nucore_memory_store",
+  "description": "Stores customer-specific clarifications, preferences, and patterns for future reference within the same conversation session and for retrieval in future sessions",
+  "parameters": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["store", "retrieve", "update", "delete"],
+        "description": "Action to perform on the memory store"
+      },
+      "category": {
+        "type": "string",
+        "enum": ["clarification", "preference", "pattern", "rule"],
+        "description": "Category of information being stored"
+      },
+      "key": {
+        "type": "string",
+        "description": "Unique identifier for this piece of information"
+      },
+      "value": {
+        "type": "string",
+        "description": "The information to store or retrieve"
+      },
+      "context": {
+        "type": "string",
+        "description": "Optional context explaining when/why this applies"
+      }
+    },
+    "required": ["action", "category", "key", "value"]
+  }
+}

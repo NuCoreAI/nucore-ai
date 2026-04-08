@@ -1,0 +1,26 @@
+{
+  "intent": "routine_status_ops",
+  "description": "Post-router execution for routine status operations.",
+  "handler": "handler.py",
+  "previous_dependencies": [
+    "routine_filter"
+  ],
+  "routing_examples": [
+    "Enable the irrigation routines",
+    "Disable all pool routines",
+    "Run the morning routine",
+    "Stop the evening routine",
+    "What routines are currently enabled?"
+  ],
+  "router_hints": [
+    "Use this intent to query the runtime state of existing routines/folders OR issue runtime operations on them (enable, disable, run, stop, etc.)",
+    "*routine* and *program* are common keywords that may indicate this intent and they are interchangeable in user queries. For example, 'Enable the irrigation routine' and 'Enable the irrigation program' should route to this intent.",
+    "This intent expects pre-filtered routines/folders from routine_filter."
+  ],
+  "tool_files": [
+    "tool_routine_status_ops.json"
+  ],
+  "llm_config": {
+    "temperature": 0.1
+  }
+}
