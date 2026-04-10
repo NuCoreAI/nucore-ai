@@ -11,7 +11,7 @@ Use this section if you only need to run and verify the system.
 ### Prerequisites
 
 - Python environment is active
-- `runtime_config.json` exists in `src/intent_handler_directory`
+- `runtime_config.json` exists in `src/intent_handler/runtime_assets`
 - API keys are set for providers you plan to use
 
 Example environment variables:
