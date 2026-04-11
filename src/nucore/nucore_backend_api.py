@@ -15,7 +15,7 @@ class NuCoreBackendAPI(ABC):
     Subclasses must implement all abstract methods.
     """
     
-    def __init__(self, json_output: bool):
+    def __init__(self, json_output: bool=True):
         """
         Initializes the NuCoreBackendAPI
         """
