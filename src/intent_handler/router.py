@@ -139,45 +139,128 @@ class IntentRouter:
         input_schema = tool_spec.get("input_schema", {})
         properties = input_schema.get("properties", {})
         required = input_schema.get("required", [])
+        allowed_optional_fields = {"confidence", "notes"}
 
         if not isinstance(payload, dict):
             raise ValueError(f"Router response must be a JSON object matching tool_router: {payload!r}")
 
-        missing = [key for key in required if key not in payload]
+        normalized_payload = dict(payload)
+        normalized_payload["user_query"] = query.strip()
+
+        missing = [key for key in required if key not in normalized_payload]
         if missing:
             raise ValueError(f"Router response is missing required fields from tool_router: {missing}")
 
         if input_schema.get("additionalProperties") is False:
-            extra_keys = sorted(set(payload) - set(properties))
+            extra_keys = sorted(set(normalized_payload) - set(properties) - allowed_optional_fields)
             if extra_keys:
                 raise ValueError(f"Router response contains unsupported tool_router fields: {extra_keys}")
 
         for field_name, field_schema in properties.items():
-            if field_name not in payload:
+            if field_name not in normalized_payload:
                 continue
             field_type = field_schema.get("type")
-            if field_type == "string" and not isinstance(payload[field_name], str):
+            if field_type == "string" and not isinstance(normalized_payload[field_name], str):
                 raise ValueError(f"Router field '{field_name}' must be a string")
 
-        normalized_payload = dict(payload)
-        normalized_payload["user_query"] = query.strip()
+        notes = normalized_payload.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            raise ValueError("Router field 'notes' must be a string when provided")
+
+        confidence = normalized_payload.get("confidence")
+        if confidence is not None and not isinstance(confidence, (int, float, str)):
+            raise ValueError("Router field 'confidence' must be numeric or string when provided")
+
         return normalized_payload
 
-    @staticmethod
-    def _coerce_route_payload(raw_response: Any) -> dict[str, Any]:
+    def _coerce_route_payload(self, raw_response: Any) -> dict[str, Any]:
         if isinstance(raw_response, dict):
-            return raw_response
+            if isinstance(raw_response.get("intent"), str):
+                return raw_response
+
+            extracted_text = self._extract_text_response(raw_response)
+            if extracted_text is not None:
+                return self._coerce_route_payload(extracted_text)
 
         if isinstance(raw_response, str):
             text = raw_response.strip()
             try:
-                return json.loads(text)
+                payload = json.loads(text)
+                if isinstance(payload, dict):
+                    return payload
             except json.JSONDecodeError:
                 match = re.search(r"\{.*\}", text, flags=re.DOTALL)
                 if match:
-                    return json.loads(match.group(0))
+                    payload = json.loads(match.group(0))
+                    if isinstance(payload, dict):
+                        return payload
+
+            inferred_intent = self._infer_intent_from_text(text)
+            if inferred_intent is not None:
+                return {"intent": inferred_intent}
+
+            fallback_intent = self._fallback_text_intent()
+            if fallback_intent is not None:
+                return {
+                    "intent": fallback_intent,
+                    "notes": f"Router returned non-JSON text: {text}",
+                }
 
         raise ValueError(f"Router response is not valid JSON: {raw_response!r}")
+
+    @staticmethod
+    def _extract_text_response(raw_response: dict[str, Any]) -> str | None:
+        text = raw_response.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+
+        content = raw_response.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    text_parts.append(item["text"])
+            joined = "\n".join(part.strip() for part in text_parts if part and part.strip()).strip()
+            if joined:
+                return joined
+
+        return None
+
+    def _infer_intent_from_text(self, text: str) -> str | None:
+        normalized = text.strip()
+        if not normalized:
+            return None
+
+        names = self.registry.names()
+        lowered_map = {name.lower(): name for name in names}
+        direct = lowered_map.get(normalized.lower())
+        if direct is not None:
+            return direct
+
+        matches: list[tuple[int, str]] = []
+        lowered_text = normalized.lower()
+        for name in names:
+            pattern = rf"(?<!\w){re.escape(name.lower())}(?!\w)"
+            match = re.search(pattern, lowered_text)
+            if match:
+                matches.append((match.start(), name))
+
+        if not matches:
+            return None
+
+        matches.sort(key=lambda item: item[0])
+        return matches[0][1]
+
+    def _fallback_text_intent(self) -> str | None:
+        for candidate in ("general_help", "general"):
+            if candidate in self.registry.names():
+                return candidate
+        return None
 
     def _supports_system_role(self, router_llm_config: dict[str, Any]) -> bool:
 
