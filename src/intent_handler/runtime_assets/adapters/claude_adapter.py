@@ -45,6 +45,23 @@ class ClaudeAdapter:
         if "temperature" in cfg:
             kwargs["temperature"] = cfg["temperature"]
 
+        stream = bool(cfg.get("stream", False))
+        stream_handler = cfg.get("stream_handler")
+        if stream and callable(stream_handler):
+            callback = stream_handler
+            async with self._client.messages.stream(**kwargs) as response_stream:
+                async for text_chunk in response_stream.text_stream:
+                    callback(text_chunk)
+                final_message = await response_stream.get_final_message()
+
+            content = final_message.content
+            text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
+            return {
+                "content": [block.model_dump() for block in content],
+                "text": "\n".join(text_parts),
+                "raw": final_message.model_dump(),
+            }
+
         response = await self._client.messages.create(**kwargs)
         content = response.content
         text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]

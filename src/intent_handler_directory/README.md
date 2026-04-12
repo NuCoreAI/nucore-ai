@@ -28,13 +28,31 @@ Only directories with `config.json` are discovered as intents.
 
 ## Optional config.json Fields
 
-- `handler_class`: explicit class name in `handler.py`
-- `previous_dependencies`: ordered list of dependency intents
-- `routing_examples`: examples for router prompt generation
-- `router_hints`: additional routing hints for router prompt generation
-- `tool_files`: list of tool JSON files relative to this folder
-- `llm_override`: optional per-intent override key into `src/intent_handler/runtime_assets/runtime_config.json` `supported_llms`
-- `llm_config`: intent-local LLM defaults
+| Field | Description |
+|---|---|
+| `handler_class` | Explicit class name in `handler.py` |
+| `routable` | Set to `false` to hide from the router (dependency-only intents). Default: `true` |
+| `previous_dependencies` | Ordered list of intent names that must run before this one |
+| `routing_examples` | Example queries used in router prompt generation |
+| `router_hints` | Additional routing guidance for the router LLM |
+| `tool_files` | List of tool JSON files relative to this intent folder |
+| `llm_override` | Key into `runtime_config.supported_llms` to use a specific LLM for this intent |
+| `llm_config` | Per-intent LLM call defaults merged with runtime selection |
+
+## Routable vs Pipeline Intents
+
+Intents fall into two categories:
+
+**Routable intents** (`routable: true`, the default) are advertised to the router LLM and can be selected directly based on user queries. Add `routing_examples` and `router_hints` to guide routing.
+
+**Pipeline filter intents** (`routable: false`) are never shown to the router. They only run when listed in another intent's `previous_dependencies`. Use this pattern for pre-processing steps that select candidates (devices, routines, etc.) for a downstream execution intent.
+
+Example — device-action pipeline:
+
+```
+router selects: command_control_status
+  └── previous_dependencies: [device_filter]   ← runs first, routable: false
+```
 
 ## Handler Requirements
 
@@ -67,20 +85,36 @@ The base class automatically:
 ## Quick Add-Intent Checklist
 
 1. Create `src/intent_handler_directory/<intent_name>/`
-2. Add `config.json`
+2. Add `config.json` with `intent`, `description`, `handler`
 3. Add `prompt.md`
-4. Add `handler.py`
+4. Add `handler.py` with a single `BaseIntentHandler` subclass
 5. Add tool files and reference them via `tool_files` (optional)
-6. Add dependency and routing metadata as needed
+6. Add `routing_examples` and `router_hints` for routing (skip for `routable: false` intents)
+7. Add `previous_dependencies` if this intent requires upstream processing
+
+## Current Intent Inventory
+
+### Routable (router-visible)
+
+| Intent | Description | Depends on |
+|---|---|---|
+| `command_control_status` | Device commands and real-time status | `device_filter` |
+| `routine_automation` | Create or edit routine logic | `device_filter` |
+| `routine_status_ops` | Enable/disable/run existing routines | `routine_filter` |
+| `group_scene_operations` | Group and scene queries | `device_filter` |
+| `general_help` | Conceptual help, definitions, non-execution queries | — |
+
+### Pipeline filters (`routable: false`)
+
+| Intent | Description | Used by |
+|---|---|---|
+| `device_filter` | Narrows device candidates for downstream execution | `command_control_status`, `routine_automation`, `group_scene_operations` |
+| `routine_filter` | Narrows routine candidates for downstream execution | `routine_status_ops` |
 
 ## Runtime Files (Do Not Treat as Intents)
 
-These are runtime-level files at this directory root:
-
-- none required
-
-Router and memory assets are not stored here. They live under:
+Router and memory assets live outside this directory:
 
 - `src/intent_handler/runtime_assets/runtime_config.json`
-- `src/intent_handler/runtime_assets/router`
-- `src/intent_handler/runtime_assets/memory_store`
+- `src/intent_handler/runtime_assets/router/`
+- `src/intent_handler/runtime_assets/memory_store/`

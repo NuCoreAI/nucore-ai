@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Protocol
 
-from nucore import NuCoreBackendAPI
+from .nucore_interface import NuCoreInterface 
 from .models import IntentDefinition, IntentHandlerResult, RouteResult
 
 
@@ -26,11 +26,11 @@ class BaseIntentHandler(ABC):
         self,
         definition: IntentDefinition,
         llm_client: LLMAdapter,
-        backend_api: NuCoreBackendAPI | None = None,
+        nucore_interface: NuCoreInterface | None = None,
     ) -> None:
         self.definition = definition
         self.llm_client = llm_client
-        self.backend_api = backend_api
+        self.nucore_interface = nucore_interface
         self._runtime_llm_config: dict[str, Any] = {}
         self._tool_specs_cache = None
         self._exported_tools_cache: dict[str, list[dict[str, Any]] | None] = {}

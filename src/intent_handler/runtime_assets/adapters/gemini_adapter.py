@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -45,9 +46,71 @@ class GeminiAdapter:
         if expect_json:
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
+        stream = bool(cfg.get("stream", False))
+        stream_handler = cfg.get("stream_handler")
+        if stream and callable(stream_handler):
+            try:
+                return await self._stream_generate_content(
+                    model=model,
+                    api_key=str(api_key),
+                    payload=payload,
+                    stream_handler=stream_handler,
+                )
+            except Exception:
+                # Fall back to non-streaming request for compatibility with endpoints
+                # that don't expose streamGenerateContent.
+                pass
+
         url = f"{self._base_url}/v1beta/models/{model}:generateContent?key={api_key}"
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
         return data
+
+    async def _stream_generate_content(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        payload: dict[str, Any],
+        stream_handler,
+    ) -> Any:
+        url = f"{self._base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse&key={api_key}"
+        chunks: list[dict[str, Any]] = []
+        text_parts: list[str] = []
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", url, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+
+                    data_str = line[5:].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
+
+                    chunk_json = json.loads(data_str)
+                    chunks.append(chunk_json)
+
+                    for candidate in chunk_json.get("candidates", []) or []:
+                        content = candidate.get("content", {})
+                        for part in content.get("parts", []) or []:
+                            text = part.get("text")
+                            if isinstance(text, str) and text:
+                                text_parts.append(text)
+                                stream_handler(text)
+
+        return {
+            "content": "".join(text_parts),
+            "text": "".join(text_parts),
+            "raw": {
+                "streamed": True,
+                "chunks": chunks,
+            },
+        }
