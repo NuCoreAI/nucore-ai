@@ -6,10 +6,12 @@ from typing import Any
 
 from nucore import NuCoreBackendAPI
 
+from .base import BaseIntentHandler
 from .base import LLMAdapter
 from .loader import IntentHandlerRegistry
 from .models import IntentHandlerResult, RouteResult
 from .router import IntentRouter
+from .nucore_interface import NuCoreInterface
 
 
 class IntentRuntime:
@@ -24,7 +26,7 @@ class IntentRuntime:
         self.intent_handler_directory = Path(intent_handler_directory).expanduser().resolve()
         self.registry = IntentHandlerRegistry(self.intent_handler_directory)
         self.llm_client = llm_client
-        self.backend_api = backend_api
+        self.nucore_interface = NuCoreInterface(nucore_api=backend_api)
         self.router = IntentRouter(self.registry, llm_client)
         self.runtime_config_path = (
             Path(runtime_config_path).expanduser().resolve()
@@ -32,12 +34,15 @@ class IntentRuntime:
             else self.registry.runtime_assets_directory / "runtime_config.json"
         )
         self.runtime_config = self._load_runtime_config()
+        self._handler_instances: dict[str, BaseIntentHandler] = {}
+        self._handler_signatures: dict[str, tuple[int, int, int]] = {}
         self._validate_runtime_config()
 
     def refresh(self) -> None:
         self.registry.refresh()
         self.runtime_config = self._load_runtime_config()
         self._validate_runtime_config()
+        self._reconcile_handler_cache()
 
     async def route(self, query: str) -> RouteResult:
         self.refresh()
@@ -57,11 +62,7 @@ class IntentRuntime:
         last_result: IntentHandlerResult | None = None
 
         for intent_name in execution_chain:
-            handler = self.registry.instantiate(
-                intent_name,
-                llm_client=self.llm_client,
-                backend_api=self.backend_api,
-            )
+            handler = self._get_or_create_handler(intent_name)
             step_llm_config = self._resolve_runtime_llm_config(intent_name)
             handler.set_runtime_llm_config(step_llm_config)
 
@@ -192,7 +193,7 @@ class IntentRuntime:
                 f"runtime_config.router_llm '{router_llm}' is not in supported_llms"
             )
 
-        for definition in self.registry.definitions():
+        for definition in self.registry.definitions():  # validate all intents, not just routable ones
             llm_key = definition.config.get("llm_override")
             if llm_key is None:
                 continue
@@ -251,3 +252,43 @@ class IntentRuntime:
         merged.update(selected)
         merged["llm_key"] = selected_key
         return merged
+
+    def _intent_signature(self, intent_name: str) -> tuple[int, int, int]:
+        definition = self.registry.get(intent_name)
+        prompt_path = definition.directory / "prompt.md"
+
+        def _mtime_ns(path: Path) -> int:
+            try:
+                return path.stat().st_mtime_ns
+            except FileNotFoundError:
+                return -1
+
+        return (
+            _mtime_ns(definition.handler_path),
+            _mtime_ns(definition.config_path),
+            _mtime_ns(prompt_path),
+        )
+
+    def _get_or_create_handler(self, intent_name: str) -> BaseIntentHandler:
+        current_signature = self._intent_signature(intent_name)
+        cached_handler = self._handler_instances.get(intent_name)
+        cached_signature = self._handler_signatures.get(intent_name)
+
+        if cached_handler is not None and cached_signature == current_signature:
+            return cached_handler
+
+        handler = self.registry.instantiate(
+            intent_name,
+            llm_client=self.llm_client,
+            nucore_interface=self.nucore_interface,
+        )
+        self._handler_instances[intent_name] = handler
+        self._handler_signatures[intent_name] = current_signature
+        return handler
+
+    def _reconcile_handler_cache(self) -> None:
+        valid_names = set(self.registry.names())
+        stale_names = [name for name in self._handler_instances if name not in valid_names]
+        for name in stale_names:
+            self._handler_instances.pop(name, None)
+            self._handler_signatures.pop(name, None)

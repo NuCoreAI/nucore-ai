@@ -2,6 +2,7 @@
   "intent": "routine_filter",
   "description": "Select relevant routine candidates for downstream routine operations intents.",
   "handler": "handler.py",
+  "routable": false,
   "previous_dependencies": [],
   "routing_examples": [
     "Disable all irrigation routines",

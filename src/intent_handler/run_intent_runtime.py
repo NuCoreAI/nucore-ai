@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="shared-features",
         help="The type of prompt to use (e.g., 'per-device', 'shared-features', etc.)",
     )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream model text tokens to stdout when provider supports it",
+    )
     return parser
 
 
@@ -152,6 +158,25 @@ def _load_backend_api(
     if not all([classpath, base_url, username, password]):
         return None
 
+    return _load_backend_api_cached(
+        classpath=classpath,
+        base_url=base_url,
+        username=username,
+        password=password,
+        json_output=bool(json_output),
+    )
+
+
+@functools.lru_cache(maxsize=8)
+def _load_backend_api_cached(
+    *,
+    classpath: str,
+    base_url: str,
+    username: str,
+    password: str,
+    json_output: bool,
+) -> Any:
+
     # Parse classpath: "package.module.ClassName"
     parts = classpath.rsplit(".", 1)
     if len(parts) != 2:
@@ -174,14 +199,48 @@ def _load_backend_api(
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
 
 
-async def _run_once(runtime: IntentRuntime, query: str) -> None:
+def _extract_text_output(output: Any) -> str | None:
+    if isinstance(output, str):
+        return output
+
+    if isinstance(output, dict):
+        text = output.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+
+        content = output.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+
+    return None
+
+
+async def _run_once(
+    runtime: IntentRuntime,
+    query: str,
+    *,
+    stream_state: dict[str, int] | None = None,
+) -> None:
     result = await runtime.handle_query(query)
     print(f"\nIntent: {result.intent}")
     print("Output:")
+
+    streamed_chunks = (stream_state or {}).get("chunks", 0)
+    text_output = _extract_text_output(result.output)
+
+    if streamed_chunks > 0:
+        # Token chunks are already printed by the stream callback.
+        print()
+        return
+
+    if text_output is not None:
+        print(text_output)
+        return
+
     print(result.output)
 
 
-async def _run_loop(runtime: IntentRuntime) -> None:
+async def _run_loop(runtime: IntentRuntime, *, stream_state: dict[str, int] | None = None) -> None:
     print("Standalone Intent Runtime")
     print("Type 'quit' to exit")
     while True:
@@ -194,7 +253,9 @@ async def _run_loop(runtime: IntentRuntime) -> None:
             continue
         if query.lower() in {"quit", "exit"}:
             break
-        await _run_once(runtime, query)
+        if stream_state is not None:
+            stream_state["chunks"] = 0
+        await _run_once(runtime, query, stream_state=stream_state)
 
 
 def main() -> None:
@@ -208,6 +269,23 @@ def main() -> None:
     )
 
     runtime_config = _load_runtime_config(runtime_config_path)
+
+    stream_state: dict[str, int] | None = None
+    if args.stream:
+        stream_state = {"chunks": 0}
+
+        def _stream_chunk_to_stdout(chunk: str) -> None:
+            if not chunk:
+                return
+            stream_state["chunks"] += 1
+            print(chunk, end="", flush=True)
+
+        for _, llm_cfg in runtime_config.get("supported_llms", {}).items():
+            if not isinstance(llm_cfg, dict):
+                continue
+            llm_cfg["stream"] = True
+            llm_cfg["stream_handler"] = _stream_chunk_to_stdout
+
     runtime_config = _apply_runtime_overrides(
         runtime_config,
         provider=args.provider,
@@ -232,10 +310,12 @@ def main() -> None:
     )
 
     if args.query:
-        asyncio.run(_run_once(runtime, args.query))
+        if stream_state is not None:
+            stream_state["chunks"] = 0
+        asyncio.run(_run_once(runtime, args.query, stream_state=stream_state))
         return
 
-    asyncio.run(_run_loop(runtime))
+    asyncio.run(_run_loop(runtime, stream_state=stream_state))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+from .nucore_interface import NuCoreInterface
 from .base import BaseIntentHandler, LLMAdapter
 from .dispatch_builder import build_default_dispatch_adapter
 from .loader import IntentHandlerRegistry
@@ -27,4 +28,5 @@ __all__ = [
     "OpenAIProviderClient",
     "ProviderDispatchLLMAdapter",
     "RouteResult",
+    "NuCoreInterface",
 ]

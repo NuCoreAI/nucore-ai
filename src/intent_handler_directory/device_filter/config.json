@@ -2,6 +2,7 @@
   "intent": "device_filter",
   "description": "Select relevant device candidates for downstream execution intents.",
   "handler": "handler.py",
+  "routable": false,
   "previous_dependencies": [],
   "routing_examples": [
     "Turn off kitchen and dining lights",

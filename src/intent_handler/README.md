@@ -27,7 +27,9 @@ export XAI_API_KEY="..."
 
 ```bash
 python -m intent_handler.run_intent_runtime \
-  --intent-dir src/intent_handler_directory
+  --intent-dir src/intent_handler_directory \
+  --provider claude \
+  --api-key sk-ant-api03-...
 ```
 
 ### Run Single Query
@@ -35,21 +37,62 @@ python -m intent_handler.run_intent_runtime \
 ```bash
 python -m intent_handler.run_intent_runtime \
   --intent-dir src/intent_handler_directory \
+  --provider claude \
+  --api-key sk-ant-api03-... \
   --query "Turn on patio lights"
 ```
 
-### Point to Explicit Runtime Config
+### Run with Streaming
+
+Add `--stream` to print tokens as they are generated. Supported by all providers (Claude, OpenAI, Grok, llama.cpp, Gemini).
 
 ```bash
 python -m intent_handler.run_intent_runtime \
-  --intent-dir src/intent_handler_directory \
-  --runtime-config src/intent_handler/runtime_assets/runtime_config.json
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --stream \
+  --query "Turn on patio lights"
 ```
+
+### Run with NuCore Backend
+
+```bash
+python -m intent_handler.run_intent_runtime \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --json-output true
+```
+
+### CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--intent-dir` | Path to intent handler directory |
+| `--runtime-config` | Path to `runtime_config.json` |
+| `--query` | Single query mode; omit for interactive loop |
+| `--provider` | LLM provider override: `claude`, `openai`, `gemini`, `grok`, `llama.cpp` |
+| `--model` | Model name override |
+| `--api-key` | API key override |
+| `--stream` | Stream tokens to stdout as they arrive |
+| `--backend-api-classpath` | Python class path for backend (e.g. `iox.IoXWrapper`) |
+| `--backend-api-base-url` | Base URL for backend API |
+| `--backend-api-username` | Backend API username |
+| `--backend-api-password` | Backend API password |
+| `--json-output` | Enable JSON output mode for backend API |
+| `--prompt_type` | Prompt variant (e.g. `shared-features`) |
+
+### Output Behavior
+
+By default the runtime prints the extracted plain text from the model response. If streaming is enabled, tokens are printed as they arrive and the final newline is added after completion. The full structured response object is only printed when no text field can be extracted.
 
 ### Quick Verification Checklist
 
 1. Router returns a valid intent and does not fail schema validation.
-2. Dependency intents run before the target intent when configured.
+2. Pipeline dependency intents (`routable: false`) are hidden from the router but run automatically via `previous_dependencies`.
 3. Prompt placeholders are resolved (common modules and runtime replacements).
 4. Tool-bearing intents send provider-converted tool schemas automatically.
 5. Final output is returned from the last step in the execution chain.
@@ -202,9 +245,10 @@ Each intent `config.json` supports:
 - `description`: displayed in router discovered intent blocks
 - `handler`: python file name, default `handler.py`
 - `handler_class`: optional explicit class name in handler file
+- `routable`: set to `false` to hide this intent from the router while still allowing it to be invoked as a dependency. Default: `true`. Use this for pipeline filter intents that are only ever triggered via `previous_dependencies`.
 - `previous_dependencies`: ordered list of prerequisite intents
-- `routing_examples`: used in router prompt generation
-- `router_hints`: used in router prompt generation
+- `routing_examples`: used in router prompt generation (only when `routable` is `true`)
+- `router_hints`: used in router prompt generation (only when `routable` is `true`)
 - `tool_files`: list of tool json files relative to intent directory
 - `llm_override`: optional LLM profile key in `runtime_config.supported_llms`
 - `llm_config`: per-intent call defaults merged with runtime selection
@@ -344,9 +388,21 @@ CLI entrypoint:
 Examples:
 
 ```bash
-python -m intent_handler.run_intent_runtime --intent-dir src/intent_handler_directory
-python -m intent_handler.run_intent_runtime --query "Turn on patio lights"
-python -m intent_handler.run_intent_runtime --runtime-config src/intent_handler/runtime_assets/runtime_config.json
+# Interactive loop
+python -m intent_handler.run_intent_runtime --provider claude --api-key sk-ant-...
+
+# Single query
+python -m intent_handler.run_intent_runtime --query "Turn on patio lights" --provider claude --api-key sk-ant-...
+
+# With backend and streaming
+python -m intent_handler.run_intent_runtime \
+  --provider claude --api-key sk-ant-... \
+  --stream \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --json-output true
 ```
 
 ## 13. Environment Variables for Provider Clients
@@ -380,9 +436,47 @@ When `api_key` is not set in runtime config, provider clients use env vars:
 - Router response JSON missing required `tool_router` fields
 - Tool spec missing `input_schema`
 
-## 16. Current Runnable Intents
+## 16. Streaming Support
 
-Current runnable intent folders are under `src/intent_handler_directory`.
+All provider adapters support an optional streaming mode. When `--stream` is passed on the CLI:
+
+- The runtime injects `stream: true` and a `stream_handler` callback into each LLM config before the call.
+- Each adapter emits text chunks via the callback as they arrive.
+- After streaming completes, the adapter returns the same normalized response shape (`content`, `text`, `raw`) so downstream handler logic is unaffected.
+- Gemini streaming falls back to a non-streaming request if the endpoint does not expose `streamGenerateContent`.
+
+Provider-specific streaming implementation:
+
+| Provider | Implementation |
+|---|---|
+| `claude` | `AsyncAnthropic.messages.stream()` |
+| `openai` | `chat.completions.create(stream=True)` |
+| `grok` | Same as OpenAI (OpenAI-compatible) |
+| `llama.cpp` | Same as OpenAI (OpenAI-compatible) |
+| `gemini` | `streamGenerateContent` SSE endpoint with fallback |
+
+## 17. Current Runnable Intents
+
+The following intents live under `src/intent_handler_directory`:
+
+### Routable Intents (visible to the router)
+
+| Intent | Description | Dependencies |
+|---|---|---|
+| `command_control_status` | Device commands and real-time status | `device_filter` |
+| `routine_automation` | Create or edit routine logic | `device_filter` |
+| `routine_status_ops` | Enable/disable/run existing routines | `routine_filter` |
+| `group_scene_operations` | Group and scene queries | `device_filter` |
+| `general_help` | Conceptual help, definitions, non-execution queries | — |
+
+### Pipeline Filter Intents (`routable: false` — dependency-only)
+
+| Intent | Description | Used by |
+|---|---|---|
+| `device_filter` | Narrows device candidates for downstream execution | `command_control_status`, `routine_automation`, `group_scene_operations` |
+| `routine_filter` | Narrows routine candidates for downstream execution | `routine_status_ops` |
+
+Pipeline filter intents are never presented to the router LLM. They are invoked automatically via `previous_dependencies` when a routable intent that depends on them is selected.
 
 Runtime utility assets:
 

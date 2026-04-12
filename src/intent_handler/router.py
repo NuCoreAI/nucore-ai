@@ -23,7 +23,7 @@ class IntentRouter:
         with router_prompt_path.open("r", encoding="utf-8") as f:
             base_prompt = f.read().strip()
 
-        definitions = self.registry.definitions()
+        definitions = self.registry.routable_definitions()
         discovered_intents = self._build_discovered_intents(definitions)
         routing_patterns = self._build_routing_patterns(definitions)
 

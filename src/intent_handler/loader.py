@@ -18,6 +18,7 @@ class IntentHandlerRegistry:
         self.router_config_path = self.root_directory / "router_config.json"
         self._definitions: dict[str, IntentDefinition] = {}
         self._modules_cache: dict[str, object] = {}
+        self._handler_class_cache: dict[tuple[Path, str | None], tuple[int, type[BaseIntentHandler]]] = {}
         self.refresh()
 
     def refresh(self) -> None:
@@ -54,6 +55,9 @@ class IntentHandlerRegistry:
 
     def definitions(self) -> list[IntentDefinition]:
         return list(self._definitions.values())
+
+    def routable_definitions(self) -> list[IntentDefinition]:
+        return [d for d in self._definitions.values() if d.config.get("routable", True)]
 
     def get(self, intent_name: str) -> IntentDefinition:
         try:
@@ -93,11 +97,11 @@ class IntentHandlerRegistry:
         intent_name: str,
         *,
         llm_client: LLMAdapter,
-        backend_api=None,
+        nucore_interface=None,
     ) -> BaseIntentHandler:
         definition = self.get(intent_name)
         handler_class = self._load_handler_class(definition)
-        return handler_class(definition=definition, llm_client=llm_client, backend_api=backend_api)
+        return handler_class(definition=definition, llm_client=llm_client, nucore_interface=nucore_interface)
 
     def _load_definition(self, intent_directory: Path) -> IntentDefinition:
         config_path = intent_directory / "config.json"
@@ -179,6 +183,16 @@ class IntentHandlerRegistry:
             dfs(name)
 
     def _load_handler_class(self, definition: IntentDefinition) -> type[BaseIntentHandler]:
+        cache_key = (definition.handler_path, definition.handler_class)
+        try:
+            mtime_ns = definition.handler_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime_ns = -1
+
+        cached_entry = self._handler_class_cache.get(cache_key)
+        if cached_entry and cached_entry[0] == mtime_ns:
+            return cached_entry[1]
+
         module_name = f"intent_handler_dynamic_{definition.name}"
         spec = importlib.util.spec_from_file_location(module_name, definition.handler_path)
         if spec is None or spec.loader is None:
@@ -198,6 +212,7 @@ class IntentHandlerRegistry:
                 raise TypeError(
                     f"Handler class '{class_name}' in {definition.handler_path} must subclass BaseIntentHandler"
                 )
+            self._handler_class_cache[cache_key] = (mtime_ns, handler_class)
             return handler_class
 
         candidates = list(self._iter_handler_classes(module))
@@ -205,7 +220,9 @@ class IntentHandlerRegistry:
             raise ValueError(
                 f"Expected exactly one BaseIntentHandler subclass in {definition.handler_path}, found {len(candidates)}"
             )
-        return candidates[0]
+        selected_class = candidates[0]
+        self._handler_class_cache[cache_key] = (mtime_ns, selected_class)
+        return selected_class
 
     @staticmethod
     def _iter_handler_classes(module) -> Iterable[type[BaseIntentHandler]]:
