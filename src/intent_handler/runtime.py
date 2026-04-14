@@ -12,6 +12,73 @@ from .loader import IntentHandlerRegistry
 from .models import IntentHandlerResult, RouteResult
 from .router import IntentRouter
 from .nucore_interface import NuCoreInterface
+from .stream_handler import StreamHandler
+
+
+def _apply_runtime_overrides(
+    runtime_config: dict[str, Any],
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Apply CLI overrides to runtime config."""
+    config = dict(runtime_config)
+    supported_llms = dict(config.get("supported_llms", {}))
+
+    selected_key = provider or config.get("default_llm") or next(iter(supported_llms), None)
+    if not selected_key:
+        raise ValueError("No provider specified and no default_llm in runtime_config")
+
+    if selected_key not in supported_llms:
+        raise ValueError(f"Provider '{selected_key}' not found in runtime_config.supported_llms")
+
+    llm_cfg = dict(supported_llms.get(selected_key, {}))
+    if model:
+        llm_cfg["model"] = model
+    if api_key:
+        llm_cfg["api_key"] = api_key
+
+    supported_llms[selected_key] = llm_cfg
+    config["supported_llms"] = supported_llms
+    if provider:
+        config["default_llm"] = selected_key
+
+    return config
+
+def _load_runtime_config(path:str, stream_handler:StreamHandler, provider:str, api_key:str, model:str) -> dict[str, Any]:
+    runtime_config_path = (
+        Path(path).expanduser().resolve()
+        if path
+        else Path(__file__).resolve().parent / "runtime_assets" / "runtime_config.json"
+    )
+    runtime_config = {
+            "supported_llms": {},
+            "default_llm": None,
+            "router_llm": None,
+    }
+    if not runtime_config_path.exists():
+        return runtime_config
+    
+    with runtime_config_path.open("r", encoding="utf-8") as handle:
+        runtime_config = json.load(handle)
+
+    if not isinstance(runtime_config, dict):
+        raise ValueError("Runtime config must be a JSON object at the top level")
+
+    if stream_handler is not None:
+        for _, llm_cfg in runtime_config.get("supported_llms", {}).items():
+            if not isinstance(llm_cfg, dict):
+                continue
+            llm_cfg["stream"] = True
+            llm_cfg["stream_handler"] = stream_handler.handle_stream_chunk
+
+    runtime_config = _apply_runtime_overrides(
+        runtime_config,
+        provider=provider,
+        api_key=api_key,
+        model=model,
+    )
+    return runtime_config
 
 
 class IntentRuntime:
@@ -20,29 +87,45 @@ class IntentRuntime:
         intent_handler_directory: str | Path,
         *,
         llm_client: LLMAdapter,
-        backend_api: NuCoreBackendAPI | None = None,
-        runtime_config_path: str | Path | None = None,
+        nucore_interface: NuCoreInterface,
+        runtime_config_path: str | Path ,
+        stream_handler: StreamHandler | None = None, 
     ) -> None:
+        if llm_client is None or nucore_interface is None or runtime_config_path is None:
+            raise ValueError("llm_client, nucore_interface, and runtime_config_path are required")
         self.intent_handler_directory = Path(intent_handler_directory).expanduser().resolve()
         self.registry = IntentHandlerRegistry(self.intent_handler_directory)
         self.llm_client = llm_client
-        self.nucore_interface = NuCoreInterface(nucore_api=backend_api)
+        self.nucore_interface = nucore_interface 
         self.router = IntentRouter(self.registry, llm_client)
-        self.runtime_config_path = (
-            Path(runtime_config_path).expanduser().resolve()
-            if runtime_config_path
-            else self.registry.runtime_assets_directory / "runtime_config.json"
-        )
-        self.runtime_config = self._load_runtime_config()
+        self.runtime_config_path = runtime_config_path
+        self.stream_handler = stream_handler
+        self.runtime_config = {} 
         self._handler_instances: dict[str, BaseIntentHandler] = {}
         self._handler_signatures: dict[str, tuple[int, int, int]] = {}
-        self._validate_runtime_config()
+        self.refresh()
 
     def refresh(self) -> None:
         self.registry.refresh()
-        self.runtime_config = self._load_runtime_config()
+        self.runtime_config = _load_runtime_config(
+            path=self.runtime_config_path,
+            stream_handler=self.stream_handler,
+            provider="",
+            api_key="",
+            model=""
+        )
         self._validate_runtime_config()
         self._reconcile_handler_cache()
+        self.reset_stream_handler()  # Reset stream handler state on refresh to avoid stale state across handler reloads
+
+    def reset_stream_handler(self): 
+        if self.stream_handler is not None:
+            self.stream_handler.reset_stream_state()
+
+    def get_stream_chunk_count(self) -> int:
+        if self.stream_handler is not None:
+            return self.stream_handler.get_stream_chunk_count()
+        return 0
 
     async def route(self, query: str) -> RouteResult:
         self.refresh()
@@ -160,22 +243,22 @@ class IntentRuntime:
         except TypeError:
             return str(value)
 
-    def _load_runtime_config(self) -> dict[str, Any]:
-        if not self.runtime_config_path.exists():
-            return {
-                "supported_llms": {},
-                "default_llm": None,
-                "router_llm": None,
-            }
-
-        with self.runtime_config_path.open("r", encoding="utf-8") as handle:
-            loaded = json.load(handle)
-
-        return {
-            "supported_llms": dict(loaded.get("supported_llms", {})),
-            "default_llm": loaded.get("default_llm"),
-            "router_llm": loaded.get("router_llm"),
-        }
+#    def _load_runtime_config(self) -> dict[str, Any]:
+#        if not self.runtime_config_path.exists():
+#            return {
+#                "supported_llms": {},
+#                "default_llm": None,
+#                "router_llm": None,
+#            }
+#
+#        with self.runtime_config_path.open("r", encoding="utf-8") as handle:
+#            loaded = json.load(handle)
+#
+#        return {
+#            "supported_llms": dict(loaded.get("supported_llms", {})),
+#            "default_llm": loaded.get("default_llm"),
+#            "router_llm": loaded.get("router_llm"),
+#        }
 
     def _validate_runtime_config(self) -> None:
         supported = self.runtime_config.get("supported_llms", {})

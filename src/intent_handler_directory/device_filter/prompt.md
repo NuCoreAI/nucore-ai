@@ -91,5 +91,4 @@ For each user query, always **thoroughly** analyze the user query in its entiret
 
 # OUTPUT REQUIREMENTS
 - For routable queries, return only the structured routing result.
-- Include the chosen `intent` and the scored candidate `devices` list (or `routines` list for `routine_status_ops`).
 - Do not include explanation, commentary, or conversational filler in structured routing output.

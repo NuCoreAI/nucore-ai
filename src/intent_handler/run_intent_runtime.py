@@ -3,11 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import functools
-import json
 from pathlib import Path
 from typing import Any
 
-from intent_handler import IntentRuntime, build_default_dispatch_adapter
+from intent_handler import IntentRuntime, NuCoreInterface, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -95,45 +94,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
-def _load_runtime_config(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"Runtime config not found: {path}")
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def _apply_runtime_overrides(
-    runtime_config: dict[str, Any],
-    provider: str | None = None,
-    api_key: str | None = None,
-    model: str | None = None,
-) -> dict[str, Any]:
-    """Apply CLI overrides to runtime config."""
-    config = dict(runtime_config)
-    supported_llms = dict(config.get("supported_llms", {}))
-
-    selected_key = provider or config.get("default_llm") or next(iter(supported_llms), None)
-    if not selected_key:
-        raise ValueError("No provider specified and no default_llm in runtime_config")
-
-    if selected_key not in supported_llms:
-        raise ValueError(f"Provider '{selected_key}' not found in runtime_config.supported_llms")
-
-    llm_cfg = dict(supported_llms.get(selected_key, {}))
-    if model:
-        llm_cfg["model"] = model
-    if api_key:
-        llm_cfg["api_key"] = api_key
-
-    supported_llms[selected_key] = llm_cfg
-    config["supported_llms"] = supported_llms
-    if provider:
-        config["default_llm"] = selected_key
-
-    return config
-
-
 def _load_backend_api(
     classpath: str | None,
     base_url: str | None,
@@ -217,15 +177,12 @@ def _extract_text_output(output: Any) -> str | None:
 
 async def _run_once(
     runtime: IntentRuntime,
-    query: str,
-    *,
-    stream_state: dict[str, int] | None = None,
-) -> None:
+    query: str) -> None:
     result = await runtime.handle_query(query)
     print(f"\nIntent: {result.intent}")
     print("Output:")
 
-    streamed_chunks = (stream_state or {}).get("chunks", 0)
+    streamed_chunks = runtime.get_stream_chunk_count() 
     text_output = _extract_text_output(result.output)
 
     if streamed_chunks > 0:
@@ -240,7 +197,7 @@ async def _run_once(
     print(result.output)
 
 
-async def _run_loop(runtime: IntentRuntime, *, stream_state: dict[str, int] | None = None) -> None:
+async def _run_loop(runtime: IntentRuntime) -> None:
     print("Standalone Intent Runtime")
     print("Type 'quit' to exit")
     while True:
@@ -253,10 +210,10 @@ async def _run_loop(runtime: IntentRuntime, *, stream_state: dict[str, int] | No
             continue
         if query.lower() in {"quit", "exit"}:
             break
-        if stream_state is not None:
-            stream_state["chunks"] = 0
-        await _run_once(runtime, query, stream_state=stream_state)
+        runtime.reset_stream_handler()  # Reset stream handler state before each query
+        await _run_once(runtime, query)
 
+nucore_interface : NuCoreInterface = None  # Global variable to hold the backend API instance
 
 def main() -> None:
     args = _build_parser().parse_args()
@@ -268,30 +225,14 @@ def main() -> None:
         else Path(__file__).resolve().parent / "runtime_assets" / "runtime_config.json"
     )
 
-    runtime_config = _load_runtime_config(runtime_config_path)
-
-    stream_state: dict[str, int] | None = None
-    if args.stream:
-        stream_state = {"chunks": 0}
-
-        def _stream_chunk_to_stdout(chunk: str) -> None:
-            if not chunk:
-                return
-            stream_state["chunks"] += 1
-            print(chunk, end="", flush=True)
-
-        for _, llm_cfg in runtime_config.get("supported_llms", {}).items():
-            if not isinstance(llm_cfg, dict):
-                continue
-            llm_cfg["stream"] = True
-            llm_cfg["stream_handler"] = _stream_chunk_to_stdout
-
-    runtime_config = _apply_runtime_overrides(
-        runtime_config,
+    runtime_config = _load_runtime_config(
+        path=args.runtime_config,
+        stream_handler=None,  # Stream handler will be set later after defining the callback
         provider=args.provider,
         api_key=args.api_key,
         model=args.model,
     )
+
     llm_adapter = build_default_dispatch_adapter(runtime_config)
 
     backend_api = _load_backend_api(
@@ -302,20 +243,28 @@ def main() -> None:
         json_output=args.json_output,
     )
 
+    if backend_api is None:
+        raise ValueError("Backend API failed to load. Please check your parameters and try again.")
+
+    global nucore_interface
+    if nucore_interface is None:
+        nucore_interface = NuCoreInterface(nucore_api=backend_api)  # Set the global variable to the loaded backend API instance
+
     runtime = IntentRuntime(
         intent_handler_directory=intent_dir,
         llm_client=llm_adapter,
-        backend_api=backend_api,
+        nucore_interface=nucore_interface,
         runtime_config_path=runtime_config_path,
+        stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
     )
 
     if args.query:
-        if stream_state is not None:
-            stream_state["chunks"] = 0
-        asyncio.run(_run_once(runtime, args.query, stream_state=stream_state))
+        if runtime.stream_state is not None:
+            runtime.stream_state["chunks"] = 0
+        asyncio.run(_run_once(runtime, args.query))
         return
 
-    asyncio.run(_run_loop(runtime, stream_state=stream_state))
+    asyncio.run(_run_loop(runtime))
 
 
 if __name__ == "__main__":
