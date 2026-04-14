@@ -9,18 +9,7 @@ from .runtime_assets.adapters import (
     GrokAdapter,
     LlamaCppAdapter,
     OpenAIAdapter,
-    OpenAICompatibleAdapter,
 )
-
-# Backward-compatible names used elsewhere in the package.
-OpenAIProviderClient = OpenAIAdapter
-AnthropicProviderClient = ClaudeAdapter
-GeminiProviderClient = GeminiAdapter
-
-
-class OpenAICompatibleProviderClient(OpenAICompatibleAdapter):
-    pass
-
 
 def build_provider_clients_from_runtime_config(
     runtime_config: dict[str, Any],
@@ -43,11 +32,11 @@ def build_provider_clients_from_runtime_config(
         if provider == "openai":
             key = api_key or env_map.get("OPENAI_API_KEY")
             if key:
-                clients["openai"] = OpenAIProviderClient(api_key=key, base_url=base_url)
+                clients["openai"] = OpenAIAdapter(api_key=key, base_url=base_url)
         elif provider in {"claude", "anthropic"}:
             key = api_key or env_map.get("ANTHROPIC_API_KEY")
             if key:
-                clients["claude"] = AnthropicProviderClient(api_key=key, base_url=base_url)
+                clients["claude"] = ClaudeAdapter(api_key=key, base_url=base_url)
         elif provider in {"grok", "xai", "x.ai"}:
             key = api_key or env_map.get("XAI_API_KEY") or env_map.get("GROK_API_KEY")
             if key:
@@ -58,6 +47,6 @@ def build_provider_clients_from_runtime_config(
         elif provider in {"gemini", "google"}:
             key = api_key or env_map.get("GEMINI_API_KEY")
             if key:
-                clients["gemini"] = GeminiProviderClient(api_key=key, base_url=base_url)
+                clients["gemini"] = GeminiAdapter(api_key=key, base_url=base_url)
 
     return clients

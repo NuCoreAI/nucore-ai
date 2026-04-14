@@ -12,15 +12,6 @@ class GeneralHelpIntentHandler(BaseIntentHandler):
     async def handle(self, query, *, route_result=None, framework_context=None):
         backend_snapshot = None
 
-        if self.backend_api is not None:
-            try:
-                nodes = self.backend_api.get_nodes()
-                if isinstance(nodes, str):
-                    backend_snapshot = nodes[:4000]
-                else:
-                    backend_snapshot = json.dumps(nodes, indent=2)[:4000]
-            except Exception:
-                backend_snapshot = None
 
         messages = self.build_messages(
             query,
