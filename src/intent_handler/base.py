@@ -7,19 +7,7 @@ from typing import Any, Protocol
 
 from .nucore_interface import NuCoreInterface 
 from .models import IntentDefinition, IntentHandlerResult, RouteResult
-
-
-class LLMAdapter(Protocol):
-    async def generate(
-        self,
-        *,
-        messages: list[dict[str, str]],
-        config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        expect_json: bool = False,
-    ) -> Any:
-        ...
-
+from .adapters import LLMAdapter
 
 class BaseIntentHandler(ABC):
     def __init__(
@@ -182,8 +170,7 @@ class BaseIntentHandler(ABC):
         if self._tool_specs_cache is None:
             tool_paths = self.get_declared_tool_paths()
             if tool_paths:
-                loader_module = importlib.import_module("intent_handler.tools_handlers")
-                self._tool_specs_cache = loader_module.ToolLoader.from_files(tool_paths)
+                self._tool_specs_cache = LLMAdapter.tools_spec_from_files(tool_paths)
             else:
                 self._tool_specs_cache = []
         return self._tool_specs_cache
@@ -198,9 +185,7 @@ class BaseIntentHandler(ABC):
             if not tool_specs:
                 self._exported_tools_cache[provider] = None
             else:
-                factory_module = importlib.import_module("intent_handler.tools_handlers.factory")
-                adapter = factory_module.create_tools_adapter(provider)
-                self._exported_tools_cache[provider] = adapter.export_tools(tool_specs)
+                self._exported_tools_cache[provider] = self.llm_client.export_tools(tool_specs)
         return self._exported_tools_cache[provider]
 
     async def call_llm(
@@ -241,5 +226,6 @@ class BaseIntentHandler(ABC):
         *,
         route_result: RouteResult | None = None,
         framework_context: str | None = None,
+        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
     ) -> IntentHandlerResult | str | dict[str, Any]:
         raise NotImplementedError

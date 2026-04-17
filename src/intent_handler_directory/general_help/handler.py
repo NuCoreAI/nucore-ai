@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 
-from intent_handler import BaseIntentHandler
+from intent_handler import BaseIntentHandler, IntentHandlerResult
+from intent_handler.base import Any
 
 
 class GeneralHelpIntentHandler(BaseIntentHandler):
     def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None):
         return {}
 
-    async def handle(self, query, *, route_result=None, framework_context=None):
+    async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
         backend_snapshot = None
-
 
         messages = self.build_messages(
             query,

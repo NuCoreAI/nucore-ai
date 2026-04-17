@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .base import LLMAdapter
+from .adapters import LLMAdapter
 from .loader import IntentHandlerRegistry
 from .models import IntentDefinition, RouteResult
 

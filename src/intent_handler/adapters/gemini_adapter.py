@@ -5,9 +5,9 @@ import os
 from typing import Any
 
 import httpx
+from .base_adapter import LLMAdapter, ToolCall, ToolSpec 
 
-
-class GeminiAdapter:
+class GeminiAdapter(LLMAdapter):
     provider_name = "gemini"
 
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
@@ -66,7 +66,21 @@ class GeminiAdapter:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
-        return data
+
+        text_parts: list[str] = []
+        for candidate in data.get("candidates", []) or []:
+            content = candidate.get("content", {})
+            for part in content.get("parts", []) or []:
+                if "text" in part:
+                    text_parts.append(part["text"])
+
+        tool_calls = self.to_canonical_tools(self.parse_tool_calls(data))
+
+        return {
+            "content": "".join(text_parts),
+            "tool_calls": tool_calls,
+            "raw": data,
+        }
 
     async def _stream_generate_content(
         self,
@@ -106,11 +120,57 @@ class GeminiAdapter:
                                 text_parts.append(text)
                                 stream_handler(text)
 
+        # Re-assemble a full response structure for the tools adapter to parse
+        combined_response = {"candidates": chunks}
+        tool_calls = self.to_canonical_tools(self.parse_tool_calls(combined_response))
+
         return {
             "content": "".join(text_parts),
-            "text": "".join(text_parts),
+            "tool_calls": tool_calls,
             "raw": {
                 "streamed": True,
                 "chunks": chunks,
             },
         }
+    
+    def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
+        function_declarations = []
+        for spec in specs:
+            function_declarations.append(
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.json_schema,
+                }
+            )
+        return [{"functionDeclarations": function_declarations}]
+
+    def parse_tool_calls(self, response: Any) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        if not isinstance(response, dict):
+            return calls
+
+        candidates = response.get("candidates", []) or []
+        for candidate in candidates:
+            content = candidate.get("content", {})
+            for part in content.get("parts", []) or []:
+                function_call = part.get("functionCall") or part.get("function_call")
+                if not function_call:
+                    continue
+                calls.append(
+                    ToolCall(
+                        call_id=str(function_call.get("id", function_call.get("name", ""))),
+                        name=str(function_call.get("name", "")),
+                        args=function_call.get("args", {}) if isinstance(function_call.get("args"), dict) else {},
+                        provider=self.provider_name,
+                        raw=function_call,
+                    )
+                )
+        return calls
+
+    def to_canonical_tools(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
+        """Convert ToolCall objects to canonical Claude tool_use format."""
+        return [
+            {"type": "tool_use", "id": tc.call_id, "name": tc.name, "input": tc.args}
+            for tc in tool_calls
+        ]

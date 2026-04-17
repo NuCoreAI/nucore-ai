@@ -1,138 +1,168 @@
-# NuCoreAI Platform! 
+# NuCoreAI Platform
 
 ## Goal
 
-This library goal is to convert a user query written in natural language to commands, queries, and programs in any NuCore enabled platform (currently eisy).
+Convert natural language user queries into commands, queries, and programs for any NuCore-enabled platform (currently eisy).
 
-## Quick start
-
-Installation:
+## Quick Start
 
 ```shell
 git clone https://github.com/NuCoreAI/nucore-ai.git
+cd nucore-ai
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
 ```
 
-## Using Frontier LLMs
-* Create a directory called ```secrets``` in the root of this project
-* Create the following two files in this directory
+## Running the Intent Runtime
+
+The primary entry point is the intent handler runtime. It routes user queries to the correct intent handler and executes them against a NuCore backend.
+
+### Minimal (no backend)
+
 ```shell
-mkdir __init__.py
-mkdir keys.py
-```
-* In keys.py, put your API KEYs in this format:
-
-```python
-OPENAI_API_KEY="sk-proj-xxxx-your-api-key" (for OpenAI)
-XAI_API_KEY_SAMPLES="xai-xxxx-your-api-key" (for xAI)
-CLAUDE_API_KEY="sk-ant-xxxx-your-api-key" (for Claude)
+python -m intent_handler.run_intent_runtime \
+  --intent-dir src/intent_handler_directory \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --query "Turn on the patio lights"
 ```
 
-## Using local (edge) LLMs 
-### llama.cpp compile and build
-1. Download llama.cpp and install prereqs
+### With NuCore Backend (eisy)
+
 ```shell
-sudo apt install build-essential 
-sudo apt install cmake
-sudo apt install clang
-sudo apt install libomp-dev
-sudo apt install libcurl4-openssl-dev 
+python -m intent_handler.run_intent_runtime \
+  --intent-dir src/intent_handler_directory \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --json-output true
+```
 
-```
-2. Go to the directory and do as per one of the options below:
+### Interactive Mode
 
-#### No GPU
+Omit `--query` to enter an interactive prompt loop:
+
 ```shell
-cmake -B build.blis -DGGML_BLAS=on -DGGML_BLAS_VENDOR=FLAME
+python -m intent_handler.run_intent_runtime \
+  --intent-dir src/intent_handler_directory \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword
 ```
-followed by
+
+### Streaming Output
+
+Add `--stream` to print tokens as they are generated (supported for all providers):
+
 ```shell
-cmake --build build.blis --conifg release
+python -m intent_handler.run_intent_runtime \
+  --stream \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --query "What devices are in the master bedroom?"
 ```
-This will install llama.cpp binaries in build.blis directory local to llama.cpp installation. The reason we are using build.blis directory is that you may want to experiment with the GPU version
+
+### Full CLI Reference
+
+| Flag | Description |
+|---|---|
+| `--intent-dir` | Path to intent handler directory (default: `src/intent_handler_directory`) |
+| `--runtime-config` | Path to `runtime_config.json` |
+| `--query` | Single query mode; omit for interactive loop |
+| `--provider` | LLM provider override: `claude`, `openai`, `gemini`, `grok`, `llama.cpp` |
+| `--model` | Model name override for selected provider |
+| `--api-key` | API key override for selected provider |
+| `--stream` | Stream tokens to stdout as they arrive |
+| `--backend-api-classpath` | Python class path for backend API (e.g. `iox.IoXWrapper`) |
+| `--backend-api-base-url` | Base URL for backend API |
+| `--backend-api-username` | Backend API username |
+| `--backend-api-password` | Backend API password |
+| `--json-output` | Enable JSON output mode for backend API |
+| `--prompt_type` | Prompt variant to use (e.g. `shared-features`) |
+
+## Supported LLM Providers
+
+| Provider | Alias | Env Var |
+|---|---|---|
+| Anthropic Claude | `claude`, `anthropic` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` |
+| Google Gemini | `gemini`, `google` | `GEMINI_API_KEY` |
+| xAI Grok | `grok`, `xai` | `XAI_API_KEY` |
+| llama.cpp (local) | `llama.cpp`, `llamacpp` | `LLAMACPP_API_KEY` (optional) |
+
+API keys can be set via environment variables or passed directly via `--api-key`. Provider selection can also be configured in `src/intent_handler/runtime_assets/runtime_config.json`.
+
+## Using a Local (Edge) LLM with llama.cpp
+
+### Build llama.cpp
+
+```shell
+sudo apt install build-essential cmake clang libomp-dev libcurl4-openssl-dev
+```
+
+#### CPU only
+
+```shell
+cmake -B build.cpu
+cmake --build build.cpu --config release
+```
 
 #### Nvidia GPU
-On Ubuntu:
+
 ```shell
 sudo ubuntu-drivers install
-sudo apt install nvidia-utils-{latest version}
 sudo apt install nvidia-cuda-toolkit
-sudo apt install nvidia-prime (for intel)
-```
-Now you are ready to build:
-```shell
-cmake -B build.cuda -DGGML_CUDA=on 
-```
-followed by
-```shell
+cmake -B build.cuda -DGGML_CUDA=on
 cmake --build build.cuda --config release
 ```
-If you have x running, you may want to have it release resources. First use nvidia-smi utility to see what's running and how much memory is being used by other things:
+
+### Start the Server
+
 ```shell
-sudo nvidia-smi
+build.cuda/bin/llama-server \
+  -m /path/to/model.gguf \
+  -c 64000 --port 8013 --host 0.0.0.0 \
+  -t 15 --n-gpu-layers 50 --batch-size 8192
 ```
-if anything is running and using memory:
-1. Make the prime display point to the integrated one (say intel)
+
+### Connect the Runtime to llama.cpp
+
 ```shell
-sudo prime-select intel
-```
-2. Then, make it on demand
-```shell
-sudo prime-select on-demand
-```
-3. Make sure your system sees it:
-```shell
-nvidia-smi
+python -m intent_handler.run_intent_runtime \
+  --provider llama.cpp \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword
 ```
 
-## The Model
-[Qwen3-Instruct-4b-Q4M.gguf](https://mygguf.com/models/unsloth_Qwen3-4B-Instruct-2507-GGUF)
-Choose Q4M quantization.
+Runtime config for llama.cpp (`src/intent_handler/runtime_assets/runtime_config.json`):
 
-### Command
-```shell
-build.cuda/bin/llama-server -m /home/michel/workspace/nucore/models/qwen3-instruct-4b.q4.gguf  -c 64000 --port 8013 --host 0.0.0.0 -t 15 --n-gpu-layers 50 --batch-size 8192
+```json
+{
+  "supported_llms": {
+    "local": {
+      "provider": "llama.cpp",
+      "model": "qwen3-instruct",
+      "url": "http://192.168.6.113:8013/v1"
+    }
+  },
+  "default_llm": "local"
+}
 ```
 
-## Testing
-1. For now, you will need an [eisy hardware] (https://www.universal-devices.com/product/eisy-home-r2/)
-2. Clone this repo anywhere
-3. There are three assistant types that use the same codebase:
-* src/assistant/generic_assistant.py -> uses local/edge LLM (qwen)
-* src/assistant/openai_assistant.py -> uses OpenAI (you need an API Key) 
-* src/assistant/claude_assistant.py -> uses Clause (you need an API Key) 
+## Hardware
 
-All have the same parameters:
+Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 
-```python
-    "--url"             , # The URL to fetch nodes and profiles from the nucore platform",
-    "--username"        , # The username to authenticate with the nucore platform",
-    "--password"        , # The password to authenticate with the nucore platform",
-    "collection_path"   , # The path to the embedding collection db. If not provided, defaults to ~/.nucore_db.
-    "--model_url"       , # The URL of the remote model. If provided, this should be a valid URL that responds to OpenAI's API requests. If frontier, use openai, claude, or xai"
-    "--model_auth_token", # Optional authentication token for the remote model API (if required by the remote model) to be used in the Authorization header. You are responsible for refreshing the token if needed. This is in case you are hosing your own model in AWS or Runpod, etc. 
-    "--embedder_url"    , # Embedder to use.  If nothing provided, then default local embedder will be used.  If a model name is provided, it will be used as the local embedder model downloaded at runtime from hg.  If a URL is provided, it should be a valid URL that responds to OpenAI's API requests."
-    "--reranker_url"    , # The URL of the reranker service. If provided, this should be a valid URL that responds to OpenAI's API requests."
-    "--prompt_type"     , # The type of prompt to use (e.g., 'per-device', 'shared-features', etc.)
-```
-### Examples:
-1. Local/Edge 
-```python
-python3 src/assistant/generic_assistant.py\
-    --url=http://192.168.6.126:8443 ,\ 
-    --username=admin, \ 
-    --password=admin, \ 
-    --model_url=http://192.168.6.113:8013/v1/chat/completions, \ 
-    --prompt_type=per-device
-```
-2. OpenAI
-```python
-python3 src/assistant/openai_assistant.py\
-    --url=http://192.168.6.126:8443, \ 
-    --username=admin, \
-    --password=admin, \
-    --model_url=openai, \
-    --prompt_type=per-device
-```
+## Further Documentation
 
-## Documentation
-The code is very well documented but we have not yet made and official documentation. 
+- Intent handler architecture: `src/intent_handler/README.md`
+- Adding new intents: `src/intent_handler_directory/README.md`
+

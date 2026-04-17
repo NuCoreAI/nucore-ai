@@ -7,12 +7,12 @@ from typing import Any
 from nucore import NuCoreBackendAPI
 
 from .base import BaseIntentHandler
-from .base import LLMAdapter
 from .loader import IntentHandlerRegistry
 from .models import IntentHandlerResult, RouteResult
 from .router import IntentRouter
 from .nucore_interface import NuCoreInterface
 from .stream_handler import StreamHandler
+from .adapters import LLMAdapter
 
 
 def _apply_runtime_overrides(
@@ -149,10 +149,10 @@ class IntentRuntime:
             step_llm_config = self._resolve_runtime_llm_config(intent_name)
             handler.set_runtime_llm_config(step_llm_config)
 
-            step_context = self._build_framework_context(
-                framework_context=framework_context,
-                dependency_outputs=dependency_outputs,
-            )
+            #step_context = self._build_framework_context(
+            #    framework_context=framework_context,
+            #    dependency_outputs=dependency_outputs,
+            #)
 
             step_route_result = (
                 route_result
@@ -168,7 +168,9 @@ class IntentRuntime:
             outcome = await handler.handle(
                 query,
                 route_result=step_route_result,
-                framework_context=step_context,
+                #framework_context=step_context,
+                framework_context=framework_context,
+                dependency_outputs=dependency_outputs,
             )
 
             if isinstance(outcome, IntentHandlerResult):

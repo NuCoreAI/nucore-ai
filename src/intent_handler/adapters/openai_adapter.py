@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from openai import AsyncOpenAI
+from .base_adapter import LLMAdapter, ToolCall, ToolSpec 
 
-
-class OpenAIAdapter:
+class OpenAIAdapter(LLMAdapter):
     provider_name = "openai"
 
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
@@ -84,7 +84,9 @@ class OpenAIAdapter:
                         if isinstance(fn_args, str) and fn_args:
                             bucket["function"]["arguments"] += fn_args
 
-            tool_calls = [tool_call_accumulator[i] for i in sorted(tool_call_accumulator)]
+            raw_tool_calls = [tool_call_accumulator[i] for i in sorted(tool_call_accumulator)]
+            raw_response = {"content": ".".join(content_parts), "tool_calls": raw_tool_calls}
+            tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
             return {
                 "content": "".join(content_parts),
                 "tool_calls": tool_calls,
@@ -96,21 +98,82 @@ class OpenAIAdapter:
 
         response = await self._client.chat.completions.create(**kwargs)
         message = response.choices[0].message
-        tool_calls = []
-        for call in message.tool_calls or []:
-            tool_calls.append(
-                {
-                    "id": call.id,
-                    "type": call.type,
-                    "function": {
-                        "name": call.function.name,
-                        "arguments": call.function.arguments,
-                    },
-                }
-            )
+        raw_tool_calls = [
+            {
+                "id": call.id,
+                "type": call.type,
+                "function": {
+                    "name": call.function.name,
+                    "arguments": call.function.arguments,
+                },
+            }
+            for call in (message.tool_calls or [])
+        ]
+        raw_response = {"content": message.content or "", "tool_calls": raw_tool_calls}
+        tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
 
         return {
             "content": message.content or "",
             "tool_calls": tool_calls,
             "raw": response.model_dump(),
         }
+
+    def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for spec in specs:
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.json_schema,
+                        "strict": spec.strict,
+                    },
+                }
+            )
+        return tools
+    
+    def to_canonical_tools(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
+        """Convert ToolCall objects to canonical Claude tool_use format."""
+        return [
+            {"type": "tool_use", "id": tc.call_id, "name": tc.name, "input": tc.args}
+            for tc in tool_calls
+        ]
+
+
+    def parse_tool_calls(self, response: Any) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        if not isinstance(response, dict):
+            return calls
+
+        for call in response.get("tool_calls", []) or []:
+            fn = call.get("function", {})
+            raw_args = fn.get("arguments", {})
+            args = self._coerce_json(raw_args)
+            calls.append(
+                ToolCall(
+                    call_id=str(call.get("id", "")),
+                    name=str(fn.get("name", "")),
+                    args=args,
+                    provider=self.provider_name,
+                    raw=call,
+                )
+            )
+
+        output_items = response.get("output", []) or []
+        for item in output_items:
+            if item.get("type") not in {"function_call", "tool_call"}:
+                continue
+            raw_args = item.get("arguments", {})
+            args = self._coerce_json(raw_args)
+            calls.append(
+                ToolCall(
+                    call_id=str(item.get("call_id", item.get("id", ""))),
+                    name=str(item.get("name", "")),
+                    args=args,
+                    provider=self.provider_name,
+                    raw=item,
+                )
+            )
+        return calls

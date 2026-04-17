@@ -6,6 +6,7 @@ from .grok_adapter import GrokAdapter
 from .llama_cpp_adapter import LlamaCppAdapter
 from .openai_adapter import OpenAIAdapter
 from .openai_compatible_adapter import OpenAICompatibleAdapter
+from .base_adapter import LLMAdapter, ToolCall, ToolSpec    
 
 __all__ = [
     "ClaudeAdapter",
@@ -14,4 +15,7 @@ __all__ = [
     "LlamaCppAdapter",
     "OpenAIAdapter",
     "OpenAICompatibleAdapter",
+    "LLMAdapter",
+    "ToolCall",
+    "ToolSpec",
 ]

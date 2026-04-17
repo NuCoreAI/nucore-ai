@@ -6,15 +6,15 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from .base import BaseIntentHandler, LLMAdapter
+from .base import BaseIntentHandler
 from .models import IntentDefinition
-
+from .adapters import LLMAdapter
 
 class IntentHandlerRegistry:
     def __init__(self, root_directory: str | Path) -> None:
         self.root_directory = Path(root_directory).expanduser().resolve()
         self.runtime_assets_directory = Path(__file__).resolve().parent / "runtime_assets"
-        self.common_modules_directory = Path(__file__).resolve().parent / "common_modules"
+        self.common_modules_directory = Path(__file__).resolve().parent / "runtime_assets" / "common_modules"
         self.router_config_path = self.root_directory / "router_config.json"
         self._definitions: dict[str, IntentDefinition] = {}
         self._modules_cache: dict[str, object] = {}
@@ -109,6 +109,35 @@ class IntentHandlerRegistry:
 
         with config_path.open("r", encoding="utf-8") as handle:
             config = json.load(handle)
+
+        # Auto-discover tool files in this intent directory and merge them into config.
+        discovered_tools = [file.name for file in intent_directory.glob("tool_*.json") if file.is_file()]
+        discovered_tools = sorted(discovered_tools, key=lambda p: p)
+
+        configured_tool_files = config.get("tool_files", [])
+        if configured_tool_files is None or not isinstance(configured_tool_files, list):
+            configured_tool_files = []
+
+        merged_tool_files: list[str] = []
+        seen_tool_files: set[str] = set()
+
+        for tool_file in configured_tool_files:
+            if not isinstance(tool_file, str):
+                continue
+            if tool_file in seen_tool_files:
+                continue
+            seen_tool_files.add(tool_file)
+            merged_tool_files.append(tool_file)
+
+        for tool_file in discovered_tools:
+            if not isinstance(tool_file, str):
+                continue
+            if tool_file in seen_tool_files:
+                continue
+            seen_tool_files.add(tool_file)
+            merged_tool_files.append(tool_file)
+
+        config["tool_files"] = merged_tool_files
 
         handler_file = config.get("handler", "handler.py")
         if not isinstance(handler_file, str) or not handler_file.endswith(".py"):
