@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from intent_handler import BaseIntentHandler
+from intent_handler import BaseIntentHandler, IntentHandlerResult
+from intent_handler.base import Any
 
 
 class RoutineStatusOpsIntentHandler(BaseIntentHandler):
@@ -23,7 +24,7 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
             "nucore_routines_runtime": routines_runtime,
         }
 
-    async def handle(self, query, *, route_result=None, framework_context=None):
+    async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
         messages = self.build_messages(
             query,
             framework_context=framework_context,

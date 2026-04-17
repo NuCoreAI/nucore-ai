@@ -1,21 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
+from adapters import LLMAdapter, ToolSpec, ToolCall
 
 
-class ProviderClient(Protocol):
-    async def generate(
-        self,
-        *,
-        messages: list[dict[str, str]],
-        config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        expect_json: bool = False,
-    ) -> Any:
-        ...
 
-
-class ProviderDispatchLLMAdapter:
+class ProviderDispatchLLMAdapter(LLMAdapter):
     """
     Dispatches each LLM call to the provider-specific client using runtime
     config fields (provider/llm). This enforces per-intent model routing.
@@ -25,14 +15,14 @@ class ProviderDispatchLLMAdapter:
 
     def __init__(
         self,
-        clients: dict[str, ProviderClient],
+        clients: dict[str, LLMAdapter],
         *,
         default_provider: str | None = None,
     ) -> None:
         if not clients:
             raise ValueError("ProviderDispatchLLMAdapter requires at least one provider client")
 
-        normalized_clients: dict[str, ProviderClient] = {}
+        normalized_clients: dict[str, LLMAdapter] = {}
         for provider, client in clients.items():
             normalized_clients[self._normalize(provider)] = client
 
@@ -47,14 +37,7 @@ class ProviderDispatchLLMAdapter:
                 )
             self._default_provider = resolved_default
 
-    async def generate(
-        self,
-        *,
-        messages: list[dict[str, str]],
-        config: dict[str, Any] | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        expect_json: bool = False,
-    ) -> Any:
+    def get_adapter_for_provider(self, config: dict[str,Any]=None) -> LLMAdapter:
         effective_config = dict(config or {})
         provider = effective_config.get("provider") or effective_config.get("llm") or self._default_provider
         normalized_provider = self._normalize(str(provider))
@@ -65,7 +48,19 @@ class ProviderDispatchLLMAdapter:
             raise ValueError(
                 f"No LLM client registered for provider '{provider}'. Available providers: {available}"
             )
+        return client, effective_config
 
+    async def generate(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        config: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        expect_json: bool = False,
+    ) -> Any:
+        client, effective_config = self.get_adapter_for_provider(config) 
+        if not client:
+            return None
         return await client.generate(
             messages=messages,
             config=effective_config,
@@ -73,8 +68,26 @@ class ProviderDispatchLLMAdapter:
             expect_json=expect_json,
         )
 
-    def register_provider(self, provider: str, client: ProviderClient) -> None:
+    def register_provider(self, provider: str, client: LLMAdapter) -> None:
         self._clients[self._normalize(provider)] = client
+    
+    def export_tools(self, specs: list[ToolSpec]) -> Any:
+        client, _ = self.get_adapter_for_provider()
+        if not client:
+            return None
+        return client.export_tools(specs)
+    
+    def parse_tool_calls(self, response: Any) -> list[ToolCall]:
+        client, _ = self.get_adapter_for_provider()
+        if not client:
+            return []
+        return client.parse_tool_calls(response)
+
+    def to_canonical_tools(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
+        client, _ = self.get_adapter_for_provider()
+        if not client:
+            return []
+        return client.to_canonical_tools(tool_calls)
 
     @staticmethod
     def _normalize(provider: str) -> str:

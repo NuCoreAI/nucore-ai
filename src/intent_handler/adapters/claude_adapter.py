@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from anthropic import AsyncAnthropic
+from .base_adapter import LLMAdapter, ToolCall, ToolSpec 
 
-
-class ClaudeAdapter:
+class ClaudeAdapter(LLMAdapter):
     provider_name = "claude"
 
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
@@ -56,18 +57,62 @@ class ClaudeAdapter:
 
             content = final_message.content
             text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
+            raw_response = {"content": [block.model_dump() for block in content]}
+            tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
             return {
-                "content": [block.model_dump() for block in content],
+                "content": raw_response["content"],
                 "text": "\n".join(text_parts),
+                "tool_calls": tool_calls,
                 "raw": final_message.model_dump(),
             }
 
         response = await self._client.messages.create(**kwargs)
         content = response.content
         text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
+        content_dicts = [block.model_dump() for block in content]
+        raw_response = {"content": content_dicts}
+        tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
 
         return {
-            "content": [block.model_dump() for block in content],
+            "content": content_dicts,
             "text": "\n".join(text_parts),
+            "tool_calls": tool_calls,
             "raw": response.model_dump(),
         }
+
+    def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "input_schema": spec.json_schema,
+            }
+            for spec in specs
+        ]
+
+    def parse_tool_calls(self, response: Any) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        if not isinstance(response, dict):
+            return calls
+
+        for block in response.get("content", []) or []:
+            if block.get("type") != "tool_use":
+                continue
+            calls.append(
+                ToolCall(
+                    call_id=str(block.get("id", "")),
+                    name=str(block.get("name", "")),
+                    args=block.get("input", {}) if isinstance(block.get("input"), dict) else {},
+                    provider=self.provider_name,
+                    raw=block,
+                )
+            )
+        return calls
+
+    def to_canonical_tools(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
+        """Convert ToolCall objects to canonical Claude tool_use format."""
+        return [
+            {"type": "tool_use", "id": tc.call_id, "name": tc.name, "input": tc.args}
+            for tc in tool_calls
+        ]
+

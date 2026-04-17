@@ -1,5 +1,5 @@
 from .nucore_interface import NuCoreInterface
-from .base import BaseIntentHandler, LLMAdapter
+from .base import BaseIntentHandler
 from .dispatch_builder import build_default_dispatch_adapter
 from .loader import IntentHandlerRegistry
 from .models import IntentDefinition, IntentHandlerResult, RouteResult
@@ -20,7 +20,6 @@ __all__ = [
     "IntentRouter",
     "IntentRuntime",
     "_load_runtime_config",
-    "LLMAdapter",
     "ProviderDispatchLLMAdapter",
     "RouteResult",
     "NuCoreInterface",

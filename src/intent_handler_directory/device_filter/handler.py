@@ -1,7 +1,9 @@
 from __future__ import annotations
+from typing import Any
 
 from intent_handler import BaseIntentHandler
 from time import sleep
+from intent_handler.base import IntentHandlerResult
 from nucore import Profile
 import threading
 
@@ -33,7 +35,7 @@ class DeviceFilterIntentHandler(BaseIntentHandler):
             "<<device_database>>": self.nucore_interface.summary_rags
         }
     
-    async def handle(self, query, *, route_result=None, framework_context=None):
+    async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
         messages = self.build_messages(
             query,
             framework_context=framework_context,
