@@ -28,6 +28,8 @@ class NuCoreInterface:
         self.groups = {}
         self.folders = {} 
         self.runtime_profiles = {}
+        self.rags = None
+        self.summary_rags = None
         self.profile = Profile(timestamp="", families=[])
         self.formatter_type = formatter_type
         self.nucore_api = nucore_api

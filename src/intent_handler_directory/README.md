@@ -35,7 +35,7 @@ Only directories with `config.json` are discovered as intents.
 | `previous_dependencies` | Ordered list of intent names that must run before this one |
 | `routing_examples` | Example queries used in router prompt generation |
 | `router_hints` | Additional routing guidance for the router LLM |
-| `tool_files` | List of tool JSON files relative to this intent folder |
+| `tool_files` | Optional list of tool JSON files (relative or absolute). Runtime also auto-discovers `tool_*.json` in this folder and merges both lists with de-duplication |
 | `llm_override` | Key into `runtime_config.supported_llms` to use a specific LLM for this intent |
 | `llm_config` | Per-intent LLM call defaults merged with runtime selection |
 
@@ -59,22 +59,23 @@ router selects: command_control_status
 Your handler must subclass `BaseIntentHandler` and implement:
 
 ```python
-async def handle(self, query, *, route_result=None, framework_context=None):
+async def handle(self, query, *, route_result=None, framework_context=None, dependency_outputs=None):
     ...
 ```
 
 Recommended runtime prompt hook:
 
 ```python
-def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None) -> dict[str, str]:
+def get_prompt_runtime_replacements(self, query, *, dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None, framework_context=None, route_result=None) -> dict[str, str]:
     return {}
 ```
 
 The base class automatically:
 
 - applies runtime placeholder replacements to `prompt.md`
-- loads `tool_files` from config
+- loads configured `tool_files` from config and merges them with auto-discovered `tool_*.json` files in the intent directory
 - converts tools to the selected provider format
+- normalizes returned provider tool calls to canonical Claude tool call format (`type=tool_use`, `id`, `name`, `input`)
 
 ## Prompt Placeholder Notes
 
@@ -88,7 +89,7 @@ The base class automatically:
 2. Add `config.json` with `intent`, `description`, `handler`
 3. Add `prompt.md`
 4. Add `handler.py` with a single `BaseIntentHandler` subclass
-5. Add tool files and reference them via `tool_files` (optional)
+5. Add tool files (`tool_*.json`) and optionally reference additional files via `tool_files`
 6. Add `routing_examples` and `router_hints` for routing (skip for `routable: false` intents)
 7. Add `previous_dependencies` if this intent requires upstream processing
 

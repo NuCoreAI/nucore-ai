@@ -7,7 +7,7 @@ from intent_handler.base import Any
 
 
 class RoutineStatusOpsIntentHandler(BaseIntentHandler):
-    def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None):
+    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, framework_context=None, route_result=None):
         routines_runtime = ""
 
         if self.backend_api is not None:

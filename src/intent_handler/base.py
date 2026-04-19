@@ -7,7 +7,8 @@ from typing import Any, Protocol
 
 from .nucore_interface import NuCoreInterface 
 from .models import IntentDefinition, IntentHandlerResult, RouteResult
-from .adapters import LLMAdapter
+from .adapters import LLMAdapter, ToolSpec
+prompt_debug_output=True
 
 class BaseIntentHandler(ABC):
     def __init__(
@@ -43,34 +44,38 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
+        dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, 
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
         extra_user_sections: dict[str, str] | None = None,
     ) -> list[dict[str, str]]:
         resolved_prompt_text = self.render_prompt_text(
             query,
+            dependency_outputs=dependency_outputs,
             framework_context=framework_context,
             route_result=route_result,
         )
-        user_parts = [f"USER QUERY:\n{query.strip()}"]
+        user_parts = []
+        if route_result:
+            user_parts.append(f"────────────────────────────────\n# ROUTER RESULT:\n*intent={route_result.intent}\n*confidence={route_result.confidence}\n*notes={route_result.notes or ''}")
 
         if framework_context:
-            user_parts.append(f"FRAMEWORK CONTEXT:\n{framework_context.strip()}")
-
-        if route_result:
-            user_parts.append(
-                "ROUTER RESULT:\n"
-                f"intent={route_result.intent}\n"
-                f"confidence={route_result.confidence}\n"
-                f"notes={route_result.notes or ''}"
-            )
+            user_parts.append(f"────────────────────────────────\n# FRAMEWORK CONTEXT:\n{framework_context.strip()}")
 
         if extra_user_sections:
             for section_name, section_value in extra_user_sections.items():
                 if section_value:
-                    user_parts.append(f"{section_name.upper()}:\n{section_value.strip()}")
+                    user_parts.append(f"────────────────────────────────\n# {section_name.upper()}:\n{section_value.strip()}")
+        
+        user_parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
+
 
         if self._supports_system_role():
+            if prompt_debug_output:
+                with open("/tmp/nucore.prompt.md", "w") as f:
+                    f.write(f"{resolved_prompt_text}\n\n")
+                    for idx, part in enumerate(user_parts):
+                        f.write(part+"\n\n")
             return [
                 {"role": "system", "content": resolved_prompt_text},
                 {"role": "user", "content": "\n\n".join(user_parts).strip()},
@@ -78,6 +83,11 @@ class BaseIntentHandler(ABC):
 
         # Claude-style clients often reject "system" as a chat message role.
         user_content = "\n\n".join(user_parts).strip()
+        if prompt_debug_output:
+            with open("/tmp/nucore.prompt.md", "w") as f:
+                f.write(f"SYSTEM INSTRUCTIONS:\n{resolved_prompt_text}\n\n")
+                f.write(user_content)
+
         return [
             {
                 "role": "user",
@@ -93,6 +103,7 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
+        dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, 
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
     ) -> dict[str, str]:
@@ -102,12 +113,14 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
+        dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, 
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
     ) -> str:
         rendered = self.prompt_text
         replacements = self.get_prompt_runtime_replacements(
             query,
+            dependency_outputs=dependency_outputs,
             framework_context=framework_context,
             route_result=route_result,
         )
@@ -229,3 +242,14 @@ class BaseIntentHandler(ABC):
         dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
     ) -> IntentHandlerResult | str | dict[str, Any]:
         raise NotImplementedError
+    
+    def get_tool_specs_from_response(self, response: Any) -> list[ToolSpec]:
+        tool_specs:list[ToolSpec] = []
+        if isinstance(response, dict):
+            tools = response.get("tool_calls") 
+            if isinstance(tools, list):
+                for tool in tools:
+                    if isinstance(tool, dict) and "name" in tool:
+                        tool_spec=ToolSpec(name=tool["name"], description=tool.get("description", ""), json_schema=tool.get("input", {}))
+                        tool_specs.append(tool_spec)
+        return tool_specs
