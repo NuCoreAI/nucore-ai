@@ -249,7 +249,7 @@ Each intent `config.json` supports:
 - `previous_dependencies`: ordered list of prerequisite intents
 - `routing_examples`: used in router prompt generation (only when `routable` is `true`)
 - `router_hints`: used in router prompt generation (only when `routable` is `true`)
-- `tool_files`: list of tool json files relative to intent directory
+- `tool_files`: optional list of tool JSON files (relative or absolute). Runtime also auto-discovers `tool_*.json` inside the intent directory and merges both lists with de-duplication.
 - `llm_override`: optional LLM profile key in `runtime_config.supported_llms`
 - `llm_config`: per-intent call defaults merged with runtime selection
 
@@ -259,6 +259,12 @@ Validation enforced:
 - Every dependency must exist
 - Self-dependency is invalid
 - Cycles are invalid
+
+Tool file resolution behavior:
+
+- Files explicitly listed in `tool_files` are loaded first
+- Files matching `tool_*.json` in the intent directory are auto-discovered and appended
+- Duplicate paths are removed during merge
 
 ## 7. Prompt Processing
 
@@ -293,11 +299,11 @@ Supported placeholder aliases for each module key:
 
 All handlers must subclass `BaseIntentHandler` and implement:
 
-- `async def handle(self, query, *, route_result=None, framework_context=None)`
+- `async def handle(self, query, *, route_result=None, framework_context=None, dependency_outputs=None)`
 
 Optional but recommended:
 
-- `def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None) -> dict[str, str]`
+- `def get_prompt_runtime_replacements(self, query, *, dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None, framework_context=None, route_result=None) -> dict[str, str]`
 
 ### 8.1 Dynamic Prompt Injection
 
@@ -318,11 +324,12 @@ Handlers do not need to manually load tools.
 
 `BaseIntentHandler.call_llm(...)` does this automatically when `tools` is not passed explicitly:
 
-1. Read `tool_files` from intent config
-2. Load canonical tool specs using `ToolLoader.from_files`
-3. Resolve effective provider from merged LLM config
-4. Convert tool schemas to provider format using `create_tools_adapter(provider)`
-5. Pass converted tools to LLM adapter
+1. Read configured `tool_files` from intent config
+2. Auto-discover `tool_*.json` files in the intent directory and merge with configured files
+3. Load canonical tool specs using `ToolLoader.from_files`
+4. Resolve effective provider from merged LLM config
+5. Convert tool schemas to provider format using `create_tools_adapter(provider)`
+6. Pass converted tools to LLM adapter
 
 Introspection helpers available to handlers:
 
@@ -333,7 +340,7 @@ Introspection helpers available to handlers:
 
 ## 9. Tool Authoring Format
 
-Tool JSON files in `tool_files` must use canonical Claude-style schema:
+Tool JSON files in `tool_files` **must use** canonical Claude-style schema:
 
 ```json
 {
@@ -349,6 +356,23 @@ Tool JSON files in `tool_files` must use canonical Claude-style schema:
 ```
 
 Provider conversion is performed by `intent_handler.tools_handlers` adapters.
+
+Tool call normalization:
+
+- Tool definitions are authored in canonical Claude schema (`name`, `description`, `input_schema`)
+- Provider adapters convert request schemas for provider compatibility
+- Responses from providers are parsed and normalized back to canonical Claude tool call shape before downstream handling
+
+Canonical tool call shape used at runtime:
+
+```json
+{
+  "type": "tool_use",
+  "id": "call_id",
+  "name": "tool_name",
+  "input": {}
+}
+```
 
 Output shapes by provider:
 

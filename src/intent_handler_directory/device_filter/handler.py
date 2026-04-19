@@ -1,4 +1,6 @@
 from __future__ import annotations
+from ast import List
+from ast import List
 from typing import Any
 
 from intent_handler import BaseIntentHandler
@@ -11,10 +13,9 @@ import logging
 import asyncio
 
 
-from nucore import Profile
 from nucore import Node
 from nucore import NuCoreError
-from rag import RAGFormatter, ProfileRagFormatter, MinimalRagFormatter
+from rag import RAGData, RAGFormatter, ProfileRagFormatter, MinimalRagFormatter
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ def debug(msg):
 
 class DeviceFilterIntentHandler(BaseIntentHandler):
 
-    def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None):
+    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, framework_context=None, route_result=None):
         self.nucore_interface._refresh_device_structure() # ensure we have the latest device structure before handling the intent   
         return {
             "<<device_database>>": self.nucore_interface.summary_rags
@@ -42,11 +43,60 @@ class DeviceFilterIntentHandler(BaseIntentHandler):
             route_result=route_result,
         )
         response = await self.call_llm(messages=messages, expect_json=True)
+        tool = self.get_tool_specs_from_response(response)
+        if not tool or len(tool) == 0:
+            debug("No tool calls found in the response.")
+            return self.as_result(
+                response,
+                route_result=route_result,
+                metadata={"stage": "device_filter", "error": "No tool calls found in the response."},
+            )
+        
+        rag_docs = self._get_rags_from_candidates(tool[0])
+        if not rag_docs or len(rag_docs['documents']) == 0:
+            debug("No matched devices found in the RAG data.")
+            return self.as_result(
+                response,
+                route_result=route_result,
+                metadata={"stage": "device_filter", "error": "No matched devices found in the RAG data."},
+            )
+
+
         return self.as_result(
-            response,
+            rag_docs,
             route_result=route_result,
             metadata={"stage": "device_filter"},
-        )
+        )      
+
+    def _get_rags_from_candidates(self, tool: dict) -> RAGData:
+        """
+        Get RAGData for the matched devices in the intent.
+        
+        :param tool_call: Dictionary representing the tool call from the LLM response
+        :return: RAGData object containing only the matched devices
+        """
+        full_rags = self.nucore_interface.rags
+        if not full_rags:
+            return RAGData()
+
+        score_threshold = self.config.get("threshold", 0.80)
+
+        matched_candidate_ids=set()
+        devices = tool.json_schema.get("devices", [])
+        for d in devices:
+            if float(d.get('score', 0)) >= score_threshold:
+                try:
+                    matched_candidate_ids.add(d['device_id'])
+                except Exception as ex:
+                    pass
+        
+        filtered_rags = RAGData(documents=[], ids=[]) 
+
+        for idx, id_ in enumerate(full_rags["ids"]):
+            if id_ in matched_candidate_ids:
+                filtered_rags.add_document(full_rags["documents"][idx], full_rags["embeddings"][idx] , id_, full_rags["metadatas"][idx])
+
+        return filtered_rags 
 
     def __load_profile__(self, profile_path:str=None):
         """Load profile from the specified path or URL.

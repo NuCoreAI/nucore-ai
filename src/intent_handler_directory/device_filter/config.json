@@ -13,5 +13,6 @@
   ],
   "llm_config": {
     "temperature": 0.0
-  }
+  },
+  "threshold": 0.79 
 }

@@ -180,7 +180,7 @@ class IntentRuntime:
 
             dependency_outputs[intent_name] = {
                 "intent": result.intent,
-                "output": self._safe_json_data(result.output),
+                "output": result.output,
                 "metadata": self._safe_json_data(result.metadata),
                 "llm": self._safe_json_data(step_llm_config),
             }
