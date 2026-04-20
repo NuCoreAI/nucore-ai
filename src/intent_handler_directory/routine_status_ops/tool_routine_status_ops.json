@@ -3,13 +3,8 @@
   "description": "Perform runtime operations on a NuCore routine (enable, disable, run, stop, etc.)",
   "input_schema": {
     "type": "object",
-    "required": ["tool", "args"],
+    "required": ["args"],
     "properties": {
-      "tool": {
-        "type": "string",
-        "const": "RoutineOps",
-        "description": "NuCore tool for issuing runtime operations on routines"
-      },
       "args": {
         "type": "array",
         "items": {

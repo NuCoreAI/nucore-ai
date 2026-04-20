@@ -3,13 +3,8 @@
     "description": "Query current value of device property (what is, show me, check). **Never** respond from memory or make assumptions",
     "input_schema": {
       "type": "object",
-      "required": ["tool","args"],
+      "required": ["args"],
       "properties": {
-        "tool": {
-          "type": "string",
-          "const": "PropsQuery",
-          "description": "NuCore tool hooking to get real-time device property status"
-        },
         "args": {
             "type": "array",
             "items": {

@@ -5,7 +5,7 @@ from intent_handler.base import Any
 
 
 class GroupSceneOperationsIntentHandler(BaseIntentHandler):
-    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, framework_context=None, route_result=None):
+    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
         return {}
 
     async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
@@ -15,12 +15,11 @@ class GroupSceneOperationsIntentHandler(BaseIntentHandler):
             route_result=route_result,
         )
         response = await self.call_llm(messages=messages)
-        return self.as_result(
-            response,
-            route_result=route_result,
-            metadata={
-                "provider": self.get_effective_provider(),
-                "model": self.get_effective_llm_config().get("model"),
-                "tools_loaded": self.get_tool_names(),
-            },
-        )
+        metadata={
+            "provider": self.get_effective_provider(),
+            "model": self.get_effective_llm_config().get("model"),
+            "tools_loaded": self.get_tool_names(),
+        },
+        response.set_metadata(metadata=metadata, route_result=route_result)
+        return response
+

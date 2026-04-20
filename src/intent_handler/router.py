@@ -147,6 +147,7 @@ class IntentRouter:
         normalized_payload = dict(payload)
         normalized_payload["user_query"] = query.strip()
 
+
         missing = [key for key in required if key not in normalized_payload]
         if missing:
             raise ValueError(f"Router response is missing required fields from tool_router: {missing}")

@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from .nucore_interface import NuCoreInterface 
 from .models import IntentDefinition, IntentHandlerResult, RouteResult
-from .adapters import LLMAdapter, ToolSpec
+from .adapters import LLMAdapter, ToolSpec, ToolCall
 prompt_debug_output=True
 
 class BaseIntentHandler(ABC):
@@ -103,7 +103,7 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
-        dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, 
+        dependency_outputs:IntentHandlerResult | None = None,
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
     ) -> dict[str, str]:
@@ -208,28 +208,20 @@ class BaseIntentHandler(ABC):
         config: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
         expect_json: bool = False,
-    ) -> Any:
+    ) -> IntentHandlerResult | str | dict[str, Any]:
         merged_config = self.get_effective_llm_config(config)
         resolved_tools = tools if tools is not None else self.build_provider_tools(merged_config)
-        return await self.llm_client.generate(
+        response = await self.llm_client.generate(
             messages=messages,
             config=merged_config or None,
             tools=resolved_tools,
             expect_json=expect_json,
         )
-
-    def as_result(
-        self,
-        output: Any,
-        *,
-        route_result: RouteResult | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> IntentHandlerResult:
         return IntentHandlerResult(
             intent=self.name,
-            output=output,
-            route_result=route_result,
-            metadata=metadata or {},
+            output=response,
+            route_result=None, # these should be set by the caller if relevant, not here,
+            metadata=None # these should be set by the caller if relevant, not here
         )
 
     @abstractmethod
@@ -240,16 +232,6 @@ class BaseIntentHandler(ABC):
         route_result: RouteResult | None = None,
         framework_context: str | None = None,
         dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
-    ) -> IntentHandlerResult | str | dict[str, Any]:
+    ) -> IntentHandlerResult:
         raise NotImplementedError
     
-    def get_tool_specs_from_response(self, response: Any) -> list[ToolSpec]:
-        tool_specs:list[ToolSpec] = []
-        if isinstance(response, dict):
-            tools = response.get("tool_calls") 
-            if isinstance(tools, list):
-                for tool in tools:
-                    if isinstance(tool, dict) and "name" in tool:
-                        tool_spec=ToolSpec(name=tool["name"], description=tool.get("description", ""), json_schema=tool.get("input", {}))
-                        tool_specs.append(tool_spec)
-        return tool_specs

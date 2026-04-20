@@ -3,13 +3,8 @@
     "description": "Send commands to devices to control their behavior (set, change, turn on, turn off)",
     "input_schema": {
       "type": "object",
-      "required": ["tool","args"],
+      "required": ["args"],
       "properties": {
-        "tool": {
-          "type": "string",
-          "const": "Commands",
-          "description": "NuCore tool hooking to send commands to devices to control their behavior"
-        },
         "args": {
             "type": "array",
             "items": {

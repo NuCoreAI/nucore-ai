@@ -3,13 +3,8 @@
     "description": "Automation/optimization routines based on device status and conditions",
     "input_schema": {
       "type": "object",
-      "required": ["tool","args"],
+      "required": ["args"],
       "properties": {
-        "tool": {
-          "type": "string",
-          "const": "Routines",
-          "description": "NuCore tool hooking to perform automation and optimization routines based on device status and conditions"
-        },
         "args": {
             "type": "array",
             "items": {

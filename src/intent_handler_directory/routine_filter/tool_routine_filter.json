@@ -3,9 +3,9 @@
   "description": "Results from filtering top candidates based on the user query for downstream intents like routine_status_ops.",
   "input_schema": {
     "type": "object",
-    "required": ["routines"],
+    "required": ["args"],
     "properties": {
-      "routines": {
+      "args": {
         "type": "array",
         "description": "Selected routine/folder candidates for routine_status_ops.",
         "items": {
