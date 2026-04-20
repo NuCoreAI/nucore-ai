@@ -3,9 +3,9 @@
   "description": "Results from filtering top candidates based on the user query for downstream intents like command_control and routine_automation.",
   "input_schema": {
     "type": "object",
-    "required": ["devices"],
+    "required": ["args"],
     "properties": {
-      "devices": {
+      "args": {
         "type": "array",
         "description": "Selected device/group/scene candidates for command_control, routine_automation, real_time_status, and group_scene_operations.",
         "items": {
@@ -25,7 +25,7 @@
           },
           "additionalProperties": false
         }
-      }
+      }  
     },
     "additionalProperties": false
   }

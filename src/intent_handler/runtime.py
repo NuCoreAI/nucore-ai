@@ -165,7 +165,7 @@ class IntentRuntime:
                 )
             )
 
-            outcome = await handler.handle(
+            result = await handler.handle(
                 query,
                 route_result=step_route_result,
                 #framework_context=step_context,
@@ -173,17 +173,10 @@ class IntentRuntime:
                 dependency_outputs=dependency_outputs,
             )
 
-            if isinstance(outcome, IntentHandlerResult):
-                result = outcome
-            else:
-                result = handler.as_result(outcome, route_result=step_route_result)
+            metadata = {"metadata": self._safe_json_data(result.metadata)}
+            result.set_metadata(metadata=metadata, route_result=step_route_result)
 
-            dependency_outputs[intent_name] = {
-                "intent": result.intent,
-                "output": result.output,
-                "metadata": self._safe_json_data(result.metadata),
-                "llm": self._safe_json_data(step_llm_config),
-            }
+            dependency_outputs[intent_name] = result
             last_result = result
 
         if last_result is None:
