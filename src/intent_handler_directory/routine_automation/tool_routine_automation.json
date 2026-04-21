@@ -1,5 +1,5 @@
 {
-    "name": "routine_automation_tool",
+    "name": "tool_routine_automation",
     "description": "Automation/optimization routines based on device status and conditions",
     "input_schema": {
       "type": "object",

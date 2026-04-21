@@ -1,5 +1,5 @@
 {
-  "name": "device_filter",
+  "name": "tool_device_filter",
   "description": "Results from filtering top candidates based on the user query for downstream intents like command_control and routine_automation.",
   "input_schema": {
     "type": "object",

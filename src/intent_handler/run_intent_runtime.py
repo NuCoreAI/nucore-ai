@@ -6,7 +6,7 @@ import functools
 from pathlib import Path
 from typing import Any
 
-from intent_handler import IntentRuntime, NuCoreInterface, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
+from intent_handler import IntentHandlerResult, IntentRuntime, NuCoreInterface, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -158,44 +158,25 @@ def _load_backend_api_cached(
     except (ImportError, AttributeError) as e:
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
 
-
-def _extract_text_output(output: Any) -> str | None:
-    if isinstance(output, str):
-        return output
-
-    if isinstance(output, dict):
-        text = output.get("text")
-        if isinstance(text, str) and text.strip():
-            return text
-
-        content = output.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-
-    return None
-
-
 async def _run_once(
     runtime: IntentRuntime,
-    query: str) -> None:
-    result = await runtime.handle_query(query)
+    query: str,
+    session_id: str | None = None) -> None:
+    result = await runtime.handle_query(query, session_id=session_id)
     print(f"\nIntent: {result.intent}")
     print("Output:")
 
-    streamed_chunks = runtime.get_stream_chunk_count() 
-    text_output = _extract_text_output(result.output)
+#    streamed_chunks = runtime.get_stream_chunk_count() 
+    text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
 
-    if streamed_chunks > 0:
-        # Token chunks are already printed by the stream callback.
-        print()
-        return
+#    if streamed_chunks > 0:
+#        # Token chunks are already printed by the stream callback.
+##        print()
+#        return
 
     if text_output is not None:
         print(text_output)
         return
-
-    print(result.output)
-
 
 async def _run_loop(runtime: IntentRuntime) -> None:
     print("Standalone Intent Runtime")
@@ -211,7 +192,7 @@ async def _run_loop(runtime: IntentRuntime) -> None:
         if query.lower() in {"quit", "exit"}:
             break
         runtime.reset_stream_handler()  # Reset stream handler state before each query
-        await _run_once(runtime, query)
+        await _run_once(runtime, query, session_id="default")
 
 nucore_interface : NuCoreInterface = None  # Global variable to hold the backend API instance
 

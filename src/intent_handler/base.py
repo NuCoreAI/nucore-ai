@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .nucore_interface import NuCoreInterface 
-from .models import IntentDefinition, IntentHandlerResult, RouteResult
+from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
 from .adapters import LLMAdapter, ToolSpec, ToolCall
 prompt_debug_output=True
 
@@ -23,6 +23,7 @@ class BaseIntentHandler(ABC):
         self._runtime_llm_config: dict[str, Any] = {}
         self._tool_specs_cache = None
         self._exported_tools_cache: dict[str, list[dict[str, Any]] | None] = {}
+        self._current_history: ConversationHistory | None = None
 
     @property
     def name(self) -> str:
@@ -40,64 +41,90 @@ class BaseIntentHandler(ABC):
     def directory(self) -> Path:
         return self.definition.directory
 
+    def set_current_history(self, history: ConversationHistory | None) -> None:
+        self._current_history = history
+
     def build_messages(
         self,
         query: str,
         *,
-        dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None, 
+        dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None,
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
         extra_user_sections: dict[str, str] | None = None,
+        history: ConversationHistory | None = None,
     ) -> list[dict[str, str]]:
+        if history is None:
+            history = self._current_history
+
         resolved_prompt_text = self.render_prompt_text(
             query,
             dependency_outputs=dependency_outputs,
             framework_context=framework_context,
             route_result=route_result,
         )
-        user_parts = []
-        if route_result:
-            user_parts.append(f"────────────────────────────────\n# ROUTER RESULT:\n*intent={route_result.intent}\n*confidence={route_result.confidence}\n*notes={route_result.notes or ''}")
 
+        # Build current user turn content
+        user_parts = []
         if framework_context:
             user_parts.append(f"────────────────────────────────\n# FRAMEWORK CONTEXT:\n{framework_context.strip()}")
-
         if extra_user_sections:
             for section_name, section_value in extra_user_sections.items():
                 if section_value:
                     user_parts.append(f"────────────────────────────────\n# {section_name.upper()}:\n{section_value.strip()}")
-        
         user_parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
+        current_user_content = "\n\n".join(user_parts).strip()
 
+        # Build history turn messages (plain user/assistant pairs, no system instructions)
+        history_messages: list[dict[str, str]] = []
+        if history and history.turns:
+            for turn in history.turns:
+                history_messages.append({"role": "user", "content": turn.query.strip()})
+                history_messages.append({"role": "assistant", "content": turn.response.strip()})
 
         if self._supports_system_role():
+            messages = (
+                [{"role": "system", "content": resolved_prompt_text}]
+                + history_messages
+                + [{"role": "user", "content": current_user_content}]
+            )
             if prompt_debug_output:
                 with open("/tmp/nucore.prompt.md", "w") as f:
-                    f.write(f"{resolved_prompt_text}\n\n")
-                    for idx, part in enumerate(user_parts):
-                        f.write(part+"\n\n")
-            return [
-                {"role": "system", "content": resolved_prompt_text},
-                {"role": "user", "content": "\n\n".join(user_parts).strip()},
+                    for msg in messages:
+                        f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
+            return messages
+
+        # Non-system-role providers (e.g. raw Claude messages without system kwarg):
+        # Prepend system instructions to the first user message only.
+        if history_messages:
+            first_user_content = (
+                "SYSTEM INSTRUCTIONS:\n"
+                f"{resolved_prompt_text}\n\n"
+                f"{history_messages[0]['content']}"
+            )
+            messages = (
+                [{"role": "user", "content": first_user_content}]
+                + history_messages[1:]
+                + [{"role": "user", "content": current_user_content}]
+            )
+        else:
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "SYSTEM INSTRUCTIONS:\n"
+                        f"{resolved_prompt_text}\n\n"
+                        f"{current_user_content}"
+                    ),
+                }
             ]
 
-        # Claude-style clients often reject "system" as a chat message role.
-        user_content = "\n\n".join(user_parts).strip()
         if prompt_debug_output:
             with open("/tmp/nucore.prompt.md", "w") as f:
-                f.write(f"SYSTEM INSTRUCTIONS:\n{resolved_prompt_text}\n\n")
-                f.write(user_content)
+                for msg in messages:
+                    f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
 
-        return [
-            {
-                "role": "user",
-                "content": (
-                    "SYSTEM INSTRUCTIONS:\n"
-                    f"{resolved_prompt_text}\n\n"
-                    f"{user_content}"
-                ),
-            }
-        ]
+        return messages
 
     def get_prompt_runtime_replacements(
         self,
@@ -208,7 +235,7 @@ class BaseIntentHandler(ABC):
         config: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
         expect_json: bool = False,
-    ) -> IntentHandlerResult | str | dict[str, Any]:
+    ) -> IntentHandlerResult: 
         merged_config = self.get_effective_llm_config(config)
         resolved_tools = tools if tools is not None else self.build_provider_tools(merged_config)
         response = await self.llm_client.generate(
@@ -221,7 +248,6 @@ class BaseIntentHandler(ABC):
             intent=self.name,
             output=response,
             route_result=None, # these should be set by the caller if relevant, not here,
-            metadata=None # these should be set by the caller if relevant, not here
         )
 
     @abstractmethod

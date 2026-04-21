@@ -11,6 +11,7 @@ from .loader import IntentHandlerRegistry
 from .models import IntentHandlerResult, RouteResult
 from .router import IntentRouter
 from .nucore_interface import NuCoreInterface
+from .session_store import SessionStore
 from .stream_handler import StreamHandler
 from .adapters import LLMAdapter
 
@@ -103,6 +104,7 @@ class IntentRuntime:
         self.runtime_config = {} 
         self._handler_instances: dict[str, BaseIntentHandler] = {}
         self._handler_signatures: dict[str, tuple[int, int, int]] = {}
+        self.session_store: SessionStore = SessionStore()
         self.refresh()
 
     def refresh(self) -> None:
@@ -127,18 +129,26 @@ class IntentRuntime:
             return self.stream_handler.get_stream_chunk_count()
         return 0
 
-    async def route(self, query: str) -> RouteResult:
+    async def route(self, query: str, history=None) -> RouteResult:
         self.refresh()
         router_llm_config = self._resolve_router_llm_config()
-        return await self.router.route(query, llm_config_override=router_llm_config)
+        return await self.router.route(query, llm_config_override=router_llm_config, history=history)
 
     async def handle_query(
         self,
         query: str,
         *,
         framework_context: str | None = None,
+        session_id: str | None = None,
     ) -> IntentHandlerResult:
-        route_result = await self.route(query)
+        default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
+        active_llm_key = self.runtime_config.get("default_llm")
+        active_llm_cfg = self.runtime_config.get("supported_llms", {}).get(active_llm_key or "", {})
+        max_turns: int = int(active_llm_cfg.get("max_turns", default_max_turns))
+
+        history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
+
+        route_result = await self.route(query, history=history)
         execution_chain = self._resolve_execution_chain(route_result.intent)
 
         dependency_outputs: dict[str, Any] = {}
@@ -148,11 +158,7 @@ class IntentRuntime:
             handler = self._get_or_create_handler(intent_name)
             step_llm_config = self._resolve_runtime_llm_config(intent_name)
             handler.set_runtime_llm_config(step_llm_config)
-
-            #step_context = self._build_framework_context(
-            #    framework_context=framework_context,
-            #    dependency_outputs=dependency_outputs,
-            #)
+            handler.set_current_history(history)
 
             step_route_result = (
                 route_result
@@ -161,26 +167,31 @@ class IntentRuntime:
                     intent=intent_name,
                     confidence=route_result.confidence,
                     notes=f"Dependency step for '{route_result.intent}'",
+                    resolved_query=route_result.resolved_query,
                     raw_response=route_result.raw_response,
                 )
             )
 
+            effective_query = step_route_result.resolved_query or query
+
             result = await handler.handle(
-                query,
+                effective_query,
                 route_result=step_route_result,
-                #framework_context=step_context,
                 framework_context=framework_context,
                 dependency_outputs=dependency_outputs,
             )
 
-            metadata = {"metadata": self._safe_json_data(result.metadata)}
-            result.set_metadata(metadata=metadata, route_result=step_route_result)
+            result.set_route_result(route_result=step_route_result)
 
             dependency_outputs[intent_name] = result
             last_result = result
 
         if last_result is None:
             raise ValueError("Execution chain produced no result")
+
+        if session_id is not None:
+            response_text = last_result.get_text_output() or ""
+            self.session_store.get(session_id).append(query=query, response=response_text)
 
         return last_result
 
@@ -214,22 +225,6 @@ class IntentRuntime:
 
         visit(target_intent)
         return ordered
-
-    def _build_framework_context(
-        self,
-        *,
-        framework_context: str | None,
-        dependency_outputs: dict[str, Any],
-    ) -> str | None:
-        if not dependency_outputs:
-            return framework_context
-
-        dependencies_json = json.dumps(dependency_outputs, indent=2)
-        dependency_block = f"DEPENDENCY OUTPUTS (ordered pipeline history):\n{dependencies_json}"
-
-        if framework_context and framework_context.strip():
-            return f"{framework_context.strip()}\n\n{dependency_block}"
-        return dependency_block
 
     def _safe_json_data(self, value: Any) -> Any:
         try:

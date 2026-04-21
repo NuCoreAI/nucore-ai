@@ -1,16 +1,12 @@
 from __future__ import annotations
-from ast import List
-from ast import List
 from typing import Any
 
 from intent_handler import BaseIntentHandler
 from time import sleep
 from intent_handler.base import IntentHandlerResult
-from nucore import Profile
-import threading
+from rag import DedupeDevices
 
 import logging
-import asyncio
 
 
 from nucore import Node
@@ -43,30 +39,25 @@ class DeviceFilterIntentHandler(BaseIntentHandler):
             route_result=route_result,
         )
         response = await self.call_llm(messages=messages, expect_json=True)
-        metadata={}
         if isinstance(response, IntentHandlerResult):
             tools = response.get_tool_calls()
             if not tools or len(tools) == 0:
                 debug("No tool calls found in the response.")
-                metadata={"stage": "device_filter", "error": "No tool calls found in the response."}
-                response.set_metadata(metadata=metadata, route_result=route_result)
+                response.set_route_result(route_result=route_result)
                 return response
         
             rag_docs = self._get_rags_from_candidates(tools[0])
-            if not rag_docs or len(rag_docs['documents']) == 0:
+            if not rag_docs: #or len(rag_docs['documents']) == 0:
                 debug("No matched devices found in the RAG data.")
-                metadata={"stage": "device_filter", "error": "No matched devices found in the RAG data."}
-                response.set_metadata(metadata=metadata, route_result=route_result)
+                response.set_metadata(route_result=route_result)
                 return response
 
-            metadata={"stage": "device_filter"},
             response.output = rag_docs
-            response.set_metadata(metadata=metadata, route_result=route_result)
+            response.set_route_result(route_result=route_result)
             return response
 
         debug("Invalid response.")
-        metadata={"stage": "device_filter", "error": "Invalid response"},
-        response.set_metadata(metadata=metadata, route_result=route_result)
+        response.set_router_result(route_result=route_result)
         return response
 
     def _get_rags_from_candidates(self, tool: dict) -> RAGData:
@@ -97,5 +88,14 @@ class DeviceFilterIntentHandler(BaseIntentHandler):
             if id_ in matched_candidate_ids:
                 filtered_rags.add_document(full_rags["documents"][idx], full_rags["embeddings"][idx] , id_, full_rags["metadatas"][idx])
 
-        return filtered_rags 
+        rag_docs = filtered_rags["documents"]
+        if not rag_docs:
+            return "" 
+        device_docs = ""
+        for rag_doc in rag_docs:
+            device_docs += "\n" + rag_doc
+        
+        deduper = DedupeDevices()
+        deduped_docs = deduper.dedupe(device_docs)
+        return deduped_docs 
 

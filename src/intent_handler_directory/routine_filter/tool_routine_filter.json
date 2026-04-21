@@ -1,5 +1,5 @@
 {
-  "name": "routine_filter",
+  "name": "tool_routine_filter",
   "description": "Results from filtering top candidates based on the user query for downstream intents like routine_status_ops.",
   "input_schema": {
     "type": "object",

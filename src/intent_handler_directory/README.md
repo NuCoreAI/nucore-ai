@@ -83,7 +83,73 @@ The base class automatically:
 - Runtime placeholders are replaced from `get_prompt_runtime_replacements(...)`.
 - Keys may be returned as raw names (`nucore_routines_runtime`) or full placeholders (`<<nucore_routines_runtime>>`).
 
-## Quick Add-Intent Checklist
+## `framework_context`
+
+An optional free-form string passed in by the **caller** of `handle_query`. When present it is appended to the user turn of the LLM message as a `# FRAMEWORK CONTEXT:` section before the user query. Use it to carry external state (session info, user preferences, system status) that the calling application knows about.
+
+Example:
+
+```python
+result = await runtime.handle_query(
+    "Turn on the patio lights",
+    framework_context="User is authenticated. Location: home. Time zone: America/Los_Angeles.",
+)
+```
+
+When `None` (the default) the section is omitted entirely.
+
+## `extra_user_sections`
+
+A `dict[str, str]` parameter on `build_messages` that lets a handler inject additional named sections into the user turn beyond `framework_context`. Each key becomes a section heading (uppercased) and each value becomes the body. Sections with empty or `None` values are skipped.
+
+Example:
+
+```python
+messages = self.build_messages(
+    query,
+    framework_context=framework_context,
+    route_result=route_result,
+    extra_user_sections={
+        "backend_snapshot": self.backend_api.get_status_snapshot(),
+        "active_alerts": self.backend_api.get_alerts() or "",
+    },
+)
+```
+
+Resulting user turn order: `ROUTER RESULT` → `FRAMEWORK CONTEXT` → each extra section → `USER QUERY`.
+
+## Session Management and Conversation History
+
+Conversation history is managed globally per session (not per intent). Pass `session_id` to `handle_query` and the runtime will automatically include prior turns in each handler's message list.
+
+```python
+result = await runtime.handle_query(
+    "Actually make them 50%",
+    session_id="user-abc123",
+)
+```
+
+Turns are stored as `(query, response)` pairs in a `ConversationHistory` object inside `IntentRuntime.session_store`. The history is prepended as alternating `user` / `assistant` messages before the current query, so the LLM sees the full conversation context.
+
+**Pruning** is automatic: each history is capped at `max_turns` (configured per LLM in `runtime_config.json` under each LLM entry, or globally via `default_max_turns` at the root). Oldest turns are dropped first.
+
+```json
+{
+  "supported_llms": {
+    "claude": { "max_turns": 20, ... }
+  },
+  "default_max_turns": 20
+}
+```
+
+To clear a session manually:
+
+```python
+runtime.session_store.clear("user-abc123")   # single session
+runtime.session_store.clear_all()            # all sessions
+```
+
+In interactive CLI mode (`_run_loop`) history is enabled automatically with `session_id="default"`. Single-query mode (`--query`) is stateless (no `session_id`).
 
 1. Create `src/intent_handler_directory/<intent_name>/`
 2. Add `config.json` with `intent`, `description`, `handler`
