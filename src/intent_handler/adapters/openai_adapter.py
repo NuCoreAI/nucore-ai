@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -21,9 +22,10 @@ class OpenAIAdapter(LLMAdapter):
     ) -> Any:
         cfg = dict(config or {})
         model = cfg.get("model") or "gpt-4.1-mini"
+        normalized_messages = self._normalize_messages(messages)
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": normalized_messages,
         }
         if tools:
             kwargs["tools"] = tools
@@ -118,6 +120,26 @@ class OpenAIAdapter(LLMAdapter):
             "raw": response.model_dump(),
         }
 
+    def _normalize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+        normalized: list[dict[str, str]] = []
+        for msg in messages or []:
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "user")
+            content = msg.get("content", "")
+            if content is None:
+                content_text = ""
+            elif isinstance(content, str):
+                content_text = content
+            else:
+                # Some OpenAI-compatible backends are strict and require content to be a plain string.
+                try:
+                    content_text = json.dumps(content, ensure_ascii=False)
+                except Exception:
+                    content_text = str(content)
+            normalized.append({"role": role, "content": content_text})
+        return normalized
+
     def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
         for spec in specs:
@@ -177,3 +199,17 @@ class OpenAIAdapter(LLMAdapter):
                 )
             )
         return calls
+
+    def _coerce_json(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}
+            try:
+                parsed = json.loads(text)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
