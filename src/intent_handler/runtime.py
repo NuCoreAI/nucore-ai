@@ -21,6 +21,7 @@ def _apply_runtime_overrides(
     provider: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
+    model_url: str | None = None,
 ) -> dict[str, Any]:
     """Apply CLI overrides to runtime config."""
     config = dict(runtime_config)
@@ -31,22 +32,42 @@ def _apply_runtime_overrides(
         raise ValueError("No provider specified and no default_llm in runtime_config")
 
     if selected_key not in supported_llms:
-        raise ValueError(f"Provider '{selected_key}' not found in runtime_config.supported_llms")
+        if provider:
+            # Allow CLI provider override even when the provider is not predeclared in runtime_config.
+            supported_llms[selected_key] = {
+                "provider": selected_key,
+                "model": None,
+                "url": None,
+                "params": {},
+            }
+        else:
+            raise ValueError(f"Provider '{selected_key}' not found in runtime_config.supported_llms")
 
     llm_cfg = dict(supported_llms.get(selected_key, {}))
     if model:
         llm_cfg["model"] = model
     if api_key:
         llm_cfg["api_key"] = api_key
+    if model_url:
+        llm_cfg["url"] = model_url
 
     supported_llms[selected_key] = llm_cfg
     config["supported_llms"] = supported_llms
     if provider:
         config["default_llm"] = selected_key
+        # Keep router/provider selection aligned with explicit CLI provider overrides.
+        config["router_llm"] = selected_key
 
     return config
 
-def _load_runtime_config(path:str, stream_handler:StreamHandler, provider:str, api_key:str, model:str) -> dict[str, Any]:
+def _load_runtime_config(
+    path: str,
+    stream_handler: StreamHandler,
+    provider: str,
+    api_key: str,
+    model: str,
+    model_url: str | None = None,
+) -> dict[str, Any]:
     runtime_config_path = (
         Path(path).expanduser().resolve()
         if path
@@ -78,6 +99,7 @@ def _load_runtime_config(path:str, stream_handler:StreamHandler, provider:str, a
         provider=provider,
         api_key=api_key,
         model=model,
+        model_url=model_url,
     )
     return runtime_config
 
@@ -91,6 +113,10 @@ class IntentRuntime:
         nucore_interface: NuCoreInterface,
         runtime_config_path: str | Path ,
         stream_handler: StreamHandler | None = None, 
+        runtime_provider: str | None = None,
+        runtime_api_key: str | None = None,
+        runtime_model: str | None = None,
+        runtime_model_url: str | None = None,
     ) -> None:
         if llm_client is None or nucore_interface is None or runtime_config_path is None:
             raise ValueError("llm_client, nucore_interface, and runtime_config_path are required")
@@ -101,6 +127,10 @@ class IntentRuntime:
         self.router = IntentRouter(self.registry, llm_client)
         self.runtime_config_path = runtime_config_path
         self.stream_handler = stream_handler
+        self._runtime_provider = runtime_provider
+        self._runtime_api_key = runtime_api_key
+        self._runtime_model = runtime_model
+        self._runtime_model_url = runtime_model_url
         self.runtime_config = {} 
         self._handler_instances: dict[str, BaseIntentHandler] = {}
         self._handler_signatures: dict[str, tuple[int, int, int]] = {}
@@ -112,9 +142,10 @@ class IntentRuntime:
         self.runtime_config = _load_runtime_config(
             path=self.runtime_config_path,
             stream_handler=self.stream_handler,
-            provider="",
-            api_key="",
-            model=""
+            provider=self._runtime_provider or "",
+            api_key=self._runtime_api_key or "",
+            model=self._runtime_model or "",
+            model_url=self._runtime_model_url,
         )
         self._validate_runtime_config()
         self._reconcile_handler_cache()

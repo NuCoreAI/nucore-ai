@@ -18,7 +18,6 @@
     "tool_command_control.json",
     "tool_real_time_status.json"
   ],
-  "llm_override": "claude",
   "llm_config": {
     "temperature": 0.1
   }

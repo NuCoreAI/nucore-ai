@@ -49,7 +49,7 @@ class DeviceFilterIntentHandler(BaseIntentHandler):
             rag_docs = self._get_rags_from_candidates(tools[0])
             if not rag_docs: #or len(rag_docs['documents']) == 0:
                 debug("No matched devices found in the RAG data.")
-                response.set_metadata(route_result=route_result)
+                response.set_route_result(route_result=route_result)
                 return response
 
             response.output = rag_docs
@@ -57,7 +57,7 @@ class DeviceFilterIntentHandler(BaseIntentHandler):
             return response
 
         debug("Invalid response.")
-        response.set_router_result(route_result=route_result)
+        response.set_route_result(route_result=route_result)
         return response
 
     def _get_rags_from_candidates(self, tool: dict) -> RAGData:

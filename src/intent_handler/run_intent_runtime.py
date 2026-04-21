@@ -48,6 +48,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override API key for the selected provider",
     )
     parser.add_argument(
+        "--model-url",
+        "--model_url",
+        dest="model_url",
+        type=str,
+        default=None,
+        help="Override model base URL or full chat/completions endpoint for OpenAI-compatible providers",
+    )
+    parser.add_argument(
         "--backend-api-classpath",
         type=str,
         default=None,
@@ -212,6 +220,7 @@ def main() -> None:
         provider=args.provider,
         api_key=args.api_key,
         model=args.model,
+        model_url=args.model_url,
     )
 
     llm_adapter = build_default_dispatch_adapter(runtime_config)
@@ -237,6 +246,10 @@ def main() -> None:
         nucore_interface=nucore_interface,
         runtime_config_path=runtime_config_path,
         stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
+        runtime_provider=args.provider,
+        runtime_api_key=args.api_key,
+        runtime_model=args.model,
+        runtime_model_url=args.model_url,
     )
 
     if args.query:
