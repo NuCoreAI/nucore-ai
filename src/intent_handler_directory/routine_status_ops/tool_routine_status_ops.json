@@ -1,5 +1,5 @@
 {
-  "name": "routine_ops_tool",
+  "name": "tool_routine_status_ops",
   "description": "Perform runtime operations on a NuCore routine (enable, disable, run, stop, etc.)",
   "input_schema": {
     "type": "object",

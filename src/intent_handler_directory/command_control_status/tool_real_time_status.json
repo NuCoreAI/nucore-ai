@@ -1,5 +1,5 @@
 {
-    "name": "real_time_status_tool",
+    "name": "tool_real_time_status",
     "description": "Query current value of device property (what is, show me, check). **Never** respond from memory or make assumptions",
     "input_schema": {
       "type": "object",

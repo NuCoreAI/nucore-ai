@@ -1,5 +1,5 @@
 {
-    "name": "command_control_tool",
+    "name": "tool_command_control",
     "description": "Send commands to devices to control their behavior (set, change, turn on, turn off)",
     "input_schema": {
       "type": "object",

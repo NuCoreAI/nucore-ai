@@ -7,7 +7,7 @@ from typing import Any
 
 from .adapters import LLMAdapter
 from .loader import IntentHandlerRegistry
-from .models import IntentDefinition, RouteResult
+from .models import ConversationHistory, IntentDefinition, RouteResult
 
 
 class IntentRouter:
@@ -33,15 +33,32 @@ class IntentRouter:
         expanded_prompt = self.registry.expand_common_module_placeholders(prompt)
         return "\n\n".join([expanded_prompt, self._build_router_output_contract()])
 
-    async def route(self, query: str, llm_config_override: dict[str, Any] | None = None) -> RouteResult:
+    async def route(self, query: str, llm_config_override: dict[str, Any] | None = None, history: ConversationHistory | None = None) -> RouteResult:
         router_llm_config = dict(self.registry.router_config().get("llm_config", {}))
         if llm_config_override:
             router_llm_config.update(llm_config_override)
 
+        history_block = ""
+        if history and history.turns:
+            lines = ["────────────────────────────────\n# CONVERSATION HISTORY (most recent first):"]
+            for turn in reversed(history.turns):
+                lines.append(f"User: {turn.query.strip()}")
+                lines.append(f"Assistant: {turn.response.strip()}")
+                lines.append("")
+            history_block = "\n".join(lines).strip()
+
+        def _make_user_content(router_prompt: str) -> str:
+            parts = []
+            if history_block:
+                parts.append(history_block)
+            parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
+            return "\n\n".join(parts)
+
+        router_prompt = self.build_router_prompt()
         if self._supports_system_role(router_llm_config):
             messages = [
-                {"role": "system", "content": self.build_router_prompt()},
-                {"role": "user", "content": query.strip()},
+                {"role": "system", "content": router_prompt},
+                {"role": "user", "content": _make_user_content(router_prompt)},
             ]
         else:
             messages = [
@@ -49,8 +66,8 @@ class IntentRouter:
                     "role": "user",
                     "content": (
                         "SYSTEM INSTRUCTIONS:\n"
-                        f"{self.build_router_prompt()}\n\n"
-                        f"USER QUERY:\n{query.strip()}"
+                        f"{router_prompt}\n\n"
+                        f"{_make_user_content(router_prompt)}"
                     ),
                 }
             ]
@@ -79,6 +96,7 @@ class IntentRouter:
             intent=intent_name,
             confidence=confidence,
             notes=payload.get("notes"),
+            resolved_query=payload.get("user_query") or query,
             raw_response=payload,
         )
 
@@ -145,7 +163,9 @@ class IntentRouter:
             raise ValueError(f"Router response must be a JSON object matching tool_router: {payload!r}")
 
         normalized_payload = dict(payload)
-        normalized_payload["user_query"] = query.strip()
+        # Preserve the router's resolved user_query if present; fall back to the raw query.
+        if "user_query" not in normalized_payload or not normalized_payload["user_query"]:
+            normalized_payload["user_query"] = query.strip()
 
 
         missing = [key for key in required if key not in normalized_payload]

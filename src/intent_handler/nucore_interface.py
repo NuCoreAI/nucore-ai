@@ -3,10 +3,10 @@ from __future__ import annotations
 from time import sleep
 import threading
 
-import logging
+import logging, json
 import asyncio
 
-from nucore import Profile, Node, NuCoreBackendAPI, NuCoreError
+from nucore import Profile, Node, NuCoreBackendAPI, NuCoreError, Property
 from rag import RAGFormatter, ProfileRagFormatter, MinimalRagFormatter
 
 
@@ -216,6 +216,184 @@ class NuCoreInterface:
         print (f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
         return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
 
+    async def send_commands(self, commands:list):
+        for cmd in commands:
+            if "device" in cmd:
+                #device ids are in base64 encoded, decode it
+                device_id = cmd["device"]
+                cmd["device"] = ProfileRagFormatter.decode_id(device_id)
+        response = self.nucore_api.send_commands(commands)
+        if response is None:
+            raise NuCoreError("Failed to send commands.")
+        return response
+    
+    async def create_automation_routine(self, routine:dict):
+        """
+        Create automation routines using the nucore API.
+        
+        Args:
+            routine (dict): A routine to create.
+        """
+        if not routine:
+            raise NuCoreError ("No valid routine provided.")
+        try: 
+            out_routine={
+                "name": f"{routine['name']}",
+                "parent": routine['parent'],
+                "enabled": routine['enabled'] ,
+                "if": [],
+                "then": [],
+                "else": []
+            }
+            ifs = routine.get("if", None)
+            if ifs is not None and len (ifs) > 0:
+                for if_ in ifs:
+                    keys = list(if_.keys())
+                    if "comp" in keys or "eq" in keys:
+                        condition = if_
+                        if not isinstance(condition, dict):
+                            continue
+                        if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
+                            continue
+                        device_id = condition.get("device", None)
+                        if device_id is None:
+                            continue
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None: 
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        condition["device"] = device_id
+                        uom_id = condition.get("uom", None)
+                        precision = condition.get("precision", None)
+                        value = condition.get("value", None)
+                        if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
+                            continue
+                        value = value * (10 ** precision)
+                        condition["value"] = int(value)
+                    out_routine['if'].append(if_)
+            
+            thens = routine.get("then", None)
+            if thens is not None and len (thens) > 0:
+                for then in thens:
+                    device_id = then.get("device", None)
+                    if device_id is not None:
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None: 
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        then["device"] = device_id
+                    parameters = then.get("parameters", None)
+                    if parameters is not None:
+                        for param in parameters:
+                            uom_id = param.get("uom", None)
+                            precision = param.get("precision", None)
+                            value = param.get("value", None)
+                            if precision is not None:
+                                prec = int(precision)
+                                if uom_id is not None and int(uom_id) != 25: 
+                                    value = value * (10 ** prec)
+                                    param["value"] = value 
+                    out_routine['then'].append(then)
+            elses = routine.get("else", None)
+            if elses is not None and len (elses) > 0:
+                for else_ in elses:
+                    device_id = else_.get("device", None)
+                    if device_id is not None:
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None:
+                            #remove this else from elses
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        else_["device"] = device_id
+                    parameters = else_.get("parameters", None)
+                    if parameters is not None:
+                        for param in parameters:
+                            uom_id = param.get("uom", None)
+                            precision = param.get("precision", None)
+                            value = param.get("value", None)
+                            if precision is not None:
+                                prec = int(precision)
+                                if uom_id is not None and int(uom_id) != 25: 
+                                    value = value * (10 ** prec)
+                                    param["value"] = value
+                    out_routine['else'].append(else_)
+
+        except Exception as e:
+            print(f"Failed to process routine: {str(e)}")
+            return None
+
+        print( "****Routine after processing:") 
+        print(json.dumps(out_routine, indent=4))
+        response=self.nucore_api.create_routine(out_routine)
+        return response
+
+    
+    async def get_properties(self, device_id:str)-> dict[str, Property]:
+        """
+        Get properties of a device by its ID.
+        
+        Args:
+            device_id (str): The ID of the device to get properties for.
+        
+        Returns:
+            dict[str, Property]: A dictionary of properties for the device.
+        Raises:
+            NuCoreError: If the device_id is empty or if the response cannot be parsed.
+        """
+        # Use nucoreAPI to fetch properties
+        if not device_id:
+            raise NuCoreError("Device ID is empty.")
+        # Decode base64 encoded device_id
+        device_id = ProfileRagFormatter.decode_id(device_id)
+        properties = self.nucore_api.get_properties(device_id)
+        if properties is None:
+            raise NuCoreError(f"Failed to get properties for device {device_id}.")
+        return properties
+    
+    def get_device_name(self, device_id:str)-> str:
+        """
+        Get the name of a device by its ID.
+        
+        Args:
+            device_id (str): The ID of the device to get the name for.
+        
+        Returns:
+            str: The name of the device, or None if not found.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        #device id is base64 encoded, decode it
+        device_id = ProfileRagFormatter.decode_id(device_id)
+        node = self.nodes.get(device_id, None)  # Return None if device_id not found
+        return node.name if node.name else device_id
+
+    def get_device_id(self, device_str:str)-> str:
+        """
+        Get the id of a device by a string. It searches id first, if not by name 
+        
+        Args:
+            device_str (str): The string to identify the device (either ID or name).
+        
+        Returns:
+            str: The ID of the device, or None if not found.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        #device id is base64 encoded, decode it
+        node = self.nodes.get(device_str, None)  # Return None if device_id not found
+        if node:
+            return node.address
+
+        for node in self.nodes.values():
+            if node.name == device_str:
+                return node.address
+        return None
+ 
+    
+    
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
         """
         Subscribe to device events using the nucore API.

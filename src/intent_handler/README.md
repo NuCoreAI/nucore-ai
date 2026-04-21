@@ -318,7 +318,76 @@ Replacement key forms accepted:
 - Raw key, for example `nucore_routines_runtime`
 - Full placeholder, for example `<<nucore_routines_runtime>>`
 
-### 8.2 Automatic Tool Loading and Conversion
+### 8.2 `framework_context`
+
+`framework_context` is an optional free-form string that the **caller** of `handle_query` can supply. It is injected verbatim into the user turn of every LLM message as a labelled section:
+
+```
+────────────────────────────────
+# FRAMEWORK CONTEXT:
+<content>
+```
+
+It is intended for external state or environment information that the calling application (not the AI) knows about — for example session data, user preferences, or system status. It is passed unchanged through the runtime into every handler in the execution chain.
+
+Example — passing session context from the caller:
+
+```python
+result = await runtime.handle_query(
+    "Turn on the patio lights",
+    framework_context="User is authenticated. Location: home. Time zone: America/Los_Angeles.",
+)
+```
+
+When `framework_context` is `None` (the default) the section is omitted entirely from the message.
+
+### 8.3 `extra_user_sections`
+
+`extra_user_sections` is an optional `dict[str, str]` parameter on `build_messages` that lets a handler inject **arbitrary named sections** into the user turn, in addition to `framework_context`. Each key becomes a section heading (uppercased) and each value becomes the section body:
+
+```
+────────────────────────────────
+# SECTION_NAME:
+<content>
+```
+
+Sections with empty or `None` values are skipped. They appear between `framework_context` and the final `USER QUERY` block.
+
+Example — injecting a live backend snapshot:
+
+```python
+async def handle(self, query, *, route_result=None, framework_context=None, dependency_outputs=None):
+    snapshot = self.backend_api.get_status_snapshot()  # runtime data from the backend
+    messages = self.build_messages(
+        query,
+        framework_context=framework_context,
+        route_result=route_result,
+        extra_user_sections={
+            "backend_snapshot": snapshot,
+            "active_alerts": self.backend_api.get_alerts() or "",
+        },
+    )
+    return await self.call_llm(messages=messages)
+```
+
+Resulting user turn structure:
+
+```
+────────────────────────────────
+# FRAMEWORK CONTEXT:
+...
+────────────────────────────────
+# BACKEND_SNAPSHOT:
+...
+────────────────────────────────
+# ACTIVE_ALERTS:
+...
+────────────────────────────────
+# USER QUERY:
+Turn on the patio lights
+```
+
+### 8.4 Automatic Tool Loading and Conversion
 
 Handlers do not need to manually load tools.
 
@@ -450,7 +519,88 @@ When `api_key` is not set in runtime config, provider clients use env vars:
 7. Optionally add `routing_examples` and `router_hints` for better routing
 8. Optionally add intent LLM override in `runtime_config.json`
 
-## 15. Common Failure Modes
+## 16. Session Management and Conversation History
+
+`IntentRuntime` maintains per-session conversation history through a built-in `SessionStore`. History is global across intents within a session — not per-intent.
+
+### How it works
+
+1. The caller passes a `session_id` string to `handle_query`.
+2. `SessionStore` returns (or creates) a `ConversationHistory` for that ID.
+3. Before each handler runs, `BaseIntentHandler.set_current_history()` loads the history.
+4. `build_messages()` prepends prior turns as alternating `user` / `assistant` messages between the system prompt and the current user turn.
+5. After the final result is returned, the query and response text are appended to the history for future turns.
+
+If `session_id` is `None` (default), no history is loaded or stored — each call is stateless.
+
+### Classes
+
+| Class | Location | Purpose |
+|---|---|---|
+| `ConversationTurn` | `models.py` | Single `(query, response)` pair |
+| `ConversationHistory` | `models.py` | Ordered list of turns with auto-pruning |
+| `SessionStore` | `session_store.py` | In-memory dict keyed by session ID |
+
+`IntentRuntime.session_store` is a public attribute and can be replaced with a custom store if needed (e.g. Redis-backed).
+
+### Pruning
+
+Each `ConversationHistory` caps itself at `max_turns` (oldest turns discarded). The limit is resolved in this order:
+
+1. `max_turns` on the active LLM entry in `runtime_config.json`
+2. `default_max_turns` at the root of `runtime_config.json`
+3. Hardcoded fallback: `20`
+
+The limit is applied when the session is first created. If the provider is switched mid-session the existing history object keeps its original limit.
+
+### runtime_config.json fields
+
+```json
+{
+  "supported_llms": {
+    "claude": {
+      "max_turns": 20,
+      ...
+    }
+  },
+  "default_max_turns": 20
+}
+```
+
+### Caller example
+
+```python
+result = await runtime.handle_query(
+    "Turn on the patio lights",
+    session_id="user-abc123",
+)
+
+# Clear history for a session
+runtime.session_store.clear("user-abc123")
+
+# Clear all sessions
+runtime.session_store.clear_all()
+```
+
+### CLI
+
+The interactive loop (`_run_loop`) uses `session_id="default"` automatically, so every interactive turn is part of the same conversation. Single-query mode (`--query`) does not pass a session ID and remains stateless.
+
+### Message layout with history
+
+For providers that support a system role:
+
+```
+[system]  <prompt text>
+[user]    <turn 1 query>
+[assistant] <turn 1 response>
+[user]    <turn 2 query>
+[assistant] <turn 2 response>
+...
+[user]    <current query with framework_context / extra_user_sections>
+```
+
+For providers that do not support a system role (e.g. Claude in raw message mode), system instructions are prepended to the first user message only, keeping the alternating `user`/`assistant` shape intact.
 
 - Missing required files: intent directory missing `prompt.md` or `handler.py`
 - Handler class ambiguity: more than one `BaseIntentHandler` subclass and no `handler_class`
@@ -460,7 +610,7 @@ When `api_key` is not set in runtime config, provider clients use env vars:
 - Router response JSON missing required `tool_router` fields
 - Tool spec missing `input_schema`
 
-## 16. Streaming Support
+## 17. Streaming Support
 
 All provider adapters support an optional streaming mode. When `--stream` is passed on the CLI:
 
@@ -479,7 +629,7 @@ Provider-specific streaming implementation:
 | `llama.cpp` | Same as OpenAI (OpenAI-compatible) |
 | `gemini` | `streamGenerateContent` SSE endpoint with fallback |
 
-## 17. Current Runnable Intents
+## 18. Current Runnable Intents
 
 The following intents live under `src/intent_handler_directory`:
 

@@ -15,11 +15,6 @@ class GroupSceneOperationsIntentHandler(BaseIntentHandler):
             route_result=route_result,
         )
         response = await self.call_llm(messages=messages)
-        metadata={
-            "provider": self.get_effective_provider(),
-            "model": self.get_effective_llm_config().get("model"),
-            "tools_loaded": self.get_tool_names(),
-        },
-        response.set_metadata(metadata=metadata, route_result=route_result)
+        response.set_route_result(route_result=route_result)
         return response
 

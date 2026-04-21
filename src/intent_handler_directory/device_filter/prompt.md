@@ -8,23 +8,6 @@ Do not execute commands, do not answer group/scene questions directly, and do no
 <<device_database>>
 
 ────────────────────────────────
-# `intent` DETERMINATION RULES
-- `command_control`: Immediate device actions (turn on/off, set value, adjust)
-- `routine_automation`: Creating or editing routine logic (if-then conditions, schedules, actions, rules)
-- `real_time_status`: Query current value of a device property (what is, show me, check)
-- `group_scene_operations`: Answer any question about groups and scenes, including: their links, features, what they do, how to manage them, and informational queries. Examples: "tell me about [group name]", "what is [group name]", "show me [group name]", "explain [group name]", "what devices are in [group name]"
-- `routine_status_ops`: Query the runtime state of existing routines/folders OR issue runtime operations on them (enable, disable, run, stop, etc.)
-
- **INTENT BOUNDARY CLARIFICATION:**
-  > If the query is **about controlling/changing** a group/scene state → `command_control`
-  > If the query is **asking for information about** a group/scene (what it is, what it does, its devices, its features) → `group_scene_operations`
-  > If the query is **asking for current status of** a group/scene → `real_time_status`
-  > If the query is **creating or modifying the logic** of a routine (conditions, actions, schedule) → `routine_automation`
-  > If the query is **asking about the runtime state** of an existing routine/folder (is it enabled, is it running, when did it last run) → `routine_status_ops`
-  > If the query is **issuing a runtime command** on an existing routine (enable, disable, run then, run else, stop, run if, run at startup) → `routine_status_ops`
-
-
-────────────────────────────────
 # DEVICE SELECTION RULES
 - Consider **all** items that are **explicitly** in DEVICE DATABASE including `name`, `props`, `sends-cmds`, `accepts-cmds` and `enums` 
 - Use context to disambiguate (e.g., "pool" with "turn on" likely means pool pump)

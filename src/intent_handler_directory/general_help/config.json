@@ -2,13 +2,18 @@
   "intent": "general_help",
   "description": "Handles broad NuCore help, definitions, and non-execution questions.",
   "handler": "handler.py",
+  "previous_dependencies": [
+    "device_filter"
+  ],
   "routing_examples": [
     "What is a scene in NuCore?",
     "How do routines work?",
-    "Explain the difference between a device and a group"
+    "Explain the difference between a device and a group",
+    "How many devices do I have?",
+    "What are the properties for the pool"
   ],
   "router_hints": [
-    "Use this when the user wants explanation, guidance, or conceptual help.",
+    "Use this when the user wants static/runtime configuration information, explanation, guidance, or conceptual help.",
     "Do not use this for direct execution requests if another intent is a closer match."
   ],
   "llm_config": {

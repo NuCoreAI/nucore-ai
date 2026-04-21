@@ -15,6 +15,5 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
             route_result=route_result,
         )
         response = await self.call_llm(messages=messages, expect_json=True)
-        metadata={"stage": "routine_filter"}
-        response.set_metadata(metadata=metadata, route_result=route_result)
+        response.set_route_result(route_result=route_result)
         return response
