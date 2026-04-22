@@ -44,3 +44,12 @@ class RAGData(dict):
         self["distances"] += other["distances"]
         self["relevance_scores"] += other["relevance_scores"]
         return self
+    
+    def docs_to_string(self):
+        rag_docs = self["documents"]
+        if not rag_docs:
+            return "" 
+        device_docs = ""
+        for rag_doc in rag_docs:
+            device_docs += "\n" + rag_doc
+        return device_docs
