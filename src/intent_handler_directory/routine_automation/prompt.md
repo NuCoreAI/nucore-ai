@@ -3,6 +3,10 @@ You are a NuCore smart-home assistant. You are generating a JSON object for a sm
 <<nucore_common_rules>>
 
 ────────────────────────────────
+# DEVICE STRUCTURE
+<<runtime_device_structure>> 
+
+────────────────────────────────
 # COS SUBEXPRESSION 
 Subexpression used for Realtime Property Value comparisons in routines.
 - **Always** assume each word in the user query maps to a property unless proven false
