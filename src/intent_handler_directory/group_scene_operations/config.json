@@ -1,14 +1,19 @@
 {
   "intent": "group_scene_operations",
-  "description": "Post-router execution for group and scene operations.",
+  "description": "Post-router execution for group and scene information.",
   "handler": "handler.py",
   "previous_dependencies": [
     "device_filter"
   ],
   "routing_examples": [
-    "Turn on the patio lights",
-    "Set hallway thermostat to 71",
-    "What is the garage temperature right now?"
+    "Are these devices cross-linked? ",
+    "How do I make devices 1, 2, and 3 work together?",
+    "What happens when I activate this device? ",
+    "What other devices are linked to this one?",
+    "What is a scene?",
+    "What is a group?",
+    "What is a controller?",
+    "Explain [group_name] to me"
   ],
   "router_hints": [
     "Use this intent to answer any question about *groups* and *scenes*, including: their links, features, what they do, how to manage them, and informational queries. Examples: 'tell me about [group name]', 'what is [group name]', 'show me [group name]', 'explain [group name]', 'what devices are in [group name]'",

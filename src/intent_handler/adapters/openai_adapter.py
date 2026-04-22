@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from typing import Any
 
@@ -29,10 +30,10 @@ class OpenAIAdapter(LLMAdapter):
         }
         if tools:
             kwargs["tools"] = tools
-        if "temperature" in cfg:
-            kwargs["temperature"] = cfg["temperature"]
-        if "max_tokens" in cfg:
-            kwargs["max_tokens"] = cfg["max_tokens"]
+#        if "temperature" in cfg:
+#            kwargs["temperature"] = cfg["temperature"]
+#        if "max_tokens" in cfg:
+#            kwargs["max_tokens"] = cfg["max_tokens"]
         if expect_json:
             kwargs["response_format"] = {"type": "json_object"}
 
@@ -143,18 +144,80 @@ class OpenAIAdapter(LLMAdapter):
     def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
         for spec in specs:
+            parameters = self._normalize_openai_schema(spec.json_schema) if spec.strict else spec.json_schema
             tools.append(
                 {
                     "type": "function",
                     "function": {
                         "name": spec.name,
                         "description": spec.description,
-                        "parameters": spec.json_schema,
+                        "parameters": parameters,
                         "strict": spec.strict,
                     },
                 }
             )
         return tools
+
+    def _normalize_openai_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
+        """Normalize JSON Schema for OpenAI strict function-calling validation."""
+        normalized = deepcopy(schema)
+        self._normalize_schema_node(normalized)
+        return normalized
+
+    def _normalize_schema_node(self, node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+
+        node_type = node.get("type")
+        type_list = node_type if isinstance(node_type, list) else [node_type]
+        is_object = "object" in type_list or "properties" in node
+
+        if is_object:
+            node.setdefault("additionalProperties", False)
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                for prop_schema in properties.values():
+                    self._normalize_schema_node(prop_schema)
+
+                current_required = node.get("required")
+                if not isinstance(current_required, list):
+                    current_required = []
+
+                required_set = {k for k in current_required if isinstance(k, str)}
+                for key, prop_schema in properties.items():
+                    if key not in required_set:
+                        self._allow_null(prop_schema)
+                        current_required.append(key)
+                        required_set.add(key)
+
+                node["required"] = current_required
+
+        items = node.get("items")
+        if isinstance(items, dict):
+            self._normalize_schema_node(items)
+        elif isinstance(items, list):
+            for item in items:
+                self._normalize_schema_node(item)
+
+        for keyword in ("anyOf", "oneOf", "allOf"):
+            variants = node.get(keyword)
+            if isinstance(variants, list):
+                for variant in variants:
+                    self._normalize_schema_node(variant)
+
+    def _allow_null(self, schema: Any) -> None:
+        if not isinstance(schema, dict):
+            return
+
+        schema_type = schema.get("type")
+        if isinstance(schema_type, str):
+            if schema_type != "null":
+                schema["type"] = [schema_type, "null"]
+        elif isinstance(schema_type, list):
+            if "null" not in schema_type:
+                schema_type.append("null")
+        elif schema_type is None:
+            schema["type"] = ["null"]
     
     def to_canonical_tools(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
         """Convert ToolCall objects to canonical Claude tool_use format."""

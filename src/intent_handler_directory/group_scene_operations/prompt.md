@@ -11,6 +11,10 @@ Primary objective
 <<nucore_definitions>>
 
 ────────────────────────────────
+# DEVICE STRUCTURE
+<<runtime_device_structure>> 
+
+────────────────────────────────
 # Core NuCore Group/Scene Concepts
 
 ## Controller

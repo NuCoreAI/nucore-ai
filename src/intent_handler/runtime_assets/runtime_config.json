@@ -7,18 +7,18 @@
       "max_turns": 20,
       "params": {
         "temperature": 0.2,
-        "max_tokens": 4096,
+        "max_tokens": 32000,
         "supports_system_role": false
       }
     },
     "openai": {
       "provider": "openai",
-      "model": "gpt-4.1-mini",
+      "model": "gpt-5-mini-2025-08-07",
       "url": null,
       "max_turns": 20,
       "params": {
-        "temperature": 0.1,
-        "max_tokens": 4096,
+        "temperature": 1.0,
+        "max_tokens": 32000,
         "supports_system_role": true
       }
     },
@@ -29,7 +29,7 @@
       "max_turns": 20,
       "params": {
         "temperature": 0.1,
-        "max_tokens": 4096,
+        "max_tokens": 32000,
         "supports_system_role": true
       }
     },
@@ -40,7 +40,7 @@
       "max_turns": 20,
       "params": {
         "temperature": 0.1,
-        "max_tokens": 4096,
+        "max_tokens": 32000,
         "supports_system_role": true
       }
     }
