@@ -302,8 +302,8 @@ class IoXWrapper(NuCoreBackendAPI):
         """
         response = self.get("/api/ai/programs")
         if response == None or response.status_code != 200:
-            return None
-        return response.json()
+            return response if response else None
+        return response.json()['data']
 
     def get_routine_summary(self, program_id:str):
         """
@@ -313,8 +313,12 @@ class IoXWrapper(NuCoreBackendAPI):
         """
         response = self.get(f"/api/ai/programs/{program_id}")
         if response == None or response.status_code != 200:
+            return response if response else None
+        try:
+            return response.json()['data']
+        except Exception as ex:
+            print(ex)
             return None
-        return response.json()
 
     def get_all_routines(self):
         """
@@ -323,8 +327,12 @@ class IoXWrapper(NuCoreBackendAPI):
         """
         response = self.get("/api/ai/triggers")
         if response == None or response.status_code != 200:
+            return response if response else None
+        try:
+            return response.json()['data']
+        except Exception as ex:
+            print(ex)
             return None
-        return response.json()
     
     def get_routine(self, program_id:str):
         """
@@ -334,8 +342,12 @@ class IoXWrapper(NuCoreBackendAPI):
         """
         response = self.get(f"/api/ai/triggers/{program_id}")
         if response == None or response.status_code != 200:
+            return response if response else None
+        try:
+            return response.json()['data']
+        except Exception as ex:
+            print(ex)
             return None
-        return response.json()
 
     def create_routine(self, program:dict):
         if not program:
@@ -369,7 +381,7 @@ class IoXWrapper(NuCoreBackendAPI):
         except Exception as ex:
             print (ex)
         
-        return response
+        return response 
 
     def delete_routine(self, program_id:str):
         """
@@ -384,7 +396,7 @@ class IoXWrapper(NuCoreBackendAPI):
         except Exception as ex:
             print (ex)
         
-        return response
+        return response 
 
     def routine_ops(self, program_id:str, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
         """

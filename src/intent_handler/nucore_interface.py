@@ -213,7 +213,7 @@ class NuCoreInterface:
         if self.formatter_type == PromptFormatTypes.DEVICE:
             return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders ) 
         
-        print (f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
+        debug (f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
         return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
 
     async def send_commands(self, commands:list):
@@ -322,7 +322,7 @@ class NuCoreInterface:
                     out_routine['else'].append(else_)
 
         except Exception as e:
-            print(f"Failed to process routine: {str(e)}")
+            debug(f"Failed to process routine: {str(e)}")
             return None
 
         print( "****Routine after processing:") 
@@ -392,7 +392,67 @@ class NuCoreInterface:
                 return node.address
         return None
  
+    def get_all_routines_summary(self):
+        """
+        Get all the runtime information for routines from the IoX device.
+        :return: JSON response containing all routines or None if failure.
+        """
+        try:
+            response = self.nucore_api.get_all_routines_summary()
+            if response is None:
+                debug(f"Failed to fetch routines summary from URL")
+                return None
+            return response
+        except Exception as e:
+            debug(f"Failed to get routines summary: {str(e)}")
+            return None
+
+    def get_routine_summary(self, routine_id:str):
+        """
+        Get all the runtime information for a specific routine from the IoX device.
+        :param routine_id: The ID of the program to retrieve.
+        :return: JSON response containing the routine information or None if failure.
+        """
+        try:
+            response = self.nucore_api.get_routine_summary(routine_id)
+            if response is None :
+                debug(f"Failed to fetch routine summary for {routine_id} from URL")
+                return None
+            return response
+        except Exception as e:
+            debug(f"Failed to get routine summary for {routine_id}: {str(e)}")
+            return None
+
+    def get_all_routines(self):
+        """
+        Get complete information for all routines from the IoX device including their logic, triggers, and actions. 
+        :return: JSON response containing all routines or None if failure
+        """
+        try:
+            response = self.nucore_api.get_all_routines()
+            if response is None: 
+                debug(f"Failed to fetch all routines from URL.") 
+                return None
+            return response
+        except Exception as e:
+            debug(f"Failed to get all routines: {str(e)}")
+            return None
     
+    def get_routine(self, routine_id:str):
+        """
+        Get complete information for a specific routine from the IoX device including its logic, triggers, and actions. 
+        :param routine_id: The ID of the program to retrieve.
+        :return: JSON response containing the routine information or None if failure
+        """
+        try:
+            response = self.nucore_api.get_routine(routine_id)
+            if response is None:
+                debug(f"Failed to fetch routine for {routine_id} from URL")
+                return None
+            return response
+        except Exception as e:
+            debug(f"Failed to get routine for {routine_id}: {str(e)}")
+            return None
     
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
         """
@@ -409,7 +469,7 @@ class NuCoreInterface:
                 on_connect_callback=on_connect_callback,
                 on_disconnect_callback=on_disconnect_callback),)).start()
         except Exception as ex:
-            print(f"Failed to subscribe to events: {str(ex)}")
+            debug(f"Failed to subscribe to events: {str(ex)}")
 
     
     async def _on_device_event(self, message:dict):
@@ -419,7 +479,7 @@ class NuCoreInterface:
         :param event: The event data received.
         """
         if message is None or 'node' not in message or 'control' not in message:
-            print(f"Received invalid message format {message}")
+            debug(f"Received invalid message format {message}")
             return
         
         control = message['control']
