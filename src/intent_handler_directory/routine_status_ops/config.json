@@ -10,6 +10,8 @@
     "Disable all pool routines",
     "Run the morning routine",
     "Stop the evening routine",
+    "Remove the weekend routine",
+    "Run the then secion of the energy saving routine",
     "What routines are currently enabled?",
     "When is the next scheduled run for the irrigation routine?",
     "Explain my program [name] logic"

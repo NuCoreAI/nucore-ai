@@ -26,14 +26,14 @@ def debug(msg):
 
 class DeviceFilterIntentHandler(BaseIntentHandler):
 
-    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
-        self.nucore_interface._refresh_device_structure() # ensure we have the latest device structure before handling the intent   
+    async def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
+        await self.nucore_interface._refresh_device_structure() # ensure we have the latest device structure before handling the intent   
         return {
             "<<device_database>>": self.nucore_interface.summary_rags.docs_to_string() if self.nucore_interface.summary_rags else ""
         }
     
     async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
-        messages = self.build_messages(
+        messages = await self.build_messages(
             query,
             framework_context=framework_context,
             route_result=route_result,

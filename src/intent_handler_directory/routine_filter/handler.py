@@ -16,17 +16,17 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
     condensed_routines: list = [] 
     is_refreshed:bool = False
     
-    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
+    async def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
         if self.nucore_interface is not None:
-            self.nucore_interface._refresh_device_structure()
-            self._refresh_routines_database()
+            await self.nucore_interface._refresh_device_structure()
+            await self._refresh_routines_database()
 
         return {
-            "routines_database": f"```json\n{RoutineFilterIntentHandler.condensed_routines}\n```",
+            "<<routines_database>>": f"```json\n{RoutineFilterIntentHandler.condensed_routines}\n```",
         }
 
     async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
-        messages = self.build_messages(
+        messages = await self.build_messages(
             query,
             dependency_outputs=dependency_outputs,
             framework_context=framework_context,
@@ -38,22 +38,31 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
             tools = response.get_tool_calls()
             if not tools or len(tools) == 0:
                 debug("No tool calls found in the response.")
+                response.output = "No routines matched the criteria in the intent."
                 response.set_route_result(route_result=route_result)
                 return response
         
-            routines = self._get_routine_summary_from_candidates(tools[0])
+            routines = await self._get_routine_summary_from_candidates(tools[0])
             if not routines: #or len(rag_docs['documents']) == 0:
                 debug("No matched routines found for the candidates.")
+                response.output = "No routines matched the criteria in the intent."
                 response.set_route_result(route_result=route_result)
                 return response
             
             for rs in routines:
                 if rs is None:
                     debug("Received None routine summary from Nucore interface.")
+                    response.output="Received None routine summary from Nucore interface."
                 elif 'id' not in rs:
                     debug(f"Routine summary missing 'id' field: {rs}")
+                    response.output=(f"Routine summary missing 'id' field: {rs}")
                 else:
                     routine_id = rs['id']
+                    routine_id = self._convert_routine_id_to_int(routine_id)
+                    if routine_id is None:
+                        debug(f"Failed to convert routine ID {rs['id']} to int, skipping enrichment with full routine logic.")
+                        continue
+                    rs['id'] = routine_id
                     full_routine = RoutineFilterIntentHandler.all_routines.get(routine_id, None)
                     if full_routine is None:
                         debug(f"No full routine found for routine ID: {routine_id}")
@@ -65,12 +74,12 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
         response.set_route_result(route_result=route_result)
         return response
 
-    def _refresh_routines_database(self):
+    async def _refresh_routines_database(self):
         if RoutineFilterIntentHandler.is_refreshed or self.nucore_interface is None:
             return 
 
         try:
-            all_routines = self.nucore_interface.get_all_routines()
+            all_routines = await self.nucore_interface.get_all_routines()
             RoutineFilterIntentHandler.is_refreshed = True
 
             # now go thorugh the list and create both the full and condensed versions of the routines database 
@@ -92,7 +101,7 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
                     routine["invalid_reason"]=r.get("error", "")
                     condensed_routine["invalid"]=r.get("invalid", False)
                     condensed_routine["invalid_reason"]=r.get("error", "")
-                RoutineFilterIntentHandler.all_routines[f"{routine_id}"] = routine
+                RoutineFilterIntentHandler.all_routines[routine_id] = routine
                 RoutineFilterIntentHandler.condensed_routines.append(condensed_routine)
 
         except Exception as ex:
@@ -137,7 +146,7 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
 
         return device_names
 
-    def _get_routine_summary_from_candidates(self, tool: dict) -> list[dict[str, Any]]:
+    async def _get_routine_summary_from_candidates(self, tool: dict) -> list[dict[str, Any]]:
         """
         Get RAGData for the matched devices in the intent.
         
@@ -152,10 +161,26 @@ class RoutineFilterIntentHandler(BaseIntentHandler):
         for r in routines:
             if float(r.get('score', 0)) >= score_threshold:
                 try:
-                    routines = self.nucore_interface.get_routine_summary(r['routine_id'])
+                    routines = await self.nucore_interface.get_routine_summary(r['routine_id'])
                     for routine in routines:
                         out.append(routine)
                 except Exception as ex:
                     pass
         return out
-        
+
+    def _convert_routine_id_to_int(self, routine_id:Any) -> int:
+        if isinstance(routine_id, int):
+            return routine_id
+        if isinstance(routine_id, str):
+            try:
+                return int(routine_id)
+            except ValueError:
+                try:
+                    return int(routine_id, 16)
+                except ValueError:
+                    debug(f"Failed to convert routine ID {routine_id} to int using both decimal and hex parsing.")
+                    return None
+
+        debug(f"Routine ID {routine_id} is neither int nor str, cannot convert to int.") 
+        return None
+             
