@@ -8,6 +8,7 @@ import asyncio
 
 from nucore import Profile, Node, NuCoreBackendAPI, NuCoreError, Property
 from rag import RAGFormatter, ProfileRagFormatter, MinimalRagFormatter
+from typing import Literal
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ class NuCoreInterface:
         self.nucore_api = nucore_api
         self.is_subscribed = False
 
-    def _refresh_device_structure(self) -> bool:
+    async def _refresh_device_structure(self) -> bool:
         """
         Refresh device structure if necessary.
         Check for changes in device structure and update internal state if changes are detected.
@@ -398,7 +399,7 @@ class NuCoreInterface:
                 return node.address
         return None
  
-    def get_all_routines_summary(self):
+    async def get_all_routines_summary(self):
         """
         Get all the runtime information for routines from the IoX device.
         :return: JSON response containing all routines or None if failure.
@@ -413,7 +414,7 @@ class NuCoreInterface:
             debug(f"Failed to get routines summary: {str(e)}")
             return None
 
-    def get_routine_summary(self, routine_id:str):
+    async def get_routine_summary(self, routine_id:str):
         """
         Get all the runtime information for a specific routine from the IoX device.
         :param routine_id: The ID of the program to retrieve.
@@ -429,7 +430,7 @@ class NuCoreInterface:
             debug(f"Failed to get routine summary for {routine_id}: {str(e)}")
             return None
 
-    def get_all_routines(self):
+    async def get_all_routines(self):
         """
         Get complete information for all routines from the IoX device including their logic, triggers, and actions. 
         :return: JSON response containing all routines or None if failure
@@ -444,7 +445,7 @@ class NuCoreInterface:
             debug(f"Failed to get all routines: {str(e)}")
             return None
     
-    def get_routine(self, routine_id:str):
+    async def get_routine(self, routine_id:str):
         """
         Get complete information for a specific routine from the IoX device including its logic, triggers, and actions. 
         :param routine_id: The ID of the program to retrieve.
@@ -458,6 +459,23 @@ class NuCoreInterface:
             return response
         except Exception as e:
             debug(f"Failed to get routine for {routine_id}: {str(e)}")
+            return None
+    
+    async def routine_ops(self, routine_id:str, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
+        """
+        Perform an operation on a program.
+        :param routine_id: The ID of the program/routine to operate on.
+        :param operation: The operation to perform (e.g., "runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup").
+        :return: response from the API or None if failure 
+        """
+        try:
+            response = self.nucore_api.routine_ops(routine_id=routine_id, operation=operation)
+            if response is None:
+                debug(f"Failed to perform routine operation {operation} for {routine_id} via URL")
+                return None
+            return response
+        except Exception as e:
+            debug(f"Failed to perform routine operation {operation} for {routine_id}: {str(e)}")
             return None
     
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 

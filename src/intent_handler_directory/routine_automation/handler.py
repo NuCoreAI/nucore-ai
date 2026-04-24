@@ -5,13 +5,13 @@ from intent_handler.base import Any
 
 
 class RoutineAutomationIntentHandler(BaseIntentHandler):
-    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
+    async def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
         return {}
 
     async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
         provider = self.get_effective_provider()
 
-        messages = self.build_messages(
+        messages = await self.build_messages(
             query,
             dependency_outputs=dependency_outputs,
             framework_context=framework_context,

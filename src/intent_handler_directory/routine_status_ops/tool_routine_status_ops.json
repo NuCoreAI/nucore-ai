@@ -24,7 +24,8 @@
                 "runThen",
                 "runElse",
                 "stop",
-                "runIf"
+                "runIf",
+                "delete"
               ],
               "description": "The operation to perform on the routine."
             }

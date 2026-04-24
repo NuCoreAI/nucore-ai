@@ -7,8 +7,8 @@ from intent_handler.base import Any
 
 
 class GeneralHelpIntentHandler(BaseIntentHandler):
-    def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
-        self.nucore_interface._refresh_device_structure() # ensure we have the latest device structure before handling the intent   
+    async def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
+        await self.nucore_interface._refresh_device_structure() # ensure we have the latest device structure before handling the intent   
         return {
             "<<device_database>>": self.nucore_interface.summary_rags
         }

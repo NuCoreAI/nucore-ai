@@ -44,7 +44,7 @@ class BaseIntentHandler(ABC):
     def set_current_history(self, history: ConversationHistory | None) -> None:
         self._current_history = history
 
-    def build_messages(
+    async def build_messages(
         self,
         query: str,
         *,
@@ -57,7 +57,7 @@ class BaseIntentHandler(ABC):
         if history is None:
             history = self._current_history
 
-        resolved_prompt_text = self.render_prompt_text(
+        resolved_prompt_text = await self.render_prompt_text(
             query,
             dependency_outputs=dependency_outputs,
             framework_context=framework_context,
@@ -126,7 +126,7 @@ class BaseIntentHandler(ABC):
 
         return messages
 
-    def get_prompt_runtime_replacements(
+    async def get_prompt_runtime_replacements(
         self,
         query: str,
         *,
@@ -136,7 +136,7 @@ class BaseIntentHandler(ABC):
     ) -> dict[str, str]:
         return {}
 
-    def render_prompt_text(
+    async def render_prompt_text(
         self,
         query: str,
         *,
@@ -145,7 +145,7 @@ class BaseIntentHandler(ABC):
         route_result: RouteResult | None = None,
     ) -> str:
         rendered = self.prompt_text
-        replacements = self.get_prompt_runtime_replacements(
+        replacements = await self.get_prompt_runtime_replacements(
             query,
             dependency_outputs=dependency_outputs,
             framework_context=framework_context,
