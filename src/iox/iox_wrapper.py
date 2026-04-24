@@ -310,8 +310,9 @@ class IoXWrapper(NuCoreBackendAPI):
         Get all the runtime information for a specific routine from the IoX device.
         :param program_id: The ID of the program to retrieve.
         :return: JSON response containing the routine information.
+        WARNING: it returns all the folders too.
         """
-        response = self.get(f"/api/ai/programs/{program_id}")
+        response = self.get(f"/api/ai/program/{program_id}")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
