@@ -418,7 +418,7 @@ class IoXWrapper(NuCoreBackendAPI):
         
         return response 
 
-    def routine_ops(self, routine_id:str, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
+    def routine_ops(self, routine_id:int, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
         """
         Perform an operation on a program.
         :param routine_id: The ID of the program to operate on.
@@ -434,6 +434,14 @@ class IoXWrapper(NuCoreBackendAPI):
             if operation == "delete":
                 response = self.delete(f'/api/ai/trigger/{routine_id}')
             else:
+                if isinstance(routine_id, str):
+                    try:
+                        routine_id = int(routine_id)
+                        #convert it to 4 digit hex string without 0x prefix since that's what the API expects
+                        routine_id = format(routine_id, '04x')
+                    except ValueError:
+                        #already in hex
+                        pass
                 response = self.get(f'/rest/programs/{routine_id}/{operation}')
         except Exception as ex:
             print (ex)
