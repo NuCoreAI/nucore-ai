@@ -8,7 +8,7 @@ import asyncio
 
 from nucore import Profile, Node, NuCoreBackendAPI, NuCoreError, Property
 from rag import RAGFormatter, ProfileRagFormatter, MinimalRagFormatter
-from typing import Literal
+from typing import Any, Literal
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class NuCoreInterface:
 
     def __init__(self, nucore_api:NuCoreBackendAPI=None, formatter_type:str=PromptFormatTypes.PROFILE):
         self.device_structure_changed = True # flag to track if device structure has changed and needs refreshing
+        self.routines_changed = True # flag to track if programs have changed so that we can refresh them 
         self.nodes = {}
         self.groups = {}
         self.folders = {} 
@@ -35,6 +36,8 @@ class NuCoreInterface:
         self.formatter_type = formatter_type
         self.nucore_api = nucore_api
         self.is_subscribed = False
+        self.all_routines: dict[str, Any] = {}
+        self.condensed_routines: list = [] 
 
     async def _refresh_device_structure(self) -> bool:
         """
@@ -59,6 +62,79 @@ class NuCoreInterface:
         self.summary_rags = self.format_nodes_summary(False)
         self.device_structure_changed = False 
         return True
+    
+    async def _refresh_routines_database(self):
+        if not self.routines_changed:
+            return False # already refreshed no need to check again
+        await self._refresh_device_structure() # make sure we have the latest device structure before refreshing routines
+
+        try:
+            all_routines = self.nucore_api.get_all_routines()
+
+            # now go thorugh the list and create both the full and condensed versions of the routines database 
+            # codensed version is used for filtering using device names, while the full version is sent to intent handlers for full processing
+            for r in all_routines:
+                routine = r.get("routine", {})
+                routine_id = routine.get("id", "")
+                if not routine_id:
+                    continue
+                condensed_routine = {
+                    "id": routine_id, 
+                    "name": routine.get("name"),
+                    "comment": routine.get("comment"),
+                    "device_names": self._get_device_name_list_from_routine(routine) 
+                }
+
+                if "invalid" in r:
+                    routine["invalid"]=r.get("invalid", False)
+                    routine["invalid_reason"]=r.get("error", "")
+                    condensed_routine["invalid"]=r.get("invalid", False)
+                    condensed_routine["invalid_reason"]=r.get("error", "")
+                self.all_routines[routine_id] = routine
+                self.condensed_routines.append(condensed_routine)
+
+            self.routines_changed = False
+        except Exception as ex:
+            pass
+
+    def _get_device_name_list_from_routine(self, routine: dict) -> list[str]: 
+        if routine is None:
+            return []
+
+        #first check the if section:        
+        if_section: list[dict] = routine.get("if", [])
+        then_section: list[dict] = routine.get("then", [])
+        else_section: list[dict] = routine.get("else", [])
+        device_id_list = []
+        for condition in if_section:
+            if "device" in condition:
+                device = condition.get("device", None)
+                if device:                    
+                    device_id_list.append(device)
+        
+        for action in then_section:
+            if "device" in action:
+                device = action.get("device", None)
+                if device:
+                    device_id_list.append(device)
+   
+        for action in else_section:
+            if "device" in action:
+                device = action.get("device", None)
+                if device:
+                    device_id_list.append(device)
+
+        device_names: list[str] = []
+        if self.nucore_api is not None:
+            for device_id in device_id_list:
+                try:
+                    device_name = self.nucore_api.get_device_name(device_id)
+                    if device_name:
+                        device_names.append(device_name)
+                except Exception as ex:
+                    pass
+
+        return device_names
 
     def format_nodes(self):
         """
@@ -461,7 +537,7 @@ class NuCoreInterface:
             debug(f"Failed to get routine for {routine_id}: {str(e)}")
             return None
     
-    async def routine_ops(self, routine_id:str, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
+    async def routine_ops(self, routine_id:int, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
         """
         Perform an operation on a program.
         :param routine_id: The ID of the program/routine to operate on.
@@ -509,6 +585,8 @@ class NuCoreInterface:
         control = message['control']
         if control == "_3": #node updated event
             self.device_structure_changed = True # just to be on the safe side
+        elif control == "_1": #node updated event
+            self.routines_changed = True # just to be on the safe side
 
     async def _on_connect_callback(self):
         """
@@ -516,6 +594,7 @@ class NuCoreInterface:
         """
         self.is_subscribed = True
         self.device_structure_changed = True # just to be on the safe side
+        self.routines_changed = True # just to be on the safe side
 
     async def _on_disconnect_callback(self):
         """

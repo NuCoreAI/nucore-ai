@@ -13,6 +13,7 @@
     "What is a scene?",
     "What is a group?",
     "What is a controller?",
+    "Tell me about [group_name]",
     "Explain [group_name] to me"
   ],
   "router_hints": [
