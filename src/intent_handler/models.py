@@ -6,7 +6,7 @@ from typing import Any
 
 from dataclasses import dataclass, field
 from typing import Any
-from adapters import ToolCall
+from .adapters import ToolCall
 
 @dataclass(frozen=True)
 class IntentDefinition:

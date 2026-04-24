@@ -5,8 +5,8 @@ Tool definitions for Static Information Retrieval
 Converts static information from text files into RAG chunks suitable for use in AI workflows/embeddings.
 The static information is formatted with a title, category, content, and exmaples. They are separated by "---end chuck---".
 """
-from .rag_data_struct import RAGData
-from .rag_formatter import RAGFormatter
+from ...src.rag.rag_data_struct import RAGData
+from ...src.rag.rag_formatter import RAGFormatter
 
 
 class StaticInfoRAGFormatter(RAGFormatter):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from adapters import LLMAdapter, ToolSpec, ToolCall
+from .adapters import LLMAdapter, ToolSpec, ToolCall
 
 
 

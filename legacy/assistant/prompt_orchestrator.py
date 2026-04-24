@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from dataclasses import dataclass, field
 from rag import RAGData
-from prompt_mgr import NuCorePrompt, ROUTER_INTENT, DEFAULT_MAX_CONTEXT_SIZE, DEFAULT_TOKENS_PER_MESSAGE, DEFAULT_SCORE_THRESHOLD
+from legacy.assistant.prompt_mgr import NuCorePrompt, ROUTER_INTENT, DEFAULT_MAX_CONTEXT_SIZE, DEFAULT_TOKENS_PER_MESSAGE, DEFAULT_SCORE_THRESHOLD
 
 
 class PromptOrchestrator:
