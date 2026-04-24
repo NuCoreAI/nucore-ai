@@ -10,9 +10,9 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
     def get_prompt_runtime_replacements(self, query, *, dependency_outputs:IntentHandlerResult| None = None, framework_context=None, route_result=None):
         routines_runtime = ""
 
-        if self.backend_api is not None:
+        if self.nucore_interface is not None:
             try:
-                routines = self.backend_api.get_all_routines_summary()
+                routines = self.nucore_interface.get_all_routines_summary()
                 if isinstance(routines, str):
                     routines_runtime = routines
                 elif routines is not None:
@@ -29,6 +29,7 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
             query,
             framework_context=framework_context,
             route_result=route_result,
+            dependency_outputs=dependency_outputs,
         )
         response = await self.call_llm(messages=messages)
         response.set_route_result(route_result=route_result)
