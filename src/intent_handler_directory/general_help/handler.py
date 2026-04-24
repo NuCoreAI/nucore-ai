@@ -15,7 +15,7 @@ class GeneralHelpIntentHandler(BaseIntentHandler):
 
     async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
 
-        messages = self.build_messages(
+        messages = await self.build_messages(
             query,
             framework_context=framework_context,
             route_result=route_result,

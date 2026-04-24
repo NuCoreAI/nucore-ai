@@ -11,7 +11,7 @@ from typing import Tuple
 from openai import AsyncOpenAI
 from base_assistant import NuCoreBaseAssistant, get_parser_args, DEFAULT_TOOL_CALL_TIME_WINDOW_SECONDS
 from nucore import PromptFormatTypes 
-from prompt_mgr import NuCorePrompt
+from legacy.assistant.prompt_mgr import NuCorePrompt
 
 
 

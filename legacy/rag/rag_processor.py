@@ -2,7 +2,7 @@
 
 import os
 from .rag_db import RAGSQLiteDB
-from .rag_data_struct import RAGData
+from ...src.rag.rag_data_struct import RAGData
 from .reranker import Reranker
 from .model_preloader import get_model
 import time

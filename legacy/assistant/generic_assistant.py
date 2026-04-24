@@ -4,7 +4,7 @@ import httpx
 import asyncio
 from base_assistant import NuCoreBaseAssistant, get_parser_args
 from nucore import PromptFormatTypes 
-from prompt_mgr import NuCorePrompt
+from legacy.assistant.prompt_mgr import NuCorePrompt
 
 
 """
