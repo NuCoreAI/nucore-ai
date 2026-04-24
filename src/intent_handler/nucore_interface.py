@@ -368,6 +368,12 @@ class NuCoreInterface:
         #device id is base64 encoded, decode it
         device_id = ProfileRagFormatter.decode_id(device_id)
         node = self.nodes.get(device_id, None)  # Return None if device_id not found
+        if not node:
+            node = self.groups.get(device_id, None)
+        if not node:
+            node = self.folders.get(device_id, None)
+        if not node:
+            return None
         return node.name if node.name else device_id
 
     def get_device_id(self, device_str:str)-> str:

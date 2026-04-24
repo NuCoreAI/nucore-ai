@@ -11,7 +11,8 @@
     "Run the morning routine",
     "Stop the evening routine",
     "What routines are currently enabled?",
-    "When is the next scheduled run for the irrigation routine?"
+    "When is the next scheduled run for the irrigation routine?",
+    "Explain my program [name] logic"
   ],
   "router_hints": [
     "Use this intent to query the runtime state of existing routines/folders OR issue runtime operations on them (enable, disable, run, stop, etc.)",
