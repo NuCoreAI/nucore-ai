@@ -6,7 +6,8 @@ import functools
 from pathlib import Path
 from typing import Any
 
-from intent_handler import IntentHandlerResult, IntentRuntime, NuCoreInterface, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
+from intent_handler import IntentHandlerResult, IntentRuntime, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
+from nucore import NuCoreInterface, PromptFormatTypes
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -162,6 +163,7 @@ def _load_backend_api_cached(
             username=username,
             password=password,
             json_output=json_output,
+            prompt_format_type=PromptFormatTypes.PROFILE
         )
     except (ImportError, AttributeError) as e:
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
@@ -171,20 +173,22 @@ async def _run_once(
     query: str,
     session_id: str | None = None) -> None:
     result = await runtime.handle_query(query, session_id=session_id)
-    print(f"\nIntent: {result.intent}")
-    print("Output:")
-
-#    streamed_chunks = runtime.get_stream_chunk_count() 
-    text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
-
-#    if streamed_chunks > 0:
-#        # Token chunks are already printed by the stream callback.
-##        print()
-#        return
-
-    if text_output is not None:
-        print(text_output)
+    tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
+    if tool_results:
+        stringified_tool_results = "\n".join([f"# AGENT RESPONSE:\n{str(tr)}" for tr in tool_results])
+        result = await runtime.handle_query(stringified_tool_results, session_id=None)
         return
+
+    text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
+    if text_output is not None:
+        streamed_chunks = runtime.get_stream_chunk_count()
+        if streamed_chunks > 0:
+            # Response was already printed live by the stream handler.
+            print()
+            return
+        print (f"\n{text_output}\n")
+
+    return
 
 async def _run_loop(runtime: IntentRuntime) -> None:
     print("Standalone Intent Runtime")
@@ -225,7 +229,8 @@ def main() -> None:
 
     llm_adapter = build_default_dispatch_adapter(runtime_config)
 
-    backend_api = _load_backend_api(
+    global nucore_interface
+    nucore_interface = _load_backend_api(
         classpath=args.backend_api_classpath,
         base_url=args.backend_api_base_url,
         username=args.backend_api_username,
@@ -233,12 +238,8 @@ def main() -> None:
         json_output=args.json_output,
     )
 
-    if backend_api is None:
-        raise ValueError("Backend API failed to load. Please check your parameters and try again.")
-
-    global nucore_interface
     if nucore_interface is None:
-        nucore_interface = NuCoreInterface(nucore_api=backend_api)  # Set the global variable to the loaded backend API instance
+        raise ValueError("Backend API failed to load. Please check your parameters and try again.")
 
     runtime = IntentRuntime(
         intent_handler_directory=intent_dir,

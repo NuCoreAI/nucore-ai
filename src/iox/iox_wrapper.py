@@ -5,24 +5,32 @@ import os
 import websockets, base64
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from nucore.nucore_backend_api import NuCoreBackendAPI
+from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
 from nucore.nodedef import Property
-from nucore.uom import get_uom_by_id 
+from nucore.node import Node
+from nucore.uom import get_uom_by_id, PREDEFINED_UOMS, UNKNOWN_UOM
+from nucore.nucore_error import NuCoreError
+from rag import ProfileRagFormatter, MinimalRagFormatter
 import xml.etree.ElementTree as ET
-from typing import Literal
+from typing import Any, Literal
+import logging
+
+logger = logging.getLogger(__name__)
+def debug(msg):
+    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
 
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-class IoXWrapper(NuCoreBackendAPI):
+class IoXWrapper(NuCoreInterface):
     ''' 
         Wrapper class for ISY interaction 
         It only works if the customer gives explicit permission for the plugin to access IoX directly
     '''
 
-    def __init__(self, json_output:bool, poly=None, base_url=None, username=None, password=None):
+    def __init__(self, json_output:bool, prompt_format_type:str, poly=None, base_url=None, username=None, password=None):
         """
         Initializes the IoXWrapper instance.
         Either use poly to get ISY info or provide base_url, username, and password directly.
@@ -32,7 +40,7 @@ class IoXWrapper(NuCoreBackendAPI):
             username (str): The username for ISY authentication (optional).
             password (str): The password for ISY authentication (optional).
         """
-        super().__init__(json_output)  # Initialize parent with no parameters
+        super().__init__(json_output, prompt_format_type)  # Initialize parent with no parameters
         if poly:
             # import only in case we are running in polglot context since 
             # udi_interface redirects standard input/output to polyglot LOGGER
@@ -155,7 +163,7 @@ class IoXWrapper(NuCoreBackendAPI):
             print(f"Error parsing JSON response for group links: {e}")
             return None
 
-    def get_properties(self, device_id:str)-> dict[str, Property]:
+    async def get_properties(self, device_id:str)-> dict[str, Property]:
         """
         Get properties of a device by its ID.
         
@@ -168,8 +176,9 @@ class IoXWrapper(NuCoreBackendAPI):
             ValueError: If the device_id is empty or if the response cannot be parsed.
         """
         if not device_id:
-            raise ValueError("Device ID cannot be empty")
+            raise ValueError("Device ID is empty.")
         
+        device_id = ProfileRagFormatter.decode_id(device_id)
         response = self.get(f"/rest/nodes/{device_id}")
         if response == None:
             return None
@@ -197,7 +206,97 @@ class IoXWrapper(NuCoreBackendAPI):
 
         return properties
     
-    def send_commands(self, commands:list):
+    def get_device_name(self, device_id:str)-> str:
+        """
+        Get the name of a device by its ID.
+        
+        Args:
+            device_id (str): The ID of the device to get the name for.
+        
+        Returns:
+            str: The name of the device, or None if not found.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        #device id is base64 encoded, decode it
+        device_id = ProfileRagFormatter.decode_id(device_id)
+        node = self.nodes.get(device_id, None)  # Return None if device_id not found
+        if not node:
+            node = self.groups.get(device_id, None)
+        if not node:
+            node = self.folders.get(device_id, None)
+        if not node:
+            return None
+        return node.name if node.name else device_id
+
+    def get_device_id(self, device_str:str)-> str:
+        """
+        Get the id of a device by a string. It searches id first, if not by name 
+        
+        Args:
+            device_str (str): The string to identify the device (either ID or name).
+        
+        Returns:
+            str: The ID of the device, or None if not found.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        #device id is base64 encoded, decode it
+        node = self.nodes.get(device_str, None)  # Return None if device_id not found
+        if node:
+            return node.address
+
+        for node in self.nodes.values():
+            if node.name == device_str:
+                return node.address
+        return None
+    
+    async def send_commands(self, commands:list):
+        for cmd in commands:
+            if "device" in cmd:
+                #device ids are in base64 encoded, decode it
+                device_id = cmd["device"]
+                cmd["device"] = ProfileRagFormatter.decode_id(device_id)
+        response = await self._send_commands(commands)
+        if response is None:
+            raise NuCoreError("Failed to send commands.")
+        return response
+
+    def _get_uom(self, uom):
+        """
+        checks to see if UOM is an integer and it belongs to a known UOM. 
+        if not, it uses string to find the UOM_ID.
+        Args:
+            uom (str or int): The unit of measure to check.
+        
+        Returns:
+            int: The UOM ID if found, otherwise None.
+        """
+        try:
+            if isinstance(uom, int):
+                # If uom is an integer, check if it is in the predefined UOMs
+                uom = str(uom)
+            if uom in PREDEFINED_UOMS.keys():
+                return int(uom)
+            else:
+                for _, uom_entry in PREDEFINED_UOMS.items(): 
+                    if uom_entry.label.upper() == uom.upper() or uom_entry.name.upper() == uom.upper():
+                        return int(uom_entry.id)
+
+                print(f"UOM {uom} is not a known UOM")
+                return UNKNOWN_UOM 
+        except ValueError:
+            if isinstance(uom, str):
+                if uom.upper() == "ENUM" or uom.upper() == "INDEX":
+                    return 25 #index
+                else:
+                    for uom_id, uom_entry in PREDEFINED_UOMS.items():
+                        if uom_entry.label.upper() == uom.upper() or uom_entry.name.upper() == uom.upper():
+                            return int (uom_entry.id)
+
+        return  UNKNOWN_UOM
+    
+    async def _send_commands(self, commands:list):
         """
         Send commands to a device (IoX-specific implementation).
         This is a simplified version - extend as needed.
@@ -295,7 +394,128 @@ class IoXWrapper(NuCoreBackendAPI):
             responses.append(self.get(url))
         return responses
     
-    def get_all_routines_summary(self):
+    async def create_automation_routine(self, routine:dict):
+        """
+        Create automation routines using the nucore API.
+        
+        Args:
+            routine (dict): A routine to create.
+        """
+        if not routine:
+            raise NuCoreError ("No valid routine provided.")
+        try: 
+            out_routine={
+                "name": f"{routine['name']}",
+                "parent": routine['parent'],
+                "enabled": routine['enabled'] ,
+                "if": [],
+                "then": [],
+                "else": []
+            }
+            ifs = routine.get("if", None)
+            if ifs is not None and len (ifs) > 0:
+                for if_ in ifs:
+                    keys = list(if_.keys())
+                    if "comp" in keys or "eq" in keys:
+                        condition = if_
+                        if not isinstance(condition, dict):
+                            continue
+                        if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
+                            continue
+                        device_id = condition.get("device", None)
+                        if device_id is None:
+                            continue
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None: 
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        condition["device"] = device_id
+                        uom_id = condition.get("uom", None)
+                        precision = condition.get("precision", None)
+                        value = condition.get("value", None)
+                        if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
+                            continue
+                        value = value * (10 ** precision)
+                        condition["value"] = int(value)
+                    out_routine['if'].append(if_)
+            
+            thens = routine.get("then", None)
+            if thens is not None and len (thens) > 0:
+                for then in thens:
+                    device_id = then.get("device", None)
+                    if device_id is not None:
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None: 
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        then["device"] = device_id
+                    parameters = then.get("parameters", None)
+                    if parameters is not None:
+                        for param in parameters:
+                            uom_id = param.get("uom", None)
+                            precision = param.get("precision", None)
+                            value = param.get("value", None)
+                            if precision is not None:
+                                prec = int(precision)
+                                if uom_id is not None and int(uom_id) != 25: 
+                                    value = value * (10 ** prec)
+                                    param["value"] = value 
+                    out_routine['then'].append(then)
+            elses = routine.get("else", None)
+            if elses is not None and len (elses) > 0:
+                for else_ in elses:
+                    device_id = else_.get("device", None)
+                    if device_id is not None:
+                        device_id = self.get_device_id(device_id)
+                        if device_id is None:
+                            #remove this else from elses
+                            continue
+                        # device ids are in base64 encoded, decode it
+                        device_id = ProfileRagFormatter.decode_id(device_id)
+                        else_["device"] = device_id
+                    parameters = else_.get("parameters", None)
+                    if parameters is not None:
+                        for param in parameters:
+                            uom_id = param.get("uom", None)
+                            precision = param.get("precision", None)
+                            value = param.get("value", None)
+                            if precision is not None:
+                                prec = int(precision)
+                                if uom_id is not None and int(uom_id) != 25: 
+                                    value = value * (10 ** prec)
+                                    param["value"] = value
+                    out_routine['else'].append(else_)
+
+        except Exception as e:
+            debug(f"Failed to process routine: {str(e)}")
+            return None
+
+        print( "****Routine after processing:") 
+        print(json.dumps(out_routine, indent=4))
+        response=self._create_routine(out_routine)
+        return response
+
+    def _create_routine(self, program:dict):
+        if not program:
+            return False
+        response=None
+        try:
+            program_content = {
+                'routine': program
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+        except Exception as ex:
+            print (ex)
+        
+        return response
+
+    
+    async def get_all_routines_summary(self):
         """
         Get all the runtime information for routines from the IoX device.
         :return: JSON response containing all routines.
@@ -305,7 +525,7 @@ class IoXWrapper(NuCoreBackendAPI):
             return response if response else None
         return response.json()['data']
 
-    def get_routine_summary(self, program_id:int):
+    async def get_routine_summary(self, program_id:int):
         """
         Get all the runtime information for a specific routine from the IoX device.
         :param program_id: The ID of the program to retrieve.
@@ -340,7 +560,7 @@ class IoXWrapper(NuCoreBackendAPI):
             print(ex)
             return None
 
-    def get_all_routines(self):
+    async def get_all_routines(self):
         """
         Get complete information for all routines from the IoX device including their logic, triggers, and actions. 
         :return: JSON response containing all routines.
@@ -354,7 +574,7 @@ class IoXWrapper(NuCoreBackendAPI):
             print(ex)
             return None
     
-    def get_routine(self, program_id:str):
+    async def get_routine(self, program_id:str):
         """
         Get complete information for a specific routine from the IoX device including its logic, triggers, and actions. 
         :param program_id: The ID of the program to retrieve.
@@ -368,23 +588,6 @@ class IoXWrapper(NuCoreBackendAPI):
         except Exception as ex:
             print(ex)
             return None
-
-    def create_routine(self, program:dict):
-        if not program:
-            return False
-        response=None
-        try:
-            program_content = {
-                'routine': program
-            }
-            headers = {
-                "Content-Type": "application/json"
-            }
-            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
-        except Exception as ex:
-            print (ex)
-        
-        return response
 
     def update_routine(self, program:dict):
         if not program:
@@ -418,7 +621,7 @@ class IoXWrapper(NuCoreBackendAPI):
         
         return response 
 
-    def routine_ops(self, routine_id:int, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
+    async def routine_ops(self, routine_id:int, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
         """
         Perform an operation on a program.
         :param routine_id: The ID of the program to operate on.
@@ -448,7 +651,7 @@ class IoXWrapper(NuCoreBackendAPI):
         
         return response
     
-    async def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
+    async def _subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
         """
         Subscribe to events
         :param on_message_callback: function to call when an event is received
@@ -533,4 +736,224 @@ class IoXWrapper(NuCoreBackendAPI):
             print(f"Failed to subscribe to events: {str(ex)}")
             return False
         return True
+
+    async def _load(self, **kwargs):
+        
+        """
+        Load devices and profiles from the specified paths or URL.
+        :param kwargs: Optional parameters for loading.
+        - profile_path: Path to the profile file. If not provided, will use the configured URL.
+        - nodes_path: Path to the nodes XML file. If not provided, will use the configured URL.
+        - dump: If True, dump the processed RAG documents to a file.
+        - include_profiles: If True, include profiles in the loading process.
+        :return: Loaded devices and profiles.
+        :raises NuCoreError: If no valid profile or nodes source is provided.
+        :raises NuCoreError: If the RAG processor is not initialized.
+        """
+        include_profiles = kwargs.get("include_profiles", True)
+
+        self._load_devices(include_profiles=include_profiles, profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
+        self.rags= self._format_nodes() 
+        if not self.rags:
+            raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
+        self.summary_rags = self.format_nodes_summary(False)
+        return True
+
+    # To have the latest state, we need to load devices only
+    def _load_devices(self, include_profiles=True, profile_path:str=None, nodes_path:str=None, groups_path:str=None):
+        if include_profiles:
+            if not self.__load_profile__(profile_path):
+                return None
+        
+        root = self.__load_nodes__(nodes_path)
+        if root == None:
+            return None
+
+        glinks_root = self.__load_groups_links__(groups_path) 
+        self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root, glinks_root) 
+
+        return self.nodes
+        
+    def __load_profile__(self, profile_path:str=None):
+        """Load profile from the specified path or URL.
+        :param profile_path: Optional path to the profile file. If not provided, will use the configured url in consturctor
+        :return: True if profile is loaded successfully, False otherwise. 
+        :raises NuCoreError: If no valid profile source is provided.
+        """
+        try:
+            if profile_path:
+                self.profile.load_from_file(profile_path)
+            else:
+                response = self.get_profiles()
+                if response is None:
+                    raise NuCoreError("Failed to fetch profile from URL.")
+                self.profile.load_from_json(response)
+                return True
+        except Exception as e:
+            raise NuCoreError(f"Failed to load profile: {str(e)}")
+
+        return False 
+        
+    def __load_nodes__(self, nodes_path:str=None):
+        """Load nodes from the specified path or URL.
+        :param nodes_path: Optional path to the XML file containing nodes. If not provided, will use the configured url in constructor.
+        :return: Parsed XML root element containing nodes.
+        :raises NuCoreError: If no valid nodes source is provided.
+        
+        This method will first try to load nodes from a file if `nodes_path` is provided, 
+        otherwise it will attempt to load from the configured URL.
+        """
+        if nodes_path:
+            return Node.load_from_file(nodes_path)
+        
+        response = self.get_nodes()
+        if response is None:
+            raise NuCoreError("Failed to fetch nodes from URL.")
+        return Node.load_from_xml(response)
+        
+        raise NuCoreError("No valid nodes source provided.")
+
+    def __load_groups_links__(self, groups_path:str=None):
+        """Load group links from the specified path or URL.
+        :param groups_path: Optional path to the JSON file containing group links. If not provided, will use the configured url in constructor.
+        :return: Parsed JSON object containing group links.
+        :raises NuCoreError: If no valid group links source is provided.
+        
+        This method will first try to load groups from a file if `groups_path` is provided, 
+        otherwise it will attempt to load from the configured URL.
+        """
+        if groups_path:
+            return Node.load_from_json(groups_path)
+        
+        response = self.get_group_links()
+        if response is None:
+            raise NuCoreError("Failed to fetch group links from URL.")
+        return Node.load_from_json(response)
+
+    def _formatter_format_nodes(self, device_rag_formatter:ProfileRagFormatter=None):
+        """
+        Format nodes for fine tuning or other purposes 
+        :return: List of formatted nodes.
+        """
+        if not self.nodes or device_rag_formatter is None:
+            raise NuCoreError("No nodes loaded.")
+        
+        if self.formatter_type == PromptFormatTypes.PROFILE:
+            return device_rag_formatter.format(profiles=self.runtime_profiles, nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+        if self.formatter_type == PromptFormatTypes.DEVICE:
+            return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders ) 
+        
+        debug(f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
+        return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
+    
+    def _format_nodes(self):
+        """
+        Format nodes for fine tuning or other purposes 
+        :return: List of formatted nodes.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        device_rag_formatter = ProfileRagFormatter(json_output=self.json_output)
+        return self._formatter_format_nodes(device_rag_formatter)
+
+    def format_nodes_summary(self, condense_profiles:bool):
+        """
+        Format nodes for fine tuning or other purposes 
+        :param condense_profiles: If True, condense profiles in the summary to:
+        {
+            "devices": [
+                "Nest Matter Family Room", "Meros Smart Plug", ...
+                ],
+            "cmds": {
+                "Cool Setpoint": [0, 8, 19],
+                "On":            [1, 3, 4, 5, 13, 14, 20, 21],
+                "Brighten":      [3, 14],
+                ...
+            },
+            "props": {
+                "Temperature":   [0, 8, 9, 10, 11],
+                "Mode":          [0, 8, 19],
+                ...
+            },
+            "enums": {
+                "Off":    [0, 3, 4, 8, 13, 14, 19, 20, 21],
+                "On":     [4, 13, 15, 17, 21],
+                ...
+            }
+        }
+        :return: List of formatted nodes.
+        """
+        if not self.nodes:
+            raise NuCoreError("No nodes loaded.")
+        device_rag_formatter = MinimalRagFormatter(json_output=self.json_output, condense=condense_profiles)
+        return self._formatter_format_nodes(device_rag_formatter)
+    
+    async def _load_routines(self):
+        try:
+            all_routines = await self.get_all_routines()
+
+            # now go thorugh the list and create both the full and condensed versions of the routines database 
+            # codensed version is used for filtering using device names, while the full version is sent to intent handlers for full processing
+            for r in all_routines:
+                routine = r.get("routine", {})
+                routine_id = routine.get("id", "")
+                if not routine_id:
+                    continue
+                condensed_routine = {
+                    "id": routine_id, 
+                    "name": routine.get("name"),
+                    "comment": routine.get("comment"),
+                    "device_names": self._get_device_name_list_from_routine(routine) 
+                }
+
+                if "invalid" in r:
+                    routine["invalid"]=r.get("invalid", False)
+                    routine["invalid_reason"]=r.get("error", "")
+                    condensed_routine["invalid"]=r.get("invalid", False)
+                    condensed_routine["invalid_reason"]=r.get("error", "")
+                self.all_routines[routine_id] = routine
+                self.condensed_routines.append(condensed_routine)
+
+            self.routines_changed = False
+        except Exception as ex:
+            pass
+
+    def _get_device_name_list_from_routine(self, routine: dict) -> list[str]: 
+        if routine is None:
+            return []
+
+        #first check the if section:        
+        if_section: list[dict] = routine.get("if", [])
+        then_section: list[dict] = routine.get("then", [])
+        else_section: list[dict] = routine.get("else", [])
+        device_id_list = []
+        for condition in if_section:
+            if "device" in condition:
+                device = condition.get("device", None)
+                if device:                    
+                    device_id_list.append(device)
+        
+        for action in then_section:
+            if "device" in action:
+                device = action.get("device", None)
+                if device:
+                    device_id_list.append(device)
+   
+        for action in else_section:
+            if "device" in action:
+                device = action.get("device", None)
+                if device:
+                    device_id_list.append(device)
+
+        device_names: list[str] = []
+        for device_id in device_id_list:
+            try:
+                device_name = self.get_device_name(device_id)
+                if device_name:
+                    device_names.append(device_name)
+            except Exception as ex:
+                pass
+
+        return device_names
+
     

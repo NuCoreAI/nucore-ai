@@ -4,16 +4,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from nucore import NuCoreBackendAPI
 
 from .base import BaseIntentHandler
 from .loader import IntentHandlerRegistry
 from .models import IntentHandlerResult, RouteResult
 from .router import IntentRouter
-from .nucore_interface import NuCoreInterface
 from .session_store import SessionStore
-from .stream_handler import StreamHandler
+from .stream_handler import RouterStreamHandler, StreamHandler
 from .adapters import LLMAdapter
+from nucore import NuCoreInterface
 
 
 def _apply_runtime_overrides(
@@ -127,6 +126,7 @@ class IntentRuntime:
         self.router = IntentRouter(self.registry, llm_client)
         self.runtime_config_path = runtime_config_path
         self.stream_handler = stream_handler
+        self.router_stream_handler = RouterStreamHandler()
         self._runtime_provider = runtime_provider
         self._runtime_api_key = runtime_api_key
         self._runtime_model = runtime_model
@@ -211,11 +211,10 @@ class IntentRuntime:
                 framework_context=framework_context,
                 dependency_outputs=dependency_outputs,
             )
-
-            result.set_route_result(route_result=step_route_result)
-
-            dependency_outputs[intent_name] = result
-            last_result = result
+            if result:
+                result.set_route_result(route_result=step_route_result)
+                dependency_outputs[intent_name] = result
+                last_result = result
 
         if last_result is None:
             raise ValueError("Execution chain produced no result")
@@ -355,6 +354,8 @@ class IntentRuntime:
         merged = dict(params if isinstance(params, dict) else {})
         merged.update(selected)
         merged["llm_key"] = selected_key
+        if merged.get("stream"):
+            merged["stream_handler"] = self.router_stream_handler.handle_stream_chunk
         return merged
 
     def _intent_signature(self, intent_name: str) -> tuple[int, int, int]:

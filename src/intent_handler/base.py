@@ -5,9 +5,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Protocol
 
-from .nucore_interface import NuCoreInterface 
 from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
-from .adapters import LLMAdapter, ToolSpec, ToolCall
+from .adapters import LLMAdapter
+from nucore import NuCoreInterface 
 prompt_debug_output=True
 
 class BaseIntentHandler(ABC):
@@ -98,7 +98,7 @@ class BaseIntentHandler(ABC):
         # Prepend system instructions to the first user message only.
         if history_messages:
             first_user_content = (
-                "SYSTEM INSTRUCTIONS:\n"
+                "────────────────────────────────\n# SYSTEM INSTRUCTIONS:\n"
                 f"{resolved_prompt_text}\n\n"
                 f"{history_messages[0]['content']}"
             )
@@ -112,7 +112,7 @@ class BaseIntentHandler(ABC):
                 {
                     "role": "user",
                     "content": (
-                        "SYSTEM INSTRUCTIONS:\n"
+                        "────────────────────────────────\n# SYSTEM INSTRUCTIONS:\n"
                         f"{resolved_prompt_text}\n\n"
                         f"{current_user_content}"
                     ),

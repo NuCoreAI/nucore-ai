@@ -86,6 +86,13 @@ class IntentHandlerResult:
                         args = {}
                     tool_calls.append(ToolCall(call_id=tool.get("id", ""), name=tool["name"], args=args, provider=tool.get("provider", ""), raw=tool.get("raw", None)))
         return tool_calls
+    
+    def get_tool_results(self) -> list[Any] | None:
+        if self.tool_result is not None:
+            return self.tool_result
+        if self.output is None or not isinstance(self.output, dict):
+            return None
+        return self.output.get("tool_results", None)
 
 
 @dataclass
