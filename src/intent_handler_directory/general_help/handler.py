@@ -14,7 +14,9 @@ class GeneralHelpIntentHandler(BaseIntentHandler):
         }
 
     async def handle(self, query, *, route_result=None, framework_context:str=None, dependency_outputs:IntentHandlerResult | str | dict[str, Any] | None = None):
-
+        if route_result and route_result.notes and "Router returned non-JSON text:" in route_result.notes:
+            # This can happen when the router fails to parse the input and returns a non-JSON response. In this case, we can choose to return a helpful message or simply return None.
+            return None
         messages = await self.build_messages(
             query,
             framework_context=framework_context,

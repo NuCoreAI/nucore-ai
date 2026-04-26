@@ -1,4 +1,4 @@
-from .nucore_backend_api import NuCoreBackendAPI
+from .nucore_interface import NuCoreInterface, PromptFormatTypes
 from .cmd import Command, CommandParameter 
 from .editor import Editor, EditorMinMaxRange, EditorSubsetRange
 from .linkdef import LinkDef, LinkParameter
@@ -15,7 +15,7 @@ from .profile import Profile, Family, Instance
 from .uom import UOMEntry, get_uom_by_id
 from .nucore_error import NuCoreError
 
-__all__ = ["NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreBackendAPI", 
+__all__ = ["NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreInterface", 
            "Command", "CommandParameter", "Editor", "LinkDef", "RuntimeProfile",
            "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id,
            "NodeBase", "NodeHierarchy", "NodeTypes", "Group", "GroupMember", "GroupMemberType", "Folder", "PromptFormatTypes"]

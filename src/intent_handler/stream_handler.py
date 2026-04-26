@@ -22,3 +22,15 @@ class StreamHandler(ABC):
             return
         self.stream_state["chunks"] += 1
         print(chunk, end="", flush=True)
+
+
+class RouterStreamHandler(StreamHandler):
+    """
+     A no op stream handler 
+    """
+
+    def handle_stream_chunk(self, chunk: str) -> Any:
+        if not chunk:
+            return
+        self.stream_state["chunks"] += 1
+        return
