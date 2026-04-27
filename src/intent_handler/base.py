@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
 from .adapters import LLMAdapter
 from nucore import NuCoreInterface 
+from threading import Thread
 prompt_debug_output=True
 
 class BaseIntentHandler(ABC):
@@ -120,11 +121,14 @@ class BaseIntentHandler(ABC):
             ]
 
         if prompt_debug_output:
-            with open("/tmp/nucore.prompt.md", "w") as f:
-                for msg in messages:
-                    f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
+            Thread(target=self._write_debug_prompt, args=(messages,)).start()
 
         return messages
+    
+    def _write_debug_prompt(self, messages: list[dict[str, str]]) -> None:
+        with open("/tmp/nucore.prompt.md", "w") as f:
+            for msg in messages:
+                f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
 
     async def get_prompt_runtime_replacements(
         self,
@@ -237,6 +241,8 @@ class BaseIntentHandler(ABC):
         expect_json: bool = False,
     ) -> IntentHandlerResult: 
         merged_config = self.get_effective_llm_config(config)
+        if self.definition.stream_handler_class is not None:
+            merged_config["stream_handler"] = self.definition.stream_handler_class.handle_stream_chunk
         resolved_tools = tools if tools is not None else self.build_provider_tools(merged_config)
         response = await self.llm_client.generate(
             messages=messages,

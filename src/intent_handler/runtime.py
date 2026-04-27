@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 
 from .base import BaseIntentHandler
@@ -12,7 +12,10 @@ from .router import IntentRouter
 from .session_store import SessionStore
 from .stream_handler import RouterStreamHandler, StreamHandler
 from .adapters import LLMAdapter
+from .directory_monitor import DirectoryMonitor
 from nucore import NuCoreInterface
+
+SubscriberCallback = Callable[[Any], None]
 
 
 def _apply_runtime_overrides(
@@ -86,12 +89,16 @@ def _load_runtime_config(
     if not isinstance(runtime_config, dict):
         raise ValueError("Runtime config must be a JSON object at the top level")
 
-    if stream_handler is not None:
-        for _, llm_cfg in runtime_config.get("supported_llms", {}).items():
-            if not isinstance(llm_cfg, dict):
-                continue
-            llm_cfg["stream"] = True
-            llm_cfg["stream_handler"] = stream_handler.handle_stream_chunk
+    for _, llm_cfg in runtime_config.get("supported_llms", {}).items():
+        if not isinstance(llm_cfg, dict):
+            continue
+        cfg_stream_handler = llm_cfg.get("stream_handler", None)
+        if cfg_stream_handler is None:
+            if stream_handler is not None:
+                llm_cfg["stream"] = True
+                llm_cfg["stream_handler"] = stream_handler.handle_stream_chunk
+            else:
+                llm_cfg["stream"] = False
 
     runtime_config = _apply_runtime_overrides(
         runtime_config,
@@ -115,7 +122,7 @@ class IntentRuntime:
         runtime_provider: str | None = None,
         runtime_api_key: str | None = None,
         runtime_model: str | None = None,
-        runtime_model_url: str | None = None,
+        runtime_model_url: str | None = None
     ) -> None:
         if llm_client is None or nucore_interface is None or runtime_config_path is None:
             raise ValueError("llm_client, nucore_interface, and runtime_config_path are required")
@@ -135,7 +142,20 @@ class IntentRuntime:
         self._handler_instances: dict[str, BaseIntentHandler] = {}
         self._handler_signatures: dict[str, tuple[int, int, int]] = {}
         self.session_store: SessionStore = SessionStore()
+        self._directory_monitor = DirectoryMonitor(self._get_monitored_directories(), poll_interval_s=10)
         self.refresh()
+        self.start_directory_monitor()
+        self.subscribe_to_directory_changes(lambda event: self._handle_directory_change(event))
+
+    def _handle_directory_change(self, event: Any) -> None:
+        # For simplicity, we refresh the entire registry and runtime config on any directory change event.
+        # More sophisticated handling could be implemented to only refresh affected handlers or update the cache incrementally based on the event details.
+        self.refresh()
+
+    def _get_monitored_directories(self) -> Sequence[Path]:
+        assets_directory = Path(__file__).resolve().parent / "runtime_assets"
+        return [self.intent_handler_directory, assets_directory]
+
 
     def refresh(self) -> None:
         self.registry.refresh()
@@ -161,7 +181,7 @@ class IntentRuntime:
         return 0
 
     async def route(self, query: str, history=None) -> RouteResult:
-        self.refresh()
+        #self.refresh()
         router_llm_config = self._resolve_router_llm_config()
         return await self.router.route(query, llm_config_override=router_llm_config, history=history)
 
@@ -216,21 +236,36 @@ class IntentRuntime:
                 dependency_outputs[intent_name] = result
                 last_result = result
 
-        if last_result is None:
-            raise ValueError("Execution chain produced no result")
-
-        if session_id is not None:
-            response_text = last_result.get_text_output() or ""
-            self.session_store.get(session_id).append(query=query, response=response_text)
+        if last_result :
+            if session_id is not None:
+                response_text = last_result.get_text_output() or ""
+                self.session_store.get(session_id).append(query=query, response=response_text)
 
         return last_result
 
     def available_intents(self) -> list[str]:
-        self.refresh()
+        #self.refresh()
         return self.registry.names()
 
+    def subscribe_to_directory_changes(self, callback: SubscriberCallback) -> int:
+        """Register a callback that runs when the intent handler directory changes."""
+        return self._directory_monitor.subscribe(callback)
+
+    def unsubscribe_from_directory_changes(self, subscriber_id: int) -> None:
+        self._directory_monitor.unsubscribe(subscriber_id)
+
+    def start_directory_monitor(self, poll_interval_s: float = 1.0) -> None:
+        self._directory_monitor.set_poll_interval(poll_interval_s)
+        self._directory_monitor.start()
+
+    def stop_directory_monitor(self) -> None:
+        self._directory_monitor.stop()
+
+    def poll_directory_changes(self) -> Any | None:
+        return self._directory_monitor.poll_once()
+
     def router_prompt(self) -> str:
-        self.refresh()
+        #self.refresh()
         return self.router.build_router_prompt()
 
     def _resolve_execution_chain(self, target_intent: str) -> list[str]:
