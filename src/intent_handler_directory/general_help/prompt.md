@@ -9,7 +9,7 @@ Your job is to:
 <<device_database>>
 
 ────────────────────────────────
-# YOUR TASK
+# YOUR TASK   
 - Answer conceptual or explanatory questions about NuCore.
 - Use the framework context if provided.
 - Use contents of DEVICE DATABASE if provided and use it as factual grounding.

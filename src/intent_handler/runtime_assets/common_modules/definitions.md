@@ -17,4 +17,5 @@
 `Group` is a logical collection of devices, and provides a structured way to control multiple devices simultaneously. It defines how commands are issued, how devices respond, and whether behavior is executed centrally (via NuCore) or natively device-to-device. A device can participate in a group in one or both roles:
 - **Controller** – Issues commands
 - **Responder** – Reacts to commands
-`Scene` defines how **responders** react when a specific **controller** issues the **On** command. A `Group` in NuCore is always a `Scene` where NuCore is the **controller**, and all its members are Responders. 
+`Scene` defines how **responders** react when a specific **controller** issues the **On** command. A `Group` in NuCore is always a `Scene` where NuCore is the **controller**, and all its members are Responders.
+`Routine`: An if-then-else automation unit. The `If` condition is evaluated; when `true` the `Then` actions execute, when `false` the `Else` actions execute. 

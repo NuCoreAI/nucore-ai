@@ -7,6 +7,7 @@ from .router import IntentRouter
 from .runtime import IntentRuntime, _load_runtime_config
 from .session_store import SessionStore
 from .stream_handler import StreamHandler
+from .directory_monitor import DirectoryChangeEvent, DirectoryMonitor
 
 __all__ = [
     "BaseIntentHandler",
@@ -17,6 +18,8 @@ __all__ = [
     "GeminiProviderClient",
     "SessionStore",
     "StreamHandler",
+    "DirectoryChangeEvent",
+    "DirectoryMonitor",
     "IntentDefinition",
     "IntentHandlerRegistry",
     "IntentHandlerResult",

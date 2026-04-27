@@ -38,6 +38,7 @@ class ClaudeAdapter(LLMAdapter):
             "model": model,
             "messages": anthropic_messages,
             "max_tokens": int(cfg.get("max_tokens", 4096)),
+            "cache_control": {"type": "ephemeral"}   
         }
         if system_parts:
             kwargs["system"] = "\n\n".join(system_parts)

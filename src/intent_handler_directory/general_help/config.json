@@ -2,10 +2,16 @@
   "intent": "general_help",
   "description": "Handles broad NuCore help, definitions, and non-execution questions.",
   "handler": "handler.py",
+  "stream_handler": "stream_handler.py",
   "previous_dependencies": [
-    "device_filter"
   ],
   "routing_examples": [
+    "Thank you",
+    "Bye",
+    "Hi there",
+    "Who are you?",
+    "What's your name?",
+    "What can you do?",
     "What is a scene in NuCore?",
     "How do routines work?",
     "Explain the difference between a device and a group",
@@ -13,10 +19,12 @@
     "What are the properties for the pool"
   ],
   "router_hints": [
-    "Use this when the user wants static/runtime configuration information, explanation, guidance, or conceptual help.",
+    "Use this when the user wants static/runtime configuration information, explanation, guidance, or conceptual help, and greetings/farewells. This should be a fallback for general questions about how NuCore works or what certain concepts mean.",
+    "Use this for greetings, farewells, and other genral questions that don't fit other intents but are still about NuCore concepts, definitions, or guidance.", 
     "Do not use this for direct execution requests if another intent is a closer match."
   ],
   "llm_config": {
     "temperature": 0.2
-  }
+  },
+  "description_for_human": "General NuCore help and definitions with optional configurration parameters such as StreamHandler support."
 }

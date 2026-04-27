@@ -97,6 +97,58 @@ By default the runtime prints the extracted plain text from the model response. 
 4. Tool-bearing intents send provider-converted tool schemas automatically.
 5. Final output is returned from the last step in the execution chain.
 
+## Directory Monitoring
+
+`IntentRuntime` includes a built-in monitor for one or more directories and notifies subscribers when files change.
+
+### Change Types
+
+- `created`: new files detected
+- `modified`: existing files changed (mtime/size)
+- `deleted`: files removed
+
+### Runtime API
+
+- `subscribe_to_directory_changes(callback) -> int`
+- `unsubscribe_from_directory_changes(subscriber_id) -> None`
+- `start_directory_monitor(poll_interval_s: float = 1.0) -> None`
+- `stop_directory_monitor() -> None`
+- `poll_directory_changes() -> tuple[DirectoryChangeEvent, ...] | None`
+
+`IntentRuntime(...)` also supports:
+
+- `monitor_directories: Sequence[str | Path] | None = None`
+
+### Event Model
+
+`DirectoryChangeEvent` contains:
+
+- `root_directory: Path`
+- `created: tuple[str, ...]`
+- `modified: tuple[str, ...]`
+- `deleted: tuple[str, ...]`
+- `detected_at_epoch_s: float`
+- `has_changes: bool`
+
+### Example
+
+```python
+def on_directory_change(event):
+  print("Created:", event.created)
+  print("Modified:", event.modified)
+  print("Deleted:", event.deleted)
+
+
+subscriber_id = runtime.subscribe_to_directory_changes(on_directory_change)
+runtime.start_directory_monitor(poll_interval_s=1.0)
+
+# Optional one-off polling without background thread:
+# events = runtime.poll_directory_changes()
+
+runtime.stop_directory_monitor()
+runtime.unsubscribe_from_directory_changes(subscriber_id)
+```
+
 ## 1. What This Infrastructure Does
 
 The infrastructure provides:
@@ -107,6 +159,7 @@ The infrastructure provides:
 - Per-intent LLM/provider selection from runtime config
 - Automatic prompt loading and runtime placeholder injection
 - Automatic tool loading and provider-specific tool schema conversion
+- Directory monitoring with subscriber notifications for intent files
 
 Main runtime code lives in:
 

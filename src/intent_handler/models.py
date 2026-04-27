@@ -7,6 +7,7 @@ from typing import Any
 from dataclasses import dataclass, field
 from typing import Any
 from .adapters import ToolCall
+from intent_handler.stream_handler import StreamHandler
 
 @dataclass(frozen=True)
 class IntentDefinition:
@@ -15,8 +16,10 @@ class IntentDefinition:
     config_path: Path
     prompt_content: str
     handler_path: Path
+    stream_handler_path: Path
     description: str
     handler_class: str | None = None
+    stream_handler_class: StreamHandler | None = None 
     previous_dependencies: list[str] = field(default_factory=list)
     routing_examples: list[str] = field(default_factory=list)
     router_hints: list[str] = field(default_factory=list)

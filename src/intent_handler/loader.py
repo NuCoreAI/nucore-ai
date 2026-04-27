@@ -9,17 +9,19 @@ from typing import Iterable
 from .base import BaseIntentHandler
 from .models import IntentDefinition
 from .adapters import LLMAdapter
+from .stream_handler import StreamHandler
 
 class IntentHandlerRegistry:
     def __init__(self, root_directory: str | Path) -> None:
         self.root_directory = Path(root_directory).expanduser().resolve()
         self.runtime_assets_directory = Path(__file__).resolve().parent / "runtime_assets"
         self.common_modules_directory = Path(__file__).resolve().parent / "runtime_assets" / "common_modules"
-        self.router_config_path = self.root_directory / "router_config.json"
+        self.router_config_path = Path(__file__).resolve().parent / "runtime_assets" / "router" / "config.json"
         self._definitions: dict[str, IntentDefinition] = {}
         self._modules_cache: dict[str, object] = {}
         self._handler_class_cache: dict[tuple[Path, str | None], tuple[int, type[BaseIntentHandler]]] = {}
-        self.refresh()
+        self._stream_handler_class_cache: dict[tuple[Path, str | None], tuple[int, type[StreamHandler]]] = {}
+        #self.refresh() # Moved refresh call to runtime to ensure directory monitor is set up first.
 
     def refresh(self) -> None:
         if not self.root_directory.exists():
@@ -139,16 +141,27 @@ class IntentHandlerRegistry:
 
         config["tool_files"] = merged_tool_files
 
-        handler_file = config.get("handler", "handler.py")
+        handler_file = config.get("handler") #, "handler.py")
         if not isinstance(handler_file, str) or not handler_file.endswith(".py"):
             raise ValueError(
                 f"Intent '{intent_directory.name}' has invalid handler '{handler_file}'. Expected a .py file name."
             )
         handler_path = intent_directory / handler_file
+        paths =[config_path, prompt_path, handler_path]
+
+        stream_handler_file = config.get("stream_handler", None)
+        stream_handler_path = None
+        if stream_handler_file:
+            if not isinstance(stream_handler_file, str) or not handler_file.endswith(".py"):
+                raise ValueError(
+                    f"Intent '{intent_directory.name}' has invalid stream_handler '{stream_handler_file}'. Expected a .py file name."
+                )
+            stream_handler_path = intent_directory / stream_handler_file
+            paths.append(stream_handler_path)
 
         missing_paths = [
             str(path.name)
-            for path in (config_path, prompt_path, handler_path)
+            for path in paths 
             if not path.exists()
         ]
         if missing_paths:
@@ -166,14 +179,22 @@ class IntentHandlerRegistry:
             prompt_path.read_text(encoding="utf-8")
         )
 
+
+        stream_handler_class = self._load_stream_handler_class(configured_intent, stream_handler_path, None)
+        if stream_handler_class is not None: 
+            stream_handler_class = stream_handler_class()
+
         return IntentDefinition(
             name=configured_intent,
             directory=intent_directory,
             config_path=config_path,
             prompt_content=prompt_content,
             handler_path=handler_path,
+            stream_handler_path=stream_handler_path,
             description=config.get("description", ""),
-            handler_class=config.get("handler_class") if isinstance(config.get("handler_class"), str) and not str(config.get("handler_class")).endswith(".py") else None,
+#            handler_class=config.get("handler_class") if isinstance(config.get("handler_class"), str) and not str(config.get("handler_class")).endswith(".py") else None,
+            handler_class=None,
+            stream_handler_class = stream_handler_class, 
             previous_dependencies=list(config.get("previous_dependencies", [])),
             routing_examples=list(config.get("routing_examples", [])),
             router_hints=list(config.get("router_hints", [])),
@@ -210,6 +231,51 @@ class IntentHandlerRegistry:
 
         for name in definitions:
             dfs(name)
+
+    #def _load_stream_handler_class(self, definition: IntentDefinition) -> type[StreamHandler]:
+    def _load_stream_handler_class(self, intent_name, stream_handler_path: Path, stream_handler_class:str) -> type[StreamHandler]: 
+        if stream_handler_path is None:
+            return None 
+        cache_key = (stream_handler_path, stream_handler_class)
+        try:
+            mtime_ns = stream_handler_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime_ns = -1
+
+        cached_entry = self._stream_handler_class_cache.get(cache_key)
+        if cached_entry and cached_entry[0] == mtime_ns:
+            return cached_entry[1]
+
+        module_name = f"intent_handler_dynamic_{intent_name}"
+        spec = importlib.util.spec_from_file_location(module_name, stream_handler_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Unable to load stream handler module for intent '{intent_name}'")
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class_name = stream_handler_class
+        if class_name:
+            stream_handler_class = getattr(module, class_name, None)
+            if stream_handler_class is None:
+                raise ValueError(
+                    f"Handler class '{class_name}' not found in {definition.stream_handler_path}"
+                )
+            if not inspect.isclass(stream_handler_class) or not issubclass(stream_handler_class, BaseIntentHandler):
+                raise TypeError(
+                    f"Handler class '{class_name}' in {stream_handler_path} must subclass BaseIntentHandler"
+                )
+            self.stream_handler_class_cache[cache_key] = (mtime_ns, stream_handler_class)
+            return stream_handler_class
+
+        candidates = list(self._iter_stream_handler_classes(module))
+        if len(candidates) != 1:
+            raise ValueError(
+                f"Expected exactly one StreamHandler subclass in {stream_handler_path}, found {len(candidates)}"
+            )
+        selected_class = candidates[0]
+        self._stream_handler_class_cache[cache_key] = (mtime_ns, selected_class)
+        return selected_class
 
     def _load_handler_class(self, definition: IntentDefinition) -> type[BaseIntentHandler]:
         cache_key = (definition.handler_path, definition.handler_class)
@@ -259,4 +325,12 @@ class IntentHandlerRegistry:
             if member is BaseIntentHandler:
                 continue
             if issubclass(member, BaseIntentHandler):
+                yield member
+
+    @staticmethod
+    def _iter_stream_handler_classes(module) -> Iterable[type[StreamHandler]]:
+        for _, member in inspect.getmembers(module, inspect.isclass):
+            if member is StreamHandler:
+                continue
+            if issubclass(member, StreamHandler):
                 yield member
