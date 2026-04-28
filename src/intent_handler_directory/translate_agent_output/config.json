@@ -2,6 +2,7 @@
   "intent": "translate_agent_output",
   "description": "It translates agent output from cryptic to human readable, and provides additional context and explanation as needed. It is used when the user needs help understanding the output of an agent, or when the output is too technical or cryptic for the user to understand.",
   "handler": "handler.py",
+  "stream_handler": "stream_handler.py",
   "previous_dependencies": [
   ],
   "routing_examples": [

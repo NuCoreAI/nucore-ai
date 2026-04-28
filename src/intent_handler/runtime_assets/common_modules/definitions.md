@@ -19,4 +19,6 @@
 - **Responder** – Reacts to commands
 `Scene` defines how **responders** react when a specific **controller** issues the **On** command. A `Group` in NuCore is always a `Scene` where NuCore is the **controller**, and all its members are Responders.
 `Routine`: An if-then-else automation unit. The `If` condition is evaluated; when `true` the `Then` actions execute, when `false` the `Else` actions execute.
-`Michel`: The inventor of NuCore.AI ... awesome to say the least 
+`Javier`: Our master UI person who makes everything beautiful for nucore
+`Michel`: He's insane and just doesn't know anything.
+`Benoit`: Master cloud implementor 
