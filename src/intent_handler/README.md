@@ -337,9 +337,9 @@ Each `.md` file becomes a module key by filename stem.
 
 Example:
 
-- `definitions.md` => `definitions`
-- `security.md` => `security`
-- `common.md` => `common`
+- `definitions.md` => `<<definitions>>`
+- `security.md` => `<<security>>`
+- `common.md` => `<<common>>`
 
 Supported placeholder aliases for each module key:
 

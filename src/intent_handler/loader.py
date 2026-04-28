@@ -29,6 +29,8 @@ class IntentHandlerRegistry:
         if not self.root_directory.is_dir():
             raise NotADirectoryError(f"Intent handler path is not a directory: {self.root_directory}")
 
+        #invalidate the cache
+        self._handler_class_cache = {}
         self._modules_cache = {}
         if self.common_modules_directory.exists() and self.common_modules_directory.is_dir():
             for module_file in sorted(self.common_modules_directory.glob("*.md")):

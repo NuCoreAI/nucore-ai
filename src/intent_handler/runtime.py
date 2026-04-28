@@ -158,6 +158,8 @@ class IntentRuntime:
 
 
     def refresh(self) -> None:
+        self._handler_instances = {}
+        self._handler_signatures = {}
         self.registry.refresh()
         self.runtime_config = _load_runtime_config(
             path=self.runtime_config_path,
