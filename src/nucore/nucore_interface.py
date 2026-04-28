@@ -37,6 +37,8 @@ class NuCoreInterface(ABC):
         self.all_routines: dict[str, Any] = {}
         self.condensed_routines: list = []
         self.json_output = json_output
+        self._subscribe_thread: threading.Thread | None = None
+        self._subscribe_lock = threading.Lock()
 
 
     async def _refresh_device_structure(self) -> bool:
@@ -195,13 +197,35 @@ class NuCoreInterface(ABC):
             on_connect_callback (callable, optional): Callback function to handle connection events.
             on_disconnect_callback (callable, optional): Callback function to handle disconnection events.
         """
-        try:
-            threading.Thread(target=asyncio.run, args=(self._subscribe_events(
-                on_message_callback=on_message_callback,
-                on_connect_callback=on_connect_callback,
-                on_disconnect_callback=on_disconnect_callback),)).start()
-        except Exception as ex:
-            debug(f"Failed to subscribe to events: {str(ex)}")
+        with self._subscribe_lock:
+            if self._subscribe_thread is not None and self._subscribe_thread.is_alive():
+                return
+
+            def _runner() -> None:
+                try:
+                    asyncio.run(
+                        self._subscribe_events(
+                            on_message_callback=on_message_callback,
+                            on_connect_callback=on_connect_callback,
+                            on_disconnect_callback=on_disconnect_callback,
+                        )
+                    )
+                except Exception as ex:
+                    debug(f"Failed to subscribe to events: {str(ex)}")
+                finally:
+                    with self._subscribe_lock:
+                        self._subscribe_thread = None
+
+            self._subscribe_thread = threading.Thread(target=_runner, name="NuCoreEventSubscriber", daemon=True)
+            self._subscribe_thread.start()
+
+    def shutdown(self, timeout_s: float = 1.0) -> None:
+        """Best-effort shutdown for background subscription worker threads."""
+        self.is_subscribed = False
+        with self._subscribe_lock:
+            thread = self._subscribe_thread
+        if thread is not None and thread.is_alive() and not thread.daemon:
+            thread.join(timeout=timeout_s)
     
     @abstractmethod 
     async def _subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 

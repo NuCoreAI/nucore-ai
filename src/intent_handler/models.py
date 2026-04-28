@@ -42,9 +42,13 @@ class IntentHandlerResult:
     output: Any
     route_result: RouteResult | None = None
     tool_result: list[Any] | None = None
+    stream_handler: StreamHandler | None = None
 
     def set_output(self, output: Any):
         self.output = output
+
+    def get_stream_handler(self) -> StreamHandler | None:
+        return self.stream_handler
 
     def add_tool_result(self, tool_result: Any):
         if tool_result is None:

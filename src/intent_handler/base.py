@@ -254,6 +254,7 @@ class BaseIntentHandler(ABC):
             intent=self.name,
             output=response,
             route_result=None, # these should be set by the caller if relevant, not here,
+            stream_handler=self.definition.stream_handler_class if self.definition.stream_handler_class else None
         )
 
     @abstractmethod

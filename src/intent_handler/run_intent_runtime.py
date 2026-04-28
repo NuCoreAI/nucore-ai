@@ -180,8 +180,8 @@ async def _run_once(
         return
 
     text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
-    if text_output is not None:
-        streamed_chunks = runtime.get_stream_chunk_count()
+    if text_output is not None and result.get_stream_handler() is not None:
+        streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
         if streamed_chunks > 0:
             # Response was already printed live by the stream handler.
             print()
@@ -196,15 +196,27 @@ async def _run_loop(runtime: IntentRuntime) -> None:
     while True:
         try:
             query = input("\n> ").strip()
+        except KeyboardInterrupt:
+            # Allow Ctrl+C to terminate the interactive loop immediately.
+            print("\nInterrupted. Exiting.")
+            break
         except EOFError:
             break
 
         if not query:
             continue
-        if query.lower() in {"quit", "exit"}:
+
+        # Normalize common shell/debug-console variants of exit commands.
+        command = query.casefold().strip().strip("\"'")
+        if command in {"quit", "exit", "q", ":q", "quit()", "exit()"} or command.startswith(("quit ", "exit ")):
             break
         runtime.reset_stream_handler()  # Reset stream handler state before each query
-        await _run_once(runtime, query, session_id="default")
+        try:
+            await _run_once(runtime, query, session_id="default")
+        except asyncio.CancelledError:
+            print("\nCancelled. Exiting.")
+            break
+    
 
 nucore_interface : NuCoreInterface = None  # Global variable to hold the backend API instance
 
@@ -256,10 +268,20 @@ def main() -> None:
     if args.query:
         if runtime.stream_state is not None:
             runtime.stream_state["chunks"] = 0
-        asyncio.run(_run_once(runtime, args.query))
+        try:
+            asyncio.run(_run_once(runtime, args.query))
+        except KeyboardInterrupt:
+            print("\nInterrupted. Exiting.")
+        finally:
+            runtime.shutdown()
         return
 
-    asyncio.run(_run_loop(runtime))
+    try:
+        asyncio.run(_run_loop(runtime))
+    except KeyboardInterrupt:
+        print("\nInterrupted. Exiting.")
+    finally:
+        runtime.shutdown()
 
 
 if __name__ == "__main__":

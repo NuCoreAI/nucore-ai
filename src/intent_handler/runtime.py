@@ -263,6 +263,20 @@ class IntentRuntime:
     def stop_directory_monitor(self) -> None:
         self._directory_monitor.stop()
 
+    def shutdown(self) -> None:
+        """Best-effort cleanup for background workers owned by the runtime."""
+        try:
+            self.stop_directory_monitor()
+        except Exception:
+            pass
+
+        shutdown_fn = getattr(self.nucore_interface, "shutdown", None)
+        if callable(shutdown_fn):
+            try:
+                shutdown_fn()
+            except Exception:
+                pass
+
     def poll_directory_changes(self) -> Any | None:
         return self._directory_monitor.poll_once()
 
