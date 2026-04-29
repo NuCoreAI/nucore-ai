@@ -10,18 +10,54 @@ from intent_handler import IntentHandlerResult, IntentRuntime, StreamHandler, bu
 from nucore import NuCoreInterface, PromptFormatTypes
 
 
+def _default_intent_dir() -> Path:
+    """Resolve the default intent handler directory for both repo and installed runs."""
+    repo_path = Path(__file__).resolve().parents[1] / "intent_handler_directory"
+    if repo_path.exists():
+        return repo_path
+
+    try:
+        import intent_handler_directory
+
+        package_path = Path(intent_handler_directory.__file__).resolve().parent
+        if package_path.exists():
+            return package_path
+    except Exception:
+        pass
+
+    return repo_path
+
+
+def _default_runtime_config_path() -> Path:
+    """Resolve runtime_config.json for both repo and installed runs."""
+    repo_path = Path(__file__).resolve().parent / "runtime_assets" / "runtime_config.json"
+    if repo_path.exists():
+        return repo_path
+
+    try:
+        from intent_handler import runtime_assets
+
+        package_path = Path(runtime_assets.__file__).resolve().parent / "runtime_config.json"
+        if package_path.exists():
+            return package_path
+    except Exception:
+        pass
+
+    return repo_path
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run standalone intent runtime")
     parser.add_argument(
         "--intent-dir",
         type=str,
-        default="src/intent_handler_directory",
+        default=None,
         help="Path to intent handler directory",
     )
     parser.add_argument(
         "--runtime-config",
         type=str,
-        default="src/intent_handler/runtime_assets/runtime_config.json",
+        default=None,
         help="Optional explicit path to runtime_config.json",
     )
     parser.add_argument(
@@ -223,15 +259,20 @@ nucore_interface : NuCoreInterface = None  # Global variable to hold the backend
 def main() -> None:
     args = _build_parser().parse_args()
 
-    intent_dir = Path(args.intent_dir).expanduser().resolve()
+    intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
     runtime_config_path = (
         Path(args.runtime_config).expanduser().resolve()
         if args.runtime_config
-        else Path(__file__).resolve().parent / "runtime_assets" / "runtime_config.json"
+        else _default_runtime_config_path()
     )
 
+    if not intent_dir.exists() or not intent_dir.is_dir():
+        raise FileNotFoundError(f"Intent handler directory not found: {intent_dir}")
+    if not runtime_config_path.exists() or not runtime_config_path.is_file():
+        raise FileNotFoundError(f"Runtime config file not found: {runtime_config_path}")
+
     runtime_config = _load_runtime_config(
-        path=args.runtime_config,
+        path=str(runtime_config_path),
         stream_handler=None,  # Stream handler will be set later after defining the callback
         provider=args.provider,
         api_key=args.api_key,

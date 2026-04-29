@@ -165,4 +165,5 @@ Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 
 - Intent handler architecture: `src/intent_handler/README.md`
 - Adding new intents: `src/intent_handler_directory/README.md`
+- Directory monitor API (subscribe/start/stop/poll): `src/intent_handler/README.md#directory-monitoring`
 

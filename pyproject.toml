@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,7 +10,6 @@ readme = "README.md"
 license = "MIT"
 authors = [
  { name="Michel Kohanim", email="michel@universal-devices.com" },
- { name="P.A. SCHEMBRI", email="pa.schembri@advanced-stack.com" }
 ]
 dependencies = [
  "requests",
@@ -29,4 +28,12 @@ urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["assistant", "prompts", "config", "rag", "nucore", "server", "iox" ]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["assistant*", "rag*", "nucore*", "iox*", "intent_handler*", "intent_handler_directory*", "utils*"]
+exclude = ["tests*", "*.tests", "*.tests.*"]
+
+[tool.setuptools.package-data]
+intent_handler = ["runtime_assets/common_modules/*.md", "runtime_assets/*.json", "runtime_assets/router/*.md", "runtime_assets/router/*.json", "runtime_assets/memory_store/*.md", "runtime_assets/memory_store/*.json"]
+intent_handler_directory = ["README.md", "**/*.py", "**/*.md", "**/*.json"]
