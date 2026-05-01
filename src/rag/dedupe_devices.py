@@ -15,6 +15,9 @@ import re
 import sys
 import copy
 from collections import OrderedDict
+from utils import get_logger
+
+logger = get_logger(__name__)
 
 class DedupeDevices:
     def __init__(self):
@@ -163,7 +166,7 @@ class DedupeDevices:
                 try:
                     devices.append(json.loads(m.group(1).strip()))
                 except json.JSONDecodeError as e:
-                    print(f"Warning: skipping bad JSON: {e}", file=sys.stderr)
+                    logger.warning(f"skipping bad JSON: {e}")
         return devices
 
     @staticmethod
@@ -276,7 +279,7 @@ class DedupeDevices:
         #    f.write(json.dumps(content, indent=2))
         devices = DedupeDevices.parse_devices(content)
         if not devices:
-            print("No devices found.", file=sys.stderr)
+            logger.warning("No devices found.")
             return {}
 
 #        print(f"Parsed {len(devices)} devices", file=sys.stderr)

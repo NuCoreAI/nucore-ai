@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
+from utils import get_logger
+
+logger = get_logger(__name__)
 
 class StreamHandler(ABC):
     def __init__(self, stream_state: dict[str, int]=None):
@@ -21,7 +24,8 @@ class StreamHandler(ABC):
         if not chunk:
             return
         self.stream_state["chunks"] += 1
-        print(chunk, end="", flush=True)
+        logger.info(chunk+"")
+        #print(chunk, end="", flush=True)
 
 
 class RouterStreamHandler(StreamHandler):

@@ -12,6 +12,8 @@ from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from nucore import Node, Group, Folder, RuntimeProfile, NodeHierarchy
 import base64, json
+from utils import get_logger
+logger = get_logger(__name__)
 
 ENCODE_IDS = False # whether to encode ids to make them URL safe
 
@@ -222,7 +224,7 @@ class ProfileRagFormatter(RAGFormatter):
                     return self.folders.get(pnode, None)
                 return self.nodes.get(pnode, None)
         except Exception as e:
-            print(f"Error getting parent node for {node.name if hasattr(node, 'name') else 'unknown'}: {e}")
+            logger.error(f"Error getting parent node for {node.name if hasattr(node, 'name') else 'unknown'}: {e}")
         return None
 
     def add_node(self, node:Node, comma:bool):

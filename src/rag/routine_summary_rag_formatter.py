@@ -12,10 +12,11 @@ Compactness rules applied:
 """
 
 import json
-import sys
 from datetime import datetime
 from .rag_formatter import RAGFormatter
 from .rag_data_struct import RAGData
+from utils import get_logger
+logger = get_logger(__name__)
 
 
 class RoutineSummaryRagFormatter(RAGFormatter):
@@ -106,7 +107,7 @@ class RoutineSummaryRagFormatter(RAGFormatter):
         
         routine_count = sum(1 for item in data if not item.get("folder", False))
         folder_count  = sum(1 for item in data if item.get("folder", False))
-        print(f"Input : {len(data)} items ({folder_count} folders, {routine_count} routines)")
+        logger.info(f"Input : {len(data)} items ({folder_count} folders, {routine_count} routines)")
 
              # Create RAG data structure
         rag_docs = RAGData()

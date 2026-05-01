@@ -18,8 +18,8 @@ If output is omitted, writes to <input_deduped.json>.
 """
 
 import json
-import sys
-from pathlib import Path
+from utils import get_logger
+logger = get_logger(__name__)
 
 MIN_ENUMS = 3  # extract if MORE THAN this many
 
@@ -121,7 +121,7 @@ class DedupeProfiles:
         reduction = (1 - new_size / orig_size) * 100
 
         #print(f"Shared: {shared_cmds} cmds, {shared_props} props")
-        print(f"Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
+        logger.info(f"Profile dedupe: Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
         return result
 
 

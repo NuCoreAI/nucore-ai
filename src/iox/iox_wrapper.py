@@ -12,10 +12,10 @@ from nucore.uom import get_uom_by_id, PREDEFINED_UOMS, UNKNOWN_UOM
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 import xml.etree.ElementTree as ET
-from typing import Any, Literal
-import logging
+from typing import Literal
+from utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 def debug(msg):
     logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
 
@@ -55,6 +55,7 @@ class IoXWrapper(NuCoreInterface):
             self.username= username
             self.password= password
         else:
+            logger.error("Either poly or base_url, username, and password must be provided")
             raise ValueError("Either poly or base_url, username, and password must be provided")
         
         self.unauthorized = False
@@ -84,10 +85,10 @@ class IoXWrapper(NuCoreInterface):
             verify=False
             )
             if response.status_code != 200:
-                print (f"invalid url status code = {response.status_code}")
+                logger.error(f"invalid url status code = {response.status_code}")
             return response
         except Exception as ex:
-            print (f"failed connection {ex}")
+            logger.error (f"failed connection {ex}")
             return None
 
     def get(self, path:str):
@@ -101,10 +102,10 @@ class IoXWrapper(NuCoreInterface):
             verify=False
             )
             if response.status_code != 200:
-                print (f"invalid url status code = {response.status_code}")
+                logger.error(f"invalid url status code = {response.status_code}")
             return response
         except Exception as ex:
-            print (f"failed connection {ex}")
+            logger.error(f"failed connection {ex}")
             return None
     
     def put(self, path:str, body:str, headers):
@@ -112,10 +113,10 @@ class IoXWrapper(NuCoreInterface):
             url=f"{self.base_url}{path}"
             response = requests.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
-                print (f"invalid url status code = {response.status_code}")
+                logger.error(f"invalid url status code = {response.status_code}")
             return response
         except Exception as ex:
-            print (f"failed put: {ex}")
+            logger.error(f"failed put: {ex}")
             return None
 
     def post(self, path:str, body:str, headers):
@@ -123,10 +124,10 @@ class IoXWrapper(NuCoreInterface):
             url=f"{self.base_url}{path}"
             response = requests.post(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
-                print (f"invalid url status code = {response.status_code}")
+                logger.error(f"invalid url status code = {response.status_code}")
             return response
         except Exception as ex:
-            print (f"failed post: {ex}")
+            logger.error(f"failed post: {ex}")
             return None
         
     def get_profiles(self):
@@ -160,7 +161,7 @@ class IoXWrapper(NuCoreInterface):
         try:
             return response.json()
         except json.JSONDecodeError as e:
-            print(f"Error parsing JSON response for group links: {e}")
+            logger.error(f"Error parsing JSON response for group links: {e}")
             return None
 
     async def get_properties(self, device_id:str)-> dict[str, Property]:
@@ -176,6 +177,7 @@ class IoXWrapper(NuCoreInterface):
             ValueError: If the device_id is empty or if the response cannot be parsed.
         """
         if not device_id:
+            logger.error("Device ID is empty.")
             raise ValueError("Device ID is empty.")
         
         device_id = ProfileRagFormatter.decode_id(device_id)
@@ -198,10 +200,10 @@ class IoXWrapper(NuCoreInterface):
                 )
                 properties[prop.id] = prop 
         except ET.ParseError as e:
-            print(f"Error parsing XML response: {e}")
+            logger.error(f"Error parsing XML response: {e}")
             return None
         except Exception as e:
-            print(f"Error processing properties: {e}")
+            logger.error(f"Error processing properties: {e}")
             return None
 
         return properties
@@ -217,6 +219,7 @@ class IoXWrapper(NuCoreInterface):
             str: The name of the device, or None if not found.
         """
         if not self.nodes:
+            logger.error("No nodes loaded.")
             raise NuCoreError("No nodes loaded.")
         #device id is base64 encoded, decode it
         device_id = ProfileRagFormatter.decode_id(device_id)
@@ -240,6 +243,7 @@ class IoXWrapper(NuCoreInterface):
             str: The ID of the device, or None if not found.
         """
         if not self.nodes:
+            logger.error("No nodes loaded.")
             raise NuCoreError("No nodes loaded.")
         #device id is base64 encoded, decode it
         node = self.nodes.get(device_str, None)  # Return None if device_id not found
@@ -249,6 +253,7 @@ class IoXWrapper(NuCoreInterface):
         for node in self.nodes.values():
             if node.name == device_str:
                 return node.address
+        logger.error(f"Device not found: {device_str}")
         return None
     
     async def send_commands(self, commands:list):
@@ -283,7 +288,7 @@ class IoXWrapper(NuCoreInterface):
                     if uom_entry.label.upper() == uom.upper() or uom_entry.name.upper() == uom.upper():
                         return int(uom_entry.id)
 
-                print(f"UOM {uom} is not a known UOM")
+                logger.error(f"UOM {uom} is not a known UOM")
                 return UNKNOWN_UOM 
         except ValueError:
             if isinstance(uom, str):
@@ -309,7 +314,7 @@ class IoXWrapper(NuCoreInterface):
         """
         responses = []
         if not commands or len(commands) == 0:
-            print("No commands to send")
+            logger.warning("No commands to send")
             return None
 
         try:
@@ -318,11 +323,12 @@ class IoXWrapper(NuCoreInterface):
             elif isinstance(commands[0], list):
                 commands = commands[0] 
         except Exception as ex:
+            logger.error(f"Error processing commands: {ex}")
             pass
         
         for command in commands:
             if not isinstance(command, dict):
-                print(f"Invalid command format: {command}")
+                logger.error(f"Invalid command format: {command}")
                 continue
 
             device_id = command.get("device") or command.get("device_id")
@@ -357,7 +363,7 @@ class IoXWrapper(NuCoreInterface):
                 for param in unamed_params:
                     value = param.get("value", None)
                     if value is None:
-                        print(f"No value found for unnamed parameter in command {command_id}")
+                        logger.error(f"No value found for unnamed parameter in command {command_id}")
                         continue
                     url += f"/{value}"
                     uom = param.get("uom", None)
@@ -372,7 +378,7 @@ class IoXWrapper(NuCoreInterface):
                         id = param.get("id", None) or param.get("name", None)
                         value = param.get("value", None)
                         if value is None:
-                            print(f"No value found for named parameter {id} in command {command_id}")
+                            logger.error(f"No value found for named parameter {id} in command {command_id}")
                             continue
                         if id is None or id == '' or id == "n/a" or id == "N/A":
                             if i == 0:
@@ -381,7 +387,7 @@ class IoXWrapper(NuCoreInterface):
                                 i+= 1
                                 continue
 
-                            print(f"No id found for named parameter in command {command_id}")
+                            logger.error(f"No id found for named parameter in command {command_id}")
                             continue
 
                         the_rest_of_the_url = f"?{id}" if i == 0 else f"?{id}" if no_name_param1 else f"&{id}"
@@ -471,6 +477,7 @@ class IoXWrapper(NuCoreInterface):
                         device_id = self.get_device_id(device_id)
                         if device_id is None:
                             #remove this else from elses
+                            logger.error(f"Device not found for else condition: {else_}")
                             continue
                         # device ids are in base64 encoded, decode it
                         device_id = ProfileRagFormatter.decode_id(device_id)
@@ -489,11 +496,11 @@ class IoXWrapper(NuCoreInterface):
                     out_routine['else'].append(else_)
 
         except Exception as e:
-            debug(f"Failed to process routine: {str(e)}")
+            logger.error(f"Failed to process routine: {str(e)}")
             return None
 
-        print( "****Routine after processing:") 
-        print(json.dumps(out_routine, indent=4))
+        logger.info("****Routine after processing:") 
+        logger.info(json.dumps(out_routine, indent=4))
         response=self._create_routine(out_routine)
         return response
 
@@ -510,7 +517,7 @@ class IoXWrapper(NuCoreInterface):
             }
             response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
         except Exception as ex:
-            print (ex)
+            logger.error(f"Error creating routine: {ex}")
         
         return response
 
@@ -533,7 +540,7 @@ class IoXWrapper(NuCoreInterface):
         WARNING: it returns all the folders too.
         """
         if program_id is None or program_id == '':
-            print("Program ID cannot be empty")
+            logger.error("Program ID cannot be empty")
             return None
         #if it's a hex string, convert it to int since the API expects int ids
         if not isinstance(program_id, int):
@@ -548,7 +555,7 @@ class IoXWrapper(NuCoreInterface):
                         try:
                             program_id = int(program_id, 16)
                         except ValueError:
-                            print(f"Invalid program ID format: {program_id}. It should be an integer or a hex string.")
+                            logger.error(f"Invalid program ID format: {program_id}. It should be an integer or a hex string.")
                             return None
 
         response = self.get(f"/api/ai/program/{program_id}")
@@ -557,7 +564,7 @@ class IoXWrapper(NuCoreInterface):
         try:
             return response.json()['data']
         except Exception as ex:
-            print(ex)
+            logger.error(f"Error retrieving routine summary: {ex}")
             return None
 
     async def get_all_routines(self):
@@ -571,7 +578,7 @@ class IoXWrapper(NuCoreInterface):
         try:
             return response.json()['data']
         except Exception as ex:
-            print(ex)
+            logger.error(f"Error retrieving all routines: {ex}")
             return None
     
     async def get_routine(self, program_id:str):
@@ -586,7 +593,7 @@ class IoXWrapper(NuCoreInterface):
         try:
             return response.json()['data']
         except Exception as ex:
-            print(ex)
+            logger.error(f"Error retrieving routine: {ex}")
             return None
 
     def update_routine(self, program:dict):
@@ -602,7 +609,7 @@ class IoXWrapper(NuCoreInterface):
             }
             response = self.post(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
         except Exception as ex:
-            print (ex)
+            logger.error(f"Error updating routine: {ex}")
         
         return response 
 
@@ -617,7 +624,7 @@ class IoXWrapper(NuCoreInterface):
         try:
             response = self.delete(f'/api/ai/trigger/{program_id}')
         except Exception as ex:
-            print (ex)
+            logger.error(f"Error deleting routine: {ex}")
         
         return response 
 
@@ -631,7 +638,7 @@ class IoXWrapper(NuCoreInterface):
         if not routine_id:
             return None
         if operation not in ["delete", "runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]:
-            print(f"Invalid operation: {operation}")
+            logger.error(f"Invalid operation: {operation}")
             return None
         try:
             if operation == "delete":
@@ -647,7 +654,7 @@ class IoXWrapper(NuCoreInterface):
                         pass
                 response = self.get(f'/rest/programs/{routine_id}/{operation}')
         except Exception as ex:
-            print (ex)
+            logger.error(f"Error performing routine operation: {ex}")
         
         return response
     
@@ -725,15 +732,15 @@ class IoXWrapper(NuCoreInterface):
                                 if on_message_callback:
                                     await on_message_callback(event_data)
                             except Exception as ex:
-                                print(f"Failed to process incoming message: {str(ex)}: {message}")
+                                logger.error(f"Failed to process incoming message: {str(ex)}: {message}")
                                 continue
                 #except websockets.ConnectionClosed:
                 except websockets.ConnectionClosed :
-                    print("WebSocket connection closed")
+                    logger.error("WebSocket connection closed")
                     if on_disconnect_callback:
                         await on_disconnect_callback()
         except Exception as ex:
-            print(f"Failed to subscribe to events: {str(ex)}")
+            logger.error(f"Failed to subscribe to events: {str(ex)}")
             return False
         return True
 
@@ -755,7 +762,7 @@ class IoXWrapper(NuCoreInterface):
         self._load_devices(include_profiles=include_profiles, profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
         self.rags= self._format_nodes() 
         if not self.rags:
-            raise ValueError(f"Warning: No RAG documents found for node {self.nuCore.url}. Skipping.")
+            logger.warning(f"No RAG documents found for node {self.nuCore.url}. Skipping.")
         self.summary_rags = self.format_nodes_summary(False)
         return True
 

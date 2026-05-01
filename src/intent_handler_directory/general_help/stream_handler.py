@@ -1,5 +1,8 @@
 from __future__ import annotations
 from typing import Any
+from utils import get_logger
+
+logger = get_logger(__name__)
 
 
 from intent_handler.stream_handler import StreamHandler
@@ -20,5 +23,6 @@ class GeneralHelpStreamHandler(StreamHandler):
         if not chunk:
             return
         self.stream_state["chunks"] += 1
-        print(chunk, end="", flush=True)
+        logger.info(chunk+"")
+        #print(chunk, end="", flush=True)
     

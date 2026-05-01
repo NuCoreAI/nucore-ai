@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from .rag_data_struct import RAGData
+from utils import get_logger
+
+logger = get_logger(__name__)
 
 """
 An abstract method for all RAG formatters
@@ -24,5 +27,5 @@ class RAGFormatter(ABC):
                     f.write(doc)
         else:
             for doc in rag_docs["documents"]:
-                print(doc)
+                logger.debug(doc)
 

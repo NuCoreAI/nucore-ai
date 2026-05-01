@@ -187,6 +187,33 @@ class IntentRuntime:
         router_llm_config = self._resolve_router_llm_config()
         return await self.router.route(query, llm_config_override=router_llm_config, history=history)
 
+    async def handle_agent_response(
+        self,
+        query: str,
+        *,
+        framework_context: str | None = None,
+        session_id: str | None = None,
+    ) -> IntentHandlerResult:
+        default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
+        active_llm_key = self.runtime_config.get("default_llm")
+        active_llm_cfg = self.runtime_config.get("supported_llms", {}).get(active_llm_key or "", {})
+        max_turns: int = int(active_llm_cfg.get("max_turns", default_max_turns))
+
+        history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
+
+        intent_name = "translate_agent_output"
+        handler = self._get_or_create_handler(intent_name)
+        step_llm_config = self._resolve_runtime_llm_config(intent_name)
+        handler.set_runtime_llm_config(step_llm_config)
+        handler.set_current_history(history)
+
+        return await handler.handle(
+            query,
+            route_result=None,
+            framework_context=framework_context,
+            dependency_outputs={},
+        )
+
     async def handle_query(
         self,
         query: str,
