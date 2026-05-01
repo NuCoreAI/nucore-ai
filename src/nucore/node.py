@@ -1,3 +1,10 @@
+"""IoX device node dataclass and XML/JSON loading helpers.
+
+Provides :class:`Node`, which extends :class:`NodeBase` with device-specific
+fields (``type``, ``pnode``, ``properties``, etc.) and factory methods for
+loading from XML or JSON sources.
+"""
+
 import json
 from textwrap import indent
 from dataclasses import dataclass, field
@@ -8,12 +15,39 @@ from .node_base import NodeBase
 
 @dataclass
 class TypeInfo:
+    """A key/value type-info entry embedded in a node's ``<typeInfo>`` element.
+
+    Attributes:
+        id: Type-info identifier string.
+        val: Associated value string.
+    """
     id: str
     val: str
 
 
 @dataclass
 class Node (NodeBase):
+    """Represents a single IoX device node.
+
+    Extends :class:`NodeBase` with device-specific fields parsed from the
+    IoX XML API.  The ``node_def`` attribute is resolved and attached after
+    :meth:`Profile.map_nodes` is called.
+
+    Attributes:
+        type: ISY/IoX device type string.
+        deviceClass: Device class integer.
+        wattage: Rated wattage.
+        dcPeriod: DC period value.
+        startDelay: Start-delay in seconds.
+        endDelay: End-delay in seconds.
+        pnode: Primary node address (if this is a non-primary node).
+        rpnode: Real primary node address.
+        sgid: Scene/group ID this node belongs to.
+        typeInfo: List of :class:`TypeInfo` entries.
+        properties: Live property values keyed by property ID.
+        custom: Raw custom attributes dict.
+        devtype: Raw devtype attributes dict.
+    """
     type: str = field(default=None)
     deviceClass: int = field(default=0)
     wattage: int = field(default=0)
@@ -28,7 +62,12 @@ class Node (NodeBase):
     custom: dict = field(default=None)
     devtype: dict = field(default=None)
 
-    def __init__(self, node_elem:ET):
+    def __init__(self, node_elem: ET.Element) -> None:
+        """Initialise a ``Node`` from an IoX XML element.
+
+        Args:
+            node_elem: The ``<node>`` XML element returned by the IoX API.
+        """
         super().__init__(node_elem)
         self.type=node_elem.find("./type").text if node_elem.find("./type") is not None else None
         self.deviceClass=int(node_elem.find("./deviceClass").text) if node_elem.find("./deviceClass") is not None else None
@@ -58,7 +97,8 @@ class Node (NodeBase):
         self.custom=node_elem.find("./custom").attrib if node_elem.find("./custom") is not None else None
         self.devtype=node_elem.find("./devtype").attrib if node_elem.find("./devtype") is not None else None
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return a human-readable summary of this node and its definition."""
         return "\n".join(
             (
                 f"Node: {self.name} [{self.address}]",
@@ -66,7 +106,17 @@ class Node (NodeBase):
             )
         )
 
-    def json(self, parent):
+    def json(self, parent) -> dict:
+        """Serialise this node to a dict suitable for LLM prompt injection.
+
+        Args:
+            parent: The parent ``NodeBase`` instance, or ``None`` if there is
+                no parent.
+
+        Returns:
+            A dictionary with ``name``, ``address``, parent info, and resolved
+            properties / commands / links from the attached ``node_def``.
+        """
         #pnode = node.pnode
         #pnode = None if pnode is None or pnode == node.address else pnode 
         #if pnode:
@@ -84,11 +134,18 @@ class Node (NodeBase):
         }
 
     @staticmethod
-    def load_from_file(nodes_path:str):
+    def load_from_file(nodes_path: str):
         """Load nodes from the specified XML file path.
-        :param nodes_path: Path to the XML file containing nodes. (mandatory) 
-        :return: Parsed XML root element.
-        :raises NuCoreError: If the nodes path is not set or the file cannot be parsed.
+
+        Args:
+            nodes_path: Path to the XML file containing nodes.
+
+        Returns:
+            Parsed XML root element.
+
+        Raises:
+            NuCoreError: If *nodes_path* is not set or the file cannot be
+                parsed.
         """
         if not nodes_path:
             raise NuCoreError("Nodes path is not set.")
@@ -96,11 +153,16 @@ class Node (NodeBase):
 
     @staticmethod
     def load_from_xml(xml):
-        """
-        Load nodes from an XML rep.
-        :param xml: XML string containing nodes. (mandatory)
-        :return: Parsed XML root element.
-        :raises NuCoreError: If the XML is not set or cannot be parsed.
+        """Load nodes from an XML string.
+
+        Args:
+            xml: XML string containing nodes.
+
+        Returns:
+            Parsed XML root element.
+
+        Raises:
+            NuCoreError: If *xml* is ``None`` or cannot be parsed.
         """
         if xml is None:
             raise NuCoreError("xml is mandatory.")
@@ -111,11 +173,16 @@ class Node (NodeBase):
 
     @staticmethod
     def load_from_json(json_str):
-        """
-        Load nodes from a JSON representation.
-        :param json_str: JSON string containing nodes. (mandatory)
-        :return: Parsed JSON object.
-        :raises NuCoreError: If the JSON is not set or cannot be parsed.
+        """Load nodes from a JSON representation.
+
+        Args:
+            json_str: JSON string or dict containing nodes.
+
+        Returns:
+            Parsed JSON object (dict).
+
+        Raises:
+            NuCoreError: If *json_str* is ``None`` or cannot be parsed.
         """
         if json_str is None:
             raise NuCoreError("json_str is mandatory.")
@@ -126,5 +193,6 @@ class Node (NodeBase):
         except json.JSONDecodeError as e:
             raise NuCoreError(f"Failed to parse JSON: {e}")
     
-    def __hash__(self):
+    def __hash__(self) -> int:
+        """Hash by unique node address."""
         return hash(self.address)  # or another unique identifier

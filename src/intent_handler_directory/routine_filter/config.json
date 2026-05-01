@@ -3,15 +3,6 @@
   "description": "Select relevant routine candidates for downstream routine operations intents.",
   "handler": "handler.py",
   "routable": false,
-  "previous_dependencies": [],
-  "routing_examples": [
-    "Disable all irrigation routines",
-    "Which pool routines are enabled?", 
-    "Do I have any schedules for [a device or device type]?"
-  ],
-  "router_hints": [
-    "Use as a prerequisite selector for intents that operate on routines."
-  ],
   "llm_config": {
     "temperature": 0.0
   }

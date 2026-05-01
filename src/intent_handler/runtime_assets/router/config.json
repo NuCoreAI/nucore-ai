@@ -1,6 +1,6 @@
 {
   "llm_config": {
-    "model": "claude-haiku-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "temperature": 0.2,
     "stream_handler": "crap.py"
   }

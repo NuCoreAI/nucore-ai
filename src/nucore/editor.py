@@ -1,6 +1,16 @@
+"""Editor range definitions for IoX node properties.
+
+Defines the allowed value space for a command or property parameter,
+supporting both discrete subsets (``EditorSubsetRange``) and continuous
+min/max ranges (``EditorMinMaxRange``).  An ``Editor`` wraps one or more
+ranges and provides helpers for rendering them as JSON or YAML-style prompt
+text.
+"""
+
 from dataclasses import dataclass, field
 from .uom import UOMEntry, supported_uoms
 
+# Sentinel string used to mark deferred/linked editor references in prompt output.
 REFERENCE_DELIMITER = "REFERENCE"
 
 @dataclass
@@ -35,7 +45,13 @@ class EditorSubsetRange:
             out += ","
         return out
 
-    def write_description(self, writer):
+    def write_description(self, writer) -> None:
+        """Write a YAML-style description of this subset range to *writer*.
+
+        Args:
+            writer: An indented writer object exposing ``write(str)`` and a
+                ``block()`` context-manager for indentation.
+        """
         uom_label = self.uom.label if self.uom.label else ' '
         if self.uom.id == "25":
             uom_label = f"{self.id}_{self.uom.label}"
@@ -143,7 +159,13 @@ class EditorMinMaxRange:
             out += ","
         return out
 
-    def write_description(self, writer):
+    def write_description(self, writer) -> None:
+        """Write a YAML-style description of this min/max range to *writer*.
+
+        Args:
+            writer: An indented writer object exposing ``write(str)`` and a
+                ``block()`` context-manager for indentation.
+        """
         with writer.block():
             writer.write(f"- uom:{self.uom.label if self.uom.label else ' '} uom_id={self.uom.id}")
             with writer.block():
@@ -193,12 +215,14 @@ class Editor:
     is_reference: bool 
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
 
-    def get_json_descriptions(self):
-        """
-        Get JSON descriptions, handling references - EXPERIMENTAL
-        
-        :param self: Description
-        :param writer: Description
+    def get_json_descriptions(self) -> str:
+        """Return a JSON fragment describing all ranges in this editor.
+
+        Returns:
+            A JSON string fragment (prefixed with a comma) that can be
+            appended to an enclosing JSON object.  Returns an empty string
+            if there are no ranges.  When ``is_reference`` is True the
+            result encodes a deferred reference placeholder instead.
         """
         out = ""  
         if self.is_reference:
@@ -214,12 +238,15 @@ class Editor:
         return out
 
 
-    def write_descriptions(self, writer):
-        """
-        Write descriptions, handling references - EXPERIMENTAL
-        
-        :param self: Description
-        :param writer: Description
+    def write_descriptions(self, writer) -> None:
+        """Write YAML-style descriptions of all ranges to *writer*.
+
+        If ``is_reference`` is True a deferred reference placeholder is
+        written instead of the individual range descriptions.
+
+        Args:
+            writer: An indented writer object exposing ``write(str)`` and a
+                ``block()`` context-manager for indentation.
         """
         if self.is_reference:
             with writer.block():
@@ -234,7 +261,18 @@ class Editor:
                 r.write_description(writer)
                 writer.write("},")
 
-    def write_prompt_section(self, writer, USE_JSON_OUTPUT):
+    def write_prompt_section(self, writer, USE_JSON_OUTPUT) -> None:
+        """Write this editor's value constraints into a prompt section.
+
+        Chooses between JSON and YAML-style output depending on
+        *USE_JSON_OUTPUT*.  No output is written when ``ranges`` is empty.
+
+        Args:
+            writer: An indented writer object exposing ``write(str)`` and a
+                ``block()`` context-manager for indentation.
+            USE_JSON_OUTPUT (bool): When True, emit compact JSON; otherwise
+                emit a labelled YAML-style block with a ``REFERENCE`` header.
+        """
         if len(self.ranges) == 0: 
             return
         with writer.block():

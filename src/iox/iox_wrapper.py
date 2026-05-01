@@ -1,44 +1,77 @@
 import json
-import requests, xml.etree.ElementTree as ET
 import sys
 import os
-import websockets, base64
+import base64
+import xml.etree.ElementTree as ET
+
+import requests
+import websockets
+import urllib3
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
 from nucore.nodedef import Property
 from nucore.node import Node
-from nucore.uom import get_uom_by_id, PREDEFINED_UOMS, UNKNOWN_UOM
+from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
-import xml.etree.ElementTree as ET
 from typing import Literal
 from utils import get_logger
 
 logger = get_logger(__name__)
-def debug(msg):
+
+
+def debug(msg: str) -> None:
+    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
     logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
 
-
-import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class IoXWrapper(NuCoreInterface):
-    ''' 
-        Wrapper class for ISY interaction 
-        It only works if the customer gives explicit permission for the plugin to access IoX directly
-    '''
+    """Direct HTTP/WebSocket wrapper for the Universal Devices IoX (ISY) controller.
 
-    def __init__(self, json_output:bool, prompt_format_type:str, poly=None, base_url=None, username=None, password=None):
-        """
-        Initializes the IoXWrapper instance.
-        Either use poly to get ISY info or provide base_url, username, and password directly.
+    Implements the :class:`~nucore.NuCoreInterface` contract so the rest of the
+    system can talk to a physical ISY hub without knowing the underlying REST
+    protocol.
+
+    **Authentication** — All REST calls use HTTP Basic Auth with the ISY
+    credentials.  SSL certificate verification is disabled because IoX hubs
+    typically use self-signed certificates.
+
+    **Initialisation modes**
+
+    * *Polyglot mode*: pass a ``poly`` interface instance; the ISY connection
+      details are fetched asynchronously via the ``ISY`` subscription event.
+    * *Direct mode*: pass ``base_url``, ``username``, and ``password``
+      explicitly.
+
+    .. note::
+        IoX direct access requires explicit customer permission — it bypasses
+        the standard Polyglot data channel.
+    """
+
+    def __init__(self, json_output: bool, prompt_format_type: str, poly=None, base_url: str = None, username: str = None, password: str = None) -> None:
+        """Initialise the IoXWrapper.
+
         Args:
-            poly: The poly interface instance (optional).
-            base_url (str): The base URL of the ISY device (optional).
-            username (str): The username for ISY authentication (optional).
-            password (str): The password for ISY authentication (optional).
+            json_output:        When ``True`` the RAG formatter emits JSON;
+                                ``False`` produces plain-text markdown.
+            prompt_format_type: One of the :class:`~nucore.PromptFormatTypes`
+                                constants controlling the prompt layout.
+            poly:               Polyglot UDI interface instance.  When
+                                provided, ISY credentials are retrieved via the
+                                ``ISY`` subscription event instead of being
+                                passed directly.
+            base_url:           Base URL of the ISY hub
+                                (e.g. ``"http://192.168.1.10:80"``).  Required
+                                in direct mode.
+            username:           ISY username.  Required in direct mode.
+            password:           ISY password.  Required in direct mode.
+
+        Raises:
+            ValueError: When neither ``poly`` nor all three of ``base_url``,
+                        ``username``, and ``password`` are supplied.
         """
         super().__init__(json_output, prompt_format_type)  # Initialize parent with no parameters
         if poly:
@@ -60,7 +93,18 @@ class IoXWrapper(NuCoreInterface):
         
         self.unauthorized = False
 
-    def __info__(self, info):
+    def __info__(self, info) -> None:
+        """Polyglot ISY-info subscription callback.
+
+        Invoked by the Polyglot framework when the ISY connection details
+        become available.  Populates ``base_url``, ``username``, and
+        ``password`` from the event payload, or sets ``unauthorized = True``
+        when the payload is ``None`` (hub not accessible).
+
+        Args:
+            info: Dict containing ISY connection metadata, or ``None`` when
+                  the hub cannot be reached.
+        """
         if info is not None:
             isy_ip = info['isy_ip_address']
             isy_port = info['isy_port']
@@ -74,7 +118,15 @@ class IoXWrapper(NuCoreInterface):
         else:
             self.unauthorized = True
     
-    def delete(self, path:str):
+    def delete(self, path: str):
+        """Send an authenticated HTTP DELETE request to the ISY hub.
+
+        Args:
+            path: API path (with or without a leading ``/``).
+
+        Returns:
+            :class:`requests.Response`, or ``None`` on connection error.
+        """
         try:
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}" 
@@ -91,7 +143,15 @@ class IoXWrapper(NuCoreInterface):
             logger.error (f"failed connection {ex}")
             return None
 
-    def get(self, path:str):
+    def get(self, path: str):
+        """Send an authenticated HTTP GET request to the ISY hub.
+
+        Args:
+            path: API path (with or without a leading ``/``).
+
+        Returns:
+            :class:`requests.Response`, or ``None`` on connection error.
+        """
         try:
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}" 
@@ -108,7 +168,17 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed connection {ex}")
             return None
     
-    def put(self, path:str, body:str, headers):
+    def put(self, path: str, body: str, headers: dict):
+        """Send an authenticated HTTP PUT request to the ISY hub.
+
+        Args:
+            path:    API path.
+            body:    Request body string (e.g. JSON-encoded payload).
+            headers: HTTP headers dict (e.g. ``{"Content-Type": "application/json"}``).
+
+        Returns:
+            :class:`requests.Response`, or ``None`` on connection error.
+        """
         try:
             url=f"{self.base_url}{path}"
             response = requests.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
@@ -119,7 +189,17 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed put: {ex}")
             return None
 
-    def post(self, path:str, body:str, headers):
+    def post(self, path: str, body: str, headers: dict):
+        """Send an authenticated HTTP POST request to the ISY hub.
+
+        Args:
+            path:    API path.
+            body:    Request body string.
+            headers: HTTP headers dict.
+
+        Returns:
+            :class:`requests.Response`, or ``None`` on connection error.
+        """
         try:
             url=f"{self.base_url}{path}"
             response = requests.post(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
@@ -130,10 +210,15 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed post: {ex}")
             return None
         
+    # ------------------------------------------------------------------
+    # IoX REST helpers
+    # ------------------------------------------------------------------
+
     def get_profiles(self):
-        """
-        Get all profiles from the IoX device.
-        :return: JSON response containing all profiles.
+        """Fetch all device/node profiles from the IoX hub.
+
+        Returns:
+            Parsed JSON response dict, or ``None`` on failure.
         """
         response = self.get("/rest/profiles")
         if response == None or response.status_code != 200:
@@ -141,9 +226,10 @@ class IoXWrapper(NuCoreInterface):
         return response.json()
 
     def get_nodes(self):
-        """
-        Get all nodes from the IoX device.
-        :return: XML response containing all nodes.
+        """Fetch the full node list from the IoX hub as raw XML.
+
+        Returns:
+            XML response text string, or ``None`` on failure.
         """
         response = self.get("/rest/nodes")
         if response == None or response.status_code != 200:
@@ -151,9 +237,10 @@ class IoXWrapper(NuCoreInterface):
         return response.text
 
     def get_group_links(self):
-        """
-        Get all groups/links/scenes from the IoX device.
-        :return: XML response containing all groups/links/scenes.
+        """Fetch all groups, links, and scenes from the IoX hub.
+
+        Returns:
+            Parsed JSON response dict, or ``None`` on failure or parse error.
         """
         response = self.get("/api/groups")
         if response == None or response.status_code != 200:
@@ -164,17 +251,21 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error parsing JSON response for group links: {e}")
             return None
 
-    async def get_properties(self, device_id:str)-> dict[str, Property]:
-        """
-        Get properties of a device by its ID.
-        
+    async def get_properties(self, device_id: str) -> dict[str, Property]:
+        """Fetch the current property values for a device.
+
+        Device IDs stored in the RAG database are Base-64 encoded; this method
+        decodes them before issuing the REST call.
+
         Args:
-            device_id (str): The ID of the device to get properties for.
-        
+            device_id: Base-64 encoded IoX node address.
+
         Returns:
-            dict[str, Property]: A dictionary of properties for the device.
+            Dict mapping property ID strings to :class:`~nucore.nodedef.Property`
+            instances, or ``None`` on parse/network failure.
+
         Raises:
-            ValueError: If the device_id is empty or if the response cannot be parsed.
+            ValueError: When ``device_id`` is empty.
         """
         if not device_id:
             logger.error("Device ID is empty.")
@@ -208,15 +299,22 @@ class IoXWrapper(NuCoreInterface):
 
         return properties
     
-    def get_device_name(self, device_id:str)-> str:
-        """
-        Get the name of a device by its ID.
-        
+    def get_device_name(self, device_id: str) -> str | None:
+        """Resolve a device ID to its human-readable display name.
+
+        Searches nodes, then groups, then folders in that order.  The input
+        ``device_id`` is expected to be Base-64 encoded (as stored in the RAG
+        database) and is decoded before lookup.
+
         Args:
-            device_id (str): The ID of the device to get the name for.
-        
+            device_id: Base-64 encoded IoX node address.
+
         Returns:
-            str: The name of the device, or None if not found.
+            Device display name, or ``None`` when not found.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When the node list has
+                not been loaded yet.
         """
         if not self.nodes:
             logger.error("No nodes loaded.")
@@ -232,15 +330,22 @@ class IoXWrapper(NuCoreInterface):
             return None
         return node.name if node.name else device_id
 
-    def get_device_id(self, device_str:str)-> str:
-        """
-        Get the id of a device by a string. It searches id first, if not by name 
-        
+    def get_device_id(self, device_str: str) -> str | None:
+        """Resolve a device identifier string to its IoX node address.
+
+        Checks for an exact ID match first; falls back to a linear name scan
+        across all loaded nodes.
+
         Args:
-            device_str (str): The string to identify the device (either ID or name).
-        
+            device_str: Raw IoX node address **or** device display name.
+
         Returns:
-            str: The ID of the device, or None if not found.
+            IoX node address string (``node.address``), or ``None`` when not
+            found.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When the node list has
+                not been loaded yet.
         """
         if not self.nodes:
             logger.error("No nodes loaded.")
@@ -256,7 +361,24 @@ class IoXWrapper(NuCoreInterface):
         logger.error(f"Device not found: {device_str}")
         return None
     
-    async def send_commands(self, commands:list):
+    async def send_commands(self, commands: list):
+        """Decode device IDs and dispatch commands to the IoX hub.
+
+        Acts as a public-facing wrapper around :meth:`_send_commands` that
+        first decodes any Base-64 encoded ``"device"`` values in the command
+        list so that the REST URL contains the raw IoX node address.
+
+        Args:
+            commands: List of command dicts, each with at minimum a ``"device"``
+                      key (Base-64 encoded) and a ``"command"`` key.
+
+        Returns:
+            List of :class:`requests.Response` objects from the hub.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When the underlying call
+                returns ``None``.
+        """
         for cmd in commands:
             if "device" in cmd:
                 #device ids are in base64 encoded, decode it
@@ -267,15 +389,21 @@ class IoXWrapper(NuCoreInterface):
             raise NuCoreError("Failed to send commands.")
         return response
 
-    def _get_uom(self, uom):
-        """
-        checks to see if UOM is an integer and it belongs to a known UOM. 
-        if not, it uses string to find the UOM_ID.
+    def _get_uom(self, uom) -> int:
+        """Normalise a unit-of-measure value to its numeric IoX UOM ID.
+
+        Accepts both integer IDs and string labels/names.  Falls back to
+        :data:`~nucore.uom.UNKNOWN_UOM` when no matching entry is found.
+
+        Special cases handled:
+        * ``"ENUM"`` / ``"INDEX"`` strings map to UOM ID ``25`` (index).
+        * Integer inputs are cast to string before the predefined-UOM lookup.
+
         Args:
-            uom (str or int): The unit of measure to check.
-        
+            uom: Integer UOM ID or string label/name (case-insensitive).
+
         Returns:
-            int: The UOM ID if found, otherwise None.
+            Integer UOM ID, or :data:`~nucore.uom.UNKNOWN_UOM` when unresolved.
         """
         try:
             if isinstance(uom, int):
@@ -301,16 +429,38 @@ class IoXWrapper(NuCoreInterface):
 
         return  UNKNOWN_UOM
     
-    async def _send_commands(self, commands:list):
-        """
-        Send commands to a device (IoX-specific implementation).
-        This is a simplified version - extend as needed.
-        
+    async def _send_commands(self, commands: list):
+        """Build and issue ISY REST command URLs from a normalised command list.
+
+        The IoX REST API for device commands takes the form::
+
+            /rest/nodes/<device_id>/cmd/<command_id>[/<value>[/<uom>]]
+                                                   [?<param_id>[.<uom>]=<value>...]
+
+        This method handles all three parameter layouts:
+
+        * **No params** — URL ends at ``/cmd/<command_id>``.
+        * **Single param** — value appended as path segments (unnamed) or as a
+          query string (named).
+        * **Multiple params** — unnamed params appended as path segments first;
+          named params appended as query-string key/value pairs.
+
+        The input list can be in two forms:
+
+        * A flat list of command dicts.
+        * A list whose first element is ``{"commands": [...]}`` (the LLM
+          sometimes wraps the list in an outer object).
+
         Args:
-            commands (list): A list of command dictionaries to send.
-        
+            commands: List of command dicts, each requiring at minimum
+                      ``"device"`` (or ``"device_id"``)
+                      and ``"command"`` (or ``"command_id"``).  Optional
+                      ``"command_params"`` / ``"parameters"`` list can contain
+                      ``{"id", "value", "uom"}`` dicts.
+
         Returns:
-            list: List of responses from the server.
+            List of :class:`requests.Response` objects (one per command), or
+            ``None`` when the input list is empty.
         """
         responses = []
         if not commands or len(commands) == 0:
@@ -400,12 +550,30 @@ class IoXWrapper(NuCoreInterface):
             responses.append(self.get(url))
         return responses
     
-    async def create_automation_routine(self, routine:dict):
-        """
-        Create automation routines using the nucore API.
-        
+    async def create_automation_routine(self, routine: dict):
+        """Translate an LLM-generated routine definition and submit it to IoX.
+
+        The LLM produces device names and symbolic UOM/value pairs.  This
+        method:
+
+        1. Resolves device names → raw IoX node addresses (Base-64 decoded).
+        2. Scales numeric values by ``10 ** precision`` where required by the
+           IoX API (precision scaling does *not* apply to UOM 25 / INDEX).
+        3. Builds a normalised ``{name, parent, enabled, if, then, else}``
+           dict and passes it to :meth:`_create_routine`.
+
         Args:
-            routine (dict): A routine to create.
+            routine: Dict with keys ``name``, ``parent``, ``enabled``,
+                     ``if`` (list of condition dicts), ``then`` (list of action
+                     dicts), and ``else`` (list of else-action dicts).
+
+        Returns:
+            :class:`requests.Response` from :meth:`_create_routine`, or
+            ``None`` when processing fails.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When the routine dict
+                is empty or ``None``.
         """
         if not routine:
             raise NuCoreError ("No valid routine provided.")
@@ -504,9 +672,17 @@ class IoXWrapper(NuCoreInterface):
         response=self._create_routine(out_routine)
         return response
 
-    def _create_routine(self, program:dict):
-        if not program:
-            return False
+    def _create_routine(self, program: dict):
+        """Submit a processed routine definition to the IoX hub via PUT.
+
+        Args:
+            program: Normalised routine dict with ``name``, ``parent``,
+                     ``enabled``, ``if``, ``then``, and ``else`` keys.
+
+        Returns:
+            :class:`requests.Response`, or ``False`` when ``program`` is
+            empty.
+        """
         response=None
         try:
             program_content = {
@@ -523,21 +699,33 @@ class IoXWrapper(NuCoreInterface):
 
     
     async def get_all_routines_summary(self):
-        """
-        Get all the runtime information for routines from the IoX device.
-        :return: JSON response containing all routines.
+        """Fetch lightweight summary records for all routines from the hub.
+
+        Returns the ``data`` array from ``/api/ai/programs``.  Each entry
+        contains runtime state (enabled, last-run, etc.) but not the full
+        trigger/action logic.
+
+        Returns:
+            List of routine summary dicts, or the raw response / ``None`` on
+            failure.
         """
         response = self.get("/api/ai/programs")
         if response == None or response.status_code != 200:
             return response if response else None
         return response.json()['data']
 
-    async def get_routine_summary(self, program_id:int):
-        """
-        Get all the runtime information for a specific routine from the IoX device.
-        :param program_id: The ID of the program to retrieve.
-        :return: JSON response containing the routine information.
-        WARNING: it returns all the folders too.
+    async def get_routine_summary(self, program_id: int):
+        """Fetch the runtime summary for a single routine.
+
+        Accepts integer or hex-string IDs and normalises to ``int`` before
+        calling the API.  Note that the API response includes folder entries
+        as well as the target program.
+
+        Args:
+            program_id: Integer routine ID or hex string (e.g. ``"1a2b"``).
+
+        Returns:
+            ``data`` list from the API response, or ``None`` on failure.
         """
         if program_id is None or program_id == '':
             logger.error("Program ID cannot be empty")
@@ -568,9 +756,14 @@ class IoXWrapper(NuCoreInterface):
             return None
 
     async def get_all_routines(self):
-        """
-        Get complete information for all routines from the IoX device including their logic, triggers, and actions. 
-        :return: JSON response containing all routines.
+        """Fetch complete trigger/action definitions for all routines.
+
+        Returns the ``data`` array from ``/api/ai/triggers`` which includes
+        the full ``if``/``then``/``else`` logic for every routine.
+
+        Returns:
+            List of full routine dicts, or the raw response / ``None`` on
+            failure.
         """
         response = self.get("/api/ai/triggers")
         if response == None or response.status_code != 200:
@@ -581,11 +774,15 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error retrieving all routines: {ex}")
             return None
     
-    async def get_routine(self, program_id:str):
-        """
-        Get complete information for a specific routine from the IoX device including its logic, triggers, and actions. 
-        :param program_id: The ID of the program to retrieve.
-        :return: JSON response containing the routine information.
+    async def get_routine(self, program_id: str):
+        """Fetch the complete trigger/action definition for a single routine.
+
+        Args:
+            program_id: Routine ID (integer or string form accepted by the
+                        ``/api/ai/trigger/<id>`` endpoint).
+
+        Returns:
+            ``data`` value from the API response, or ``None`` on failure.
         """
         response = self.get(f"/api/ai/trigger/{program_id}")
         if response == None or response.status_code != 200:
@@ -596,7 +793,15 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error retrieving routine: {ex}")
             return None
 
-    def update_routine(self, program:dict):
+    def update_routine(self, program: dict):
+        """Update an existing routine on the hub via POST.
+
+        Args:
+            program: Updated routine dict (same schema as :meth:`_create_routine`).
+
+        Returns:
+            :class:`requests.Response`, or ``False`` when ``program`` is empty.
+        """
         if not program:
             return False
         response=None
@@ -613,11 +818,15 @@ class IoXWrapper(NuCoreInterface):
         
         return response 
 
-    def delete_routine(self, program_id:str):
-        """
-        Delete a program/routine by its ID.
-        :param program_id: The ID of the program to delete.
-        :return: The response from the server, or False if the program_id is invalid.
+    def delete_routine(self, program_id: str):
+        """Delete a routine by its ID.
+
+        Args:
+            program_id: Routine ID string.
+
+        Returns:
+            :class:`requests.Response`, or ``None`` when ``program_id`` is
+            falsy or on error.
         """
         if not program_id:
             return None
@@ -628,12 +837,24 @@ class IoXWrapper(NuCoreInterface):
         
         return response 
 
-    async def routine_ops(self, routine_id:int, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
-        """
-        Perform an operation on a program.
-        :param routine_id: The ID of the program to operate on.
-        :param operation: The operation to perform (e.g., "run", "stop", "enable", "disable", etc.).
-        :return: The response from the server, or False if the program_id is invalid.
+    async def routine_ops(
+        self,
+        routine_id: int,
+        operation: Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"],
+    ):
+        """Perform a lifecycle operation on an IoX routine.
+
+        For all operations except ``"delete"``, the routine ID is converted
+        to a zero-padded 4-digit hex string (e.g. ``"001a"``) because that is
+        the format expected by the ``/rest/programs`` endpoint.
+
+        Args:
+            routine_id: Integer or hex-string routine ID.
+            operation:  One of the valid IoX program operations.
+
+        Returns:
+            :class:`requests.Response` from the hub, or ``None`` when the
+            routine ID is falsy or the operation is unrecognised.
         """
         if not routine_id:
             return None
@@ -658,29 +879,51 @@ class IoXWrapper(NuCoreInterface):
         
         return response
     
-    async def _subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
-        """
-        Subscribe to events
-        :param on_message_callback: function to call when an event is received
-        :param on_connect_callback: function to call when connection is established
-        :param on_disconnect_callback: function to call when connection is lost
-        All callback functions should be async
-        :return: True if subscription is successful, False otherwise
-        The format for event data is a dictionary of the following structure:
-        {
-            'seqnum': str or None,
-            'sid': str or None,
-            'timestamp': str or None,
-            'control': str,
-            'action': {
-                'value': str,
-                'uom': str or None,
-                'prec': str or None
-            },
-            'node': str,
-            'fmtAct': str,
-            'fmtName': str
-        }
+    # ------------------------------------------------------------------
+    # WebSocket event subscription
+    # ------------------------------------------------------------------
+
+    async def _subscribe_events(
+        self,
+        on_message_callback,
+        on_connect_callback=None,
+        on_disconnect_callback=None,
+    ):
+        """Open a WebSocket subscription to the ISY event stream.
+
+        Connects to ``/rest/subscribe`` over ``ws://`` or ``wss://`` (SSL
+        certificate verification is disabled for self-signed certs).  Parses
+        each incoming XML message into a normalised event dict and forwards it
+        to ``on_message_callback``.
+
+        Event dict schema::
+
+            {
+                'seqnum':    str | None,
+                'sid':       str | None,
+                'timestamp': str | None,
+                'control':   str | None,
+                'action': {
+                    'value': str | None,
+                    'uom':   str | None,
+                    'prec':  str | None,
+                },
+                'node':      str | None,
+                'fmtAct':    str | None,
+                'fmtName':   str | None,
+                'eventInfo': bytes | None,  # raw XML bytes when present
+            }
+
+        Args:
+            on_message_callback:    Async callable receiving the event dict.
+            on_connect_callback:    Optional async callable invoked on
+                                    successful WebSocket connection.
+            on_disconnect_callback: Optional async callable invoked when the
+                                    WebSocket closes.
+
+        Returns:
+            ``True`` when the loop ends cleanly; ``False`` on connection
+            failure.
         """
 
         try:
@@ -744,18 +987,28 @@ class IoXWrapper(NuCoreInterface):
             return False
         return True
 
+    # ------------------------------------------------------------------
+    # Loading
+    # ------------------------------------------------------------------
+
     async def _load(self, **kwargs):
-        
-        """
-        Load devices and profiles from the specified paths or URL.
-        :param kwargs: Optional parameters for loading.
-        - profile_path: Path to the profile file. If not provided, will use the configured URL.
-        - nodes_path: Path to the nodes XML file. If not provided, will use the configured URL.
-        - dump: If True, dump the processed RAG documents to a file.
-        - include_profiles: If True, include profiles in the loading process.
-        :return: Loaded devices and profiles.
-        :raises NuCoreError: If no valid profile or nodes source is provided.
-        :raises NuCoreError: If the RAG processor is not initialized.
+        """Load devices, profiles, and build the RAG stores.
+
+        Keyword Args:
+            include_profiles (bool): Include profile data in the load.
+                Defaults to ``True``.
+            profile_path (str | None): Path to a local profile JSON file.
+                When omitted, profiles are fetched from the hub.
+            nodes_path (str | None): Path to a local nodes XML file.
+                When omitted, nodes are fetched from the hub.
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When no valid profile
+                or nodes source is provided, or when the RAG processor is not
+                initialised.
         """
         include_profiles = kwargs.get("include_profiles", True)
 
@@ -766,8 +1019,26 @@ class IoXWrapper(NuCoreInterface):
         self.summary_rags = self.format_nodes_summary(False)
         return True
 
-    # To have the latest state, we need to load devices only
-    def _load_devices(self, include_profiles=True, profile_path:str=None, nodes_path:str=None, groups_path:str=None):
+    # Load only devices to get the latest live state.
+    def _load_devices(
+        self,
+        include_profiles: bool = True,
+        profile_path: str = None,
+        nodes_path: str = None,
+        groups_path: str = None,
+    ):
+        """Load nodes, groups, folders (and optionally profiles) into memory.
+
+        Args:
+            include_profiles: When ``True`` (default) the profile mapping is
+                loaded before nodes.
+            profile_path:     Optional path to a local profile JSON file.
+            nodes_path:       Optional path to a local nodes XML file.
+            groups_path:      Optional path to a local group-links JSON file.
+
+        Returns:
+            The loaded nodes dict, or ``None`` when loading fails.
+        """
         if include_profiles:
             if not self.__load_profile__(profile_path):
                 return None
@@ -781,11 +1052,19 @@ class IoXWrapper(NuCoreInterface):
 
         return self.nodes
         
-    def __load_profile__(self, profile_path:str=None):
-        """Load profile from the specified path or URL.
-        :param profile_path: Optional path to the profile file. If not provided, will use the configured url in consturctor
-        :return: True if profile is loaded successfully, False otherwise. 
-        :raises NuCoreError: If no valid profile source is provided.
+    def __load_profile__(self, profile_path: str = None) -> bool:
+        """Load the device/node profile from a file or the hub.
+
+        Args:
+            profile_path: Path to a local profile JSON file.  When omitted,
+                          the profile is fetched from the hub via
+                          :meth:`get_profiles`.
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: On any load failure.
         """
         try:
             if profile_path:
@@ -801,14 +1080,19 @@ class IoXWrapper(NuCoreInterface):
 
         return False 
         
-    def __load_nodes__(self, nodes_path:str=None):
-        """Load nodes from the specified path or URL.
-        :param nodes_path: Optional path to the XML file containing nodes. If not provided, will use the configured url in constructor.
-        :return: Parsed XML root element containing nodes.
-        :raises NuCoreError: If no valid nodes source is provided.
-        
-        This method will first try to load nodes from a file if `nodes_path` is provided, 
-        otherwise it will attempt to load from the configured URL.
+    def __load_nodes__(self, nodes_path: str = None):
+        """Load the node list from a file or the hub.
+
+        Args:
+            nodes_path: Path to a local nodes XML file.  When omitted, nodes
+                        are fetched from the hub via :meth:`get_nodes`.
+
+        Returns:
+            Parsed XML root element.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When the source is
+                unavailable or returns ``None``.
         """
         if nodes_path:
             return Node.load_from_file(nodes_path)
@@ -820,14 +1104,20 @@ class IoXWrapper(NuCoreInterface):
         
         raise NuCoreError("No valid nodes source provided.")
 
-    def __load_groups_links__(self, groups_path:str=None):
-        """Load group links from the specified path or URL.
-        :param groups_path: Optional path to the JSON file containing group links. If not provided, will use the configured url in constructor.
-        :return: Parsed JSON object containing group links.
-        :raises NuCoreError: If no valid group links source is provided.
-        
-        This method will first try to load groups from a file if `groups_path` is provided, 
-        otherwise it will attempt to load from the configured URL.
+    def __load_groups_links__(self, groups_path: str = None):
+        """Load group/scene link definitions from a file or the hub.
+
+        Args:
+            groups_path: Path to a local groups JSON file.  When omitted,
+                         group links are fetched from the hub via
+                         :meth:`get_group_links`.
+
+        Returns:
+            Parsed groups JSON object.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When the source is
+                unavailable or returns ``None``.
         """
         if groups_path:
             return Node.load_from_json(groups_path)
@@ -837,10 +1127,26 @@ class IoXWrapper(NuCoreInterface):
             raise NuCoreError("Failed to fetch group links from URL.")
         return Node.load_from_json(response)
 
-    def _formatter_format_nodes(self, device_rag_formatter:ProfileRagFormatter=None):
-        """
-        Format nodes for fine tuning or other purposes 
-        :return: List of formatted nodes.
+    # ------------------------------------------------------------------
+    # RAG formatting
+    # ------------------------------------------------------------------
+
+    def _formatter_format_nodes(self, device_rag_formatter: ProfileRagFormatter = None):
+        """Format loaded nodes using the provided formatter instance.
+
+        Selects the format call signature based on ``self.formatter_type``:
+        ``PROFILE`` mode passes runtime profiles; ``DEVICE`` mode passes only
+        nodes/groups/folders.
+
+        Args:
+            device_rag_formatter: Formatter instance to use.
+
+        Returns:
+            List of formatted RAG document strings.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When nodes are not
+                loaded or the formatter is ``None``.
         """
         if not self.nodes or device_rag_formatter is None:
             raise NuCoreError("No nodes loaded.")
@@ -854,48 +1160,68 @@ class IoXWrapper(NuCoreInterface):
         return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
     
     def _format_nodes(self):
-        """
-        Format nodes for fine tuning or other purposes 
-        :return: List of formatted nodes.
+        """Build full-detail RAG documents for all loaded nodes.
+
+        Instantiates a :class:`~rag.ProfileRagFormatter` and delegates to
+        :meth:`_formatter_format_nodes`.
+
+        Returns:
+            List of formatted RAG document strings.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When nodes are not
+                loaded.
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
         device_rag_formatter = ProfileRagFormatter(json_output=self.json_output)
         return self._formatter_format_nodes(device_rag_formatter)
 
-    def format_nodes_summary(self, condense_profiles:bool):
-        """
-        Format nodes for fine tuning or other purposes 
-        :param condense_profiles: If True, condense profiles in the summary to:
-        {
-            "devices": [
-                "Nest Matter Family Room", "Meros Smart Plug", ...
-                ],
-            "cmds": {
-                "Cool Setpoint": [0, 8, 19],
-                "On":            [1, 3, 4, 5, 13, 14, 20, 21],
-                "Brighten":      [3, 14],
-                ...
-            },
-            "props": {
-                "Temperature":   [0, 8, 9, 10, 11],
-                "Mode":          [0, 8, 19],
-                ...
-            },
-            "enums": {
-                "Off":    [0, 3, 4, 8, 13, 14, 19, 20, 21],
-                "On":     [4, 13, 15, 17, 21],
-                ...
+    def format_nodes_summary(self, condense_profiles: bool):
+        """Build a compact device-summary RAG for use in the router/filter prompt.
+
+        When ``condense_profiles`` is ``True`` the output is a single JSON
+        object that groups devices by shared commands, properties, and enum
+        values — keeping the prompt token count low::
+
+            {
+                "devices": ["Nest Matter Family Room", "Meros Smart Plug", ...],
+                "cmds":  {"Cool Setpoint": [0, 8, 19], "On": [1, 3, 4], ...},
+                "props": {"Temperature": [0, 8, 9], "Mode": [0, 8, 19], ...},
+                "enums": {"Off": [0, 3, 4], "On": [4, 13, 15], ...}
             }
-        }
-        :return: List of formatted nodes.
+
+        Args:
+            condense_profiles: When ``True`` condenses shared-feature output;
+                               when ``False`` emits one entry per device.
+
+        Returns:
+            :class:`~rag.MinimalRagFormatter` result object.
+
+        Raises:
+            :class:`~nucore.nucore_error.NuCoreError`: When nodes are not
+                loaded.
         """
         if not self.nodes:
             raise NuCoreError("No nodes loaded.")
         device_rag_formatter = MinimalRagFormatter(json_output=self.json_output, condense=condense_profiles)
         return self._formatter_format_nodes(device_rag_formatter)
     
-    async def _load_routines(self):
+    async def _load_routines(self) -> None:
+        """Fetch all routines from the hub and populate the in-memory stores.
+
+        Builds two parallel stores:
+
+        * ``self.all_routines`` — maps ``routine_id → full routine dict``
+          (including trigger/action logic).  Used by the
+          ``routine_status_ops`` handler for direct access.
+        * ``self.condensed_routines`` — list of lightweight dicts with
+          ``id``, ``name``, ``comment``, and ``device_names``.  Used by the
+          ``routine_filter`` handler as the LLM prompt payload.
+
+        Silently ignores exceptions so a partial failure does not block
+        startup.
+        """
         try:
             all_routines = await self.get_all_routines()
 
@@ -925,7 +1251,20 @@ class IoXWrapper(NuCoreInterface):
         except Exception as ex:
             pass
 
-    def _get_device_name_list_from_routine(self, routine: dict) -> list[str]: 
+    def _get_device_name_list_from_routine(self, routine: dict) -> list[str]:
+        """Extract the human-readable device names referenced by a routine.
+
+        Scans the ``if``, ``then``, and ``else`` sections of the routine for
+        ``"device"`` fields, resolves each raw address to its display name via
+        :meth:`get_device_name`, and returns the deduplicated list.
+
+        Args:
+            routine: Full routine dict with optional ``if``/``then``/``else``
+                     section lists.
+
+        Returns:
+            List of device display name strings (may be empty).
+        """
         if routine is None:
             return []
 
