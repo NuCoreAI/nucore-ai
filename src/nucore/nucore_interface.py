@@ -1,21 +1,29 @@
+"""Abstract interface and event-handling base for NuCore backends.
+
+Defines :class:`NuCoreInterface` — the ABC that all concrete backends
+(e.g. :class:`IoXWrapper`) must implement — and :class:`PromptFormatTypes`
+which controls how device data is formatted into LLM prompts.
+"""
+
 from __future__ import annotations
 
 from time import sleep
 import threading
 
-import logging, asyncio
+import asyncio
 
 from .profile import Profile
 from .nodedef import Property
 from typing import Any, Literal
 from abc import ABC, abstractmethod
+from utils import get_logger
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 def debug(msg):
     logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
 
 class PromptFormatTypes:
+    """Constants for the two supported device-data prompt formats."""
     DEVICE = "per-device"
     PROFILE = "shared-features"
 

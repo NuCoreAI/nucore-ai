@@ -353,5 +353,7 @@ class Group(NodeBase):
 
         return "\n".join(explanation_lines)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
+        """Hash by unique node address."""
+        return hash(self.address)  # or another unique identifier
         return hash(self.address)  # or another unique identifier

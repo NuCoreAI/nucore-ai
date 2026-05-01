@@ -1,5 +1,12 @@
 #This class represents schedules in IoX. Schedules can be categorized
 # in the following 13 categories
+"""Schedule dataclasses for IoX / ISY automation programs.
+
+Represents the 13 schedule categories supported by the IoX controller XML
+format.  Each concrete subclass of :class:`NuCoreSchedule` implements
+:meth:`parse_schedule` (to read from XML) and :meth:`get_schedule` (to
+produce XML) for one schedule category.
+"""
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 
@@ -89,6 +96,12 @@ choose specific days of the week from the following
 
 
 class NuCoreSchedule(ABC):
+    """Abstract base class for all IoX schedule types.
+
+    Subclasses implement :meth:`parse_schedule` to populate fields from an
+    XML string and :meth:`get_schedule` to serialise back to XML.
+    """
+
     def __init__(self):
         super().__init__()
 

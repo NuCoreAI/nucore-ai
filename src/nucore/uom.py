@@ -1,3 +1,9 @@
+"""Unit of Measure (UOM) catalogue for IoX / ISY node properties.
+
+Provides the ``UOMEntry`` dataclass, the ``PREDEFINED_UOMS`` registry, and
+the :func:`get_uom_by_id` lookup helper used throughout the nucore package.
+"""
+
 from dataclasses import dataclass
 
 
@@ -928,7 +934,16 @@ PREDEFINED_UOMS = {
 }
 
 
-def get_uom_by_id(uom_id):
+def get_uom_by_id(uom_id) -> "UOMEntry | None":
+    """Return the ``UOMEntry`` for the given numeric or string UOM identifier.
+
+    Args:
+        uom_id: UOM identifier as an ``int`` or ``str`` (e.g. ``17`` or ``"17"``
+            for Fahrenheit).  Unknown identifiers return ``None``.
+
+    Returns:
+        The matching :class:`UOMEntry`, or ``None`` if *uom_id* is not found.
+    """
     try:
         if isinstance(uom_id, int):
             uom_id = str(uom_id)
@@ -937,4 +952,5 @@ def get_uom_by_id(uom_id):
     return PREDEFINED_UOMS.get(uom_id, None)
 
 
+#: Flat list of all predefined UOM entries, used as field metadata choices.
 supported_uoms = list(PREDEFINED_UOMS.values())

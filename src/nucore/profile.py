@@ -1,3 +1,12 @@
+"""Profile loading and node-mapping for IoX / ISY device definitions.
+
+Parses the JSON profile returned by the IoX controller (families, instances,
+editors, linkdefs, nodedefs) into the :class:`Profile` dataclass and
+resolved Python objects.  After :meth:`Profile.map_nodes` is called the
+profile holds all live :class:`Node`, :class:`Group`, and :class:`Folder`
+objects linked to their definitions.
+"""
+
 from dataclasses import dataclass, field
 
 from .editor import Editor
@@ -13,9 +22,9 @@ from .folder import Folder
 from .editor import EditorMinMaxRange, EditorSubsetRange, REFERENCE_DELIMITER
 from .uom import get_uom_by_id
 import json
-import logging
+from utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def debug(msg):
     logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
@@ -71,7 +80,18 @@ class Profile:
     folders: dict = field(default_factory=dict)
     
 
-    def load_from_file(self, profile_path:str):
+    def load_from_file(self, profile_path: str) -> bool:
+        """Load and parse profile data from a JSON file.
+
+        Args:
+            profile_path: Path to the JSON profile file.
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            NuCoreError: If *profile_path* is not set.
+        """
         if not profile_path: 
             raise NuCoreError("Profile path is mandatory.")
 
@@ -80,7 +100,18 @@ class Profile:
 
         return self.__parse_profile__(raw)
     
-    def load_from_json(self, raw:dict):
+    def load_from_json(self, raw: dict) -> bool:
+        """Load profile from an already-parsed JSON dict.
+
+        Args:
+            raw: Parsed JSON dict representing the profile.
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            NuCoreError: If *raw* is empty or ``None``.
+        """
         if not raw:
             raise NuCoreError("Profile data is mandatory.")
         """Load profile from the specified URL that returns json."""
@@ -97,7 +128,7 @@ class Profile:
                     self.linkdef_lookup[f"{linkdef.id}.{family.id}.{instance.id}"] = linkdef
 
     def __build_editor__(self, edict) -> Editor:
-
+        """Build an :class:`Editor` from a raw editor dict."""
         ranges = []
         for rng in edict.get("ranges", []):
             uom_id = rng["uom"]
@@ -129,8 +160,15 @@ class Profile:
         editor = Editor(id=edict["id"], is_reference=False, ranges=ranges)
         return editor
     
-    def __parse_profile__(self, raw):
-        """Build Profile from dict, with type/checking and lookups"""
+    def __parse_profile__(self, raw) -> bool:
+        """Build Profile object tree from a raw dict, with validation and lookups.
+
+        Args:
+            raw: Parsed JSON dict representing the complete profile.
+
+        Returns:
+            ``True`` on success.
+        """
         for fidx, f in enumerate(raw.get("families", [])):
             # Validate keys / format
             if "id" not in f:

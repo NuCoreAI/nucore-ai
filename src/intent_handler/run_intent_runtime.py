@@ -51,6 +51,7 @@ def _default_runtime_config_path() -> Path:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the CLI argument parser for the intent runtime."""
     parser = argparse.ArgumentParser(description="Run standalone intent runtime")
     parser.add_argument(
         "--intent-dir",
@@ -165,6 +166,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
+
 def _load_backend_api(
     classpath: str | None,
     base_url: str | None,
@@ -207,8 +209,24 @@ def _load_backend_api_cached(
     password: str,
     json_output: bool,
 ) -> Any:
+    """LRU-cached backend API instantiation.
 
-    # Parse classpath: "package.module.ClassName"
+    Separated from :func:`_load_backend_api` so that repeated calls with the
+    same arguments (common in the interactive loop) return the already-
+    constructed object without re-importing the module or hitting the network.
+
+    Args:
+        classpath:   Fully qualified ``"module.ClassName"`` string.
+        base_url:    Backend service base URL.
+        username:    Authentication username.
+        password:    Authentication password.
+        json_output: Whether the backend should return JSON-formatted data.
+
+    Raises:
+        ValueError: If ``classpath`` is malformed or the class cannot be
+                    imported / instantiated.
+    """
+    # Parse classpath into (module_name, class_name) pair.
     parts = classpath.rsplit(".", 1)
     if len(parts) != 2:
         raise ValueError(
@@ -233,20 +251,37 @@ def _load_backend_api_cached(
 async def _run_once(
     runtime: IntentRuntime,
     query: str,
-    session_id: str | None = None) -> None:
+    session_id: str | None = None,
+) -> None:
+    """Execute a single query through the runtime and print the result.
+
+    If the handler returns tool results (agentic loop), the results are
+    stringified and sent back to the runtime via
+    :meth:`~IntentRuntime.handle_agent_response` so the LLM can process
+    them before producing a final text response.
+
+    When a stream handler was active during the call, the response tokens
+    were already printed live; this function just emits a trailing newline
+    and returns without reprinting.
+
+    Args:
+        runtime:    The active :class:`~IntentRuntime` instance.
+        query:      The user query string to process.
+        session_id: Optional session identifier for conversation tracking.
+    """
     result = await runtime.handle_query(query, session_id=session_id)
     tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
     if tool_results:
+        # Agentic loop: feed tool results back so the LLM can respond to them.
         stringified_tool_results = "\n".join([f"\n{query}\n# AGENT RESPONSE:\n{str(tr)}" for tr in tool_results])
         result = await runtime.handle_agent_response(stringified_tool_results, session_id=None)
-        #result = await runtime.handle_query(stringified_tool_results, session_id=None)
         return
 
     text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
     if text_output is not None and result.get_stream_handler() is not None:
         streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
         if streamed_chunks > 0:
-            # Response was already printed live by the stream handler.
+            # Response was already printed live by the stream handler; just add newline.
             print()
             return
         logger.info(f"\n{text_output}\n")
@@ -254,6 +289,18 @@ async def _run_once(
     return
 
 async def _run_loop(runtime: IntentRuntime) -> None:
+    """Run an interactive REPL that repeatedly prompts for queries.
+
+    Reads lines from stdin and dispatches each to :func:`_run_once`.  Exits
+    cleanly on ``quit`` / ``exit`` (and common variants), ``Ctrl+C``
+    (``KeyboardInterrupt``), and ``Ctrl+D`` / pipe-close (``EOFError``).
+
+    The stream handler is reset before every query so per-call state (e.g.
+    chunk counters) does not leak between turns.
+
+    Args:
+        runtime: The active :class:`~IntentRuntime` instance.
+    """
     print("Standalone Intent Runtime")
     print("Type 'quit' to exit")
     while True:
@@ -261,7 +308,7 @@ async def _run_loop(runtime: IntentRuntime) -> None:
             query = input("\n> ").strip()
         except KeyboardInterrupt:
             # Allow Ctrl+C to terminate the interactive loop immediately.
-            log.info("\nInterrupted. Exiting.")
+            logger.info("\nInterrupted. Exiting.")
             break
         except EOFError:
             break
@@ -269,11 +316,12 @@ async def _run_loop(runtime: IntentRuntime) -> None:
         if not query:
             continue
 
-        # Normalize common shell/debug-console variants of exit commands.
+        # Normalise common shell/debug-console variants of exit commands.
         command = query.casefold().strip().strip("\"'")
         if command in {"quit", "exit", "q", ":q", "quit()", "exit()"} or command.startswith(("quit ", "exit ")):
             break
-        runtime.reset_stream_handler()  # Reset stream handler state before each query
+        # Reset per-call stream handler state before dispatching.
+        runtime.reset_stream_handler()
         try:
             await _run_once(runtime, query, session_id="default")
         except asyncio.CancelledError:
@@ -281,9 +329,25 @@ async def _run_loop(runtime: IntentRuntime) -> None:
             break
     
 
-nucore_interface : NuCoreInterface = None  # Global variable to hold the backend API instance
+# Module-level reference to the backend API instance; populated in main() so
+# that it can be inspected from a debugger or extended tests without re-running
+# the full startup sequence.
+nucore_interface: NuCoreInterface = None
+
 
 def main() -> None:
+    """CLI entry point: parse arguments, configure logging, and start the runtime.
+
+    Startup sequence:
+    1. Parse CLI arguments.
+    2. Configure the shared logger (level, file, JSON, console).
+    3. Resolve paths for the intent handler directory and runtime config.
+    4. Load the runtime config and build the LLM dispatch adapter.
+    5. Instantiate the backend API (``nucore_interface``).
+    6. Construct :class:`~IntentRuntime` and either run a single query
+       (``--query``) or enter the interactive REPL.
+    7. Shut down the runtime on exit regardless of how it terminates.
+    """
     args = _build_parser().parse_args()
 
     log_config = configure_logging(
@@ -295,6 +359,7 @@ def main() -> None:
     )
     logger.debug("Logging initialized", extra={"log_config": log_config})
 
+    # Resolve paths — prefer explicit CLI args, fall back to auto-detected defaults.
     intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
     runtime_config_path = (
         Path(args.runtime_config).expanduser().resolve()
@@ -316,6 +381,7 @@ def main() -> None:
         model_url=args.model_url,
     )
 
+    # Build the LLM dispatch adapter from the resolved config.
     llm_adapter = build_default_dispatch_adapter(runtime_config)
 
     global nucore_interface
@@ -344,6 +410,7 @@ def main() -> None:
     logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})
 
     if args.query:
+        # Single-query (non-interactive) mode: run once and exit.
         if runtime.stream_state is not None:
             runtime.stream_state["chunks"] = 0
         try:
@@ -354,6 +421,7 @@ def main() -> None:
             runtime.shutdown()
         return
 
+    # Interactive REPL mode.
     try:
         asyncio.run(_run_loop(runtime))
     except KeyboardInterrupt:

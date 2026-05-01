@@ -1,12 +1,30 @@
+"""Node definition dataclasses for IoX / ISY devices.
+
+Defines the structure of node properties, commands, links, and node
+definitions (``NodeDef``) that describe the behaviour and capabilities of
+an IoX device node.
+"""
+
 import textwrap
 from dataclasses import dataclass, field
 from .editor import Editor
 from .cmd import Command
 from .linkdef import LinkDef
 
-#the actual node property that maps to 
+#: Maps directly to the live property value reported by the IoX controller.
 @dataclass
 class Property:
+    """A live property value reported by the IoX controller for a specific node.
+
+    Attributes:
+        id: Property identifier (e.g. ``"ST"`` for status).
+        value: Raw numeric value as a string.
+        formatted: Human-readable formatted value (e.g. ``"75.0 °F"``).
+        uom: Unit-of-measure identifier string.
+        uom_name: Display name for the unit of measure.
+        prec: Decimal precision of the value.
+        name: Human-readable property name.
+    """
     id: str
     value: str
     formatted: str
@@ -82,7 +100,8 @@ class NodeDef:
     icon: str = None
     links: NodeLinks = None
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return a multi-line human-readable summary of the node definition."""
         #s = [f"Node type: {self.id} ({self.nls})"]
         s=[]
         s.append(textwrap.indent("***Properties***", "  "))
