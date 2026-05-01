@@ -8,6 +8,10 @@ from typing import Any
 
 from intent_handler import IntentHandlerResult, IntentRuntime, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
 from nucore import NuCoreInterface, PromptFormatTypes
+from utils import configure_logging, get_logger
+
+
+logger = get_logger(__name__)
 
 
 def _default_intent_dir() -> Path:
@@ -137,6 +141,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stream model text tokens to stdout when provider supports it",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        help="Logger level override (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Optional log file path; enables rotating file logs",
+    )
+    parser.add_argument(
+        "--log-json",
+        action="store_true",
+        help="Enable JSON log output format",
+    )
+    parser.add_argument(
+        "--no-log-console",
+        action="store_true",
+        help="Disable console log output",
+    )
     return parser
 
 def _load_backend_api(
@@ -211,8 +237,9 @@ async def _run_once(
     result = await runtime.handle_query(query, session_id=session_id)
     tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
     if tool_results:
-        stringified_tool_results = "\n".join([f"# AGENT RESPONSE:\n{str(tr)}" for tr in tool_results])
-        result = await runtime.handle_query(stringified_tool_results, session_id=None)
+        stringified_tool_results = "\n".join([f"\n{query}\n# AGENT RESPONSE:\n{str(tr)}" for tr in tool_results])
+        result = await runtime.handle_agent_response(stringified_tool_results, session_id=None)
+        #result = await runtime.handle_query(stringified_tool_results, session_id=None)
         return
 
     text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
@@ -222,7 +249,7 @@ async def _run_once(
             # Response was already printed live by the stream handler.
             print()
             return
-        print (f"\n{text_output}\n")
+        logger.info(f"\n{text_output}\n")
 
     return
 
@@ -234,7 +261,7 @@ async def _run_loop(runtime: IntentRuntime) -> None:
             query = input("\n> ").strip()
         except KeyboardInterrupt:
             # Allow Ctrl+C to terminate the interactive loop immediately.
-            print("\nInterrupted. Exiting.")
+            log.info("\nInterrupted. Exiting.")
             break
         except EOFError:
             break
@@ -250,7 +277,7 @@ async def _run_loop(runtime: IntentRuntime) -> None:
         try:
             await _run_once(runtime, query, session_id="default")
         except asyncio.CancelledError:
-            print("\nCancelled. Exiting.")
+            logger.info("\nCancelled. Exiting.")
             break
     
 
@@ -258,6 +285,15 @@ nucore_interface : NuCoreInterface = None  # Global variable to hold the backend
 
 def main() -> None:
     args = _build_parser().parse_args()
+
+    log_config = configure_logging(
+        level=args.log_level,
+        log_file=args.log_file,
+        json_output=True if args.log_json else None,
+        console=False if args.no_log_console else None,
+        force=True,
+    )
+    logger.debug("Logging initialized", extra={"log_config": log_config})
 
     intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
     runtime_config_path = (
@@ -305,6 +341,7 @@ def main() -> None:
         runtime_model=args.model,
         runtime_model_url=args.model_url,
     )
+    logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})
 
     if args.query:
         if runtime.stream_state is not None:
@@ -312,7 +349,7 @@ def main() -> None:
         try:
             asyncio.run(_run_once(runtime, args.query))
         except KeyboardInterrupt:
-            print("\nInterrupted. Exiting.")
+            logger.warning("\nInterrupted. Exiting.")
         finally:
             runtime.shutdown()
         return
@@ -320,7 +357,7 @@ def main() -> None:
     try:
         asyncio.run(_run_loop(runtime))
     except KeyboardInterrupt:
-        print("\nInterrupted. Exiting.")
+        logger.warning("\nInterrupted. Exiting.")
     finally:
         runtime.shutdown()
 

@@ -68,6 +68,57 @@ python -m intent_handler.run_intent_runtime \
   --query "What devices are in the master bedroom?"
 ```
 
+### Logging
+
+The runtime now supports centralized, flexible logging for both development and production use.
+
+#### Runtime Logging Flags
+
+```shell
+python -m intent_handler.run_intent_runtime \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --log-level DEBUG \
+  --log-file logs/intent-runtime.log
+```
+
+Use JSON logs for ingestion by external tools:
+
+```shell
+python -m intent_handler.run_intent_runtime \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --log-json \
+  --log-file logs/intent-runtime.json.log
+```
+
+Disable console logs (for quiet batch or service environments):
+
+```shell
+python -m intent_handler.run_intent_runtime \
+  --provider claude \
+  --api-key sk-ant-api03-... \
+  --no-log-console \
+  --log-file logs/intent-runtime.log
+```
+
+#### Logging Environment Variables
+
+- `NUCORE_LOG_LEVEL` (default: `INFO`)
+- `NUCORE_LOG_JSON` (`true`/`false`, default: `false`)
+- `NUCORE_LOG_FILE` (optional file path)
+- `NUCORE_LOG_CONSOLE` (`true`/`false`, default: `true`)
+
+#### Logger Usage in Code
+
+```python
+from utils import configure_logging, get_logger
+
+configure_logging(level="INFO")
+logger = get_logger(__name__)
+logger.info("runtime started")
+```
+
 ### Full CLI Reference
 
 | Flag | Description |
@@ -85,6 +136,10 @@ python -m intent_handler.run_intent_runtime \
 | `--backend-api-password` | Backend API password |
 | `--json-output` | Enable JSON output mode for backend API |
 | `--prompt_type` | Prompt variant to use (e.g. `shared-features`) |
+| `--log-level` | Logging level override: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `--log-file` | Optional rotating log file path |
+| `--log-json` | Emit logs in JSON format |
+| `--no-log-console` | Disable console logging |
 
 ## Supported LLM Providers
 

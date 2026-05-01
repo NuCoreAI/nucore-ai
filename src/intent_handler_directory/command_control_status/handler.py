@@ -3,6 +3,10 @@ from typing import Any
 
 from intent_handler import BaseIntentHandler, IntentHandlerResult
 from rag import RAGData
+from utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class CommandControlStatusIntentHandler(BaseIntentHandler):
@@ -76,7 +80,7 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
 
         prop_query= tool.args 
         if not prop_query or len(prop_query) == 0:
-            print("No property query provided")
+            logger.warning("No property query provided")
             return None
         try:
             if isinstance(prop_query[0], list): 
@@ -88,11 +92,11 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
             # Process the property query
             device_id = property.get('device') or property.get('device_id')
             if not device_id:
-                print(f"No device ID provided for property query: {property}")
+                logger.warning("No device ID provided for property query", extra={"property": property})
                 continue
             properties = await self.nucore_interface.get_properties(device_id)
             if not properties:
-                print(f"No properties found for device {device_id}")
+                logger.warning("No properties found for device", extra={"device_id": device_id})
                 continue
             prop_id = property.get('property') or property.get('property_id')
             device_name = self.nucore_interface.get_device_name(device_id)
@@ -104,7 +108,7 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
                     texts.append(f"{device_name}: {prop.formatted if prop.formatted else prop.value}")
                 else:
                     texts.append(f"Property {prop_id} not found for device {device_name}")
-                    print( f"Property {prop_id} not found for device {device_name}")
+                    logger.warning("Property not found for device", extra={"property_id": prop_id, "device_name": device_name})
             else:
-                print(f"No property ID provided for device {device_name}")
+                logger.warning("No property ID provided for device", extra={"device_name": device_name})
         return texts

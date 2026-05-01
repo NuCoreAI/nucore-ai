@@ -5,6 +5,8 @@ Simple approach: find first {, find matching }, repeat
 import json
 import time
 from typing import List, Tuple, Dict, Any, Optional
+from utils import get_logger
+logger = get_logger(__name__)
 
 
 class JSONDuplicateDetector:
