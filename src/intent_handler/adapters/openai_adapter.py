@@ -87,7 +87,7 @@ class OpenAIAdapter(LLMAdapter):
                 delta_content = getattr(delta, "content", None)
                 if isinstance(delta_content, str) and delta_content:
                     content_parts.append(delta_content)
-                    stream_handler(delta_content)
+                    await stream_handler(delta_content)
 
                 # Tool-call arguments arrive in fragments across chunks;
                 # append argument strings and fill in id/name when present.

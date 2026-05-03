@@ -18,7 +18,7 @@ class GeneralHelpStreamHandler(StreamHandler):
     progress bar, or a UI component).
     """
 
-    def handle_stream_chunk(self, chunk: str) -> Any:
+    async def handle_stream_chunk(self, chunk: str, is_end: bool=False) -> Any:
         """Count and log one streamed token chunk.
 
         Increments the shared ``stream_state["chunks"]`` counter so the
@@ -28,12 +28,11 @@ class GeneralHelpStreamHandler(StreamHandler):
         Args:
             chunk: A partial token string from the LLM stream.
                    Empty chunks are silently ignored.
+            is_end: A boolean flag indicating whether this chunk is the last
+                    in the stream.  Useful for handlers that need to know when
+                    the stream has completed.
 
         Returns:
             ``None``; the return value is not used by the runtime.
         """
-        if not chunk:
-            return
-        self.stream_state["chunks"] += 1
-        print(chunk, end="", flush=True)
-    
+        await super().handle_stream_chunk(chunk, is_end)  # Increment chunk count and log the chunk.

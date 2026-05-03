@@ -163,7 +163,7 @@ class GeminiAdapter(LLMAdapter):
                             text = part.get("text")
                             if isinstance(text, str) and text:
                                 text_parts.append(text)
-                                stream_handler(text)
+                                await stream_handler(text)
 
         # Re-assemble a full response structure for the tools adapter to parse.
         combined_response = {"candidates": chunks}
