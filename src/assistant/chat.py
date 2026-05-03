@@ -2,14 +2,17 @@ from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from src.assistant.old_base_assistant import get_parser_args
-from legacy.assistant.generic_assistant import NuCoreAssistant as eisyAI_local
+from intent_handler.run_intent_runtime import main as run_intent_runtime_main
+from intent_handler.run_intent_runtime import _build_parser, _run_once
+from utils import get_logger
+logger = get_logger(__name__)
 
 import uvicorn
 import json
 
 app = FastAPI()
-eisy_ai=None
+global eisy_args
+eisy_args=None
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -33,10 +36,10 @@ async def get():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global eisy_ai
     await websocket.accept()
     active_connections.append(websocket)
-    
+    global eisy_args
+    eisy_ai = run_intent_runtime_main(args=eisy_args, websocket=websocket)
     
     try:
         while True:
@@ -47,24 +50,15 @@ async def websocket_endpoint(websocket: WebSocket):
             user_message = message_data.get("message", "")
 
             if user_message:
-                await eisy_ai.process_customer_input(user_message, websocket=websocket)
-            
+                eisy_ai.reset_stream_handler()
+                await _run_once(eisy_ai, user_message)
             
     except Exception as e:
         print(f"Error: {e}")
     finally:
         active_connections.remove(websocket)
 
-def NuCoreChat(args):
-    global eisy_ai
-    if args.model_url== "openai":
-        from legacy.assistant.openai_assistant import NuCoreAssistant as eisyAI_openai
-        eisy_ai=eisyAI_openai(args)
-    elif args.model_url == "claude":
-        from legacy.assistant.claude_assistant import NuCoreAssistant as eisyAI_claude
-        eisy_ai=eisyAI_claude(args)
-    else:
-        eisy_ai=eisyAI_local(args)
+def NuCoreChat():
     
     # Run the server with HTTPS
     uvicorn.run(
@@ -77,5 +71,5 @@ def NuCoreChat(args):
     )
     
 if __name__ == "__main__":
-    args = get_parser_args()
-    NuCoreChat(args)
+    eisy_args = _build_parser().parse_args()
+    NuCoreChat()

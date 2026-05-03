@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import functools
+import functools, json
 from pathlib import Path
 from typing import Any
 
@@ -335,7 +335,7 @@ async def _run_loop(runtime: IntentRuntime) -> None:
 nucore_interface: NuCoreInterface = None
 
 
-def main() -> None:
+def main(args:Any=None, websocket=None) -> None:
     """CLI entry point: parse arguments, configure logging, and start the runtime.
 
     Startup sequence:
@@ -348,7 +348,8 @@ def main() -> None:
        (``--query``) or enter the interactive REPL.
     7. Shut down the runtime on exit regardless of how it terminates.
     """
-    args = _build_parser().parse_args()
+    if args is None:
+        args = _build_parser().parse_args()
 
     log_config = configure_logging(
         level=args.log_level,
@@ -406,8 +407,13 @@ def main() -> None:
         runtime_api_key=args.api_key,
         runtime_model=args.model,
         runtime_model_url=args.model_url,
+        websocket=websocket,
     )
     logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})
+
+    if websocket:
+        logger.info("WebSocket connection detected; streaming responses will be sent to the client.")
+        return runtime
 
     if args.query:
         # Single-query (non-interactive) mode: run once and exit.

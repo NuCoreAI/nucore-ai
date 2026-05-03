@@ -89,13 +89,14 @@ class ClaudeAdapter(LLMAdapter):
             callback = stream_handler
             async with self._client.messages.stream(**kwargs) as response_stream:
                 async for text_chunk in response_stream.text_stream:
-                    callback(text_chunk)
+                    await callback(text_chunk)
                 final_message = await response_stream.get_final_message()
 
             content = final_message.content
             text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
             raw_response = {"content": [block.model_dump() for block in content]}
             tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
+            await callback("", is_end=True)  # Signal end of stream to the handler.
             return {
                 "content": raw_response["content"],
                 "text": "\n".join(text_parts),

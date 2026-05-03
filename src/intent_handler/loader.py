@@ -4,7 +4,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from .base import BaseIntentHandler
 from .models import IntentDefinition
@@ -36,13 +36,14 @@ class IntentHandlerRegistry:
     changes on disk.
     """
 
-    def __init__(self, root_directory: str | Path) -> None:
+    def __init__(self, root_directory: str | Path, websocket:Any=None) -> None:
         """Initialise the registry.
-
+    
         Args:
             root_directory: Absolute or relative path to the directory that
                             contains one sub-directory per intent handler.
                             The path is resolved to an absolute form immediately.
+            websocket: Optional websocket instance for real-time updates.   
         """
         self.root_directory = Path(root_directory).expanduser().resolve()
         self.runtime_assets_directory = Path(__file__).resolve().parent / "runtime_assets"
@@ -53,6 +54,7 @@ class IntentHandlerRegistry:
         # Cache key: (file_path, explicit_class_name | None) → (mtime_ns, class)
         self._handler_class_cache: dict[tuple[Path, str | None], tuple[int, type[BaseIntentHandler]]] = {}
         self._stream_handler_class_cache: dict[tuple[Path, str | None], tuple[int, type[StreamHandler]]] = {}
+        self.websocket = websocket
         # NOTE: refresh() is intentionally NOT called here.  The runtime calls
         # it after the directory monitor is configured to avoid a race between
         # the initial scan and the first monitor poll.
@@ -322,6 +324,7 @@ class IntentHandlerRegistry:
         stream_handler_class = self._load_stream_handler_class(configured_intent, stream_handler_path, None)
         if stream_handler_class is not None:
             stream_handler_class = stream_handler_class()
+            stream_handler_class.set_websocket(self.websocket)
 
         return IntentDefinition(
             name=configured_intent,

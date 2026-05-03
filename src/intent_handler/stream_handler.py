@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+import json
+import json
 from typing import Any
 from utils import get_logger
 
@@ -17,7 +19,7 @@ class StreamHandler(ABC):
     Reset it between calls via :meth:`reset_stream_state`.
     """
 
-    def __init__(self, stream_state: dict[str, int] | None = None) -> None:
+    def __init__(self, stream_state: dict[str, Any] = None)->None: 
         """Initialise with an optional shared state dict.
 
         Args:
@@ -25,8 +27,13 @@ class StreamHandler(ABC):
                           Defaults to ``{"chunks": 0}`` when ``None``.
                           Pass an existing dict to share state with external
                           consumers (e.g. the runtime's ``stream_state``).
+            websocket: Optional WebSocket connection for streaming output.
         """
         self.stream_state = {"chunks": 0} if stream_state is None else stream_state
+
+    def set_websocket(self, websocket) -> None:
+        """Set the WebSocket connection for streaming output."""   
+        self.websocket = websocket
 
     def reset_stream_state(self) -> None:
         """Reset the chunk counter to zero before a new generation call."""
@@ -36,7 +43,7 @@ class StreamHandler(ABC):
         """Return the number of non-empty chunks received since the last reset."""
         return self.stream_state.get("chunks", 0)
 
-    def handle_stream_chunk(self, chunk: str) -> Any:
+    async def handle_stream_chunk(self, chunk: str, is_end: bool = False) -> Any:
         """Process one streamed token chunk from the LLM.
 
         The default implementation increments the chunk counter and logs the
@@ -47,6 +54,9 @@ class StreamHandler(ABC):
         Args:
             chunk: A string token or partial token from the LLM stream.
                    Empty chunks are silently ignored.
+            is_end: A boolean flag indicating whether this chunk is the last
+                    in the stream.  Useful for handlers that need to know when
+                    the stream has completed.
 
         Returns:
             Any value; the return is ignored by the runtime but is available
@@ -56,6 +66,17 @@ class StreamHandler(ABC):
             return
         self.stream_state["chunks"] += 1
         print(chunk, end="", flush=True)
+
+        if self.websocket:
+            if self.websocket.client_state.name != "CONNECTED":
+                logger.error("WebSocket is not connected. Cannot send message.")
+                return None
+            payload={
+                "sender": "bot",
+                "message": chunk,
+                "end": "true" if is_end else "false"
+            }
+            await self.websocket.send_text(json.dumps(payload))
 
 
 class RouterStreamHandler(StreamHandler):
@@ -67,7 +88,7 @@ class RouterStreamHandler(StreamHandler):
     runtime checks to decide whether the response was already printed live.
     """
 
-    def handle_stream_chunk(self, chunk: str) -> Any:
+    async def handle_stream_chunk(self, chunk: str, is_end: bool = False) -> Any:
         """Count the chunk but suppress all output.
 
         Args:

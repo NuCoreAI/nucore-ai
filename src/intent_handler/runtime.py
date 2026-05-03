@@ -193,7 +193,8 @@ class IntentRuntime:
         runtime_provider: str | None = None,
         runtime_api_key: str | None = None,
         runtime_model: str | None = None,
-        runtime_model_url: str | None = None
+        runtime_model_url: str | None = None,
+        websocket: Any = None,
     ) -> None:
         """Initialise and start the intent runtime.
 
@@ -216,6 +217,7 @@ class IntentRuntime:
             runtime_api_key:          Optional CLI API key override.
             runtime_model:            Optional CLI model name override.
             runtime_model_url:        Optional CLI base-URL override.
+            websocket:                Optional WebSocket connection passed to the stream handler for real-time streaming output.
 
         Raises:
             ValueError: If any of ``llm_client``, ``nucore_interface``, or
@@ -224,7 +226,7 @@ class IntentRuntime:
         if llm_client is None or nucore_interface is None or runtime_config_path is None:
             raise ValueError("llm_client, nucore_interface, and runtime_config_path are required")
         self.intent_handler_directory = Path(intent_handler_directory).expanduser().resolve()
-        self.registry = IntentHandlerRegistry(self.intent_handler_directory)
+        self.registry = IntentHandlerRegistry(self.intent_handler_directory, websocket=websocket)
         self.llm_client = llm_client
         self.nucore_interface = nucore_interface
         self.router = IntentRouter(self.registry, llm_client)
@@ -233,6 +235,8 @@ class IntentRuntime:
         # Separate stream handler used exclusively by the router so its chunk
         # counter does not interfere with per-intent handler stream state.
         self.router_stream_handler = RouterStreamHandler()
+        self.stream_handler.set_websocket(websocket)
+        self.router_stream_handler.set_websocket(websocket)
         self._runtime_provider = runtime_provider
         self._runtime_api_key = runtime_api_key
         self._runtime_model = runtime_model
