@@ -270,10 +270,13 @@ async def _run_once(
         session_id: Optional session identifier for conversation tracking.
     """
     result = await runtime.handle_query(query, session_id=session_id)
+    if result is None:
+        return
     tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
     if tool_results:
         # Agentic loop: feed tool results back so the LLM can respond to them.
-        stringified_tool_results = "\n".join([f"\n{query}\n# AGENT RESPONSE:\n{str(tr)}" for tr in tool_results])
+        query = result.get_effective_query() or query
+        stringified_tool_results = "\n".join([f"\n\n{query}\n\n# AGENT RESPONSE\n\n{str(tr)}" for tr in tool_results])
         result = await runtime.handle_agent_response(stringified_tool_results, session_id=None)
         return
 

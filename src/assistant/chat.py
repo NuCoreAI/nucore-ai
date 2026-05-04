@@ -50,7 +50,6 @@ async def websocket_endpoint(websocket: WebSocket):
             user_message = message_data.get("message", "")
 
             if user_message:
-                eisy_ai.reset_stream_handler()
                 await _run_once(eisy_ai, user_message)
             
     except Exception as e:

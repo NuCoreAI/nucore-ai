@@ -103,6 +103,9 @@ class IntentHandlerResult:
         output:         Primary LLM output dict (keys: ``text``, ``content``,
                         ``tool_calls``, ``tool_results``, etc.) or any value
                         set by the handler.
+        effective_query: Optionally rewritten/clarified version of the original
+                         user query produced during handling (e.g. by a
+                         clarification subroutine).
         route_result:   :class:`RouteResult` that selected this intent, if
                         routing was performed.
         tool_result:    Accumulated list of tool execution results appended via
@@ -113,6 +116,7 @@ class IntentHandlerResult:
 
     intent: str
     output: Any
+    effective_query: str | None = None
     route_result: RouteResult | None = None
     tool_result: list[Any] | None = None
     stream_handler: StreamHandler | None = None
@@ -139,6 +143,14 @@ class IntentHandlerResult:
     def set_route_result(self, route_result: RouteResult | None = None) -> None:
         """Attach the :class:`RouteResult` that selected this intent."""
         self.route_result = route_result
+
+    def set_effective_query(self, effective_query: str | None = None) -> None:
+        """Attach the effective query that was used for this intent."""
+        self.effective_query = effective_query
+
+    def get_effective_query(self) -> str | None:
+        """Return the effective query that was used for this intent."""
+        return self.effective_query
 
     def get_text_output(self) -> str | None:
         """Extract the best available plain-text output string.

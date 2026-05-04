@@ -121,11 +121,9 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
                         debug(f"Tool call missing 'id' or 'operation' field: {tool}")
                         continue
                     rc = await self.nucore_interface.routine_ops(routine_id=routine_id, operation=operation)
-                    if rc is not None:
-                        out.append(rc)
+                    response.add_tool_result(rc if rc is not None else f"Operation '{operation}' on routine '{routine_id}' failed.")
         else:
             debug("No tool calls found in the response.")
 
-        response.output = out if out else "No routine status operations found in the intent."
         response.set_route_result(route_result=route_result)
         return response

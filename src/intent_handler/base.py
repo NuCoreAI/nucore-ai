@@ -3,16 +3,13 @@ from __future__ import annotations
 import importlib
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
 from .adapters import LLMAdapter
 from nucore import NuCoreInterface
-from threading import Thread
+from utils.logger import _write_debug_prompt
 
-# When True, the fully-assembled prompt is written to /tmp/nucore.prompt.md
-# after every call to build_messages — useful during development and debugging.
-prompt_debug_output = True
 
 
 class BaseIntentHandler(ABC):
@@ -173,11 +170,6 @@ class BaseIntentHandler(ABC):
                 + history_messages
                 + [{"role": "user", "content": current_user_content}]
             )
-            if prompt_debug_output:
-                with open("/tmp/nucore.prompt.md", "w") as f:
-                    for msg in messages:
-                        f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
-            return messages
 
         # Non-system-role layout (e.g. Claude messages API without a system
         # kwarg): inject the system instructions into the first user message.
@@ -205,17 +197,8 @@ class BaseIntentHandler(ABC):
                 }
             ]
 
-        if prompt_debug_output:
-            # Write off the hot path to avoid blocking the async event loop.
-            Thread(target=self._write_debug_prompt, args=(messages,)).start()
-
         return messages
 
-    def _write_debug_prompt(self, messages: list[dict[str, str]]) -> None:
-        """Write the assembled prompt to a temp file for inspection (debug only)."""
-        with open("/tmp/nucore.prompt.md", "w") as f:
-            for msg in messages:
-                f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
 
     # ------------------------------------------------------------------
     # Prompt rendering
@@ -431,6 +414,7 @@ class BaseIntentHandler(ABC):
         if self.definition.stream_handler_class is not None:
             merged_config["stream_handler"] = self.definition.stream_handler_class.handle_stream_chunk
         resolved_tools = tools if tools is not None else self.build_provider_tools(merged_config)
+        await _write_debug_prompt(self.definition.name, messages)
         response = await self.llm_client.generate(
             messages=messages,
             config=merged_config or None,

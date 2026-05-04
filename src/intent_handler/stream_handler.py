@@ -3,8 +3,10 @@ import json
 import json
 from typing import Any
 from utils import get_logger
+import logging
 
 logger = get_logger(__name__)
+
 
 
 class StreamHandler(ABC):
@@ -65,7 +67,6 @@ class StreamHandler(ABC):
         if not chunk:
             return
         self.stream_state["chunks"] += 1
-        print(chunk, end="", flush=True)
 
         if self.websocket:
             if self.websocket.client_state.name != "CONNECTED":
@@ -77,6 +78,10 @@ class StreamHandler(ABC):
                 "end": "true" if is_end else "false"
             }
             await self.websocket.send_text(json.dumps(payload))
+            if logger.getEffectiveLevel() == logging.DEBUG:
+                print(chunk, end="", flush=True)
+        else:
+            print(chunk, end="", flush=True)
 
 
 class RouterStreamHandler(StreamHandler):
@@ -94,6 +99,4 @@ class RouterStreamHandler(StreamHandler):
         Args:
             chunk: A string token from the router LLM stream.
         """
-        if not chunk:
-            return
-        self.stream_state["chunks"] += 1
+        await  super().handle_stream_chunk(chunk, is_end)
