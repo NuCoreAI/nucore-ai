@@ -229,7 +229,7 @@ class IntentRuntime:
         self.registry = IntentHandlerRegistry(self.intent_handler_directory, websocket=websocket)
         self.llm_client = llm_client
         self.nucore_interface = nucore_interface
-        self.router = IntentRouter(self.registry, llm_client)
+        self.router = IntentRouter(self.registry, llm_client, nucore_interface)
         self.runtime_config_path = runtime_config_path
         self.stream_handler = stream_handler
         # Separate stream handler used exclusively by the router so its chunk
@@ -339,7 +339,7 @@ class IntentRuntime:
         framework_context: str | None = None,
         session_id: str | None = None,
     ) -> IntentHandlerResult:
-        """Feed a tool/agent result back through the ``translate_agent_output`` intent.
+        """Feed a tool/agent result back through the ``router`` to generate a final response. 
 
         Called after :meth:`handle_query` returns tool results that need to be
         converted into a final user-facing text response by the LLM.
@@ -351,7 +351,7 @@ class IntentRuntime:
                                for agent responses — history is not appended).
 
         Returns:
-            :class:`~models.IntentHandlerResult` from ``translate_agent_output``.
+            :class:`~models.IntentHandlerResult` from self.router.route with the final response content and metadata. 
         """
         default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
         active_llm_key = self.runtime_config.get("default_llm")
@@ -360,18 +360,7 @@ class IntentRuntime:
 
         history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
 
-        intent_name = "translate_agent_output"
-        handler = self._get_or_create_handler(intent_name)
-        step_llm_config = self._resolve_runtime_llm_config(intent_name)
-        handler.set_runtime_llm_config(step_llm_config)
-        handler.set_current_history(history)
-
-        return await handler.handle(
-            query,
-            route_result=None,
-            framework_context=framework_context,
-            dependency_outputs={},
-        )
+        return await self.route(query, history=history)
 
     async def handle_query(
         self,
@@ -412,6 +401,9 @@ class IntentRuntime:
         history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
 
         route_result = await self.route(query, history=history)
+        if route_result is None:
+            return None
+
         execution_chain = self._resolve_execution_chain(route_result.intent)
 
         dependency_outputs: dict[str, Any] = {}
@@ -448,6 +440,7 @@ class IntentRuntime:
             )
             if result:
                 result.set_route_result(route_result=step_route_result)
+                result.set_effective_query(effective_query)
                 dependency_outputs[intent_name] = result
                 last_result = result
 

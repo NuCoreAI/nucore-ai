@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 from .adapters import LLMAdapter
 from .loader import IntentHandlerRegistry
 from .models import ConversationHistory, IntentDefinition, RouteResult
+from nucore import NuCoreInterface
+from utils.logger import _write_debug_prompt
 
 
 class IntentRouter:
@@ -31,22 +32,24 @@ class IntentRouter:
     4. Prepend recent conversation history when supplied.
     """
 
-    def __init__(self, registry: IntentHandlerRegistry, llm_client: LLMAdapter) -> None:
+    def __init__(self, registry: IntentHandlerRegistry, llm_client: LLMAdapter, nucore_interface: NuCoreInterface) -> None:
         """Initialise the router.
 
         Args:
-            registry:   Registry of loaded intent definitions used to build
-                        the prompt and validate the selected intent name.
-            llm_client: LLM adapter used to call the routing model.
+            registry:         Registry of loaded intent definitions used to build
+                              the prompt and validate the selected intent name.
+            llm_client:       LLM adapter used to call the routing model.
+            nucore_interface: Backend API instance injected into the router.
         """
         self.registry = registry
         self.llm_client = llm_client
+        self.nucore_interface = nucore_interface
 
     # ------------------------------------------------------------------
     # Prompt construction
     # ------------------------------------------------------------------
 
-    def build_router_prompt(self) -> str:
+    async def build_router_prompt(self) -> str:
         """Build the complete system prompt for the routing LLM.
 
         Loads the base template from ``runtime_assets/router/prompt.md``,
@@ -63,6 +66,9 @@ class IntentRouter:
         if not router_prompt_path.exists():
             raise FileNotFoundError(f"Router prompt template not found: {router_prompt_path}")
 
+        # this will also refresh the device database
+        await self.nucore_interface._refresh_routines_database()
+
         with router_prompt_path.open("r", encoding="utf-8") as f:
             base_prompt = f.read().strip()
 
@@ -70,8 +76,14 @@ class IntentRouter:
         discovered_intents = self._build_discovered_intents(definitions)
         routing_patterns = self._build_routing_patterns(definitions)
 
-        prompt = base_prompt.replace("<<DISCOVERED_INTENTS>>", discovered_intents)
-        prompt = prompt.replace("<<ROUTING_PATTERNS>>", routing_patterns)
+        prompt = base_prompt.replace("<<discovered_intents>>", discovered_intents)
+        prompt = prompt.replace("<<routing_patterns>>", routing_patterns)
+        prompt = prompt.replace("<<device_database>>", (
+                self.nucore_interface.summary_rags.docs_to_string()
+                if self.nucore_interface.summary_rags
+                else ""
+            ))
+        prompt = prompt.replace("<<routines_database>>", f"```json\n{self.nucore_interface.condensed_routines}\n```")
 
         # Expand any shared module placeholders (e.g. <<nucore_rules>>).
         expanded_prompt = self.registry.expand_common_module_placeholders(prompt)
@@ -126,6 +138,7 @@ class IntentRouter:
                 lines.append("")
             history_block = "\n".join(lines).strip()
 
+
         def _make_user_content(router_prompt: str) -> str:
             """Combine optional history and the user query into one content string."""
             parts = []
@@ -134,7 +147,7 @@ class IntentRouter:
             parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
             return "\n\n".join(parts)
 
-        router_prompt = self.build_router_prompt()
+        router_prompt = await self.build_router_prompt()
         # Build message list using the provider-appropriate layout.
         if self._supports_system_role(router_llm_config):
             messages = [
@@ -155,12 +168,17 @@ class IntentRouter:
                 }
             ]
 
+        await _write_debug_prompt("router", messages) 
         raw_response = await self.llm_client.generate(
             messages=messages,
             config=router_llm_config,
             expect_json=True,
         )
         payload = self._coerce_route_payload(raw_response)
+        if payload.get("intent") is None:
+            # The payload is invalid or missing an intent; return a RouteResult with notes but no intent.
+            return None
+
         payload = self._normalize_and_validate_route_payload(payload, query)
 
         intent_name = payload.get("intent")
@@ -373,7 +391,10 @@ class IntentRouter:
                     "notes": f"Router returned non-JSON text: {text}",
                 }
 
-        raise ValueError(f"Router response is not valid JSON: {raw_response!r}")
+        return{
+            "intent": None,
+            "notes": f"Router returned non-JSON text: {text}"
+        }
 
     @staticmethod
     def _extract_text_response(raw_response: dict[str, Any]) -> str | None:
