@@ -690,18 +690,12 @@ The following intents live under `src/intent_handler_directory`:
 
 | Intent | Description | Dependencies |
 |---|---|---|
-| `command_control_status` | Device commands and real-time status | `device_filter` |
-| `routine_automation` | Create or edit routine logic | `device_filter` |
-| `routine_status_ops` | Enable/disable/run existing routines | `routine_filter` |
-| `group_scene_operations` | Group and scene queries | `device_filter` |
-| `general_help` | Conceptual help, definitions, non-execution queries | — |
+| `command_control_status` | Device commands and real-time status | None | 
+| `routine_automation` | Create or edit routine logic | None |
+| `routine_status_ops` | Enable/disable/run existing routines | None |
+| `group_scene_operations` | Group and scene queries | None |
 
 ### Pipeline Filter Intents (`routable: false` — dependency-only)
-
-| Intent | Description | Used by |
-|---|---|---|
-| `device_filter` | Narrows device candidates for downstream execution | `command_control_status`, `routine_automation`, `group_scene_operations` |
-| `routine_filter` | Narrows routine candidates for downstream execution | `routine_status_ops` |
 
 Pipeline filter intents are never presented to the router LLM. They are invoked automatically via `previous_dependencies` when a routable intent that depends on them is selected.
 

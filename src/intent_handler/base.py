@@ -9,6 +9,7 @@ from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, 
 from .adapters import LLMAdapter
 from nucore import NuCoreInterface
 from utils.logger import _write_debug_prompt
+from rag import RAGData, DedupeDevices 
 
 
 
@@ -464,3 +465,59 @@ class BaseIntentHandler(ABC):
         """
         raise NotImplementedError
     
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_rags_from_candidates(self, candidate_devices:list[dict[str, Any]]) -> str:
+        """Filter the full RAG store to the devices nominated by the LLM tool call.
+
+        Iterates the candidate list in ``candidate_devices``, discards entries below
+        the configured score threshold, then extracts and de-duplicates the
+        matching RAG documents.
+
+        Args:
+            candidate_devices: A list of dicts with ``device_id`` and ``score`` keys.
+
+        Returns:
+            De-duplicated device document string ready for downstream prompt
+            injection, or an empty string when no candidates pass the threshold.
+        """
+        full_rags = self.nucore_interface.rags
+        if not candidate_devices or not full_rags:
+            return RAGData()
+
+        # Threshold is configurable per-intent; fall back to 0.80.
+        score_threshold = self.config.get("threshold", 0.80)
+
+        # Collect device IDs that meet the relevance threshold.
+        matched_candidate_ids: set[str] = set()
+        for d in candidate_devices:
+            if float(d.get('score', 0)) >= score_threshold:
+                try:
+                    matched_candidate_ids.add(d['device_id'])
+                except Exception:
+                    pass
+
+        # Build a filtered RAGData containing only the matched devices.
+        filtered_rags = RAGData(documents=[], ids=[])
+        for idx, id_ in enumerate(full_rags["ids"]):
+            if id_ in matched_candidate_ids:
+                filtered_rags.add_document(
+                    full_rags["documents"][idx],
+                    full_rags["embeddings"][idx],
+                    id_,
+                    full_rags["metadatas"][idx],
+                )
+
+        rag_docs = filtered_rags["documents"]
+        if not rag_docs:
+            return ""
+
+        # Concatenate documents then de-duplicate overlapping content.
+        device_docs = ""
+        for rag_doc in rag_docs:
+            device_docs += "\n" + rag_doc
+
+        deduper = DedupeDevices()
+        return deduper.dedupe(device_docs)

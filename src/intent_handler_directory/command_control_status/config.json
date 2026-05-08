@@ -3,7 +3,6 @@
   "description": "Post-router execution for command control and realtime status requests.",
   "handler": "handler.py",
   "previous_dependencies": [
-    "device_filter"
   ],
   "routing_examples": [
     "Turn on the patio lights",
@@ -11,8 +10,7 @@
     "What is the garage temperature right now?"
   ],
   "router_hints": [
-    "Use this intent for *Immediate* device actions (turn on/off, set value, adjust) and real time device status checks",
-    "This intent expects pre-filtered devices from device_filter."
+    "Use this intent for *Immediate* device actions (turn on/off, set value, adjust) and real time device status checks"
   ],
   "tool_files": [
     "tool_command_control.json",

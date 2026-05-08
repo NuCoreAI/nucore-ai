@@ -38,7 +38,11 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         Returns:
             Empty dict — the static prompt requires no runtime substitution.
         """
-        return {}
+        if route_result and route_result.route_context:
+            # If the router provided candidate devices in the route context, use those directly.
+            candidate_rags = self._get_rags_from_candidates(route_result.route_context.get("candidate_devices", []))
+            return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
+        return {"<<runtime_device_structure>>": "" }
 
     async def handle(
         self,

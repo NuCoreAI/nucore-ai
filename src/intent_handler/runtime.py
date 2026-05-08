@@ -335,6 +335,7 @@ class IntentRuntime:
     async def handle_agent_response(
         self,
         query: str,
+        agent_response: str,
         *,
         framework_context: str | None = None,
         session_id: str | None = None,
@@ -346,12 +347,13 @@ class IntentRuntime:
 
         Args:
             query:             Stringified tool results to process.
+            agent_response:    The response from the agent to convert to human-readable form.
             framework_context: Optional extra context string forwarded to the handler.
             session_id:        Session ID for history look-up (currently unused
                                for agent responses — history is not appended).
 
         Returns:
-            :class:`~models.IntentHandlerResult` from self.router.route with the final response content and metadata. 
+            Nothing
         """
         default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
         active_llm_key = self.runtime_config.get("default_llm")
@@ -360,7 +362,7 @@ class IntentRuntime:
 
         history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
 
-        return await self.route(query, history=history)
+        return await self.router.handle_agent_response(query, agent_response=agent_response,history=history)
 
     async def handle_query(
         self,
@@ -444,11 +446,6 @@ class IntentRuntime:
                 dependency_outputs[intent_name] = result
                 last_result = result
 
-        if last_result :
-            if session_id is not None:
-                response_text = last_result.get_text_output() or ""
-                self.session_store.get(session_id).append(query=query, response=response_text)
-
         return last_result
 
     def available_intents(self) -> list[str]:
@@ -522,6 +519,8 @@ class IntentRuntime:
         active: set[str] = set()  # Intents currently in the DFS call stack (grey nodes).
 
         def visit(intent_name: str) -> None:
+            if not intent_name:
+                return 
             if intent_name in active:
                 raise ValueError(f"Circular dependency in execution chain at '{intent_name}'")
             if intent_name in visited:
