@@ -44,6 +44,8 @@ class IntentRouter:
         self.registry = registry
         self.llm_client = llm_client
         self.nucore_interface = nucore_interface
+        self.router_tool_spec = None # it will be updated when we load them
+        self.tool_specs = self._load_router_tool_specs()  # Cache the router tool specs for efficiency.
 
     # ------------------------------------------------------------------
     # Prompt construction
@@ -83,12 +85,13 @@ class IntentRouter:
                 if self.nucore_interface.summary_rags
                 else ""
             ))
-        prompt = prompt.replace("<<routines_database>>", f"```json\n{self.nucore_interface.condensed_routines}\n```")
+        prompt = prompt.replace("<<routines_database>>", f"```json\n{await self.nucore_interface.get_all_routines_summary()}\n```")
 
         # Expand any shared module placeholders (e.g. <<nucore_rules>>).
         expanded_prompt = self.registry.expand_common_module_placeholders(prompt)
         # Append the output schema contract so the LLM knows the required JSON shape.
-        return "\n\n".join([expanded_prompt, self._build_router_output_contract()])
+        return expanded_prompt
+        #return "\n\n".join([expanded_prompt, self._build_router_output_contract()])
 
     # ------------------------------------------------------------------
     # Routing
@@ -139,7 +142,7 @@ class IntentRouter:
             history_block = "\n".join(lines).strip()
 
 
-        def _make_user_content(router_prompt: str) -> str:
+        def _make_user_content() -> str:
             """Combine optional history and the user query into one content string."""
             parts = []
             if history_block:
@@ -152,7 +155,7 @@ class IntentRouter:
         if self._supports_system_role(router_llm_config):
             messages = [
                 {"role": "system", "content": router_prompt},
-                {"role": "user", "content": _make_user_content(router_prompt)},
+                {"role": "user", "content": _make_user_content()},
             ]
         else:
             # Claude and similar providers that do not use a separate system role:
@@ -163,7 +166,7 @@ class IntentRouter:
                     "content": (
                         "SYSTEM INSTRUCTIONS:\n"
                         f"{router_prompt}\n\n"
-                        f"{_make_user_content(router_prompt)}"
+                        f"{_make_user_content()}"
                     ),
                 }
             ]
@@ -172,14 +175,20 @@ class IntentRouter:
         raw_response = await self.llm_client.generate(
             messages=messages,
             config=router_llm_config,
+            tools=self.tool_specs,
             expect_json=True,
         )
         payload = self._coerce_route_payload(raw_response)
         if payload.get("intent") is None:
             # The payload is invalid or missing an intent; return a RouteResult with notes but no intent.
-            return None
+            return RouteResult(
+                intent=None,
+                notes=payload.get("notes", "Router failed to select a valid intent."),
+                resolved_query=payload.get("user_query") or query,
+                raw_response=raw_response
+            )
 
-        payload = self._normalize_and_validate_route_payload(payload, query)
+#        payload = self._normalize_and_validate_route_payload(payload, query)
 
         intent_name = payload.get("intent")
         if intent_name not in self.registry.names():
@@ -197,10 +206,105 @@ class IntentRouter:
         return RouteResult(
             intent=intent_name,
             confidence=confidence,
-            notes=payload.get("notes"),
+            notes=payload.get("notes", None),
+            route_context=payload.get("context", None),
             resolved_query=payload.get("user_query") or query,
             raw_response=payload,
         )
+
+    # ------------------------------------------------------------------
+    # Simplistic that converts technical agent response to human readable response.
+    # ------------------------------------------------------------------
+      
+    async def handle_agent_response(
+        self,
+        query: str,
+        agent_response: str,
+        llm_config_override: dict[str, Any] | None = None,
+        history: ConversationHistory | None = None,
+    ) -> Any:
+        """Route ``query`` to the best-matching intent and return a :class:`~models.RouteResult`.
+
+        Merges the router's own ``llm_config`` (from ``router/config.json``)
+        with any caller-supplied overrides, assembles a message list that
+        optionally includes recent conversation history, calls the LLM, and
+        validates the returned JSON payload against the ``tool_router`` schema.
+
+        Args:
+            query:               The raw user input to route.
+            agent_response:      The response from the agent to convert to human-readable form.
+            llm_config_override: Optional dict of LLM config values that take
+                                 precedence over the router's own config.
+            history:             Optional conversation history to prepend to
+                                 the user message so the LLM can consider
+                                 context when resolving ambiguous queries.
+
+        Returns:
+            Nothing
+
+        Raises:
+            ValueError: If the LLM returns an invalid response or selects an
+                        intent name not present in the registry.
+        """
+        # Start from the router's own llm_config, then layer caller overrides on top.
+        router_llm_config = dict(self.registry.router_config().get("llm_config", {}))
+        if llm_config_override:
+            router_llm_config.update(llm_config_override)
+
+        # Build a formatted history block (most recent turn first) for the user message.
+        history_block = ""
+        if history and history.turns:
+            lines = ["────────────────────────────────\n# CONVERSATION HISTORY (most recent first):"]
+            for turn in reversed(history.turns):
+                lines.append(f"User: {turn.query.strip()}")
+                lines.append(f"Assistant: {turn.response.strip()}")
+                lines.append("")
+            history_block = "\n".join(lines).strip()
+
+
+        def _make_user_content() -> str:
+            """Combine optional history and the user query into one content string."""
+            parts = []
+            if history_block:
+                parts.append(history_block)
+            parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
+            parts.append(f"────────────────────────────────\n# AGENT RESPONSE:\n{agent_response.strip()}")
+            return "\n\n".join(parts)
+
+        router_prompt = "You are an assistant that converts technical agent responses into human-readable summaries for the user. Given the following AGENT RESPONSE, and conversation history, produce a concise and clear summary that explains in plain language what the agent did or found out. Be sure to include any important details that the user should know, but avoid technical jargon and focus on what matters to the user.\n\n" 
+        # Build message list using the provider-appropriate layout.
+        if self._supports_system_role(router_llm_config):
+            messages = [
+                {"role": "system", "content": router_prompt},
+                {"role": "user", "content": _make_user_content()},
+            ]
+        else:
+            # Claude and similar providers that do not use a separate system role:
+            # inline the system instructions at the start of the user turn.
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "SYSTEM INSTRUCTIONS:\n"
+                        f"{router_prompt}\n\n"
+                        f"{_make_user_content()}"
+                    ),
+                }
+            ]
+
+        await _write_debug_prompt("translator", messages) 
+        raw_response = await self.llm_client.generate(
+            messages=messages,
+            config=router_llm_config,
+        )
+        payload = self._coerce_route_payload(raw_response)
+        return RouteResult(
+            intent=None,
+            notes=payload.get("notes", "Router failed to select a valid intent.") if payload else "Router failed to produce a valid response.",
+            resolved_query=payload.get("user_query") or query,
+            raw_response=raw_response
+        )
+
 
     # ------------------------------------------------------------------
     # Prompt block builders
@@ -247,96 +351,108 @@ class IntentRouter:
                 patterns.append(f"- **{definition.name}**: No specific patterns defined")
         return "\n".join(patterns)
 
-    def _build_router_output_contract(self) -> str:
-        """Append the ``# OUTPUT SCHEMA`` section to the prompt.
+#    def _build_router_output_contract(self) -> str:
+#        """Append the ``# OUTPUT SCHEMA`` section to the prompt.
+#
+#        Inlines the ``tool_router.json`` input schema so the LLM knows the
+#        exact JSON structure it must return.
+#        """
+#        tool_spec = self._load_router_tool_spec()
+#        return "\n".join(
+#            [
+#                "# OUTPUT SCHEMA",
+#                f"Return JSON only that conforms exactly to `{tool_spec.get('name', 'tool_router')}` input_schema.",
+#                json.dumps(tool_spec.get("input_schema", {}), indent=2),
+#                "Do not include markdown fences or extra keys.",
+#            ]
+#        )
 
-        Inlines the ``tool_router.json`` input schema so the LLM knows the
-        exact JSON structure it must return.
-        """
-        tool_spec = self._load_router_tool_spec()
-        return "\n".join(
-            [
-                "# OUTPUT SCHEMA",
-                f"Return JSON only that conforms exactly to `{tool_spec.get('name', 'tool_router')}` input_schema.",
-                json.dumps(tool_spec.get("input_schema", {}), indent=2),
-                "Do not include markdown fences or extra keys.",
-            ]
-        )
-
-    def _load_router_tool_spec(self) -> dict[str, Any]:
+    def _load_router_tool_specs(self) -> dict[str, Any]:
         """Load and return the ``tool_router.json`` schema dict.
 
         Raises:
             FileNotFoundError: If ``runtime_assets/router/tool_router.json`` is missing.
         """
-        tool_spec_path = self.registry.runtime_assets_directory / "router" / "tool_router.json"
-        if not tool_spec_path.exists():
-            raise FileNotFoundError(f"Router tool schema not found: {tool_spec_path}")
-        with tool_spec_path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+        tool_spec_path = self.registry.runtime_assets_directory / "router"
+
+        #go through this directory and find all *.json files that start with "tool_" and load them into an array of dicts and return that array
+        tool_specs = self.llm_client.tools_spec_from_files(tool_spec_path.glob("tool_*.json"))
+        if not tool_specs:
+            raise FileNotFoundError(f"No router tool schema files found in: {tool_spec_path}")
+        for spec in tool_specs:
+            if spec.name == "tool_router":
+                self.router_tool_spec = spec
+                break
+        # now export the specs into native llm format using export_tools method:
+        try:
+            return self.llm_client.export_tools(tool_specs)
+        except Exception as e:
+            raise RuntimeError(f"Failed to export router tool specs using LLM client: {e}") 
 
     # ------------------------------------------------------------------
     # Payload validation
     # ------------------------------------------------------------------
 
-    def _normalize_and_validate_route_payload(self, payload: dict[str, Any], query: str) -> dict[str, Any]:
-        """Validate and normalise a parsed route payload against the ``tool_router`` schema.
-
-        Checks that all required fields are present, that string fields are
-        strings, and (when ``additionalProperties`` is ``false``) that no
-        unexpected keys are present.  ``user_query`` is backfilled from
-        ``query`` when the router omits it.
-
-        Args:
-            payload: Parsed JSON dict returned by the routing LLM.
-            query:   Original user query used as a fallback for ``user_query``.
-
-        Returns:
-            The normalised payload dict.
-
-        Raises:
-            ValueError: On type mismatches or missing required fields.
-        """
-        tool_spec = self._load_router_tool_spec()
-        input_schema = tool_spec.get("input_schema", {})
-        properties = input_schema.get("properties", {})
-        required = input_schema.get("required", [])
-        # These optional fields are always permitted even when additionalProperties is false.
-        allowed_optional_fields = {"confidence", "notes"}
-
-        if not isinstance(payload, dict):
-            raise ValueError(f"Router response must be a JSON object matching tool_router: {payload!r}")
-
-        normalized_payload = dict(payload)
-        # Backfill user_query so downstream code always has a resolved query string.
-        if "user_query" not in normalized_payload or not normalized_payload["user_query"]:
-            normalized_payload["user_query"] = query.strip()
-
-        missing = [key for key in required if key not in normalized_payload]
-        if missing:
-            raise ValueError(f"Router response is missing required fields from tool_router: {missing}")
-
-        if input_schema.get("additionalProperties") is False:
-            extra_keys = sorted(set(normalized_payload) - set(properties) - allowed_optional_fields)
-            if extra_keys:
-                raise ValueError(f"Router response contains unsupported tool_router fields: {extra_keys}")
-
-        for field_name, field_schema in properties.items():
-            if field_name not in normalized_payload:
-                continue
-            field_type = field_schema.get("type")
-            if field_type == "string" and not isinstance(normalized_payload[field_name], str):
-                raise ValueError(f"Router field '{field_name}' must be a string")
-
-        notes = normalized_payload.get("notes")
-        if notes is not None and not isinstance(notes, str):
-            raise ValueError("Router field 'notes' must be a string when provided")
-
-        confidence = normalized_payload.get("confidence")
-        if confidence is not None and not isinstance(confidence, (int, float, str)):
-            raise ValueError("Router field 'confidence' must be numeric or string when provided")
-
-        return normalized_payload
+#    def _normalize_and_validate_route_payload(self, payload: dict[str, Any], query: str) -> dict[str, Any]:
+#        """Validate and normalise a parsed route payload against the ``tool_router`` schema.
+#
+#        Checks that all required fields are present, that string fields are
+#        strings, and (when ``additionalProperties`` is ``false``) that no
+#        unexpected keys are present.  ``user_query`` is backfilled from
+#        ``query`` when the router omits it.
+#
+#        Args:
+#            payload: Parsed JSON dict returned by the routing LLM.
+#            query:   Original user query used as a fallback for ``user_query``.
+#
+#        Returns:
+#            The normalised payload dict.
+#
+#        Raises:
+#            ValueError: On type mismatches or missing required fields.
+#        """
+#        if not self.router_tool_spec:
+#            raise RuntimeError("Router tool spec not loaded; cannot validate payload")
+#
+#        input_schema = self.router_tool_spec.json_schema
+#        properties = input_schema.get("properties", {})
+#        required = input_schema.get("required", [])
+#        # These optional fields are always permitted even when additionalProperties is false.
+#        allowed_optional_fields = {"confidence", "notes"}
+#
+#        if not isinstance(payload, dict):
+#            raise ValueError(f"Router response must be a JSON object matching tool_router: {payload!r}")
+#
+#        normalized_payload = dict(payload)
+#        # Backfill user_query so downstream code always has a resolved query string.
+#        if "user_query" not in normalized_payload or not normalized_payload["user_query"]:
+#            normalized_payload["user_query"] = query.strip()
+#
+#        missing = [key for key in required if key not in normalized_payload]
+#        if missing:
+#            raise ValueError(f"Router response is missing required fields from tool_router: {missing}")
+#
+#        if input_schema.get("additionalProperties") is False:
+#            extra_keys = sorted(set(normalized_payload) - set(properties) - allowed_optional_fields)
+#            if extra_keys:
+#                raise ValueError(f"Router response contains unsupported tool_router fields: {extra_keys}")
+#
+#        for field_name, field_schema in properties.items():
+#            if field_name not in normalized_payload:
+#                continue
+#            field_type = field_schema.get("type")
+#            if field_type == "string" and not isinstance(normalized_payload[field_name], str):
+#                raise ValueError(f"Router field '{field_name}' must be a string")
+#
+#        notes = normalized_payload.get("notes")
+#        if notes is not None and not isinstance(notes, str):
+#            raise ValueError("Router field 'notes' must be a string when provided")
+#
+#        confidence = normalized_payload.get("confidence")
+#        if confidence is not None and not isinstance(confidence, (int, float, str)):
+#            raise ValueError("Router field 'confidence' must be numeric or string when provided")
+#
+#        return normalized_payload
 
     # ------------------------------------------------------------------
     # Response coercion
@@ -354,46 +470,39 @@ class IntentRouter:
         Raises:
             ValueError: If no valid payload can be extracted.
         """
+        intent = None
+        candidate_devices = None
+        candidate_routines = None
         if isinstance(raw_response, dict):
-            if isinstance(raw_response.get("intent"), str):
-                return raw_response
-
-            # Unwrap nested text/content fields produced by some adapter responses.
-            extracted_text = self._extract_text_response(raw_response)
-            if extracted_text is not None:
-                return self._coerce_route_payload(extracted_text)
-
-        if isinstance(raw_response, str):
-            text = raw_response.strip()
-            try:
-                payload = json.loads(text)
-                if isinstance(payload, dict):
-                    return payload
-            except json.JSONDecodeError:
-                # Fall back to regex extraction when the string contains
-                # surrounding prose or markdown fences.
-                match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-                if match:
-                    payload = json.loads(match.group(0))
-                    if isinstance(payload, dict):
-                        return payload
-
-            # Last resort: try to find a known intent name mentioned in the text.
-            inferred_intent = self._infer_intent_from_text(text)
-            if inferred_intent is not None:
-                return {"intent": inferred_intent}
-
-            # If a generic fallback intent is registered, use it rather than raising.
-            fallback_intent = self._fallback_text_intent()
-            if fallback_intent is not None:
+            text = self._extract_text_response(raw_response) 
+            tool_calls = raw_response.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                for call in tool_calls:
+                    if call.get("name") == "tool_router":
+                        input = call.get("input", None)
+                        if not input:
+                            input = call.get("arguments", None) 
+                            if not input:
+                                continue
+                        intent = input.get("intent", None)
+                        candidate_devices = input.get("candidate_devices", None)
+                        candidate_routines = input.get("candidate_routines", None)
+                        return {
+                            "intent": intent,
+                            "context": {
+                                "candidate_devices": candidate_devices,
+                                "candidate_routines": candidate_routines,
+                            }
+                        }
+            else:
                 return {
-                    "intent": fallback_intent,
-                    "notes": f"Router returned non-JSON text: {text}",
+                    "intent": None,
+                    "notes": text if text else "Router returned a JSON object but it does not contain tool_calls or text fields.",
                 }
-
+                    
         return{
             "intent": None,
-            "notes": f"Router returned non-JSON text: {text}"
+            "notes": f"Router returned non-JSON text: {text}" if text else "Router returned an unparseable response with no intent.",
         }
 
     @staticmethod

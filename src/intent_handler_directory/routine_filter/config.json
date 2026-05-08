@@ -1,9 +1,0 @@
-{
-  "intent": "routine_filter",
-  "description": "Select relevant routine candidates for downstream routine operations intents.",
-  "handler": "handler.py",
-  "routable": false,
-  "llm_config": {
-    "temperature": 0.0
-  }
-}

@@ -272,22 +272,34 @@ async def _run_once(
     result = await runtime.handle_query(query, session_id=session_id)
     if result is None:
         return
+    text_output = ""
     tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
     if tool_results:
         # Agentic loop: feed tool results back so the LLM can respond to them.
         query = result.get_effective_query() or query
-        stringified_tool_results = "\n".join([f"\n\n{query}\n\n# AGENT RESPONSE\n\n{str(tr)}" for tr in tool_results])
-        result = await runtime.handle_agent_response(stringified_tool_results, session_id=None)
-        return
-
-    text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else None)
-    if text_output is not None and result.get_stream_handler() is not None:
-        streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
-        if streamed_chunks > 0:
-            # Response was already printed live by the stream handler; just add newline.
-            print()
+        stringified_tool_results = "\n".join([f"\n\n{str(tr)}" for tr in tool_results])
+        result = await runtime.handle_agent_response(query, stringified_tool_results, session_id=session_id)
+        if result is None:
             return
-        logger.info(f"\n{text_output}\n")
+        text_output = result.notes if result.notes else "Unknown output from translator"
+        if runtime.stream_handler:
+            await runtime.stream_handler.send_chunk(f"\n{text_output}", True)  # Separate tool results from final response with extra newlines for readability in the stream output.
+        else:
+            print(f"\n{text_output}")  # Separate tool results from final response with extra newlines for readability in the console output.
+    else:
+        text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
+        if result.get_stream_handler() is not None:
+            streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
+            if streamed_chunks > 0:
+                # Response was already printed live by the stream handler; just add newline.
+                print()
+                return
+            result.get_stream_handler().send_chunk(text_output, True)
+
+    if text_output:
+        if session_id:
+            runtime.session_store.get(session_id).append(query=query, response=text_output)
+
 
     return
 

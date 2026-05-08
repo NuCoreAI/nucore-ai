@@ -55,19 +55,12 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
             block, or a ``"No routine runtime information available."`` fallback.
         """
         routines_runtime = "No routine runtime information available."
-
-        if dependency_outputs is not None and isinstance(dependency_outputs, dict):
-            # Prefer the explicit routine_filter output; fall back to the whole dict.
-            dep = dependency_outputs.get("routine_filter", dependency_outputs)
-            if isinstance(dep, IntentHandlerResult):
-                routines_runtime = f"```json\n{json.dumps(dep.output, indent=2)}\n```"
-            elif isinstance(dep, str):
-                routines_runtime = dep
-            elif isinstance(dep, dict):
-                routines_runtime = f"```json\n{json.dumps(dep, indent=2)}\n```"
+        if self.nucore_interface is not None:
+            # Ensure we have the latest routines before injecting them into the prompt.
+            await self.nucore_interface._refresh_routines_database()
 
         return {
-            "nucore_routines_runtime": routines_runtime or "No routine runtime information available.",
+            "<<nucore_routines_runtime>>": f"```json\n{self.nucore_interface.condensed_routines}\n```",
         }
 
     async def handle(

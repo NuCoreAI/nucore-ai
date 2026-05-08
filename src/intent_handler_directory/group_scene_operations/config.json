@@ -3,7 +3,6 @@
   "description": "Post-router execution for group and scene information.",
   "handler": "handler.py",
   "previous_dependencies": [
-    "device_filter"
   ],
   "routing_examples": [
     "Are these devices cross-linked? ",
@@ -17,8 +16,7 @@
     "Explain [group_name] to me"
   ],
   "router_hints": [
-    "Use this intent to answer any question about *groups* and *scenes*, including: their links, features, what they do, how to manage them, and informational queries. Examples: 'tell me about [group name]', 'what is [group name]', 'show me [group name]', 'explain [group name]', 'what devices are in [group name]'",
-    "This intent expects pre-filtered devices from device_filter."
+    "Use this intent to answer any question about *groups* and *scenes*, including: their links, features, what they do, how to manage them, and informational queries. Examples: 'tell me about [group name]', 'what is [group name]', 'show me [group name]', 'explain [group name]', 'what devices are in [group name]'"
   ],
   "tool_files": [
   ],

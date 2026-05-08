@@ -51,7 +51,7 @@ Example — device-action pipeline:
 
 ```
 router selects: command_control_status
-  └── previous_dependencies: [device_filter]   ← runs first, routable: false
+  └── previous_dependencies: [None]   ← runs first, routable: false (EXAMPLE ONLY)
 ```
 
 ## Handler Requirements
@@ -165,18 +165,14 @@ In interactive CLI mode (`_run_loop`) history is enabled automatically with `ses
 
 | Intent | Description | Depends on |
 |---|---|---|
-| `command_control_status` | Device commands and real-time status | `device_filter` |
-| `routine_automation` | Create or edit routine logic | `device_filter` |
-| `routine_status_ops` | Enable/disable/run existing routines | `routine_filter` |
-| `group_scene_operations` | Group and scene queries | `device_filter` |
-| `general_help` | Conceptual help, definitions, non-execution queries | — |
+| `command_control_status` | Device commands and real-time status | `None` |
+| `routine_automation` | Create or edit routine logic | `None` |
+| `routine_status_ops` | Enable/disable/run existing routines | `None` |
+| `group_scene_operations` | Group and scene queries | `None` |
 
 ### Pipeline filters (`routable: false`)
 
-| Intent | Description | Used by |
-|---|---|---|
-| `device_filter` | Narrows device candidates for downstream execution | `command_control_status`, `routine_automation`, `group_scene_operations` |
-| `routine_filter` | Narrows routine candidates for downstream execution | `routine_status_ops` |
+Currently, there's none
 
 ## Runtime Files (Do Not Treat as Intents)
 

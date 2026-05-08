@@ -42,6 +42,11 @@ class GroupSceneOperationsIntentHandler(BaseIntentHandler):
             Dict mapping ``"<<runtime_device_structure>>"`` to the assembled
             device context string.
         """
+        if route_result and route_result.route_context:
+            # If the router provided candidate devices in the route context, use those directly.
+            candidate_rags = self._get_rags_from_candidates(route_result.route_context.get("candidate_devices", []))
+            return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
+
         dout = ""
         if isinstance(dependency_outputs, dict):
             for dependency_output in dependency_outputs.values():

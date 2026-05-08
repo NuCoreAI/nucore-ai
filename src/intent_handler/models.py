@@ -74,6 +74,8 @@ class RouteResult:
         confidence:      Optional confidence score in ``[0, 1]`` reported by
                          the routing LLM.
         notes:           Optional reasoning or explanation from the router.
+        route_context:   Optional dict of additional context or metadata produced
+                         by the router for downstream intent handlers.
         resolved_query:  Optionally rewritten/clarified version of the original
                          user query produced during routing.
         raw_response:    Full raw response dict from the routing LLM for
@@ -83,6 +85,7 @@ class RouteResult:
     intent: str
     confidence: float | None = None
     notes: str | None = None
+    route_context: dict[str, Any] | None = None
     resolved_query: str | None = None
     raw_response: dict[str, Any] = field(default_factory=dict)
 

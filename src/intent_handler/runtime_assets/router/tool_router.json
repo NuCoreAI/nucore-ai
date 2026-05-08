@@ -1,6 +1,6 @@
 {
   "name": "tool_router",
-  "description": "Results from intent detection based on the user query for downstream intent handlers.",
+  "description": "Results from intent detection based on the user query for downstream intent handlers. ",
   "input_schema": {
     "type": "object",
     "required": ["intent", "user_query"],
@@ -12,6 +12,48 @@
       "user_query": {
         "type": "string",
         "description": "The original user query."
+      }, 
+      "candidate_devices": {
+        "type": "array",
+        "description": "Optional list of candidate devices/groups/scenes relevant to the user query, with relevance scores. This is intended to be used by downstream intents like command_control and routine_automation to help narrow down device candidates for LLM processing.",
+        "items": {
+          "type": "object",
+          "required": ["device_id", "score"],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "The unique device or group/scene identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "candidate_routines": {
+        "type": "array",
+        "description": "Optional list of candidate routines/folders relevant to the user query, with relevance scores. This is intended to be used by downstream intents like routine_status_ops to help narrow down routine candidates for LLM processing.",
+        "items": {
+          "type": "object",
+          "required": ["routine_id", "score"],
+          "properties": {
+            "routine_id": {
+              "type": "string",
+              "description": "The unique routine/folder identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
       }
     },
     "additionalProperties": true
