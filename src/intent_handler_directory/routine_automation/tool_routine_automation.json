@@ -1,6 +1,6 @@
 {
     "name": "tool_routine_automation",
-    "description": "Automation/optimization routines based on device status and conditions",
+    "description": "Creates or updates Automation/optimization routines based on device status and conditions",
     "input_schema": {
       "type": "object",
       "required": ["args"],
@@ -13,6 +13,10 @@
                     "name":{
                         "type": "string",
                         "description": "The name of the routine"
+                    },
+                    "id":{
+                        "type": "integer",
+                        "description": "The routine ID to edit, or null if creating a new routine"
                     },
                     "parent":{
                         "type": "integer",

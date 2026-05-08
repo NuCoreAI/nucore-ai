@@ -5,9 +5,11 @@
   "previous_dependencies": [
   ],
   "routing_examples": [
-    "Turn on the patio lights",
-    "Set hallway thermostat to 71",
-    "What is the garage temperature right now?"
+    "Turn on the patio lights on Mondays and Wednesday at sunset and turn off at sunrise next day",
+    "If I am not home by 7pm, turn on the porch light and set the thermostat to 72 degrees",
+    "Update the morning routine to open the blinds and start the coffee maker at 7am on weekdays",
+    "Create a new routine to turn on the living room lights and play music when I say 'Good evening'",
+    "Edit the bedtime routine to turn off all lights and lock the doors at 10pm every night"
   ],
   "router_hints": [
     "Use this intent for creating or editing routine logic (if-then conditions, schedules, actions, rules)."

@@ -110,6 +110,13 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the create_automation_routine method.")
 
+    @abstractmethod 
+    async def update_routine(self, routine:dict):
+        """
+        Update an existing automation routine using the nucore API.
+        """
+        raise NotImplementedError("Subclasses must implement the create_automation_routine method.")
+
     @abstractmethod
     async def get_properties(self, device_id:str)-> dict[str, Property]:
         """

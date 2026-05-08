@@ -784,7 +784,7 @@ class IoXWrapper(NuCoreInterface):
         Returns:
             ``data`` value from the API response, or ``None`` on failure.
         """
-        response = self.get(f"/api/ai/trigger/{program_id}")
+        response = await self.get(f"/api/ai/trigger/{program_id}")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -793,7 +793,7 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error retrieving routine: {ex}")
             return None
 
-    def update_routine(self, program: dict):
+    async def update_routine(self, program: dict):
         """Update an existing routine on the hub via POST.
 
         Args:
@@ -818,7 +818,7 @@ class IoXWrapper(NuCoreInterface):
         
         return response 
 
-    def delete_routine(self, program_id: str):
+    async def delete_routine(self, program_id: str):
         """Delete a routine by its ID.
 
         Args:
@@ -831,7 +831,7 @@ class IoXWrapper(NuCoreInterface):
         if not program_id:
             return None
         try:
-            response = self.delete(f'/api/ai/trigger/{program_id}')
+            response = await self.delete(f'/api/ai/trigger/{program_id}')
         except Exception as ex:
             logger.error(f"Error deleting routine: {ex}")
         
@@ -863,7 +863,7 @@ class IoXWrapper(NuCoreInterface):
             return None
         try:
             if operation == "delete":
-                response = self.delete(f'/api/ai/trigger/{routine_id}')
+                response = await self.delete(f'/api/ai/trigger/{routine_id}')
             else:
                 if isinstance(routine_id, str):
                     try:
@@ -1272,24 +1272,24 @@ class IoXWrapper(NuCoreInterface):
         if_section: list[dict] = routine.get("if", [])
         then_section: list[dict] = routine.get("then", [])
         else_section: list[dict] = routine.get("else", [])
-        device_id_list = []
+        device_id_list = set() 
         for condition in if_section:
             if "device" in condition:
                 device = condition.get("device", None)
                 if device:                    
-                    device_id_list.append(device)
+                    device_id_list.add(device)
         
         for action in then_section:
             if "device" in action:
                 device = action.get("device", None)
                 if device:
-                    device_id_list.append(device)
+                    device_id_list.add(device)
    
         for action in else_section:
             if "device" in action:
                 device = action.get("device", None)
                 if device:
-                    device_id_list.append(device)
+                    device_id_list.add(device)
 
         device_names: list[str] = []
         for device_id in device_id_list:
@@ -1300,6 +1300,6 @@ class IoXWrapper(NuCoreInterface):
             except Exception as ex:
                 pass
 
-        return device_names
+        return list(device_names)
 
     
