@@ -50,6 +50,10 @@
               "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
               "minimum": 0,
               "maximum": 1
+            },
+            "to_edit": {
+              "type": "boolean",
+              "description": "Indicates if query is requesting for the routine to be edited. This can be used to differentiate between queries that request creation of routines from scratch vs. those that request edits to existing routines, which can help downstream intent handlers decide whether to use the candidate routine list for LLM processing or not. If editing is requested, and additional devices are mentioned in the user query, then also provide a candidate_device list to help the LLM narrow down device candidates for the routine edit. If not editing, then this field can be false or omitted, and downstream intent handlers can choose to ignore the candidate routine list for LLM processing and treat the query as a request to create a new routine from scratch." 
             }
           },
           "additionalProperties": false

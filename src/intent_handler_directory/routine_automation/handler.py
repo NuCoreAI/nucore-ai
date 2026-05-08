@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from intent_handler import BaseIntentHandler, IntentHandlerResult
+from utils import get_logger
+from utils import _get_candidate_devices_from_routines, _get_full_routines_from_candidates
+
+logger = get_logger(__name__)
+
+def debug(msg: str) -> None:
+    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
+    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
 
 
 class RoutineAutomationIntentHandler(BaseIntentHandler):
@@ -38,11 +47,30 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         Returns:
             Empty dict — the static prompt requires no runtime substitution.
         """
+        out = {}
+        
         if route_result and route_result.route_context:
-            # If the router provided candidate devices in the route context, use those directly.
-            candidate_rags = self._get_rags_from_candidates(route_result.route_context.get("candidate_devices", []))
-            return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
+            candidate_devices = route_result.route_context.get("candidate_devices", [])
+            
+            candidate_routines = route_result.route_context.get("candidate_routines", [])
+            if not candidate_routines:
+                candidate_rags = self._get_rags_from_candidates(candidate_devices)
+                return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
+
+            # we are editing. The first thing to do is to get the candidate routines for editing
+            # to the candidate devices if any exist. This is because the router may have filtered out devices that are actually part of the routine.
+            candidate_routines = await _get_full_routines_from_candidates(self, candidate_routines)
+            extra_devices = _get_candidate_devices_from_routines(candidate_routines)
+            if extra_devices:
+                candidate_devices.extend(extra_devices)
+            candidate_rags = self._get_rags_from_candidates(candidate_devices)
+            return {
+                        "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
+                        "<<existing_routines>>": "" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"
+                    }
+
         return {"<<runtime_device_structure>>": "" }
+    
 
     async def handle(
         self,
@@ -72,6 +100,7 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
             :class:`~intent_handler.IntentHandlerResult` with tool results
             attached and route metadata set.
         """
+        
         messages = await self.build_messages(
             query,
             dependency_outputs=dependency_outputs,
@@ -120,7 +149,12 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         try:
             result = []
             for routine in tool.args:
-                result.append(await self.nucore_interface.create_automation_routine(routine))
+                if routine['id'] is None or routine['id'] == "": 
+                    result.append(await self.nucore_interface.create_automation_routine(routine))
+                else:
+                    #this is an update
+                    result.append(await self.nucore_interface.update_routine(routine))
             return result
         except Exception as e:
             return f"Error processing routine automation tool: {str(e)}"
+
