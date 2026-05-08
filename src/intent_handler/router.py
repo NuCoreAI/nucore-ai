@@ -85,7 +85,7 @@ class IntentRouter:
                 if self.nucore_interface.summary_rags
                 else ""
             ))
-        prompt = prompt.replace("<<routines_database>>", f"```json\n{await self.nucore_interface.get_all_routines_summary()}\n```")
+        prompt = prompt.replace("<<routines_database>>", f"```json\n{self.nucore_interface.condensed_routines}```")
 
         # Expand any shared module placeholders (e.g. <<nucore_rules>>).
         expanded_prompt = self.registry.expand_common_module_placeholders(prompt)

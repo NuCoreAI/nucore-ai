@@ -1,0 +1,11 @@
+{
+  "intent": "device_filter",
+  "description": "Select relevant device candidates for downstream execution intents.",
+  "handler": "handler.py",
+  "routable": false,
+  "previous_dependencies": [],
+  "llm_config": {
+    "temperature": 0.0
+  },
+  "threshold": 0.79 
+}
