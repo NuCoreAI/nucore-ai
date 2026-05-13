@@ -134,7 +134,7 @@ class IntentRouter:
         # Build a formatted history block (most recent turn first) for the user message.
         history_block = ""
         if history and history.turns:
-            lines = ["────────────────────────────────\n# CONVERSATION HISTORY (most recent first):"]
+            lines = ["---\n# CONVERSATION HISTORY (most recent first):"]
             for turn in reversed(history.turns):
                 lines.append(f"User: {turn.query.strip()}")
                 lines.append(f"Assistant: {turn.response.strip()}")
@@ -147,7 +147,7 @@ class IntentRouter:
             parts = []
             if history_block:
                 parts.append(history_block)
-            parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
+            parts.append(f"---\n# USER QUERY:\n{query.strip()}")
             return "\n\n".join(parts)
 
         router_prompt = await self.build_router_prompt()
@@ -254,7 +254,7 @@ class IntentRouter:
         # Build a formatted history block (most recent turn first) for the user message.
         history_block = ""
         if history and history.turns:
-            lines = ["────────────────────────────────\n# CONVERSATION HISTORY (most recent first):"]
+            lines = ["---\n# CONVERSATION HISTORY (most recent first):"]
             for turn in reversed(history.turns):
                 lines.append(f"User: {turn.query.strip()}")
                 lines.append(f"Assistant: {turn.response.strip()}")
@@ -267,8 +267,8 @@ class IntentRouter:
             parts = []
             if history_block:
                 parts.append(history_block)
-            parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
-            parts.append(f"────────────────────────────────\n# AGENT RESPONSE:\n{agent_response.strip()}")
+            parts.append(f"---\n# USER QUERY:\n{query.strip()}")
+            parts.append(f"---\n# AGENT RESPONSE:\n{agent_response.strip()}")
             return "\n\n".join(parts)
 
         router_prompt = "You are an assistant that converts technical agent responses into human-readable summaries for the user. Given the following AGENT RESPONSE, and conversation history, produce a concise and clear summary that explains in plain language what the agent did or found out. Be sure to include any important details that the user should know, but avoid technical jargon and focus on what matters to the user.\n\n" 

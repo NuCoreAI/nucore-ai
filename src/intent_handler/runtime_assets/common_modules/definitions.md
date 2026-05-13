@@ -1,5 +1,5 @@
 
-────────────────────────────────
+---
 # DEFINITIONS 
 `NuCore` is an open source and typeless Smart Home and Demand Flexibility technology
 `Typeless` means that the same patterns are used for anything and therefore service, devices, virtual things, widgets can all be described in Natural Language without ascribing types

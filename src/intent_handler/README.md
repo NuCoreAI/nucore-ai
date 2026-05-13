@@ -376,7 +376,7 @@ Replacement key forms accepted:
 `framework_context` is an optional free-form string that the **caller** of `handle_query` can supply. It is injected verbatim into the user turn of every LLM message as a labelled section:
 
 ```
-────────────────────────────────
+---
 # FRAMEWORK CONTEXT:
 <content>
 ```
@@ -399,7 +399,7 @@ When `framework_context` is `None` (the default) the section is omitted entirely
 `extra_user_sections` is an optional `dict[str, str]` parameter on `build_messages` that lets a handler inject **arbitrary named sections** into the user turn, in addition to `framework_context`. Each key becomes a section heading (uppercased) and each value becomes the section body:
 
 ```
-────────────────────────────────
+---
 # SECTION_NAME:
 <content>
 ```
@@ -426,16 +426,16 @@ async def handle(self, query, *, route_result=None, framework_context=None, depe
 Resulting user turn structure:
 
 ```
-────────────────────────────────
+---
 # FRAMEWORK CONTEXT:
 ...
-────────────────────────────────
+---
 # BACKEND_SNAPSHOT:
 ...
-────────────────────────────────
+---
 # ACTIVE_ALERTS:
 ...
-────────────────────────────────
+---
 # USER QUERY:
 Turn on the patio lights
 ```
