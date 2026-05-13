@@ -148,12 +148,12 @@ class BaseIntentHandler(ABC):
         # sections, and the user query — each separated by a visual rule.
         user_parts = []
         if framework_context:
-            user_parts.append(f"────────────────────────────────\n# FRAMEWORK CONTEXT:\n{framework_context.strip()}")
+            user_parts.append(f"---\n# FRAMEWORK CONTEXT:\n{framework_context.strip()}")
         if extra_user_sections:
             for section_name, section_value in extra_user_sections.items():
                 if section_value:
-                    user_parts.append(f"────────────────────────────────\n# {section_name.upper()}:\n{section_value.strip()}")
-        user_parts.append(f"────────────────────────────────\n# USER QUERY:\n{query.strip()}")
+                    user_parts.append(f"---\n# {section_name.upper()}:\n{section_value.strip()}")
+        user_parts.append(f"---\n# USER QUERY:\n{query.strip()}")
         current_user_content = "\n\n".join(user_parts).strip()
 
         # Flatten history into alternating user/assistant pairs.
@@ -176,7 +176,7 @@ class BaseIntentHandler(ABC):
         # kwarg): inject the system instructions into the first user message.
         if history_messages:
             first_user_content = (
-                "────────────────────────────────\n# SYSTEM INSTRUCTIONS:\n"
+                "---\n# SYSTEM INSTRUCTIONS:\n"
                 f"{resolved_prompt_text}\n\n"
                 f"{history_messages[0]['content']}"
             )
@@ -191,7 +191,7 @@ class BaseIntentHandler(ABC):
                 {
                     "role": "user",
                     "content": (
-                        "────────────────────────────────\n# SYSTEM INSTRUCTIONS:\n"
+                        "---\n# SYSTEM INSTRUCTIONS:\n"
                         f"{resolved_prompt_text}\n\n"
                         f"{current_user_content}"
                     ),

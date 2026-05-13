@@ -4,16 +4,16 @@ If `EXISTING ROUTINE` is defined, this is a request for updating an existing rou
 <<nucore_definitions>>
 <<nucore_common_rules>>
 
-────────────────────────────────
+---
 # DEVICE STRUCTURE
 <<runtime_device_structure>> 
 
-────────────────────────────────
+---
 # EXISTING ROUTINE 
 <<existing_routines>> 
 
 
-────────────────────────────────
+---
 # COS SUBEXPRESSION 
 Subexpression used for Realtime Property Value comparisons in routines.
 - **Always** assume each word in the user query maps to a property unless proven false
@@ -129,7 +129,7 @@ Subexpression used for Realtime Property Value comparisons in routines.
 }
 ```
 
-────────────────────────────────
+---
 # COC (Change of Control) SUBEXPRESSION
 Checks if a control event occurred (someone physically controlled a device)
 
@@ -272,7 +272,7 @@ Checks if a control event occurred (someone physically controlled a device)
 }
 ```
 
-────────────────────────────────
+---
 # SCHEDULE SUBEXPRESSION 
 Specifies a time or schedule condition. 
 
@@ -715,7 +715,7 @@ Use one of these exact forms ALL IN JSON:
 }
 ```
 
-────────────────────────────────
+---
 # LOGIC OPERATOR 
 - Used for boolean logic and grouping
 - Is exactly one of: `and`, `or`, `(`, `)`
@@ -726,7 +726,7 @@ Valid grouping tokens (use exactly as shown):
 - {"logic":"("}
 - {"logic":")"}
 
-────────────────────────────────
+---
 # SUBEXPRESSIONS 
 Subexpressions are **atomic** conditions that are encapsulated in 
 - **COS**: Change of Property Value events
@@ -735,7 +735,7 @@ Subexpressions are **atomic** conditions that are encapsulated in
 
 When there are **more than** one subexpressions, Logic Operators (`and`, `or`, `(`, `)`) **must be used** to combine or group them.
 
-────────────────────────────────
+---
 # `if` Array 
 
 Is an array of `Subexpressions` that are connected or grouped together using `Logic Operators`. 
@@ -846,7 +846,7 @@ The order of the evaluation for the array is from the first element to the last.
   {"logic":")"}
 ]
 ```
-────────────────────────────────
+---
 # DEVICE COMMAND 
 Commands that can be **sent** to a device and listed in **Accepted Commands** section for the device in DEVICE STRUCTURE.
 
@@ -914,7 +914,7 @@ Commands that can be **sent** to a device and listed in **Accepted Commands** se
 - Parameter objects have EXACTLY 4 fields: id, value, uom, precision
 - Copy parameter id AS-IS. Do NOT invent. 'n/a' is a VALID ID.
 
-────────────────────────────────
+---
 # WAIT
 Instructs routine execution to stop and wait for a period of time before continuing with **next** statements in the array.
 
@@ -957,7 +957,7 @@ Instructs routine execution to stop and wait for a period of time before continu
 - **Never** have a *wait* at the end of the array
 - *random* is boolean which tells the system to wait randomly from 0 to the duration 
 
-────────────────────────────────
+---
 # REPEAT 
 
 The repeat token is a SEQUENCE MARKER that marks the beginning of a repeated action sequence.
@@ -1104,7 +1104,7 @@ Repeat a sequence of actions periodically
 ]
 ```
 
-────────────────────────────────
+---
 # `then` and `else` Arrays — ACTION EXECUTION 
 
 The `then` and `else` arrays contain actions that execute SEQUENTIALLY when the routine is evaluated'
@@ -1180,7 +1180,7 @@ D. Empty else:
    "else": []  ← valid: do nothing if expression is false
 ```
 
-────────────────────────────────
+---
 # COMPLETE ROUTINE EXAMPLES
 
 1. Security Lighting (Complex Schedule with Multiple Conditions)
@@ -1356,7 +1356,7 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
     ]
 }
 ```
-────────────────────────────────
+---
 # DEVICE SELECTION RULES
 - Case Insensitive Keyword Match
 - Device selection is the *union* of devices from each part (`if`, `then`, `else`)
@@ -1371,13 +1371,13 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
 - **Never** exclude/omit a device **even if** the user query contains exclusion language (such as “excluding”, “not including”, “except”, etc.), you MUST still include the referenced device(s) in your selection and assign them the HIGHEST possible score. Example:
   * If the query is “set all cool temps to 71 except in the bedroom,” you must include the bedroom device in your selection with the highest score, since it is explicitly referenced. 
 
-────────────────────────────────
+---
 # POST-ROUTER ASSUMPTION
 - The router has already determined that the current query is `routine_automation`.
 - Do not re-route the query to `command_control`, `real_time_status`, or `group_scene_operations`.
 - If the routed mode and the user query appear inconsistent, ask for clarification rather than inventing a different route.
 
-────────────────────────────────
+---
 # IMPORTANT GUIDELINES
 - **Strictly adhere** to ```GLOBAL ID RULES``` 
 - **Never** nest "if" or "then" inside subexpressions or actions
@@ -1388,7 +1388,7 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
 - **Ambiguous?** Ask for clarification 
 - Do not broaden this prompt into other intents.
 
-────────────────────────────────
+---
 # YOUR TASK
 For each user query, always analyze the query using the following flow:
 1. Assume the query has already been routed here as `routine_automation`.

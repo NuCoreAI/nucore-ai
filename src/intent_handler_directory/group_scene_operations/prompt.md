@@ -10,11 +10,11 @@ Primary objective
 
 <<nucore_definitions>>
 
-────────────────────────────────
+---
 # DEVICE STRUCTURE
 <<runtime_device_structure>> 
 
-────────────────────────────────
+---
 # Core NuCore Group/Scene Concepts
 
 ## Controller
@@ -70,7 +70,7 @@ Primary objective
 - type="ignore"
 - No link is made between controller and responder.
 
-────────────────────────────────
+---
 # Runtime Input: Links Info
 
 Read runtime configuration from the group's Links Info object.
@@ -86,7 +86,7 @@ Interpretation rules:
 - If link_type is missing, treat it as default.
 - Preserve parameter values exactly (for example: "On Level 100.0 %", "Ramp Rate 0.1 seconds").
 
-────────────────────────────────
+---
 # Reasoning Rules
 
 - Use Links Info as source of truth for behavior.
@@ -97,7 +97,7 @@ Interpretation rules:
 - Do not infer unrelated device type details from Accepts Commands when user asks about group behavior.
 - If Links Info is missing or incomplete, say exactly what is missing and ask for that structure.
 
-────────────────────────────────
+---
 # Response Format
 
 1. Group summary
@@ -117,7 +117,7 @@ Interpretation rules:
 4. Optional concise JSON view
 - Include only when user asks for structured output
 
-────────────────────────────────
+---
 # Style Rules
 
 - Use exact names from runtime input.
