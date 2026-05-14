@@ -32,24 +32,6 @@ def _default_intent_dir() -> Path:
     return repo_path
 
 
-def _default_runtime_config_path() -> Path:
-    """Resolve runtime_config.json for both repo and installed runs."""
-    repo_path = Path(__file__).resolve().parent / "runtime_assets" / "runtime_config.json"
-    if repo_path.exists():
-        return repo_path
-
-    try:
-        from intent_handler import runtime_assets
-
-        package_path = Path(runtime_assets.__file__).resolve().parent / "runtime_config.json"
-        if package_path.exists():
-            return package_path
-    except Exception:
-        pass
-
-    return repo_path
-
-
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser for the intent runtime."""
     parser = argparse.ArgumentParser(description="Run standalone intent runtime")
@@ -63,39 +45,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--runtime-config",
         type=str,
         default=None,
-        help="Optional explicit path to runtime_config.json",
+        help="Required path to runtime profile JSON containing top-level 'nucore_runtime'",
+    )
+    parser.add_argument(
+        "--secrets-file",
+        type=str,
+        default=None,
+        help="Optional path to a JSON object of secret key/value pairs (for example API keys)",
     )
     parser.add_argument(
         "--query",
         type=str,
         default=None,
         help="Single query mode (non-interactive)",
-    )
-    parser.add_argument(
-        "--provider",
-        type=str,
-        default=None,
-        help="Override default LLM provider (e.g., claude, openai, gemini)",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=None,
-        help="Override model for the selected provider",
-    )
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        default=None,
-        help="Override API key for the selected provider",
-    )
-    parser.add_argument(
-        "--model-url",
-        "--model_url",
-        dest="model_url",
-        type=str,
-        default=None,
-        help="Override model base URL or full chat/completions endpoint for OpenAI-compatible providers",
     )
     parser.add_argument(
         "--backend-api-classpath",
@@ -138,11 +100,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The type of prompt to use (e.g., 'per-device', 'shared-features', etc.)",
     )
     parser.add_argument(
-        "--stream",
-        action="store_true",
-        help="Stream model text tokens to stdout when provider supports it",
-    )
-    parser.add_argument(
         "--log-level",
         type=str,
         default=None,
@@ -165,6 +122,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Disable console log output",
     )
     return parser
+
+
+def _load_secrets_file(path: str | Path) -> dict[str, str]:
+    """Load a secrets file into a flat ``dict[str, str]``.
+
+    The file must be JSON with a top-level object containing key/value pairs,
+    for example:
+
+    {
+      "OPENAI_API_KEY": "...",
+      "ANTHROPIC_API_KEY": "..."
+    }
+    """
+    file_path = Path(path).expanduser().resolve()
+    if not file_path.exists() or not file_path.is_file():
+        raise FileNotFoundError(f"Secrets file not found: {file_path}")
+
+    with file_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    if not isinstance(payload, dict):
+        raise ValueError("Secrets file must contain a top-level JSON object")
+
+    return {str(key): str(value) for key, value in payload.items() if value is not None}
 
 
 def _load_backend_api(
@@ -294,7 +275,7 @@ async def _run_once(
                 # Response was already printed live by the stream handler; just add newline.
                 print()
                 return
-            result.get_stream_handler().send_chunk(text_output, True)
+            await result.get_stream_handler().send_chunk(text_output, True)
 
     if text_output:
         if session_id:
@@ -356,8 +337,8 @@ def main(args:Any=None, websocket=None) -> None:
     Startup sequence:
     1. Parse CLI arguments.
     2. Configure the shared logger (level, file, JSON, console).
-    3. Resolve paths for the intent handler directory and runtime config.
-    4. Load the runtime config and build the LLM dispatch adapter.
+    3. Resolve paths for the intent handler directory and runtime profile.
+    4. Load the runtime profile and build the LLM dispatch adapter.
     5. Instantiate the backend API (``nucore_interface``).
     6. Construct :class:`~IntentRuntime` and either run a single query
        (``--query``) or enter the interactive REPL.
@@ -377,28 +358,23 @@ def main(args:Any=None, websocket=None) -> None:
 
     # Resolve paths — prefer explicit CLI args, fall back to auto-detected defaults.
     intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
-    runtime_config_path = (
-        Path(args.runtime_config).expanduser().resolve()
-        if args.runtime_config
-        else _default_runtime_config_path()
-    )
+    runtime_config_path = Path(args.runtime_config).expanduser().resolve() if args.runtime_config else None
+    secrets_env = _load_secrets_file(args.secrets_file) if args.secrets_file else None
 
     if not intent_dir.exists() or not intent_dir.is_dir():
         raise FileNotFoundError(f"Intent handler directory not found: {intent_dir}")
+    if runtime_config_path is None:
+        raise ValueError("--runtime-config is required and must point to a JSON file with top-level 'nucore_runtime'")
     if not runtime_config_path.exists() or not runtime_config_path.is_file():
-        raise FileNotFoundError(f"Runtime config file not found: {runtime_config_path}")
+        raise FileNotFoundError(f"Runtime profile file not found: {runtime_config_path}")
 
     runtime_config = _load_runtime_config(
         path=str(runtime_config_path),
         stream_handler=None,  # Stream handler will be set later after defining the callback
-        provider=args.provider,
-        api_key=args.api_key,
-        model=args.model,
-        model_url=args.model_url,
     )
 
     # Build the LLM dispatch adapter from the resolved config.
-    llm_adapter = build_default_dispatch_adapter(runtime_config)
+    llm_adapter = build_default_dispatch_adapter(runtime_config, env=secrets_env)
 
     global nucore_interface
     nucore_interface = _load_backend_api(
@@ -418,10 +394,6 @@ def main(args:Any=None, websocket=None) -> None:
         nucore_interface=nucore_interface,
         runtime_config_path=runtime_config_path,
         stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
-        runtime_provider=args.provider,
-        runtime_api_key=args.api_key,
-        runtime_model=args.model,
-        runtime_model_url=args.model_url,
         websocket=websocket,
     )
     logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})

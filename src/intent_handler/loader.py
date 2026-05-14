@@ -48,7 +48,6 @@ class IntentHandlerRegistry:
         self.root_directory = Path(root_directory).expanduser().resolve()
         self.runtime_assets_directory = Path(__file__).resolve().parent / "runtime_assets"
         self.common_modules_directory = Path(__file__).resolve().parent / "runtime_assets" / "common_modules"
-        self.router_config_path = Path(__file__).resolve().parent / "runtime_assets" / "router" / "config.json"
         self._definitions: dict[str, IntentDefinition] = {}
         self._modules_cache: dict[str, object] = {}
         # Cache key: (file_path, explicit_class_name | None) → (mtime_ns, class)
@@ -140,16 +139,6 @@ class IntentHandlerRegistry:
             return self._definitions[intent_name]
         except KeyError as exc:
             raise KeyError(f"Unknown intent handler '{intent_name}'") from exc
-
-    def router_config(self) -> dict:
-        """Load and return the router config dict from ``runtime_assets/router/config.json``.
-
-        Returns an empty dict when the file does not exist.
-        """
-        if not self.router_config_path.exists():
-            return {}
-        with self.router_config_path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
 
     # ------------------------------------------------------------------
     # Common module placeholder expansion

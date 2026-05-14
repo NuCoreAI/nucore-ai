@@ -105,8 +105,7 @@ class IntentRouter:
     ) -> RouteResult:
         """Route ``query`` to the best-matching intent and return a :class:`~models.RouteResult`.
 
-        Merges the router's own ``llm_config`` (from ``router/config.json``)
-        with any caller-supplied overrides, assembles a message list that
+        Uses caller-supplied runtime-resolved ``llm_config``, assembles a message list that
         optionally includes recent conversation history, calls the LLM, and
         validates the returned JSON payload against the ``tool_router`` schema.
 
@@ -126,13 +125,12 @@ class IntentRouter:
             ValueError: If the LLM returns an invalid response or selects an
                         intent name not present in the registry.
         """
-        # Start from the router's own llm_config, then layer caller overrides on top.
-        router_llm_config = dict(self.registry.router_config().get("llm_config", {}))
-        if llm_config_override:
-            router_llm_config.update(llm_config_override)
+        router_llm_config = dict(llm_config_override or {})
 
-        # Build a formatted history block (most recent turn first) for the user message.
+        # Build a formatted history block only for the fallback path that has
+        # to inline the whole conversation into a single user message.
         history_block = ""
+        history_messages: list[dict[str, str]] = []
         if history and history.turns:
             lines = ["---\n# CONVERSATION HISTORY (most recent first):"]
             for turn in reversed(history.turns):
@@ -140,12 +138,15 @@ class IntentRouter:
                 lines.append(f"Assistant: {turn.response.strip()}")
                 lines.append("")
             history_block = "\n".join(lines).strip()
+            for turn in history.turns:
+                history_messages.append({"role": "user", "content": turn.query.strip()})
+                history_messages.append({"role": "assistant", "content": turn.response.strip()})
 
 
-        def _make_user_content() -> str:
+        def _make_user_content(include_history_block: bool = False) -> str:
             """Combine optional history and the user query into one content string."""
             parts = []
-            if history_block:
+            if include_history_block and history_block:
                 parts.append(history_block)
             parts.append(f"---\n# USER QUERY:\n{query.strip()}")
             return "\n\n".join(parts)
@@ -153,9 +154,12 @@ class IntentRouter:
         router_prompt = await self.build_router_prompt()
         # Build message list using the provider-appropriate layout.
         if self._supports_system_role(router_llm_config):
+            # History is passed as real conversation turns; no need to inline it
+            # as a markdown block in the final user message.
             messages = [
                 {"role": "system", "content": router_prompt},
-                {"role": "user", "content": _make_user_content()},
+            ] + history_messages + [
+                {"role": "user", "content": _make_user_content(include_history_block=False)},
             ]
         else:
             # Claude and similar providers that do not use a separate system role:
@@ -166,7 +170,7 @@ class IntentRouter:
                     "content": (
                         "SYSTEM INSTRUCTIONS:\n"
                         f"{router_prompt}\n\n"
-                        f"{_make_user_content()}"
+                        f"{_make_user_content(include_history_block=True)}"
                     ),
                 }
             ]
@@ -225,8 +229,7 @@ class IntentRouter:
     ) -> Any:
         """Route ``query`` to the best-matching intent and return a :class:`~models.RouteResult`.
 
-        Merges the router's own ``llm_config`` (from ``router/config.json``)
-        with any caller-supplied overrides, assembles a message list that
+        Uses caller-supplied runtime-resolved ``llm_config``, assembles a message list that
         optionally includes recent conversation history, calls the LLM, and
         validates the returned JSON payload against the ``tool_router`` schema.
 
@@ -246,10 +249,7 @@ class IntentRouter:
             ValueError: If the LLM returns an invalid response or selects an
                         intent name not present in the registry.
         """
-        # Start from the router's own llm_config, then layer caller overrides on top.
-        router_llm_config = dict(self.registry.router_config().get("llm_config", {}))
-        if llm_config_override:
-            router_llm_config.update(llm_config_override)
+        router_llm_config = dict(llm_config_override or {})
 
         # Build a formatted history block (most recent turn first) for the user message.
         history_block = ""

@@ -1,0 +1,31 @@
+{
+  "nucore_runtime": {
+    "default": {
+      "provider": "claude",
+      "model": "claude-sonnet-4-20250514",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "url": null,
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 32000
+    },
+    "router": {
+      "provider": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "url": null,
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 32000
+    },
+    "routine_automation": {
+      "provider": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "url": null,
+      "max_turns": 20,
+      "temperature": 0.1,
+      "max_tokens": 32000
+    }
+  }
+}

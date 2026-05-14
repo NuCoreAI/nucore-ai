@@ -51,6 +51,8 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         
         if route_result and route_result.route_context:
             candidate_devices = route_result.route_context.get("candidate_devices", [])
+            if not candidate_devices:
+                candidate_devices = []
             
             candidate_routines = route_result.route_context.get("candidate_routines", [])
             if not candidate_routines:

@@ -21,13 +21,11 @@ def build_default_dispatch_adapter(
     request to the correct provider at call time.
 
     Args:
-        runtime_config: Parsed ``runtime_config.json`` dict.  Expected keys:
+        runtime_config: Runtime configuration dict. Expected keys:
 
-            * ``supported_llms`` — mapping of LLM alias → config dict, each
-              with at minimum ``provider`` (or ``llm``), ``model``, and
-              optionally ``api_key`` / ``url``.
-            * ``default_llm``    — alias key used to resolve the default
-              provider name forwarded to the adapter.
+                        * ``nucore_runtime`` — mapping of profile name → config dict.
+                          The ``default`` profile is used to resolve the adapter's default
+                          provider when present.
 
         extra_clients:  Optional dict of ``provider_name → adapter instance``
                         to merge on top of the clients built from config.
@@ -60,15 +58,11 @@ def build_default_dispatch_adapter(
             "Add API keys or pass extra_clients."
         )
 
-    # Resolve the default provider name from the runtime config so the adapter
-    # knows which client to use when no explicit provider override is given.
-    default_llm_key = runtime_config.get("default_llm")
-    supported_llms = runtime_config.get("supported_llms", {})
     default_provider = None
-    if default_llm_key and isinstance(supported_llms, dict):
-        cfg = supported_llms.get(default_llm_key, {})
+    runtime_profiles = runtime_config.get("nucore_runtime")
+    if isinstance(runtime_profiles, dict):
+        cfg = runtime_profiles.get("default", {})
         if isinstance(cfg, dict):
-            # ``provider`` is preferred; ``llm`` is accepted as a legacy alias.
-            default_provider = cfg.get("provider") or cfg.get("llm")
+            default_provider = cfg.get("provider")
 
     return ProviderDispatchLLMAdapter(clients=clients, default_provider=default_provider)
