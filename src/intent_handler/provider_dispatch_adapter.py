@@ -87,6 +87,13 @@ class ProviderDispatchLLMAdapter(LLMAdapter):
             ValueError: If the resolved provider name has no registered client.
         """
         effective_config = dict(config or {})
+        llm_key = str(effective_config.get("llm_key") or "").strip()
+        if llm_key:
+            normalized_key = self._normalize(llm_key)
+            client = self._clients.get(normalized_key)
+            if client is not None:
+                return client, effective_config
+
         # Accept "provider" or legacy "llm" key; fall back to the registered default.
         provider = effective_config.get("provider") or effective_config.get("llm") or self._default_provider
         normalized_provider = self._normalize(str(provider))

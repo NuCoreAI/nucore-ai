@@ -272,10 +272,8 @@ class BaseIntentHandler(ABC):
         """Return True if the active provider accepts a dedicated system role message.
 
         The ``supports_system_role`` config key overrides automatic detection.
-        When auto-detecting, Claude / Anthropic providers are identified by
-        name and treated as non-system-role (they use the messages API with a
-        separate ``system`` kwarg handled by :class:`~adapters.ClaudeAdapter`).
-        All other providers default to True.
+        The adapters in this runtime normalize system-role messages for all
+        supported providers, so the default is True unless explicitly disabled.
         """
         llm_config = self.get_effective_llm_config()
 
@@ -283,18 +281,6 @@ class BaseIntentHandler(ABC):
         explicit = llm_config.get("supports_system_role")
         if explicit is not None:
             return bool(explicit)
-
-        # Heuristic: check provider name and model string for known identifiers.
-        provider_hint = " ".join(
-            [
-                str(getattr(self.llm_client, "provider_name", "") or ""),
-                str(llm_config.get("provider", "") or ""),
-                str(llm_config.get("model", "") or ""),
-            ]
-        ).lower()
-
-        if "claude" in provider_hint or "anthropic" in provider_hint:
-            return False
 
         return True
 

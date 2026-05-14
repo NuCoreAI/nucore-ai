@@ -20,145 +20,142 @@ logger = get_logger(__name__)
 SubscriberCallback = Callable[[Any], None]
 
 
-def _apply_runtime_overrides(
-    runtime_config: dict[str, Any],
-    provider: str | None = None,
-    api_key: str | None = None,
-    model: str | None = None,
-    model_url: str | None = None,
+_PROVIDER_CAPABILITIES: dict[str, dict[str, Any]] = {
+    # Anthropic's SDK accepts a dedicated system prompt and we already map
+    # system-role messages onto that field inside the adapter.
+    "claude": {"supports_system_role": True},
+    "anthropic": {"supports_system_role": True},
+    "openai": {"supports_system_role": True},
+    "gpt": {"supports_system_role": True},
+    "gemini": {"supports_system_role": True},
+    "google": {"supports_system_role": True},
+    "grok": {"supports_system_role": True},
+    "xai": {"supports_system_role": True},
+    "x.ai": {"supports_system_role": True},
+    "llamacpp": {"supports_system_role": True},
+    "llama_cpp": {"supports_system_role": True},
+    "llama.cpp": {"supports_system_role": True},
+}
+
+
+def _normalize_provider_name(provider: str | None) -> str:
+    value = str(provider or "").strip().lower()
+    if value == "anthropic":
+        return "claude"
+    if value == "gpt":
+        return "openai"
+    if value in {"google"}:
+        return "gemini"
+    if value in {"xai", "x.ai"}:
+        return "grok"
+    if value in {"llamacpp", "llama_cpp"}:
+        return "llama.cpp"
+    return value
+
+
+def _coerce_runtime_profile(
+    profile_name: str,
+    payload: dict[str, Any],
+    *,
+    stream_handler: StreamHandler | None,
 ) -> dict[str, Any]:
-    """Layer CLI-supplied overrides on top of a loaded runtime config dict.
+    """Normalize one ``nucore_runtime`` profile into dispatch-ready shape."""
+    provider = _normalize_provider_name(payload.get("provider"))
+    if not provider:
+        raise ValueError(f"nucore_runtime.{profile_name} must define a non-empty 'provider'")
 
-    Mutates a shallow copy of ``runtime_config`` (never the original) so the
-    caller can safely discard or retry with the original dict.
-
-    When ``provider`` names a key not already in ``supported_llms``, a minimal
-    placeholder entry is created so downstream code can still resolve it.  The
-    ``default_llm`` (and ``router_llm``) are updated to ``provider`` whenever
-    an explicit provider is given so all subsequent routing uses the CLI choice.
-
-    Args:
-        runtime_config: Parsed ``runtime_config.json`` dict.
-        provider:        Provider alias override (e.g. ``"claude"``).
-        api_key:         API key override for the selected provider.
-        model:           Model name override.
-        model_url:       Base URL override for OpenAI-compatible endpoints.
-
-    Returns:
-        A new dict with the overrides applied.
-
-    Raises:
-        ValueError: If no provider can be resolved and ``supported_llms`` is empty.
-    """
-    config = dict(runtime_config)
-    supported_llms = dict(config.get("supported_llms", {}))
-
-    selected_key = provider or config.get("default_llm") or next(iter(supported_llms), None)
-    if not selected_key:
-        raise ValueError("No provider specified and no default_llm in runtime_config")
-
-    if selected_key not in supported_llms:
-        if provider:
-            # Auto-create a minimal entry so the CLI can override any provider
-            # even when it is not pre-declared in runtime_config.json.
-            supported_llms[selected_key] = {
-                "provider": selected_key,
-                "model": None,
-                "url": None,
-                "params": {},
-            }
-        else:
-            raise ValueError(f"Provider '{selected_key}' not found in runtime_config.supported_llms")
-
-    llm_cfg = dict(supported_llms.get(selected_key, {}))
-    if model:
-        llm_cfg["model"] = model
-    if api_key:
-        llm_cfg["api_key"] = api_key
-    if model_url:
-        llm_cfg["url"] = model_url
-
-    supported_llms[selected_key] = llm_cfg
-    config["supported_llms"] = supported_llms
-    if provider:
-        config["default_llm"] = selected_key
-        # Keep router/provider selection aligned with explicit CLI provider overrides.
-        config["router_llm"] = selected_key
-
-    return config
+    capabilities = _PROVIDER_CAPABILITIES.get(provider, {})
+    result: dict[str, Any] = {
+        "provider": provider,
+        "model": payload.get("model"),
+        "api_key": payload.get("api_key"),
+        "url": payload.get("url"),
+        "max_turns": int(payload.get("max_turns", 20)),
+        "temperature": payload.get("temperature"),
+        "max_tokens": payload.get("max_tokens"),
+        "supports_system_role": bool(
+            payload.get("supports_system_role", capabilities.get("supports_system_role", True))
+        ),
+    }
+    if stream_handler is not None:
+        result["stream"] = True
+        result["stream_handler"] = stream_handler.handle_stream_chunk
+    else:
+        result["stream"] = False
+    return result
 
 def _load_runtime_config(
     path: str,
     stream_handler: StreamHandler,
-    provider: str,
-    api_key: str,
-    model: str,
-    model_url: str | None = None,
 ) -> dict[str, Any]:
-    """Load, validate, and return the runtime config dict.
+    """Load and normalize CLI-provided runtime profiles.
 
-    Reads the JSON file at ``path`` (falling back to a safe empty config when
-    the file does not exist), injects the stream-handler callback into every
-    LLM entry that does not already declare one, and then applies CLI overrides
-    via :func:`_apply_runtime_overrides`.
+    Expected file format:
 
-    Args:
-        path:           Absolute or relative path to ``runtime_config.json``.
-        stream_handler: Active :class:`~stream_handler.StreamHandler` instance
-                        whose ``handle_stream_chunk`` callback is wired into
-                        each LLM config entry.  Pass ``None`` to disable
-                        streaming for all providers.
-        provider:       See :func:`_apply_runtime_overrides`.
-        api_key:        See :func:`_apply_runtime_overrides`.
-        model:          See :func:`_apply_runtime_overrides`.
-        model_url:      See :func:`_apply_runtime_overrides`.
-
-    Returns:
-        Fully resolved runtime config dict.
-
-    Raises:
-        ValueError: If the JSON file does not contain a top-level object.
-    """
-    runtime_config_path = (
-        Path(path).expanduser().resolve()
-        if path
-        else Path(__file__).resolve().parent / "runtime_assets" / "runtime_config.json"
-    )
-    runtime_config = {
-            "supported_llms": {},
-            "default_llm": None,
-            "router_llm": None,
+    {
+      "nucore_runtime": {
+        "default": {...},
+        "router": {...},
+        "intent_name": {...}
+      }
     }
-    if not runtime_config_path.exists():
-        return runtime_config
-    
-    with runtime_config_path.open("r", encoding="utf-8") as handle:
-        runtime_config = json.load(handle)
+    """
+    if not path:
+        raise ValueError("A runtime profile JSON path is required")
 
-    if not isinstance(runtime_config, dict):
-        raise ValueError("Runtime config must be a JSON object at the top level")
+    runtime_profile_path = Path(path).expanduser().resolve()
+    if not runtime_profile_path.exists() or not runtime_profile_path.is_file():
+        raise FileNotFoundError(f"Runtime profile file not found: {runtime_profile_path}")
 
-    # Wire the stream handler callback into every LLM entry that does not
-    # already declare its own; set stream=False when no handler is available.
-    for _, llm_cfg in runtime_config.get("supported_llms", {}).items():
-        if not isinstance(llm_cfg, dict):
+    with runtime_profile_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    if not isinstance(payload, dict):
+        raise ValueError("Runtime profile must be a JSON object at top level")
+
+    raw_runtime = payload.get("nucore_runtime")
+    if not isinstance(raw_runtime, dict):
+        raise ValueError("Runtime profile must contain an object key 'nucore_runtime'")
+
+    raw_default = raw_runtime.get("default")
+    if not isinstance(raw_default, dict):
+        raise ValueError("nucore_runtime.default must be an object")
+
+    default_profile = _coerce_runtime_profile("default", raw_default, stream_handler=stream_handler)
+
+    supported_llms: dict[str, dict[str, Any]] = {"default": default_profile}
+    normalized_profiles: dict[str, dict[str, Any]] = {"default": default_profile}
+
+    raw_router = raw_runtime.get("router")
+    if raw_router is not None:
+        if not isinstance(raw_router, dict):
+            raise ValueError("nucore_runtime.router must be an object when provided")
+        router_profile = _coerce_runtime_profile("router", raw_router, stream_handler=stream_handler)
+        supported_llms["router"] = router_profile
+        normalized_profiles["router"] = router_profile
+
+    for profile_name, profile_payload in raw_runtime.items():
+        if profile_name in {"default", "router"}:
             continue
-        cfg_stream_handler = llm_cfg.get("stream_handler", None)
-        if cfg_stream_handler is None:
-            if stream_handler is not None:
-                llm_cfg["stream"] = True
-                llm_cfg["stream_handler"] = stream_handler.handle_stream_chunk
-            else:
-                llm_cfg["stream"] = False
+        if not isinstance(profile_payload, dict):
+            raise ValueError(f"nucore_runtime.{profile_name} must be an object")
+        normalized_profile = _coerce_runtime_profile(
+            profile_name,
+            profile_payload,
+            stream_handler=stream_handler,
+        )
+        supported_llms[profile_name] = normalized_profile
+        normalized_profiles[profile_name] = normalized_profile
 
-    runtime_config = _apply_runtime_overrides(
-        runtime_config,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        model_url=model_url,
-    )
-    return runtime_config
+    default_max_turns = int(default_profile.get("max_turns", 20))
+    return {
+        "nucore_runtime": normalized_profiles,
+        "supported_llms": supported_llms,
+        "default_llm": "default",
+        "router_llm": "router" if "router" in supported_llms else "default",
+        "default_max_turns": default_max_turns,
+        "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
+    }
 
 
 class IntentRuntime:
@@ -172,8 +169,9 @@ class IntentRuntime:
     - Maintains per-session conversation history through :class:`~session_store.SessionStore`.
     - Caches instantiated handler objects and evicts them when their source
       files change (via ``mtime_ns`` signatures).
-    - Merges three-layer LLM config (runtime defaults → per-intent ``llm_override``
-      → CLI-supplied overrides) before each handler call.
+        - Resolves profile-based LLM config (``nucore_runtime.default`` → optional
+            per-intent ``config.json`` ``llm_config`` overlay, or full
+            ``nucore_runtime.<intent_name>`` override) before each handler call.
 
     Lifecycle::
 
@@ -190,10 +188,6 @@ class IntentRuntime:
         nucore_interface: NuCoreInterface,
         runtime_config_path: str | Path ,
         stream_handler: StreamHandler | None = None, 
-        runtime_provider: str | None = None,
-        runtime_api_key: str | None = None,
-        runtime_model: str | None = None,
-        runtime_model_url: str | None = None,
         websocket: Any = None,
     ) -> None:
         """Initialise and start the intent runtime.
@@ -209,14 +203,10 @@ class IntentRuntime:
                                       generation calls (routing + handling).
             nucore_interface:         Backend API instance injected into every
                                       handler.
-            runtime_config_path:      Path to ``runtime_config.json``.
+            runtime_config_path:      Path to runtime profile JSON containing
+                                      top-level ``nucore_runtime``.
             stream_handler:           Optional stream handler whose callback is
                                       wired into LLM configs for token streaming.
-            runtime_provider:         Optional CLI provider override forwarded
-                                      to :func:`_load_runtime_config`.
-            runtime_api_key:          Optional CLI API key override.
-            runtime_model:            Optional CLI model name override.
-            runtime_model_url:        Optional CLI base-URL override.
             websocket:                Optional WebSocket connection passed to the stream handler for real-time streaming output.
 
         Raises:
@@ -237,10 +227,6 @@ class IntentRuntime:
         self.router_stream_handler = RouterStreamHandler()
         self.stream_handler.set_websocket(websocket)
         self.router_stream_handler.set_websocket(websocket)
-        self._runtime_provider = runtime_provider
-        self._runtime_api_key = runtime_api_key
-        self._runtime_model = runtime_model
-        self._runtime_model_url = runtime_model_url
         self.runtime_config: dict[str, Any] = {}
         # Handler instance cache: intent_name → handler object.
         self._handler_instances: dict[str, BaseIntentHandler] = {}
@@ -279,7 +265,7 @@ class IntentRuntime:
         """Re-scan the intent directory and reload the runtime config.
 
         Clears per-handler signature caches, refreshes the registry, reloads
-        ``runtime_config.json`` with current overrides, validates the config,
+        the runtime profile JSON, validates the config,
         reconciles the handler instance cache (evicting stale entries), and
         resets the stream handler state.
 
@@ -291,10 +277,6 @@ class IntentRuntime:
         self.runtime_config = _load_runtime_config(
             path=self.runtime_config_path,
             stream_handler=self.stream_handler,
-            provider=self._runtime_provider or "",
-            api_key=self._runtime_api_key or "",
-            model=self._runtime_model or "",
-            model_url=self._runtime_model_url,
         )
         self._validate_runtime_config()
         self._reconcile_handler_cache()
@@ -405,6 +387,16 @@ class IntentRuntime:
         route_result = await self.route(query, history=history)
         if route_result is None:
             return None
+
+        # Natural Language Mode: the router answered directly (no intent matched).
+        # Return the response as a synthetic result so the caller can persist it
+        # in session history, enabling the next turn to reference this reply.
+        if route_result.intent is None:
+            nl_text = route_result.notes or ""
+            return IntentHandlerResult(
+                intent="",
+                output={"text": nl_text},
+            )
 
         execution_chain = self._resolve_execution_chain(route_result.intent)
 
@@ -567,91 +559,80 @@ class IntentRuntime:
         """Validate the loaded runtime config for internal consistency.
 
         Checks:
-        - ``supported_llms`` is a dict.
-        - ``default_llm`` and ``router_llm`` (when set) name keys in ``supported_llms``.
-        - Every intent's ``llm_override`` (when set) names a key in ``supported_llms``.
+        - ``supported_llms`` is a dict and has at least ``default``.
+        - ``nucore_runtime.default`` exists and is an object.
+        - Intent ``config.json`` ``llm_config`` values are objects when provided.
 
         Raises:
             ValueError: On any consistency violation.
         """
         supported = self.runtime_config.get("supported_llms", {})
-        default_llm = self.runtime_config.get("default_llm")
-        router_llm = self.runtime_config.get("router_llm")
+        runtime_profiles = self.runtime_config.get("nucore_runtime", {})
 
         if not isinstance(supported, dict):
             raise ValueError("runtime_config.supported_llms must be a dictionary")
-        if default_llm is not None and default_llm not in supported:
-            raise ValueError(
-                f"runtime_config.default_llm '{default_llm}' is not in supported_llms"
-            )
-        if router_llm is not None and router_llm not in supported:
-            raise ValueError(
-                f"runtime_config.router_llm '{router_llm}' is not in supported_llms"
-            )
+        if "default" not in supported:
+            raise ValueError("runtime_config.supported_llms must include 'default'")
+        if not isinstance(runtime_profiles, dict):
+            raise ValueError("runtime_config.nucore_runtime must be a dictionary")
+        if not isinstance(runtime_profiles.get("default"), dict):
+            raise ValueError("runtime_config.nucore_runtime.default must be a dictionary")
 
         for definition in self.registry.definitions():  # validate all intents, not just routable ones
-            llm_key = definition.config.get("llm_override")
-            if llm_key is None:
+            llm_cfg = definition.config.get("llm_config")
+            if llm_cfg is None:
                 continue
-            if not isinstance(llm_key, str) or not llm_key.strip():
+            if not isinstance(llm_cfg, dict):
                 raise ValueError(
-                    f"Intent '{definition.name}' llm_override must be a non-empty string when provided"
-                )
-            if llm_key not in supported:
-                raise ValueError(
-                    f"Intent '{definition.name}' llm_override '{llm_key}' is not in runtime_config.supported_llms"
+                    f"Intent '{definition.name}' llm_config must be an object when provided"
                 )
 
     def _resolve_runtime_llm_config(self, intent_name: str) -> dict[str, Any]:
-        """Build the merged LLM config dict for a specific intent handler call.
+        """Resolve intent runtime LLM config with profile-first precedence.
 
-        Selection priority:
-        1. ``config["llm_override"]`` declared in the intent's ``config.json``.
-        2. ``runtime_config["default_llm"]`` global default.
-        3. First key in ``supported_llms`` as a last resort.
-
-        The selected entry's ``params`` sub-dict is merged first, then the
-        top-level entry keys overwrite it, and ``llm_key`` is injected so the
-        dispatch adapter can identify which client to use.
-
-        Raises:
-            ValueError: If the resolved key is not in ``supported_llms``.
+        Resolution order:
+        1. ``nucore_runtime.<intent_name>`` (full override).
+        2. ``nucore_runtime.default`` overlaid by intent ``config.json``
+           ``llm_config`` fields.
         """
         supported = self.runtime_config.get("supported_llms", {})
         if not supported:
             return {}
 
         definition = self.registry.get(intent_name)
-        selected_key = definition.config.get("llm_override")
-        if selected_key is None:
-            selected_key = self.runtime_config.get("default_llm")
-            if selected_key is None:
-                selected_key = next(iter(supported.keys()))
-        elif not isinstance(selected_key, str) or not selected_key.strip():
-            raise ValueError(
-                f"Intent '{intent_name}' llm_override must be a non-empty string when provided"
-            )
-        if selected_key not in supported:
-            raise ValueError(
-                f"Intent '{intent_name}' llm_override '{selected_key}' is not in runtime_config.supported_llms"
-            )
+        if intent_name in supported:
+            selected = dict(supported.get(intent_name, {}))
+            selected["llm_key"] = intent_name
+            return selected
 
-        selected = dict(supported.get(selected_key, {}))
-        params = selected.pop("params", {})
-        merged = dict(params if isinstance(params, dict) else {})
-        merged.update(selected)
-        merged["llm_key"] = selected_key
+        default_key = self.runtime_config.get("default_llm") or "default"
+        if default_key not in supported:
+            raise ValueError(f"Default runtime profile '{default_key}' is not available")
+
+        merged = dict(supported.get(default_key, {}))
+        intent_overlay = definition.config.get("llm_config", {})
+        if intent_overlay is not None and not isinstance(intent_overlay, dict):
+            raise ValueError(
+                f"Intent '{intent_name}' llm_config must be an object when provided"
+            )
+        if isinstance(intent_overlay, dict):
+            merged.update(intent_overlay)
+
+        provider = _normalize_provider_name(merged.get("provider"))
+        merged["provider"] = provider
+        if "supports_system_role" not in merged:
+            provider_caps = self.runtime_config.get("provider_capabilities", {})
+            merged["supports_system_role"] = bool(
+                provider_caps.get(provider, {}).get("supports_system_role", True)
+            )
+        merged["llm_key"] = default_key
         return merged
 
     def _resolve_router_llm_config(self) -> dict[str, Any]:
-        """Build the merged LLM config dict used by the intent router.
+        """Build the LLM config dict used by the intent router.
 
-        Prefers ``runtime_config["router_llm"]`` over ``default_llm``.  The
-        router stream handler callback is injected when streaming is enabled so
-        the router's token output does not mix with the handler's stream state.
-
-        Raises:
-            ValueError: If the resolved key is not in ``supported_llms``.
+        Uses ``nucore_runtime.router`` when present, otherwise falls back to
+        ``nucore_runtime.default``.
         """
         supported = self.runtime_config.get("supported_llms", {})
         if not supported:
@@ -666,15 +647,14 @@ class IntentRuntime:
             )
 
         selected = dict(supported.get(selected_key, {}))
-        params = selected.pop("params", {})
-        merged = dict(params if isinstance(params, dict) else {})
-        merged.update(selected)
-        merged["llm_key"] = selected_key
+        provider = _normalize_provider_name(selected.get("provider"))
+        selected["provider"] = provider
+        selected["llm_key"] = selected_key
         # Override the stream handler with the router-specific one so chunk
         # counts for routing calls are tracked separately from handler calls.
-        if merged.get("stream"):
-            merged["stream_handler"] = self.router_stream_handler.handle_stream_chunk
-        return merged
+        if selected.get("stream"):
+            selected["stream_handler"] = self.router_stream_handler.handle_stream_chunk
+        return selected
 
     def _intent_signature(self, intent_name: str) -> tuple[int, int, int]:
         """Return a ``(handler_mtime, config_mtime, prompt_mtime)`` tuple for cache invalidation.

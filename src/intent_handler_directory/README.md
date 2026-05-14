@@ -34,10 +34,9 @@ Only directories with `config.json` are discovered as intents.
 | `routable` | Set to `false` to hide from the router (dependency-only intents). Default: `true` |
 | `previous_dependencies` | Ordered list of intent names that must run before this one |
 | `routing_examples` | Example queries used in router prompt generation |
-| `router_hints` | Additional routing guidance for the router LLM |
+| `router_hints` | Additional routing guidance for the router |
 | `tool_files` | Optional list of tool JSON files (relative or absolute). Runtime also auto-discovers `tool_*.json` in this folder and merges both lists with de-duplication |
-| `llm_override` | Key into `runtime_config.supported_llms` to use a specific LLM for this intent |
-| `llm_config` | Per-intent LLM call defaults merged with runtime selection |
+| `llm_config` | Per-intent overlay fields merged with runtime selection when no full intent profile exists |
 
 ## Routable vs Pipeline Intents
 
@@ -131,14 +130,13 @@ result = await runtime.handle_query(
 
 Turns are stored as `(query, response)` pairs in a `ConversationHistory` object inside `IntentRuntime.session_store`. The history is prepended as alternating `user` / `assistant` messages before the current query, so the LLM sees the full conversation context.
 
-**Pruning** is automatic: each history is capped at `max_turns` (configured per LLM in `runtime_config.json` under each LLM entry, or globally via `default_max_turns` at the root). Oldest turns are dropped first.
+**Pruning** is automatic: each history is capped at `max_turns` from the active resolved profile in `nucore_runtime` (default, router, or intent-specific). Oldest turns are dropped first.
 
 ```json
 {
-  "supported_llms": {
-    "claude": { "max_turns": 20, ... }
-  },
-  "default_max_turns": 20
+  "nucore_runtime": {
+    "default": { "max_turns": 20 }
+  }
 }
 ```
 
@@ -178,6 +176,6 @@ Currently, there's none
 
 Router and memory assets live outside this directory:
 
-- `src/intent_handler/runtime_assets/runtime_config.json`
+- `src/intent_handler/runtime_assets/nucore_runtime.example.json`
 - `src/intent_handler/runtime_assets/router/`
 - `src/intent_handler/runtime_assets/memory_store/`

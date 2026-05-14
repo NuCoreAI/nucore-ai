@@ -17,13 +17,14 @@ pip install -e .
 
 The primary entry point is the intent handler runtime. It routes user queries to the correct intent handler and executes them against a NuCore backend.
 
+Create a runtime profile JSON first (see `src/intent_handler/runtime_assets/nucore_runtime.example.json`).
+
 ### Minimal (no backend)
 
 ```shell
 python -m intent_handler.run_intent_runtime \
   --intent-dir src/intent_handler_directory \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --query "Turn on the patio lights"
 ```
 
@@ -32,8 +33,7 @@ python -m intent_handler.run_intent_runtime \
 ```shell
 python -m intent_handler.run_intent_runtime \
   --intent-dir src/intent_handler_directory \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
@@ -48,8 +48,7 @@ Omit `--query` to enter an interactive prompt loop:
 ```shell
 python -m intent_handler.run_intent_runtime \
   --intent-dir src/intent_handler_directory \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
@@ -58,14 +57,49 @@ python -m intent_handler.run_intent_runtime \
 
 ### Streaming Output
 
-Add `--stream` to print tokens as they are generated (supported for all providers):
+Streaming is always enabled from runtime profiles and no CLI switch is required.
 
 ```shell
 python -m intent_handler.run_intent_runtime \
-  --stream \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --query "What devices are in the master bedroom?"
+```
+
+### Secrets File
+
+Use `--secrets_file` to provide API keys as key/value pairs. These values are
+loaded into a dict and passed to provider dispatch as the environment source.
+
+The file must be valid JSON with a single top-level object. Each property name
+is a secret name and each value is the string to use for lookup. Do not use
+shell syntax, comments, or nested structures.
+
+Example `secrets.json`:
+
+```json
+{
+  "OPENAI_API_KEY": "...",
+  "ANTHROPIC_API_KEY": "...",
+  "GEMINI_API_KEY": "...",
+  "XAI_API_KEY": "...",
+  "LLAMACPP_API_KEY": "..."
+}
+```
+
+Format rules:
+
+- Top level must be a JSON object.
+- Keys should be environment-style secret names such as `OPENAI_API_KEY`.
+- Values should be strings.
+- Duplicate or alias keys are allowed if you want to point multiple names at the same secret value.
+
+Usage:
+
+```shell
+python -m intent_handler.run_intent_runtime \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+  --secrets_file /path/to/secrets.json \
+  --query "Turn on the patio lights"
 ```
 
 ### Logging
@@ -76,8 +110,7 @@ The runtime now supports centralized, flexible logging for both development and 
 
 ```shell
 python -m intent_handler.run_intent_runtime \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --log-level DEBUG \
   --log-file logs/intent-runtime.log
 ```
@@ -86,8 +119,7 @@ Use JSON logs for ingestion by external tools:
 
 ```shell
 python -m intent_handler.run_intent_runtime \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --log-json \
   --log-file logs/intent-runtime.json.log
 ```
@@ -96,8 +128,7 @@ Disable console logs (for quiet batch or service environments):
 
 ```shell
 python -m intent_handler.run_intent_runtime \
-  --provider claude \
-  --api-key sk-ant-api03-... \
+  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
   --no-log-console \
   --log-file logs/intent-runtime.log
 ```
@@ -124,12 +155,9 @@ logger.info("runtime started")
 | Flag | Description |
 |---|---|
 | `--intent-dir` | Path to intent handler directory (default: `src/intent_handler_directory`) |
-| `--runtime-config` | Path to `runtime_config.json` |
+| `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
+| `--secrets_file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
-| `--provider` | LLM provider override: `claude`, `openai`, `gemini`, `grok`, `llama.cpp` |
-| `--model` | Model name override for selected provider |
-| `--api-key` | API key override for selected provider |
-| `--stream` | Stream tokens to stdout as they arrive |
 | `--backend-api-classpath` | Python class path for backend API (e.g. `iox.IoXWrapper`) |
 | `--backend-api-base-url` | Base URL for backend API |
 | `--backend-api-username` | Backend API username |
@@ -141,7 +169,7 @@ logger.info("runtime started")
 | `--log-json` | Emit logs in JSON format |
 | `--no-log-console` | Disable console logging |
 
-## Supported LLM Providers
+## Supported Providers
 
 | Provider | Alias | Env Var |
 |---|---|---|
@@ -151,7 +179,7 @@ logger.info("runtime started")
 | xAI Grok | `grok`, `xai` | `XAI_API_KEY` |
 | llama.cpp (local) | `llama.cpp`, `llamacpp` | `LLAMACPP_API_KEY` (optional) |
 
-API keys can be set via environment variables or passed directly via `--api-key`. Provider selection can also be configured in `src/intent_handler/runtime_assets/runtime_config.json`.
+Provider and model settings come from the runtime profile file passed to `--runtime-config`. Profiles use a `provider` field and do not rely on legacy `llm` aliases or `supported_llms` fallback behavior. API keys can be embedded in the profile, supplied via `--secrets_file`, or read from process environment variables.
 
 ## Using a Local (Edge) LLM with llama.cpp
 
@@ -190,25 +218,27 @@ build.cuda/bin/llama-server \
 
 ```shell
 python -m intent_handler.run_intent_runtime \
-  --provider llama.cpp \
+  --runtime-config /path/to/nucore_runtime.json \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
   --backend-api-password yourpassword
 ```
 
-Runtime config for llama.cpp (`src/intent_handler/runtime_assets/runtime_config.json`):
+Runtime profile for llama.cpp (`--runtime-config` target):
 
 ```json
 {
-  "supported_llms": {
-    "local": {
+  "nucore_runtime": {
+    "default": {
       "provider": "llama.cpp",
       "model": "qwen3-instruct",
-      "url": "http://192.168.6.113:8013/v1"
+      "url": "http://192.168.6.113:8013/v1",
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 32000
     }
-  },
-  "default_llm": "local"
+  }
 }
 ```
 
