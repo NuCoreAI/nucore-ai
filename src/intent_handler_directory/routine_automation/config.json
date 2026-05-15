@@ -12,7 +12,8 @@
     "Edit the bedtime routine to turn off all lights and lock the doors at 10pm every night"
   ],
   "router_hints": [
-    "Use this intent for creating or editing routine logic (if-then conditions, schedules, actions, rules)."
+    "Use this intent for creating or editing routine logic (if-then conditions, schedules, actions, rules).",
+    "If you made a mistake or if the user want to change something you created, **always** update the existing routine instead of creating a new one."
   ],
   "tool_files": [
     "tool_routine_automation.json"

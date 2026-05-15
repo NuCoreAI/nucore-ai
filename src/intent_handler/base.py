@@ -7,6 +7,7 @@ from typing import Any
 
 from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
 from .adapters import LLMAdapter
+from .session_store import SessionStore
 from nucore import NuCoreInterface
 from utils.logger import _write_debug_prompt
 from rag import RAGData, DedupeDevices 
@@ -145,7 +146,8 @@ class BaseIntentHandler(ABC):
         )
 
         # Build current user turn: optional framework context, any extra
-        # sections, and the user query — each separated by a visual rule.
+        # sections, history (with consistent labels), and the user query —
+        # each separated by a visual rule.
         user_parts = []
         if framework_context:
             user_parts.append(f"---\n# FRAMEWORK CONTEXT:\n{framework_context.strip()}")
@@ -153,40 +155,20 @@ class BaseIntentHandler(ABC):
             for section_name, section_value in extra_user_sections.items():
                 if section_value:
                     user_parts.append(f"---\n# {section_name.upper()}:\n{section_value.strip()}")
-        user_parts.append(f"---\n# USER QUERY:\n{query.strip()}")
+        formatted_history = SessionStore._format_history_content(history)
+        if formatted_history:
+            user_parts.append(formatted_history)
+        user_parts.append(f"\n\n---\n# USER QUERY:\n{query.strip()}")
         current_user_content = "\n\n".join(user_parts).strip()
 
-        # Flatten history into alternating user/assistant pairs.
-        # System instructions are NOT repeated here; they appear only once.
-        history_messages: list[dict[str, str]] = []
-        if history and history.turns:
-            for turn in history.turns:
-                history_messages.append({"role": "user", "content": turn.query.strip()})
-                history_messages.append({"role": "assistant", "content": turn.response.strip()})
-
         if self._supports_system_role():
-            # Standard layout: system prompt → history → current user turn.
-            messages = (
-                [{"role": "system", "content": resolved_prompt_text}]
-                + history_messages
-                + [{"role": "user", "content": current_user_content}]
-            )
-
-        # Non-system-role layout (e.g. Claude messages API without a system
-        # kwarg): inject the system instructions into the first user message.
-        if history_messages:
-            first_user_content = (
-                "---\n# SYSTEM INSTRUCTIONS:\n"
-                f"{resolved_prompt_text}\n\n"
-                f"{history_messages[0]['content']}"
-            )
-            messages = (
-                [{"role": "user", "content": first_user_content}]
-                + history_messages[1:]
-                + [{"role": "user", "content": current_user_content}]
-            )
+            # Standard layout: system prompt → current user turn (which already includes history block).
+            messages = [
+                {"role": "system", "content": resolved_prompt_text},
+                {"role": "user", "content": current_user_content},
+            ]
         else:
-            # No history: combine system instructions and user query in one message.
+            # Non-system-role layout: inline system instructions with the user content.
             messages = [
                 {
                     "role": "user",

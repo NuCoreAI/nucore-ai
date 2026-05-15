@@ -14,6 +14,48 @@ from utils import configure_logging, get_logger
 logger = get_logger(__name__)
 
 
+def _stringify_tool_result(tool_result: Any) -> str:
+    """Return a readable text form for a backend/tool result.
+
+    The translator needs the actual response payload, not the Python repr of
+    an HTTP response object (for example ``<Response [200]>``).
+    """
+    if tool_result is None:
+        return "null"
+
+    if isinstance(tool_result, (str, int, float, bool)):
+        return str(tool_result)
+
+    if isinstance(tool_result, (dict, list)):
+        try:
+            return json.dumps(tool_result, indent=2, default=str)
+        except Exception:
+            return str(tool_result)
+
+    status_code = getattr(tool_result, "status_code", None)
+    if status_code is not None:
+        payload: dict[str, Any] = {"status_code": status_code}
+
+        try:
+            body = tool_result.json()
+        except Exception:
+            body = None
+
+        if body is not None:
+            payload["body"] = body
+        else:
+            text = getattr(tool_result, "text", None)
+            if isinstance(text, str) and text.strip():
+                payload["body"] = text.strip()
+
+        try:
+            return json.dumps(payload, indent=2, default=str)
+        except Exception:
+            return str(payload)
+
+    return str(tool_result)
+
+
 def _default_intent_dir() -> Path:
     """Resolve the default intent handler directory for both repo and installed runs."""
     repo_path = Path(__file__).resolve().parents[1] / "intent_handler_directory"
@@ -258,7 +300,9 @@ async def _run_once(
     if tool_results:
         # Agentic loop: feed tool results back so the LLM can respond to them.
         query = result.get_effective_query() or query
-        stringified_tool_results = "\n".join([f"\n\n{str(tr)}" for tr in tool_results])
+        stringified_tool_results = "\n\n".join(
+            _stringify_tool_result(tr) for tr in tool_results
+        )
         result = await runtime.handle_agent_response(query, stringified_tool_results, session_id=session_id)
         if result is None:
             return
