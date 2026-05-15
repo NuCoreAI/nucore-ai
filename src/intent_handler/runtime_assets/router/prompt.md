@@ -36,6 +36,9 @@ Use these sources in order of relevance:
 - **Ambiguous without history?** Check CONVERSATION HISTORY first. If the reference can be resolved from history, route — do not ask for clarification.
 - When CONVERSATION HISTORY is present, use it **only** to resolve pronoun or references for devices or routines such as "it", "them", "the same device", or "that routine". Treat the resolved reference as if the user had stated it explicitly in the current query.
 - **Never use CONVERSATION HISTORY to answer a query.** Even if the identical question appears in history with a full answer, you must still route to the correct intent. Prior answers in history are not your output — routing JSON is.
+- **Repeated command handling:** If the current query is a complete, explicit action request (for example, "turn on master bedroom"), route it every time, even if the same command appears in recent history.
+- Do not downgrade a repeated explicit command to Natural Language Mode just because it was already executed earlier.
+- If a query is an explicit actionable command, treat it as a new request for execution, not a confirmation.
 
 ---
 # CONVERSATION HISTORY RULES
@@ -48,6 +51,7 @@ If the user's message is a confirmation ("yes", "yep", "correct", "confirming", 
 1. Look at the **last assistant turn** in CONVERSATION HISTORY.
 2. If the assistant proposed or asked about a specific action (e.g. "Should I enable the Movie Time routine?"), treat the confirmation as the user explicitly requesting that action.
 3. Reconstruct the full intent query (e.g. "enable Movie Time routine") and route it — do not ask for more clarification.
+4. Apply this confirmation flow only when the user message is primarily a confirmation phrase (short acknowledgment) and not a full actionable command.
 
 ## Pronoun Resolution
 If the user refers to a device, routine, or scene with a pronoun or vague reference:

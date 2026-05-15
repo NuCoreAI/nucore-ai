@@ -26,6 +26,10 @@ async def _get_routine_summary_from_candidates(intent_handler, candidates) -> li
         the threshold.  Empty when no candidates qualify.
     """
     score_threshold = intent_handler.config.get("threshold", 0.80)
+    if not candidates:
+        debug("No candidates provided to _get_routine_summary_from_candidates.")
+        return []
+
 
     out: list[dict[str, Any]] = []
     for r in candidates:
