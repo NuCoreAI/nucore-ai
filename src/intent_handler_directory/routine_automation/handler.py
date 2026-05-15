@@ -151,7 +151,8 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         try:
             result = []
             for routine in tool.args:
-                if routine['id'] is None or routine['id'] == "": 
+                id = routine.get('id', None)
+                if id is None or id == "":
                     result.append(await self.nucore_interface.create_automation_routine(routine))
                 else:
                     #this is an update

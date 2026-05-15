@@ -43,3 +43,46 @@ class SessionStore:
     def clear_all(self) -> None:
         """Remove history for all sessions."""
         self._sessions.clear()
+
+    def format_history_for_prompt(self, session_id: str) -> str:
+        """Format conversation history with consistent labeling for LLM prompts.
+
+        Returns a formatted string suitable for inclusion in user message content,
+        with labeled sections and begin/end markers. Returns empty string if no
+        history exists.
+
+        Args:
+            session_id: Session identifier to retrieve history for.
+
+        Returns:
+            Formatted history string with "CONVERSATION HISTORY" label,
+            begin/end markers, and turns in reverse chronological order.
+            Empty string if history is empty or nonexistent.
+        """
+        history = self.get(session_id)
+        return self._format_history_content(history)
+
+    @staticmethod
+    def _format_history_content(history: ConversationHistory | None) -> str:
+        """Format a ConversationHistory with consistent labeling (static helper).
+
+        This can be called on any history object without session_store access.
+
+        Args:
+            history: The ConversationHistory to format, or None.
+
+        Returns:
+            Formatted history string with labels and markers, or empty string.
+        """
+        if not history or not history.turns:
+            return ""
+
+        content = (
+            "---\n# CONVERSATION HISTORY (most recent first):\n"
+            "<<BEGIN CONVERSATION HISTORY>>\n"
+        )
+        for turn in reversed(history.turns):
+            content += f"User: {turn.query.strip()}\n"
+            content += f"Assistant: {turn.response.strip()}\n\n"
+        content += "<<END CONVERSATION HISTORY>>"
+        return content

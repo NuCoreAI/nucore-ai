@@ -35,9 +35,10 @@ async def _write_debug_prompt(intent_name:str, messages: list[dict[str, str]]) -
         return
     global prompt_writer_started
     with open(prompt_debug_output, "a") as f:
-        f.write(f"\n\nIntent: {intent_name} \n\n")
+        f.write(f"\n\n----\nIntent: {intent_name} \n\n")
         for msg in messages:
             f.write(f"[{msg['role']}]\n{msg['content']}\n\n")
+            #f.write(f"\n\n{msg['content']}")
 
 def _to_bool(value: str | bool | None, default: bool) -> bool:
     if value is None:

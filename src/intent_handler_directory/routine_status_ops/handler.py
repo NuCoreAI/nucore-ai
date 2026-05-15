@@ -59,7 +59,7 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
         if route_result and route_result.route_context:
             # If the router provided candidate devices in the route context, use those directly.
             candidate_routines = await _get_routine_summary_from_candidates(self, route_result.route_context.get("candidate_routines", []))
-            return {"<<nucore_routines_runtime>>": f"```json\n{self.nucore_interface.condensed_routines}```" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"}
+            return {"<<nucore_routines_runtime>>": f"```json\n{json.dumps(self.nucore_interface.condensed_routines)}\n```" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"}
 
         return {
             "<<nucore_routines_runtime>>": "No routine runtime information available."

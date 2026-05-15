@@ -7,6 +7,7 @@ from typing import Any
 from .adapters import LLMAdapter
 from .loader import IntentHandlerRegistry
 from .models import ConversationHistory, IntentDefinition, RouteResult
+from .session_store import SessionStore
 from nucore import NuCoreInterface
 from utils.logger import _write_debug_prompt
 
@@ -85,7 +86,7 @@ class IntentRouter:
                 if self.nucore_interface.summary_rags
                 else ""
             ))
-        prompt = prompt.replace("<<routines_database>>", f"```json\n{self.nucore_interface.condensed_routines}```")
+        prompt = prompt.replace("<<routines_database>>", f"```json\n{json.dumps(self.nucore_interface.condensed_routines)}\n```")
 
         # Expand any shared module placeholders (e.g. <<nucore_rules>>).
         expanded_prompt = self.registry.expand_common_module_placeholders(prompt)
@@ -127,50 +128,32 @@ class IntentRouter:
         """
         router_llm_config = dict(llm_config_override or {})
 
-        # Build a formatted history block only for the fallback path that has
-        # to inline the whole conversation into a single user message.
-        history_block = ""
-        history_messages: list[dict[str, str]] = []
-        if history and history.turns:
-            lines = ["---\n# CONVERSATION HISTORY (most recent first):"]
-            for turn in reversed(history.turns):
-                lines.append(f"User: {turn.query.strip()}")
-                lines.append(f"Assistant: {turn.response.strip()}")
-                lines.append("")
-            history_block = "\n".join(lines).strip()
-            for turn in history.turns:
-                history_messages.append({"role": "user", "content": turn.query.strip()})
-                history_messages.append({"role": "assistant", "content": turn.response.strip()})
+        # Build history block and user content for all providers.
+        history_block = SessionStore._format_history_content(history)
 
-
-        def _make_user_content(include_history_block: bool = False) -> str:
-            """Combine optional history and the user query into one content string."""
+        def _make_user_content() -> str:
+            """Combine optional history block and the user query into one content string."""
             parts = []
-            if include_history_block and history_block:
+            if history_block:
                 parts.append(history_block)
             parts.append(f"---\n# USER QUERY:\n{query.strip()}")
             return "\n\n".join(parts)
 
         router_prompt = await self.build_router_prompt()
-        # Build message list using the provider-appropriate layout.
+        user_content = _make_user_content()
         if self._supports_system_role(router_llm_config):
-            # History is passed as real conversation turns; no need to inline it
-            # as a markdown block in the final user message.
             messages = [
                 {"role": "system", "content": router_prompt},
-            ] + history_messages + [
-                {"role": "user", "content": _make_user_content(include_history_block=False)},
+                {"role": "user", "content": user_content},
             ]
         else:
-            # Claude and similar providers that do not use a separate system role:
-            # inline the system instructions at the start of the user turn.
             messages = [
                 {
                     "role": "user",
                     "content": (
                         "SYSTEM INSTRUCTIONS:\n"
                         f"{router_prompt}\n\n"
-                        f"{_make_user_content(include_history_block=True)}"
+                        f"{user_content}"
                     ),
                 }
             ]
@@ -251,24 +234,18 @@ class IntentRouter:
         """
         router_llm_config = dict(llm_config_override or {})
 
-        # Build a formatted history block (most recent turn first) for the user message.
-        history_block = ""
-        if history and history.turns:
-            lines = ["---\n# CONVERSATION HISTORY (most recent first):"]
-            for turn in reversed(history.turns):
-                lines.append(f"User: {turn.query.strip()}")
-                lines.append(f"Assistant: {turn.response.strip()}")
-                lines.append("")
-            history_block = "\n".join(lines).strip()
-
+        # Get consistently formatted history for inclusion in prompts.
+        history_block = SessionStore._format_history_content(history)
 
         def _make_user_content() -> str:
             """Combine optional history and the user query into one content string."""
             parts = []
             if history_block:
                 parts.append(history_block)
-            parts.append(f"---\n# USER QUERY:\n{query.strip()}")
-            parts.append(f"---\n# AGENT RESPONSE:\n{agent_response.strip()}")
+            parts.append(f"---\n\n# USER QUERY:\n{query.strip()}")
+            parts.append(
+                f"\n\n# AGENT RESPONSE:\n{agent_response.strip()}\n"
+            )
             return "\n\n".join(parts)
 
         router_prompt = "You are an assistant that converts technical agent responses into human-readable summaries for the user. Given the following AGENT RESPONSE, and conversation history, produce a concise and clear summary that explains in plain language what the agent did or found out. Be sure to include any important details that the user should know, but avoid technical jargon and focus on what matters to the user.\n\n" 

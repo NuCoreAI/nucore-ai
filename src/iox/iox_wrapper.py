@@ -589,30 +589,64 @@ class IoXWrapper(NuCoreInterface):
             ifs = routine.get("if", None)
             if ifs is not None and len (ifs) > 0:
                 for if_ in ifs:
-                    keys = list(if_.keys())
-                    if "comp" in keys or "eq" in keys:
+                    if not isinstance(if_, dict):
+                        continue
+
+                    # Keep logic operators and schedule blocks as-is.
+                    if "logic" in if_ or "weekly" in if_ or "at" in if_ or "from" in if_ or "to" in if_ or "for" in if_:
+                        out_routine['if'].append(if_)
+                        continue
+
+                    # COS: property-state comparison condition.
+                    if "comp" in if_:
                         condition = if_
-                        if not isinstance(condition, dict):
+                        required = {"device", "status", "comp", "value", "uom", "precision"}
+                        if not required.issubset(condition.keys()):
+                            logger.error(f"Invalid COS condition (missing required fields): {condition}")
                             continue
-                        if not "device" in condition or not "precision" in condition or not "value" in condition or not "uom" in condition:
-                            continue
-                        device_id = condition.get("device", None)
+
+                        device_id = self.get_device_id(condition.get("device"))
                         if device_id is None:
+                            logger.error(f"Device not found for COS condition: {condition}")
                             continue
-                        device_id = self.get_device_id(device_id)
-                        if device_id is None: 
+                        condition["device"] = ProfileRagFormatter.decode_id(device_id)
+
+                        uom_id = condition.get("uom")
+                        precision = condition.get("precision")
+                        value = condition.get("value")
+                        if uom_id is not None and int(uom_id) != 25 and precision is not None and value is not None:
+                            condition["value"] = int(value * (10 ** int(precision)))
+
+                        out_routine['if'].append(condition)
+                        continue
+
+                    # COC: physical control event condition.
+                    if "eq" in if_:
+                        condition = if_
+                        required = {"device", "eq", "control"}
+                        if not required.issubset(condition.keys()):
+                            logger.error(f"Invalid COC condition (missing required fields): {condition}")
                             continue
-                        # device ids are in base64 encoded, decode it
-                        device_id = ProfileRagFormatter.decode_id(device_id)
-                        condition["device"] = device_id
-                        uom_id = condition.get("uom", None)
-                        precision = condition.get("precision", None)
-                        value = condition.get("value", None)
-                        if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
+
+                        device_id = self.get_device_id(condition.get("device"))
+                        if device_id is None:
+                            logger.error(f"Device not found for COC condition: {condition}")
                             continue
-                        value = value * (10 ** precision)
-                        condition["value"] = int(value)
-                    out_routine['if'].append(if_)
+                        condition["device"] = ProfileRagFormatter.decode_id(device_id)
+
+                        parameters = condition.get("parameters")
+                        if isinstance(parameters, list):
+                            for param in parameters:
+                                uom_id = param.get("uom")
+                                precision = param.get("precision")
+                                value = param.get("value")
+                                if precision is not None and uom_id is not None and int(uom_id) != 25 and value is not None:
+                                    param["value"] = value * (10 ** int(precision))
+
+                        out_routine['if'].append(condition)
+                        continue
+
+                    logger.error(f"Unsupported IF condition shape, dropping: {if_}")
             
             thens = routine.get("then", None)
             if thens is not None and len (thens) > 0:
@@ -861,9 +895,10 @@ class IoXWrapper(NuCoreInterface):
         if operation not in ["delete", "runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]:
             logger.error(f"Invalid operation: {operation}")
             return None
+        response = None
         try:
             if operation == "delete":
-                response = await self.delete(f'/api/ai/trigger/{routine_id}')
+                response = self.delete(f'/api/ai/trigger/{routine_id}')
             else:
                 if isinstance(routine_id, str):
                     try:

@@ -2,6 +2,7 @@
   "nucore_runtime": {
     "default": {
       "provider": "claude",
+      "model_2": "claude-haiku-4-5-20251001",
       "model": "claude-sonnet-4-20250514",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
