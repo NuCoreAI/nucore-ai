@@ -1374,7 +1374,7 @@ Scenario: "After sunset when pool is off and temperature is above 75°F, turn on
 ---
 # POST-ROUTER ASSUMPTION
 - The router has already determined that the current query is `routine_automation`.
-- Do not re-route the query to `command_control`, `real_time_status`, or `group_scene_operations`.
+- Do not re-route the query to `command_control`, `real_time_status`, or `group_scene_ops`.
 - If the routed mode and the user query appear inconsistent, ask for clarification rather than inventing a different route.
 
 ---

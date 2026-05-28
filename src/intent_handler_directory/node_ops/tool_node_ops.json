@@ -1,0 +1,45 @@
+{
+  "name": "tool_node_ops",
+  "description": "Perform runtime operations on a NuCore node (enable, disable, delete, move, rename, etc.)",
+  "input_schema": {
+    "type": "object",
+    "required": ["args"],
+    "properties": {
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "enable",
+                "disable",
+                "delete",
+                "rename",
+                "move",
+                "add_group",
+                "add_folder"
+              ],
+              "description": "The operation to perform on the node."
+            },
+            "node_id": {
+              "type": "string",
+              "description": "The node ID from NODES RUNTIME DATA. Must match the 'id' field exactly. (required for all operations except 'add_group' and 'add_folder')"
+            },
+            "new_name": {
+              "type": "string",
+              "description": "The new name for the node (required for `add_group`, `add_folder`, and `rename` operations)."
+            },
+            "new_parent_id": {
+              "type": "string",
+              "description": "The new parent ID for the node (required for `move` operation)."
+            }
+          },
+          "required": ["operation"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

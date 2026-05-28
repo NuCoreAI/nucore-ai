@@ -10,7 +10,8 @@
     "What is the garage temperature right now?"
   ],
   "router_hints": [
-    "Use this intent for *Immediate* device actions (turn on/off, set value, adjust) and real time device status checks"
+    "Use this intent for *Immediate* device actions (turn on/off, set value, adjust) and real time device status checks",
+    "Do not use this intent for object level operations like move, rename, delete, enabled, disabled, etc. (use node_ops intent for that)"
   ],
   "tool_files": [
     "tool_command_control.json",

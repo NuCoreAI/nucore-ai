@@ -12,7 +12,7 @@ Your job is to select the correct device or devices and call the tool.
 ---
 # POST-ROUTER ASSUMPTION
 - The incoming query has already been classified as either `command_control` or `real_time_status`.
-- Do not re-route to `routine_automation` or `group_scene_operations`.
+- Do not re-route to `routine_automation` or `group_scene_ops`.
 - If the routed intent and the query content appear inconsistent, ask for clarification rather than inventing a different route.
 
 ---

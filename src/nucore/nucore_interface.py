@@ -193,6 +193,29 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the get_routine method.")
 
     @abstractmethod 
+    async def add_node(self, node_name:str, type:Literal["folder", "group"]):
+        """
+        Add a new node (folder or group) to the device structure.
+        :param node_name: The name of the node to add.
+        :param type: The type of the node, either "folder" or "group".
+        :return: response from the API or None if failure 
+        """
+        raise NotImplementedError("Subclasses must implement the add_node method.")
+    
+    @abstractmethod
+    async def node_ops(self, node_id:str, operation:Literal["delete", "enable", "disable", "rename", "move", "group"], **kwargs):
+        """
+        Perform an operation on a node (folder or group).
+        :param node_id: The ID of the node to operate on.
+        :param operation: The operation to perform (e.g., "delete", "enable", "disable", "rename", "move").
+        :param kwargs: Additional parameters for the operation:
+          new_name for rename
+          new_parent_id for move
+        :return: response from the API or None if failure 
+        """
+        raise NotImplementedError("Subclasses must implement the node_ops method.")
+
+    @abstractmethod 
     async def routine_ops(self, routine_id:int, operation:Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"]):
         """
         Perform an operation on a program.
@@ -268,7 +291,7 @@ class NuCoreInterface(ABC):
         control = message['control']
         if control == "_3": #node updated event
             self.device_structure_changed = True # just to be on the safe side
-        elif control == "_1": #node updated event
+        elif control == "_1": #programs updated event
             self.routines_changed = True # just to be on the safe side
 
     async def _on_connect_callback(self):

@@ -166,7 +166,7 @@ In interactive CLI mode (`_run_loop`) history is enabled automatically with `ses
 | `command_control_status` | Device commands and real-time status | `None` |
 | `routine_automation` | Create or edit routine logic | `None` |
 | `routine_status_ops` | Enable/disable/run existing routines | `None` |
-| `group_scene_operations` | Group and scene queries | `None` |
+| `group_scene_ops` | Group and scene queries | `None` |
 
 ### Pipeline filters (`routable: false`)
 

@@ -1,5 +1,5 @@
 {
-  "intent": "group_scene_operations",
+  "intent": "group_scene_ops",
   "description": "Post-router execution for group and scene information.",
   "handler": "handler.py",
   "previous_dependencies": [
