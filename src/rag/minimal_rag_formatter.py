@@ -5,7 +5,7 @@ Format: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
 """
 
 import json
-from nucore import Node, Group, Folder, RuntimeProfile, NodeDef
+from nucore import Node, Group, RuntimeProfile, NodeDef, NodeHierarchy
 from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from .dedupe_profiles import DedupeProfiles
@@ -192,6 +192,16 @@ class MinimalRagFormatter(RAGFormatter):
         #    parts.append(f"`enums`: {', '.join(unique_enums)}")
         
         return f">>> \"{node.address}\" : {' | '.join(parts)} <<<"
+        
+    def _get_parent(self, node):
+        if node.parent_type == NodeHierarchy.UD_HIERARCHY_NODE_TYPE_GROUP:
+            return f"{node.parent}|group"
+        elif node.parent_type == NodeHierarchy.UD_HIERARCHY_NODE_TYPE_FOLDER:
+            return f"{node.parent}|folder"
+        elif node.parent_type == NodeHierarchy.UD_HIERARCHY_NODE_TYPE_NODE:
+            return f"{node.parent}|node"
+        else:
+            return "none"
 
     def _format_profile(self, profile: RuntimeProfile) -> list[str]:
         """Format all devices in a profile."""
@@ -222,17 +232,13 @@ class MinimalRagFormatter(RAGFormatter):
         for node in profile.nodes:
             if node.address:
                 if isinstance(node, Group):
-                    groups.append({ "id": node.address, "name": node.name})
-                elif isinstance(node, Folder):
-                    folders.append({ "id": node.address, "name": node.name})
+                    groups.append({ "id": node.address, "name": node.name, "parent": self._get_parent(node)})
                 else:
-                    devices.append({ "id": node.address, "name": node.name})
+                    devices.append({ "id": node.address, "name": node.name, "parent": self._get_parent(node)})
         if len(devices) > 0:
             out["devices"] = devices
         if len(groups) > 0:
             out["groups"] = groups
-        if len(folders) > 0:
-            out["folders"] = folders
         
         return out
 
@@ -273,7 +279,8 @@ class MinimalRagFormatter(RAGFormatter):
         # Format from profiles if available
         if self.profiles:
             all_lines_json = {
-                "profiles": []
+                "profiles": [],
+                "folders":[]
             }
             for profile in self.profiles.values():
                 result = self._format_profile(profile)
@@ -284,6 +291,11 @@ class MinimalRagFormatter(RAGFormatter):
                 if result.get("devices"):
                     device_count += len(result["devices"])
             deduper = DedupeProfiles()
+            if self.folders:
+                for folder in self.folders.values():
+                    folder_info = {"id": folder.address, "name": folder.name, "parent": self._get_parent(folder)}
+                    all_lines_json["folders"].append(folder_info)
+
             all_lines_json = deduper.dedupe(all_lines_json)
         # Otherwise format from nodes directly
         elif self.nodes:

@@ -1,0 +1,26 @@
+{
+  "intent": "node_ops",
+  "description": "Post-router execution for node (node, group, folder) operations.",
+  "handler": "handler.py",
+  "previous_dependencies": [
+  ],
+  "routing_examples": [
+    "Enable the thermostat",
+    "Delete the master bedroom",
+    "Remove the bathroom folder",
+    "Move kitchen keypad to kitchen group",
+    "Rename hallway to left hallway",
+    "Disable the washing machine",
+    "Create a family room group",
+    "Make a new folder for upstairs"
+  ],
+  "router_hints": [
+    "Use this intent to handle any operations related to nodes, including enabling, disabling, deleting, moving, and renaming nodes. Nodes can be devices, groups, or folders." 
+  ],
+  "tool_files": [
+    "tool_node_ops.json"
+  ],
+  "llm_config": {
+    "temperature": 0.1
+  }
+}

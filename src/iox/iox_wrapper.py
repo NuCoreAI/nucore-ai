@@ -118,11 +118,13 @@ class IoXWrapper(NuCoreInterface):
         else:
             self.unauthorized = True
     
-    def delete(self, path: str):
+    def delete(self, path: str, body: str = None, headers: dict = None):
         """Send an authenticated HTTP DELETE request to the ISY hub.
 
         Args:
             path: API path (with or without a leading ``/``).
+            body: Request body string (e.g. JSON-encoded payload).
+            headers: HTTP headers dict (e.g. ``{"Content-Type": "application/json"}``).
 
         Returns:
             :class:`requests.Response`, or ``None`` on connection error.
@@ -131,11 +133,7 @@ class IoXWrapper(NuCoreInterface):
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}" 
             # Method 1a: Using auth parameter (simplest)
-            response = requests.delete(
-            url,
-            auth=(self.username, self.password),
-            verify=False
-            )
+            response = requests.delete(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -209,6 +207,28 @@ class IoXWrapper(NuCoreInterface):
         except Exception as ex:
             logger.error(f"failed post: {ex}")
             return None
+
+    def patch(self, path: str, body: str, headers: dict):
+        """Send an authenticated HTTP PATCH request to the ISY hub.
+
+        Args:
+            path:    API path.
+            body:    Request body string.
+            headers: HTTP headers dict.
+
+        Returns:
+            :class:`requests.Response`, or ``None`` on connection error.
+        """
+        try:
+            url=f"{self.base_url}{path}"
+            response = requests.patch(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            if response.status_code != 200:
+                logger.error(f"invalid url status code = {response.status_code}")
+            return response
+        except Exception as ex:
+            logger.error(f"failed patch: {ex}")
+            return None
+        
         
     # ------------------------------------------------------------------
     # IoX REST helpers
@@ -360,6 +380,39 @@ class IoXWrapper(NuCoreInterface):
                 return node.address
         logger.error(f"Device not found: {device_str}")
         return None
+    
+    def _validate_node_name(self, name: str):
+            #make sure name does not contain \<>&;?!/ characters since those are not allowed in node names
+        if any(c in name for c in ['\\', '<', '>', '&', ';', '?', '!', '/']):
+            out = f"Node name ({name}) cannot contain the following characters: \\ < > & ; ? ! /"
+            logger.error(out)
+            return False, out
+        return True, None
+    
+    def _get_node_type(self, node_id: str):
+        """
+        Determine whether a given node ID corresponds to a device, group, or folder.
+        if not found, return None and log an error.
+        if found, return type and the node
+        """
+        if not node_id:
+            out = "Node ID is empty."
+            logger.error(out)
+            return None, out
+        type = "node"
+        node = self.nodes.get(node_id, None)  # Return None if node_id not found
+        if not node:
+            node = self.groups.get(node_id, None)
+            if not node:
+                node = self.folders.get(node_id, None)
+                if not node:
+                    out = f"Node not found: {node_id}"
+                    logger.error(out)
+                    return None, out
+                type = "folder" 
+            else:
+                type = "group"
+        return type, node
     
     async def send_commands(self, commands: list):
         """Decode device IDs and dispatch commands to the IoX hub.
@@ -870,6 +923,143 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error deleting routine: {ex}")
         
         return response 
+    
+    async def add_node(self, node_name:str, type:Literal["folder", "group"]):
+        """
+        Add a new node (folder or group) to the device structure.
+        :param node_name: The name of the node to add.
+        :param type: The type of the node, either "folder" or "group".
+        :return: response from the API or None if failure 
+        """
+        type=type.lower()
+        if not type in ["folder", "group"]:
+            out = f"Invalid node type: {type}. Must be 'folder' or 'group'."
+            logger.error(out)
+            return out
+
+        if not node_name:
+            out = "Node name cannot be empty."
+            logger.error(out)
+            return out  
+
+        response = None
+        #make sure name does not contain \<>&;?!/ characters since those are not allowed in node names
+        rc, out = self._validate_node_name(node_name)
+        if not rc:
+            return out
+        try:
+            body = {
+              'name': node_name, 
+              'nodeType': type, 
+            }
+            headers = {
+                "Content-Type": "application/json"
+            }
+            response = self.post(f'/api/nodes', body=json.dumps(body), headers=headers)
+        except Exception as ex:
+            out = f"Error adding node: {ex}"
+            logger.error(out)
+            response = out
+        
+        return response 
+
+    async def node_ops(self, node_id:str, operation:Literal["delete", "enable", "disable", "rename", "move", "group"], **kwargs):
+        """
+        Perform an operation on a node (folder or group).
+        :param node_id: The ID of the node to operate on.
+        :param operation: The operation to perform (e.g., "delete", "enable", "disable", "rename", "move").
+        :param kwargs: Additional parameters for the operation:
+          new_name for rename
+          new_parent_id for move
+        :return: response from the API or None if failure 
+        """
+        if not node_id:
+            out = "Node ID cannot be empty."
+            logger.error(out)
+            return out
+        operation = operation.lower()
+        if operation not in ["delete", "enable", "disable", "rename", "move", "group"]:
+            out = f"Invalid operation: {operation}. Must be one of 'delete', 'enable', 'disable', 'rename', 'move', 'group'."
+            logger.error(out)
+            return out
+        
+        if operation == "enable" or operation == "disable":
+            try:
+                body = { 'enabled': operation == "enable" }
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                response = self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+            except Exception as ex:
+                out = f"Error performing node {operation} operation: {ex}"
+                logger.error(out)
+                response = out
+            return response  
+
+        type, out = self._get_node_type(node_id)
+        if not type:
+            return out
+        node = out 
+        if operation == "delete":
+            try:
+                body = { 'nodeType': type }
+                if type == "node":
+                    body['family'] = node.family if node.family else "n/a"
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                response = self.delete(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+            except Exception as ex:
+                out = f"Error performing delete node operation: {ex}"
+                logger.error(out)
+                response = out
+            return response
+
+        if operation == "rename":
+            new_name = kwargs.get("new_name", None)
+            if not new_name:
+                out = "New name must be provided for rename operation."
+                logger.error(out)
+                return out
+            #make sure name does not contain \<>&;?!/ characters since those are not allowed in node names
+            rc, out = self._validate_node_name(new_name)
+            if not rc:
+                return out
+            
+            try:
+                body = { 'name': new_name, 'nodeType': type} 
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                response = self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+            except Exception as ex:
+                out = f"Error performing rename node operation: {ex}"
+                logger.error(out)
+                response = out
+            return response      
+
+        if operation == "move":
+            new_parent_id = kwargs.get("new_parent_id", None)
+            if not new_parent_id:
+                out = "New parent ID must be provided for move operation."
+                logger.error(out)
+                return out
+
+            parent_type, out = self._get_node_type(new_parent_id)
+            if not parent_type:
+                return out
+
+            try:
+                body = { 'nodeType': type, 'parentAddress': new_parent_id, 'parentNodeType': parent_type } 
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                response = self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+            except Exception as ex:
+                out = f"Error performing move node operation: {ex}"
+                logger.error(out)
+                response = out
+            return response      
 
     async def routine_ops(
         self,
@@ -1137,7 +1327,6 @@ class IoXWrapper(NuCoreInterface):
             raise NuCoreError("Failed to fetch nodes from URL.")
         return Node.load_from_xml(response)
         
-        raise NuCoreError("No valid nodes source provided.")
 
     def __load_groups_links__(self, groups_path: str = None):
         """Load group/scene link definitions from a file or the hub.

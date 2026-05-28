@@ -377,7 +377,7 @@ class Profile:
         for node_elem in elements:
             try:
                 folder = Folder(node_elem)
-                self.folders[node.address] = folder
+                self.folders[folder.address] = folder
             except Exception as e:
                 debug(f"Error parsing folder: {e}")
                 continue

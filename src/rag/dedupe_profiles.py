@@ -125,6 +125,7 @@ class DedupeProfiles:
     @staticmethod
     def _dedupe(data: dict) -> dict:
         profiles = data.get("profiles", [])
+        folders = data.get("folders", [])
 
         # Step 1: Find per-section collections (exact full-set matches)
         collections = DedupeProfiles.build_collections(profiles)
@@ -239,7 +240,7 @@ class DedupeProfiles:
 
             new_profiles.append(new_profile)
 
-        return {"shared": shared_section, "profiles": new_profiles}
+        return {"shared": shared_section, "profiles": new_profiles, "folders": folders}
 
 
     def dedupe(self, data: dict) -> dict:
