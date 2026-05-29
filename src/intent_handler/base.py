@@ -101,7 +101,6 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
         extra_user_sections: dict[str, str] | None = None,
@@ -121,8 +120,6 @@ class BaseIntentHandler(ABC):
 
         Args:
             query:              The user's current query string.
-            dependency_outputs: Outputs from upstream handlers in the execution
-                                chain (available for prompt rendering).
             framework_context:  Optional context injected by the framework
                                 (e.g. time, location) prepended to the user turn.
             route_result:       Route result from the router, forwarded to prompt
@@ -140,7 +137,6 @@ class BaseIntentHandler(ABC):
 
         resolved_prompt_text = await self.render_prompt_text(
             query,
-            dependency_outputs=dependency_outputs,
             framework_context=framework_context,
             route_result=route_result,
         )
@@ -191,7 +187,6 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
-        dependency_outputs: IntentHandlerResult | None = None,
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
     ) -> dict[str, str]:
@@ -205,11 +200,52 @@ class BaseIntentHandler(ABC):
         """
         return {}
 
+    async def get_tool_result_context(
+        self,
+        registry: Any,
+        query: str | None = None,
+        framework_context: str | None = None,
+        route_result: RouteResult | None = None,
+    ) -> Any: 
+        """
+         If the subclass has provided a specific prompt for tool results by overriding get_tool_result_prompt, this method will renders it by replacing the nucore and runtime templates and return the rendered context. If get_tool_result_prompt returns None, this method return nothing. 
+
+        """
+        context = await self.get_tool_result_prompt()
+        if context is None:
+            return ""
+        context = registry.expand_common_module_placeholders(context) 
+        context = context.strip()
+        context = await self.render_prompt_text(
+            query=query,
+            prompt=context,
+            framework_context=framework_context,
+            route_result=route_result,
+        )
+
+        return context
+
+    
+    async def get_tool_result_prompt(self)->str:
+        """
+            If subclass wants to provide specific prompt for tool results that is different from the main prompt, they can override this method. Otherwise, it will simply use the main prompt. 
+            If used, the subclass can include nucore templates such as <<nucore_definitions>> or <<nucore_common_rules>> as well as specific runtime templates that will be replaced
+            using get_prompt_runtime_replacements. Example:
+            <<nucore_definitions>>
+            <<nucore_common_rules>>
+
+            ---
+            # DEVICE STRUCTURE
+            <<runtime_device_structure>> 
+        """
+        return None
+
+
     async def render_prompt_text(
         self,
         query: str,
         *,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
+        prompt: str | None = None,
         framework_context: str | None = None,
         route_result: RouteResult | None = None,
     ) -> str:
@@ -218,13 +254,13 @@ class BaseIntentHandler(ABC):
         Calls :meth:`get_prompt_runtime_replacements` to collect substitution
         values, then replaces each ``<<key>>`` occurrence in the raw prompt text.
         Missing or ``None`` values are replaced with an empty string.
+        If a specific prompt is provided via the ``prompt`` parameter, it will be used instead of the default prompt text.
 
         Returns the fully rendered, stripped prompt string.
         """
-        rendered = self.prompt_text
+        rendered = prompt or self.prompt_text
         replacements = await self.get_prompt_runtime_replacements(
             query,
-            dependency_outputs=dependency_outputs,
             framework_context=framework_context,
             route_result=route_result,
         )
@@ -408,7 +444,8 @@ class BaseIntentHandler(ABC):
         *,
         route_result: RouteResult | None = None,
         framework_context: str | None = None,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
+        raw_response: IntentHandlerResult | None = None,
+        tool_calls: list[ToolCall] | None = None,
     ) -> IntentHandlerResult:
         """Execute the intent and return the result.
 
@@ -416,9 +453,10 @@ class BaseIntentHandler(ABC):
 
         .. code-block:: python
 
-            messages = await self.build_messages(query, ...)
-            response = await self.call_llm(messages=messages)
-            # post-process response (e.g. parse tool calls, call backend)
+            # Runtime builds messages/calls the LLM first, then passes the
+            # raw response and extracted tool calls here for post-processing.
+            response = raw_response
+            # post-process response (e.g. execute tools, transform output)
             response.set_route_result(route_result=route_result)
             return response
 
@@ -426,7 +464,8 @@ class BaseIntentHandler(ABC):
             query:              The (possibly resolved) user query string.
             route_result:       Route metadata from the router.
             framework_context:  Optional runtime context string.
-            dependency_outputs: Results from upstream handlers in the chain.
+            raw_response:       LLM response returned by ``call_llm``.
+            tool_calls:         Tool calls extracted from ``raw_response``.
 
         Returns:
             An :class:`IntentHandlerResult` carrying the final output.

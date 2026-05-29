@@ -2,8 +2,6 @@
   "intent": "command_control_status",
   "description": "Post-router execution for command control and realtime status requests.",
   "handler": "handler.py",
-  "previous_dependencies": [
-  ],
   "routing_examples": [
     "Turn on the patio lights",
     "Set hallway thermostat to 71",

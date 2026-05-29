@@ -2,8 +2,6 @@
   "intent": "routine_automation",
   "description": "Post-router execution for routine automation.",
   "handler": "handler.py",
-  "previous_dependencies": [
-  ],
   "routing_examples": [
     "Turn on the patio lights on Mondays and Wednesday at sunset and turn off at sunrise next day",
     "If I am not home by 7pm, turn on the porch light and set the thermostat to 72 degrees",

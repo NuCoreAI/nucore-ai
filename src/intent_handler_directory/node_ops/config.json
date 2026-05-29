@@ -2,8 +2,6 @@
   "intent": "node_ops",
   "description": "Post-router execution for node (node, group, folder) operations.",
   "handler": "handler.py",
-  "previous_dependencies": [
-  ],
   "routing_examples": [
     "Enable the thermostat",
     "Delete the master bedroom",
@@ -22,5 +20,8 @@
   ],
   "llm_config": {
     "temperature": 0.1
+  },
+  "agentic": {
+    "enabled": true
   }
 }

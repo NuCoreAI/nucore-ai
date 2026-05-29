@@ -3,11 +3,11 @@
   "description": "Results from intent detection based on the user query for downstream intent handlers. ",
   "input_schema": {
     "type": "object",
-    "required": ["intent", "user_query"],
+    "required": ["user_query"],
     "properties": {
       "intent": {
-        "type": "string",
-        "description": "Primary intent of the user query."
+        "type": ["string", "null"],
+        "description": "Primary intent of the user query. Use null when Natural Language Mode should answer directly without routing to an intent handler."
       },
       "user_query": {
         "type": "string",
@@ -57,6 +57,34 @@
             }
           },
           "additionalProperties": false
+        }
+      },
+      "route_plan": {
+        "type": "array",
+        "description": "Optional ordered plan for multi-intent queries. Each step names the intent and a step-specific user_query. Runtime executes steps in order.",
+        "items": {
+          "type": "object",
+          "required": ["intent", "user_query"],
+          "properties": {
+            "intent": {
+              "type": "string",
+              "description": "Intent name for this step."
+            },
+            "user_query": {
+              "type": "string",
+              "description": "Step-specific query text to execute for this intent."
+            },
+            "context": {
+              "type": "object",
+              "description": "Optional step-specific routing context (for candidate devices/routines, etc.).",
+              "additionalProperties": true
+            },
+            "notes": {
+              "type": "string",
+              "description": "Optional notes for this planning step."
+            }
+          },
+          "additionalProperties": true
         }
       }
     },

@@ -24,15 +24,13 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
     attached to the response as tool results.
 
     This handler has no prompt placeholders — ``get_prompt_runtime_replacements``
-    returns an empty dict, relying entirely on the static prompt and any
-    ``dependency_outputs`` passed through ``build_messages``.
+    returns replacements derived from route context and runtime state.
     """
 
     async def get_prompt_runtime_replacements(
         self,
         query,
         *,
-        dependency_outputs: IntentHandlerResult | None = None,
         framework_context=None,
         route_result=None,
     ) -> dict:
@@ -40,7 +38,6 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
 
         Args:
             query:              The user query (unused).
-            dependency_outputs: Unused for this handler.
             framework_context:  Unused for this handler.
             route_result:       Unused for this handler.
 
@@ -80,7 +77,8 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         *,
         route_result=None,
         framework_context: str = None,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
+        raw_response: IntentHandlerResult | None = None,
+        tool_calls=None,
     ):
         """Call the LLM and dispatch any ``tool_routine_automation`` tool calls.
 
@@ -96,24 +94,17 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
                                  it is present both before and after tool
                                  dispatch).
             framework_context:   Optional extra context string.
-            dependency_outputs:  Outputs from preceding intents in the chain.
 
         Returns:
             :class:`~intent_handler.IntentHandlerResult` with tool results
             attached and route metadata set.
         """
         
-        messages = await self.build_messages(
-            query,
-            dependency_outputs=dependency_outputs,
-            framework_context=framework_context,
-            route_result=route_result,
-        )
-        response = await self.call_llm(messages=messages)
+        response = raw_response
         response.set_route_result(route_result=route_result)
 
         # Dispatch each tool call and collect the backend results.
-        tools = response.get_tool_calls()
+        tools = tool_calls if tool_calls is not None else response.get_tool_calls()
         if tools:
             for tool in tools:
                 if tool.name == "tool_routine_automation":

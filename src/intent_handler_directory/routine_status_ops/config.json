@@ -2,8 +2,6 @@
   "intent": "routine_status_ops",
   "description": "Post-router execution for routine status operations.",
   "handler": "handler.py",
-  "previous_dependencies": [
-  ],
   "routing_examples": [
     "Enable the irrigation routines",
     "Disable all pool routines",

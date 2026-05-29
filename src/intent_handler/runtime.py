@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 
+from .bounded_agentic import BoundedAgentOrchestrator, BoundedAgentPolicy
 from .base import BaseIntentHandler
 from .loader import IntentHandlerRegistry
-from .models import IntentHandlerResult, RouteResult
+from .models import IntentHandlerResult, ModeDecision, RoutePlanStep, RouteResult
 from .router import IntentRouter
 from .session_store import SessionStore
 from .stream_handler import RouterStreamHandler, StreamHandler
@@ -150,6 +151,7 @@ def _load_runtime_config(
     default_max_turns = int(default_profile.get("max_turns", 20))
     return {
         "nucore_runtime": normalized_profiles,
+        "bounded_agentic": dict(payload.get("bounded_agentic") or {}),
         "supported_llms": supported_llms,
         "default_llm": "default",
         "router_llm": "router" if "router" in supported_llms else "default",
@@ -228,6 +230,8 @@ class IntentRuntime:
         self.stream_handler.set_websocket(websocket)
         self.router_stream_handler.set_websocket(websocket)
         self.runtime_config: dict[str, Any] = {}
+        self._bounded_agent_policy: BoundedAgentPolicy = BoundedAgentPolicy.from_runtime_config({})
+        self._bounded_agent_orchestrator: BoundedAgentOrchestrator = BoundedAgentOrchestrator()
         # Handler instance cache: intent_name → handler object.
         self._handler_instances: dict[str, BaseIntentHandler] = {}
         # Signature cache: intent_name → (handler_mtime_ns, config_mtime_ns, prompt_mtime_ns).
@@ -278,6 +282,7 @@ class IntentRuntime:
             path=self.runtime_config_path,
             stream_handler=self.stream_handler,
         )
+        self._bounded_agent_policy = BoundedAgentPolicy.from_runtime_config(self.runtime_config)
         self._validate_runtime_config()
         self._reconcile_handler_cache()
         # Reset stream state so stale chunk counters from a previous call don't
@@ -317,6 +322,7 @@ class IntentRuntime:
     async def handle_agent_response(
         self,
         query: str,
+        context: str,
         agent_response: str,
         *,
         framework_context: str | None = None,
@@ -329,6 +335,7 @@ class IntentRuntime:
 
         Args:
             query:             Stringified tool results to process.
+            context:           Additional context to provide to the router to be used in system message. 
             agent_response:    The response from the agent to convert to human-readable form.
             framework_context: Optional extra context string forwarded to the handler.
             session_id:        Session ID for history look-up (currently unused
@@ -344,7 +351,7 @@ class IntentRuntime:
 
         history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
 
-        return await self.router.handle_agent_response(query, agent_response=agent_response,history=history)
+        return await self.router.handle_agent_response(query, context=context, agent_response=agent_response,history=history)
 
     async def handle_query(
         self,
@@ -352,18 +359,17 @@ class IntentRuntime:
         *,
         framework_context: str | None = None,
         session_id: str | None = None,
-    ) -> IntentHandlerResult:
-        """Route a query, execute the dependency chain, and return the final result.
+    ) -> list[IntentHandlerResult]:
+        """Route a query, execute selected intent(s), and return the final result.
 
         Full execution pipeline:
         1. Retrieve (or create) the conversation history for ``session_id``.
         2. Route the query to an intent via :meth:`route`.
-        3. Resolve the topologically-ordered dependency chain for the selected intent.
-        4. For each intent in the chain: resolve its LLM config, inject history,
-           create a step-specific :class:`~models.RouteResult`, and call the handler.
-        5. Accumulate ``dependency_outputs`` so downstream handlers can read
-           results from earlier steps.
-        6. After the chain completes, append the final text response to the
+          3. If the router returns a multi-intent ``route_plan``, execute each
+              planned step in order using its step-specific query.
+          4. Otherwise execute one intent (deterministic or bounded-agentic
+              depending on policy).
+          5. After execution completes, append the final text response to the
            session history (when a session ID is provided).
 
         Args:
@@ -375,7 +381,7 @@ class IntentRuntime:
                                and updated after it.
 
         Returns:
-            :class:`~models.IntentHandlerResult` from the last handler in the chain.
+            :class:`~models.IntentHandlerResult` list of results 
         """
         default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
         active_llm_key = self.runtime_config.get("default_llm")
@@ -398,10 +404,98 @@ class IntentRuntime:
                 output={"text": nl_text},
             )
 
+        route_plan = route_result.route_plan or []
+        if len(route_plan) > 1:
+            return await self._execute_route_plan(
+                initial_route=route_result,
+                route_plan=route_plan,
+                history=history,
+                framework_context=framework_context,
+            )
+
+        mode_decision = self._mode_decision_for_route(route_result)
+        if mode_decision.mode == "bounded_agentic":
+
+            async def execute_chain_step(step_query: str, step_route: RouteResult) -> IntentHandlerResult | None:
+                return await self._execute_resolved_route(
+                    query=step_query,
+                    route_result=step_route,
+                    history=history,
+                    framework_context=framework_context,
+                )
+
+            async def reroute_step(step_query: str) -> RouteResult:
+                return await self.route(step_query, history=history)
+
+            return await self._bounded_agent_orchestrator.execute(
+                query=query,
+                initial_route=route_result,
+                decision=mode_decision,
+                execute_chain=execute_chain_step,
+                reroute=reroute_step,
+                post_step_hook=self.nucore_interface._refresh_routines_database,
+            )
+
+        return await self._execute_resolved_route(
+            query=query,
+            route_result=route_result,
+            history=history,
+            framework_context=framework_context,
+        )
+
+    async def _execute_route_plan(
+        self,
+        *,
+        initial_route: RouteResult,
+        route_plan: list[RoutePlanStep],
+        history: Any,
+        framework_context: str | None,
+    ) -> list[IntentHandlerResult | None]:
+        """Execute router-planned multi-intent steps in the returned order."""
+        results: list[IntentHandlerResult | None] = [] 
+
+        for index, step in enumerate(route_plan, start=1):
+            step_route = RouteResult(
+                intent=step.intent,
+                confidence=initial_route.confidence,
+                notes=step.notes or initial_route.notes,
+                #route_context=step.route_context,
+                route_context=initial_route.route_context,
+                resolved_query=step.user_query,
+                raw_response=initial_route.raw_response,
+            )
+            logger.debug(
+                "Executing route-plan step %s/%s: intent='%s' query='%s'",
+                index,
+                len(route_plan),
+                step.intent,
+                step.user_query,
+            )
+            results.extend(await self._execute_resolved_route(
+                query=step.user_query,
+                route_result=step_route,
+                history=history,
+                framework_context=framework_context,
+            ))
+            if results is None:
+                results = []
+            await self.nucore_interface._refresh_routines_database()
+
+        return results
+
+    async def _execute_resolved_route(
+        self,
+        *,
+        query: str,
+        route_result: RouteResult,
+        history: Any,
+        framework_context: str | None,
+    ) -> list[IntentHandlerResult | None]:
+        """Execute the routed intent for one resolved route."""
+
         execution_chain = self._resolve_execution_chain(route_result.intent)
 
-        dependency_outputs: dict[str, Any] = {}
-        last_result: IntentHandlerResult | None = None
+        results: list[IntentHandlerResult | None] = []
 
         for intent_name in execution_chain:
             logger.debug(f"Handling intent '{intent_name}' for query '{query}' with history: {history}")
@@ -421,24 +515,70 @@ class IntentRuntime:
                     notes=f"Dependency step for '{route_result.intent}'",
                     resolved_query=route_result.resolved_query,
                     raw_response=route_result.raw_response,
+                    route_context=route_result.route_context,
                 )
             )
 
             effective_query = step_route_result.resolved_query or query
 
-            result = await handler.handle(
+            messages = await handler.build_messages(
                 effective_query,
-                route_result=step_route_result,
                 framework_context=framework_context,
-                dependency_outputs=dependency_outputs,
+                route_result=step_route_result,
+                history=history,
             )
+            raw_response = await handler.call_llm(messages=messages)
+            extracted_tool_calls = raw_response.get_tool_calls() if raw_response else []
+
+            result = raw_response
+            if extracted_tool_calls:
+                # Process each tool call as its own step so post-processing and
+                # structure refresh happen between calls.
+                for tool_call in extracted_tool_calls:
+                    step_result = await handler.handle(
+                        effective_query,
+                        route_result=step_route_result,
+                        framework_context=framework_context,
+                        raw_response=result,
+                        tool_calls=[tool_call],
+                    )
+                    if step_result is not None:
+                        result = step_result
+                    #await self.nucore_interface._refresh_routines_database
+            else:
+                step_result = await handler.handle(
+                    effective_query,
+                    route_result=step_route_result,
+                    framework_context=framework_context,
+                    raw_response=raw_response,
+                    tool_calls=[],
+                )
+                if step_result is not None:
+                    result = step_result
+
+            if result is None:
+                result = raw_response
             if result:
                 result.set_route_result(route_result=step_route_result)
                 result.set_effective_query(effective_query)
-                dependency_outputs[intent_name] = result
-                last_result = result
+                result.add_tool_result_context(
+                    context=await handler.get_tool_result_context(
+                        registry=self.registry,
+                        query=effective_query,
+                        framework_context=framework_context,
+                        route_result=step_route_result,
+                    ))
+                results.append(result)
 
-        return last_result
+        return results
+
+    def _mode_decision_for_route(self, route_result: RouteResult) -> ModeDecision:
+        """Return deterministic vs bounded-agentic mode decision for a routed request."""
+        if not route_result.intent:
+            return ModeDecision(mode="deterministic", reason="no_routed_intent")
+
+        definition = self.registry.get(route_result.intent)
+        return self._bounded_agent_policy.decide(route_result, intent_config=definition.config)
 
     def available_intents(self) -> list[str]:
         """Return the names of all currently loaded intent handlers."""
@@ -497,38 +637,13 @@ class IntentRuntime:
     # ------------------------------------------------------------------
 
     def _resolve_execution_chain(self, target_intent: str) -> list[str]:
-        """Return a topologically-ordered list of intents to execute for ``target_intent``.
+        """Return the intents to execute for ``target_intent``.
 
-        Performs a depth-first traversal of the ``previous_dependencies`` graph
-        starting from ``target_intent``.  Each dependency appears before the
-        intent that declares it.
-
-        Raises:
-            ValueError: If a cycle is detected in the dependency graph.
+        Execution is single-intent: only the routed intent is executed.
         """
-        ordered: list[str] = []
-        visited: set[str] = set()
-        active: set[str] = set()  # Intents currently in the DFS call stack (grey nodes).
-
-        def visit(intent_name: str) -> None:
-            if not intent_name:
-                return 
-            if intent_name in active:
-                raise ValueError(f"Circular dependency in execution chain at '{intent_name}'")
-            if intent_name in visited:
-                return
-
-            active.add(intent_name)
-            definition = self.registry.get(intent_name)
-            for dependency in definition.previous_dependencies:
-                visit(dependency)
-            active.remove(intent_name)
-
-            visited.add(intent_name)
-            ordered.append(intent_name)
-
-        visit(target_intent)
-        return ordered
+        if not target_intent:
+            return []
+        return [target_intent]
 
     def _safe_json_data(self, value: Any) -> Any:
         """Return ``value`` if JSON-serialisable, otherwise its ``str()`` representation."""

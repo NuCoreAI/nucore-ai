@@ -36,7 +36,6 @@ class IntentDefinition:
         stream_handler_class:  Pre-instantiated :class:`~stream_handler.StreamHandler`
                                instance, or ``None`` when no stream handler is
                                configured.
-        previous_dependencies: Names of intents that must run before this one.
         routing_examples:      Example queries used to guide the router.
         router_hints:          Additional free-text hints for the router.
         llm_config:            Per-intent LLM override config (merged on top of
@@ -54,7 +53,6 @@ class IntentDefinition:
     description: str
     handler_class: str | None = None
     stream_handler_class: StreamHandler | None = None
-    previous_dependencies: list[str] = field(default_factory=list)
     routing_examples: list[str] = field(default_factory=list)
     router_hints: list[str] = field(default_factory=list)
     llm_config: dict[str, Any] = field(default_factory=dict)
@@ -64,6 +62,22 @@ class IntentDefinition:
 # ---------------------------------------------------------------------------
 # Routing
 # ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RoutePlanStep:
+    """One router-planned intent execution step.
+
+    Attributes:
+        intent:        Intent name to execute for this step.
+        user_query:    Step-specific query text to send to that intent.
+        route_context: Optional context for downstream prompt placeholders.
+        notes:         Optional planner notes for observability/debugging.
+    """
+
+    intent: str
+    user_query: str
+    route_context: dict[str, Any] | None = None
+    notes: str | None = None
 
 @dataclass(frozen=True)
 class RouteResult:
@@ -78,6 +92,8 @@ class RouteResult:
                          by the router for downstream intent handlers.
         resolved_query:  Optionally rewritten/clarified version of the original
                          user query produced during routing.
+        route_plan:      Optional ordered list of planned intent steps for
+                 multi-intent requests.
         raw_response:    Full raw response dict from the routing LLM for
                          debugging or downstream inspection.
     """
@@ -87,7 +103,54 @@ class RouteResult:
     notes: str | None = None
     route_context: dict[str, Any] | None = None
     resolved_query: str | None = None
+    route_plan: list[RoutePlanStep] | None = None
     raw_response: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Bounded agentic orchestration
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class AgentBudget:
+    """Execution limits applied to bounded-agentic requests.
+
+    Attributes:
+        max_steps:      Maximum planner/execution loop iterations.
+        max_retries:    Maximum reroute retries after failed steps.
+        max_latency_ms: Soft latency budget for the full request.
+    """
+
+    max_steps: int = 2
+    max_retries: int = 1
+    max_latency_ms: int = 15000
+
+
+@dataclass(frozen=True)
+class ModeDecision:
+    """Router-adjacent decision describing how a request should execute.
+
+    Attributes:
+        mode:    ``"deterministic"`` or ``"bounded_agentic"``.
+        reason:  Human-readable policy reason for observability.
+        budget:  Budget applied when ``mode`` is ``"bounded_agentic"``.
+    """
+
+    mode: str
+    reason: str
+    budget: AgentBudget | None = None
+
+
+@dataclass(frozen=True)
+class AgentStepLog:
+    """One step in a bounded-agentic execution trace."""
+
+    step: int
+    intent: str | None
+    query: str
+    latency_ms: int
+    status: str
+    notes: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +186,7 @@ class IntentHandlerResult:
     route_result: RouteResult | None = None
     tool_result: list[Any] | None = None
     stream_handler: StreamHandler | None = None
+    execution_metadata: dict[str, Any] | None = None
 
     def set_output(self, output: Any) -> None:
         """Replace the primary output value."""
@@ -131,6 +195,16 @@ class IntentHandlerResult:
     def get_stream_handler(self) -> StreamHandler | None:
         """Return the attached stream handler, or ``None``."""
         return self.stream_handler
+
+    def add_tool_result_context(self, context: Any) -> None:
+        """Append context to the internal list of tool results.
+        No-ops when ``context`` is ``None``.
+        """
+        if context is None:
+            return
+        if self.tool_result is None:
+            self.tool_result = []
+        self.tool_result.append({"context": context})
 
     def add_tool_result(self, tool_result: Any) -> None:
         """Append a tool execution result to the internal list.

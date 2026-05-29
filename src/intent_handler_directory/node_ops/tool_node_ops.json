@@ -33,7 +33,7 @@
             },
             "new_parent_id": {
               "type": "string",
-              "description": "The new parent ID for the node (required for `move` operation)."
+              "description": "The new parent ID for the node. **ONLY** used for the `move` operation. You **CANNOT** use this for `add_group` or `add_folder` operations."
             }
           },
           "required": ["operation"],

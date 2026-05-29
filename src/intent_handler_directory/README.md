@@ -31,41 +31,65 @@ Only directories with `config.json` are discovered as intents.
 | Field | Description |
 |---|---|
 | `handler_class` | Explicit class name in `handler.py` |
-| `routable` | Set to `false` to hide from the router (dependency-only intents). Default: `true` |
-| `previous_dependencies` | Ordered list of intent names that must run before this one |
+| `routable` | Set to `false` to hide from the router. Default: `true` |
 | `routing_examples` | Example queries used in router prompt generation |
 | `router_hints` | Additional routing guidance for the router |
 | `tool_files` | Optional list of tool JSON files (relative or absolute). Runtime also auto-discovers `tool_*.json` in this folder and merges both lists with de-duplication |
 | `llm_config` | Per-intent overlay fields merged with runtime selection when no full intent profile exists |
 
-## Routable vs Pipeline Intents
+## Routable Intents
 
 Intents fall into two categories:
 
 **Routable intents** (`routable: true`, the default) are advertised to the router LLM and can be selected directly based on user queries. Add `routing_examples` and `router_hints` to guide routing.
 
-**Pipeline filter intents** (`routable: false`) are never shown to the router. They only run when listed in another intent's `previous_dependencies`. Use this pattern for pre-processing steps that select candidates (devices, routines, etc.) for a downstream execution intent.
-
-Example — device-action pipeline:
-
-```
-router selects: command_control_status
-  └── previous_dependencies: [None]   ← runs first, routable: false (EXAMPLE ONLY)
-```
+**Non-routable intents** (`routable: false`) are not advertised to the router and are not selected directly from user queries.
 
 ## Handler Requirements
 
 Your handler must subclass `BaseIntentHandler` and implement:
 
 ```python
-async def handle(self, query, *, route_result=None, framework_context=None, dependency_outputs=None):
+async def handle(
+  self,
+  query,
+  *,
+  route_result=None,
+  framework_context=None,
+  raw_response=None,
+  tool_calls=None,
+):
     ...
+```
+
+How to use the new signature:
+
+- `raw_response` is the response object produced by runtime via `call_llm`.
+- `tool_calls` is the extracted tool-call list for the current post-processing step.
+- Runtime now owns message building and LLM invocation.
+- Handlers should only post-process: execute tool calls, validate/transform output,
+  and attach tool results.
+
+Recommended pattern:
+
+```python
+async def handle(..., raw_response=None, tool_calls=None):
+  response = raw_response
+  if response is None:
+    return None
+
+  calls = tool_calls if tool_calls is not None else response.get_tool_calls()
+  for tool in calls:
+    # execute backend action
+    response.add_tool_result(...)
+
+  return response
 ```
 
 Recommended runtime prompt hook:
 
 ```python
-def get_prompt_runtime_replacements(self, query, *, dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None, framework_context=None, route_result=None) -> dict[str, str]:
+def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None) -> dict[str, str]:
     return {}
 ```
 
@@ -155,22 +179,17 @@ In interactive CLI mode (`_run_loop`) history is enabled automatically with `ses
 4. Add `handler.py` with a single `BaseIntentHandler` subclass
 5. Add tool files (`tool_*.json`) and optionally reference additional files via `tool_files`
 6. Add `routing_examples` and `router_hints` for routing (skip for `routable: false` intents)
-7. Add `previous_dependencies` if this intent requires upstream processing
 
 ## Current Intent Inventory
 
 ### Routable (router-visible)
 
-| Intent | Description | Depends on |
-|---|---|---|
-| `command_control_status` | Device commands and real-time status | `None` |
-| `routine_automation` | Create or edit routine logic | `None` |
-| `routine_status_ops` | Enable/disable/run existing routines | `None` |
-| `group_scene_ops` | Group and scene queries | `None` |
-
-### Pipeline filters (`routable: false`)
-
-Currently, there's none
+| Intent | Description |
+|---|---|
+| `command_control_status` | Device commands and real-time status |
+| `routine_automation` | Create or edit routine logic |
+| `routine_status_ops` | Enable/disable/run existing routines |
+| `group_scene_ops` | Group and scene queries |
 
 ## Runtime Files (Do Not Treat as Intents)
 

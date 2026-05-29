@@ -1,4 +1,5 @@
 from __future__ import annotations
+from os import replace
 from typing import Any
 
 from intent_handler import BaseIntentHandler, IntentHandlerResult
@@ -17,31 +18,23 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
     * ``tool_real_time_status`` — fetches live property values for a list of
       ``(device, property)`` pairs via :meth:`_process_real_time_status_tool`.
 
-    Dependency outputs (e.g. from a preceding RAG or profile intent) are
-    injected into the prompt under the ``<<runtime_device_structure>>``
-    placeholder so the LLM has device context when deciding which commands
-    to issue.
+    Candidate context from routing is injected into the prompt under the
+    ``<<runtime_device_structure>>`` placeholder so the LLM has device
+    context when deciding which commands to issue.
     """
 
     async def get_prompt_runtime_replacements(
         self,
         query,
         *,
-        dependency_outputs: IntentHandlerResult | None = None,
         framework_context=None,
         route_result=None,
     ):
         """Build the ``<<runtime_device_structure>>`` prompt placeholder value.
 
-        Concatenates text or RAG document content from all dependency handler
-        results so the LLM receives a consolidated view of the device structure
-        before generating tool calls.
-
         Args:
             query:               The user query (unused here; reserved for
                                  subclass overrides).
-            dependency_outputs:  Dict of ``intent_name → IntentHandlerResult``
-                                 from preceding intents in the execution chain.
             framework_context:   Unused; present for interface compatibility.
             route_result:        Unused; present for interface compatibility.
 
@@ -55,19 +48,7 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
             return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
 
 
-        dout = ""
-        if isinstance(dependency_outputs, dict):
-            for dependency_output in dependency_outputs.values():
-                if isinstance(dependency_output, IntentHandlerResult):
-                    output = dependency_output.output
-                    if isinstance(output, str):
-                        dout += output + "\n\n"
-                    elif isinstance(output, RAGData):
-                        # Flatten RAG document list into plain text.
-                        for document in output['documents']:
-                            dout += document + "\n\n"
-
-        return {"<<runtime_device_structure>>": dout}
+        return {"<<runtime_device_structure>>": "Not available!"}
 
     async def handle(
         self,
@@ -75,7 +56,8 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
         *,
         route_result=None,
         framework_context: str = None,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
+        raw_response: IntentHandlerResult | None = None,
+        tool_calls=None,
     ):
         """Execute the intent: call the LLM and dispatch any returned tool calls.
 
@@ -88,24 +70,17 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
             query:               The user query string.
             route_result:        Routing metadata forwarded to message assembly.
             framework_context:   Optional extra context string.
-            dependency_outputs:  Outputs from preceding intents in the chain.
 
         Returns:
             :class:`~intent_handler.IntentHandlerResult` with tool results
             attached, or ``None`` if the LLM returns an empty response.
         """
-        messages = await self.build_messages(
-            query,
-            dependency_outputs=dependency_outputs,
-            framework_context=framework_context,
-            route_result=route_result,
-        )
-        response = await self.call_llm(messages=messages)
+        response = raw_response
         if not response:
             return None
 
         # Dispatch each tool call to the appropriate handler and accumulate results.
-        tools = response.get_tool_calls()
+        tools = tool_calls if tool_calls is not None else response.get_tool_calls()
         if tools:
             for tool in tools:
                 if tool.name == "tool_command_control":
@@ -118,6 +93,9 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
 
         response.set_route_result(route_result=route_result)
         return response
+
+    async def get_tool_result_prompt(self)->str:
+        return "<<nucore_definitions>>\n\n<<nucore_common_rules>>\n\n---\n# DEVICE STRUCTURE\n\n<<runtime_device_structure>> "
 
     # ------------------------------------------------------------------
     # Tool handlers
@@ -200,7 +178,7 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
                 prop = properties.get(prop_id)
                 if prop:
                     # Prefer the formatted display value; fall back to raw value.
-                    texts.append(f"{device_name}: {prop.formatted if prop.formatted else prop.value}")
+                    texts.append(f"{device_name}: {prop.name if prop.name else prop.id} = {prop.formatted if prop.formatted else prop.value} ")
                 else:
                     texts.append(f"Property {prop_id} not found for device {device_name}")
                     logger.warning("Property not found for device", extra={"property_id": prop_id, "device_name": device_name})

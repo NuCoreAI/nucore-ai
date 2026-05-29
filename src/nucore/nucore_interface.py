@@ -80,9 +80,9 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the _load method.")
     
     async def _refresh_routines_database(self):
+        await self._refresh_device_structure() # make sure we have the latest device structure before refreshing routines
         if not self.routines_changed:
             return False # already refreshed no need to check again
-        await self._refresh_device_structure() # make sure we have the latest device structure before refreshing routines
         if await self._load_routines(): # load routines from the device
             self.routines_changed = False
 
@@ -289,7 +289,11 @@ class NuCoreInterface(ABC):
             return
         
         control = message['control']
+        action = message.get('action', '')
         if control == "_3": #node updated event
+            if action and action in [ 'NX', 'PI', 'WD' ]:
+                #we may want to use 'WD' (device write pending) later for diagnostics 
+                return
             self.device_structure_changed = True # just to be on the safe side
         elif control == "_1": #programs updated event
             self.routines_changed = True # just to be on the safe side

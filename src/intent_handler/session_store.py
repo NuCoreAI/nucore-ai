@@ -56,7 +56,7 @@ class SessionStore:
 
         Returns:
             Formatted history string with "CONVERSATION HISTORY" label,
-            begin/end markers, and turns in reverse chronological order.
+            begin/end markers, and turns in chronological order.
             Empty string if history is empty or nonexistent.
         """
         history = self.get(session_id)
@@ -78,11 +78,11 @@ class SessionStore:
             return ""
 
         content = (
-            "---\n# CONVERSATION HISTORY (most recent first):\n"
+            "---\n# CONVERSATION HISTORY (oldest first):\n"
             "<<BEGIN CONVERSATION HISTORY>>\n"
         )
-        for turn in reversed(history.turns):
-            content += f"User: {turn.query.strip()}\n"
-            content += f"Assistant: {turn.response.strip()}\n\n"
+        for index, turn in enumerate(history.turns, start=1):
+            content += f"Turn {index} User: {turn.query.strip()}\n"
+            content += f"Turn {index} Assistant: {turn.response.strip()}\n\n"
         content += "<<END CONVERSATION HISTORY>>"
         return content

@@ -105,7 +105,6 @@ class IntentHandlerRegistry:
         if not definitions:
             raise ValueError(f"No intent handlers found in {self.root_directory}")
 
-        self._validate_dependencies(definitions)
         self._definitions = definitions
 
     # ------------------------------------------------------------------
@@ -325,58 +324,11 @@ class IntentHandlerRegistry:
             description=config.get("description", ""),
             handler_class=None,
             stream_handler_class=stream_handler_class,
-            previous_dependencies=list(config.get("previous_dependencies", [])),
             routing_examples=list(config.get("routing_examples", [])),
             router_hints=list(config.get("router_hints", [])),
             llm_config=dict(config.get("llm_config", {})),
             config=config,
         )
-
-    # ------------------------------------------------------------------
-    # Dependency validation
-    # ------------------------------------------------------------------
-
-    def _validate_dependencies(self, definitions: dict[str, IntentDefinition]) -> None:
-        """Check that all ``previous_dependencies`` references are valid and acyclic.
-
-        Performs two passes:
-        1. Reference check — every dependency name must exist in ``definitions``
-           and cannot be the intent itself.
-        2. Cycle detection — DFS over the dependency graph to find any strongly
-           connected components (cycles raise ``ValueError``).
-
-        Raises:
-            ValueError: On an unknown dependency, self-dependency, or cycle.
-        """
-        for intent_name, definition in definitions.items():
-            for dependency in definition.previous_dependencies:
-                if dependency not in definitions:
-                    raise ValueError(
-                        f"Intent '{intent_name}' has unknown dependency '{dependency}'"
-                    )
-                if dependency == intent_name:
-                    raise ValueError(
-                        f"Intent '{intent_name}' cannot depend on itself"
-                    )
-
-        # DFS state: 0 = unvisited, 1 = in current path (grey), 2 = done (black).
-        visit_state: dict[str, int] = {name: 0 for name in definitions}
-
-        def dfs(name: str) -> None:
-            state = visit_state[name]
-            if state == 1:
-                raise ValueError(f"Circular dependency detected at intent '{name}'")
-            if state == 2:
-                return
-
-            visit_state[name] = 1  # Mark as in-progress (grey).
-            definition = definitions[name]
-            for dependency in definition.previous_dependencies:
-                dfs(dependency)
-            visit_state[name] = 2  # Mark as complete (black).
-
-        for name in definitions:
-            dfs(name)
 
     # ------------------------------------------------------------------
     # Dynamic class loading
