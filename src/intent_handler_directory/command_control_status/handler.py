@@ -178,7 +178,7 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
                 prop = properties.get(prop_id)
                 if prop:
                     # Prefer the formatted display value; fall back to raw value.
-                    texts.append(f"{device_name}: {prop.name if prop.name else prop.id} = {prop.formatted if prop.formatted else prop.value} ")
+                    texts.append(f"{device_name}: {prop.name if prop.name else prop.id} = {prop.formatted if prop.formatted else prop.value}")
                 else:
                     texts.append(f"Property {prop_id} not found for device {device_name}")
                     logger.warning("Property not found for device", extra={"property_id": prop_id, "device_name": device_name})
