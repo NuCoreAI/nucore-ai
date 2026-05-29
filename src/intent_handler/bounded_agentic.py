@@ -246,4 +246,6 @@ class BoundedAgentOrchestrator:
             },
             "steps": [log.__dict__ for log in step_logs],
         }
-        return results
+        ### MICHEL 
+        # return result 
+        return [final]
