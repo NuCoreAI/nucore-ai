@@ -44,6 +44,29 @@ async def handle(
 This keeps handlers focused on tool execution and output shaping, while runtime
 owns prompt/message/LLM orchestration.
 
+### Custom Prompt for agent_response Handling
+
+When runtime performs the tool-result follow-up pass (converting
+`agent_response` into user-facing output), a handler can provide a dedicated
+prompt template instead of reusing its main `prompt.md` content.
+
+Override this hook in your `BaseIntentHandler` subclass:
+
+```python
+async def get_tool_result_prompt(self) -> str | None:
+  return """
+<<nucore_definitions>>
+<<nucore_common_rules>>
+
+---
+# DEVICE STRUCTURE
+<<runtime_device_structure>>
+"""
+```
+
+Return `None` to keep the default flow (no dedicated tool-result system prompt
+from the handler).
+
 Create a runtime profile JSON first (see `src/intent_handler/runtime_assets/nucore_runtime.example.json`).
 
 ### Minimal (no backend)

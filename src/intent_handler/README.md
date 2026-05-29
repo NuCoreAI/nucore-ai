@@ -241,6 +241,21 @@ def get_prompt_runtime_replacements(self, query, *, framework_context=None, rout
     return {}
 ```
 
+Optional tool-result/agent-response prompt hook:
+
+```python
+async def get_tool_result_prompt(self) -> str | None:
+  """Return a dedicated prompt template for tool-result follow-up."""
+  return None
+```
+
+When non-`None`, runtime uses this template while handling tool results and
+rendering `agent_response` into final user-facing text. Placeholders are
+expanded in two stages:
+
+1. Common NuCore module placeholders (for example `<<nucore_definitions>>`).
+2. Runtime placeholders returned by `get_prompt_runtime_replacements(...)`.
+
 ## Session History
 
 Session history is stored in `IntentRuntime.session_store`.

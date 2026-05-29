@@ -93,6 +93,18 @@ def get_prompt_runtime_replacements(self, query, *, framework_context=None, rout
     return {}
 ```
 
+Optional tool-result prompt hook (for agent-response handling):
+
+```python
+async def get_tool_result_prompt(self) -> str | None:
+  # Return a dedicated prompt template for tool-result follow-up.
+  return None
+```
+
+Use this when your intent needs a different system prompt for the runtime
+`agent_response` conversion step than the main prompt used for the first LLM
+call.
+
 The base class automatically:
 
 - applies runtime placeholder replacements to `prompt.md`
