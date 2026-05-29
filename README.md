@@ -17,6 +17,33 @@ pip install -e .
 
 The primary entry point is the intent handler runtime. It routes user queries to the correct intent handler and executes them against a NuCore backend.
 
+### Handler Execution Contract
+
+Intent handlers now use a runtime-managed execution flow:
+
+1. Runtime builds messages via `handler.build_messages(...)`.
+2. Runtime calls the LLM via `handler.call_llm(...)`.
+3. Runtime extracts tool calls from the raw response.
+4. Runtime calls `handler.handle(...)` for post-processing.
+
+Current `handle` signature:
+
+```python
+async def handle(
+  self,
+  query,
+  *,
+  route_result=None,
+  framework_context=None,
+  raw_response=None,
+  tool_calls=None,
+):
+  ...
+```
+
+This keeps handlers focused on tool execution and output shaping, while runtime
+owns prompt/message/LLM orchestration.
+
 Create a runtime profile JSON first (see `src/intent_handler/runtime_assets/nucore_runtime.example.json`).
 
 ### Minimal (no backend)
