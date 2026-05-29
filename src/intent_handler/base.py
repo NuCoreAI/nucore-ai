@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
-from .adapters import LLMAdapter
+from .adapters import LLMAdapter, ToolCall
 from .session_store import SessionStore
 from nucore import NuCoreInterface
 from utils.logger import _write_debug_prompt
@@ -218,13 +218,15 @@ class BaseIntentHandler(ABC):
         method expands common NuCore placeholders via ``registry`` and then
         applies runtime replacements via :meth:`render_prompt_text`.
 
-        Returns an empty string when no custom tool-result prompt is supplied.
+        Returns ``None`` when no custom tool-result prompt is supplied.
         """
         context = await self.get_tool_result_prompt()
         if context is None:
-            return ""
+            return None
         context = registry.expand_common_module_placeholders(context) 
         context = context.strip()
+        if not context:
+            return None
         context = await self.render_prompt_text(
             query=query,
             prompt=context,
