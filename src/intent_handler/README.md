@@ -139,6 +139,47 @@ Streaming is always enabled via runtime wiring and profile resolution.
 
 Runtime profiles are provider-only: use `provider` in each profile and do not rely on legacy `llm` aliases or `supported_llms` fallback behavior.
 
+## Bounded Agentic Mode
+
+The runtime supports an optional bounded-agentic branch that is selected by
+policy after normal routing. It is disabled by default.
+
+Top-level runtime config keys:
+
+```json
+{
+  "bounded_agentic": {
+    "enabled": false,
+    "enabled_intents": ["node_ops"],
+    "max_steps": 2,
+    "max_retries": 1,
+    "max_latency_ms": 15000
+  }
+}
+```
+
+Selection rules:
+
+- Runtime `bounded_agentic.enabled` must be `true`.
+- All intents are agentic by default when bounded-agentic is enabled.
+- Intent-level overrides in `config.json`:
+  - `"agentic": {"enabled": false}` opts out (deterministic mode).
+  - `"agentic": {"enabled": true}` explicitly opts in.
+  - `"agentic": {"always": true}` forces agentic mode.
+- `bounded_agentic.enabled_intents` is still accepted for compatibility and
+  explicit allow-listing, but no longer required for default behavior.
+
+When bounded-agentic runs, execution metadata is attached to
+`IntentHandlerResult.execution_metadata`.
+
+Recommended NuCore starting defaults:
+
+- `enabled: true`
+- `enabled_intents: []`
+- `max_steps: 3`
+- `max_retries: 1`
+- `max_latency_ms: 12000`
+
 ## Directory Layout
 
 Only folders with `config.json` are discovered as runnable intents.
@@ -157,26 +198,46 @@ Each runnable intent folder must contain:
 | `description` | Router-visible description |
 | `handler` | Handler Python file (default `handler.py`) |
 | `handler_class` | Optional explicit class in handler file |
-| `routable` | `false` hides intent from router (dependency-only) |
-| `previous_dependencies` | Ordered prerequisite intents |
+| `routable` | `false` hides intent from router |
 | `routing_examples` | Router examples |
 | `router_hints` | Router hints |
 | `tool_files` | Extra tool files; runtime also auto-discovers `tool_*.json` |
 | `llm_config` | Per-intent overlay fields used when no full intent profile exists |
+| `agentic` | Optional object for bounded-agentic policy (`enabled`, `always`) |
 
 ## Handler Contract
 
 All handlers must subclass `BaseIntentHandler` and implement:
 
 ```python
-async def handle(self, query, *, route_result=None, framework_context=None, dependency_outputs=None):
+async def handle(
+  self,
+  query,
+  *,
+  route_result=None,
+  framework_context=None,
+  raw_response=None,
+  tool_calls=None,
+):
     ...
 ```
+
+Runtime execution model:
+
+1. Runtime calls `handler.build_messages(...)`.
+2. Runtime calls `handler.call_llm(messages=...)`.
+3. Runtime extracts tool calls from the raw response.
+4. Runtime calls `handler.handle(...)` for post-processing, passing:
+   - `raw_response`: the result returned by `call_llm`
+   - `tool_calls`: extracted tool calls (processed one-by-one by runtime)
+
+Handlers should treat `handle(...)` as a post-processing step (tool execution,
+result transformation, validation), not as the place to call the LLM.
 
 Optional runtime prompt replacement hook:
 
 ```python
-def get_prompt_runtime_replacements(self, query, *, dependency_outputs=None, framework_context=None, route_result=None) -> dict[str, str]:
+def get_prompt_runtime_replacements(self, query, *, framework_context=None, route_result=None) -> dict[str, str]:
     return {}
 ```
 

@@ -6,7 +6,7 @@ from typing import Any
 
 from .adapters import LLMAdapter
 from .loader import IntentHandlerRegistry
-from .models import ConversationHistory, IntentDefinition, RouteResult
+from .models import ConversationHistory, IntentDefinition, RoutePlanStep, RouteResult
 from .session_store import SessionStore
 from nucore import NuCoreInterface
 from utils.logger import _write_debug_prompt
@@ -120,7 +120,8 @@ class IntentRouter:
 
         Returns:
             A :class:`~models.RouteResult` with at minimum ``intent`` and
-            ``resolved_query`` populated.
+            ``resolved_query`` populated. Multi-intent requests may also
+            include ``route_plan`` with ordered per-step intent/query pairs.
 
         Raises:
             ValueError: If the LLM returns an invalid response or selects an
@@ -166,22 +167,56 @@ class IntentRouter:
             expect_json=True,
         )
         payload = self._coerce_route_payload(raw_response)
+        route_plan = self._normalize_route_plan(payload, fallback_query=query)
+
+        # Backward compatibility: if only a route plan is returned, use the
+        # first step as the primary intent signal.
+        if route_plan and payload.get("intent") is None:
+            payload["intent"] = route_plan[0].intent
+        if route_plan and not payload.get("user_query"):
+            payload["user_query"] = route_plan[0].user_query
+
         if payload.get("intent") is None:
             # The payload is invalid or missing an intent; return a RouteResult with notes but no intent.
             return RouteResult(
                 intent=None,
-                notes=payload.get("notes", "Router failed to select a valid intent."),
+                notes=(
+                    payload.get("notes")
+                    or self._extract_text_response(raw_response)
+                    or "Router failed to select a valid intent."
+                ),
                 resolved_query=payload.get("user_query") or query,
+                route_plan=route_plan,
                 raw_response=raw_response
             )
 
-#        payload = self._normalize_and_validate_route_payload(payload, query)
-
         intent_name = payload.get("intent")
-        if intent_name not in self.registry.names():
-            raise ValueError(
-                f"Router selected unknown intent '{intent_name}'. Available intents: {self.registry.names()}"
+        known_intents = set(self.registry.names())
+        if intent_name not in known_intents:
+            return RouteResult(
+                intent=None,
+                notes=(
+                    f"Router selected unknown intent '{intent_name}'. "
+                    "Falling back to Natural Language Mode."
+                ),
+                resolved_query=payload.get("user_query") or query,
+                route_plan=route_plan,
+                raw_response=payload,
             )
+
+        if route_plan:
+            unknown_plan_intents = [step.intent for step in route_plan if step.intent not in known_intents]
+            if unknown_plan_intents:
+                return RouteResult(
+                    intent=None,
+                    notes=(
+                        "Router returned unknown intents in route_plan: "
+                        f"{', '.join(sorted(set(unknown_plan_intents)))}"
+                    ),
+                    resolved_query=payload.get("user_query") or query,
+                    route_plan=route_plan,
+                    raw_response=payload,
+                )
 
         # Confidence may be numeric or a string representation; normalise to float.
         confidence = payload.get("confidence")
@@ -196,6 +231,7 @@ class IntentRouter:
             notes=payload.get("notes", None),
             route_context=payload.get("context", None),
             resolved_query=payload.get("user_query") or query,
+            route_plan=route_plan,
             raw_response=payload,
         )
 
@@ -206,6 +242,7 @@ class IntentRouter:
     async def handle_agent_response(
         self,
         query: str,
+        context: str,
         agent_response: str,
         llm_config_override: dict[str, Any] | None = None,
         history: ConversationHistory | None = None,
@@ -218,6 +255,7 @@ class IntentRouter:
 
         Args:
             query:               The raw user input to route.
+            context:             Additional context to provide to the router to be used in system message.
             agent_response:      The response from the agent to convert to human-readable form.
             llm_config_override: Optional dict of LLM config values that take
                                  precedence over the router's own config.
@@ -249,6 +287,8 @@ class IntentRouter:
             return "\n\n".join(parts)
 
         router_prompt = "You are an assistant that converts technical agent responses into human-readable summaries for the user. Given the following AGENT RESPONSE, and conversation history, produce a concise and clear summary that explains in plain language what the agent did or found out. Be sure to include any important details that the user should know, but avoid technical jargon and focus on what matters to the user.\n\n" 
+        if context:
+            router_prompt += f"Here is some additional context that may help you interpret the agent response:\n{context}\n\n"
         # Build message list using the provider-appropriate layout.
         if self._supports_system_role(router_llm_config):
             messages = [
@@ -292,9 +332,6 @@ class IntentRouter:
         lines = [f"- intent: {definition.name}"]
         if definition.description:
             lines.append(f"  description: {definition.description}")
-        if definition.previous_dependencies:
-            lines.append("  previous_dependencies (ordered):")
-            lines.extend(f"    - {intent_name}" for intent_name in definition.previous_dependencies)
         if definition.routing_examples:
             lines.append("  examples:")
             lines.extend(f"    - {example}" for example in definition.routing_examples)
@@ -450,6 +487,7 @@ class IntentRouter:
         intent = None
         candidate_devices = None
         candidate_routines = None
+        text: str | None = None
         if isinstance(raw_response, dict):
             text = self._extract_text_response(raw_response) 
             tool_calls = raw_response.get("tool_calls")
@@ -464,8 +502,13 @@ class IntentRouter:
                         intent = input.get("intent", None)
                         candidate_devices = input.get("candidate_devices", None)
                         candidate_routines = input.get("candidate_routines", None)
+                        route_plan = input.get("route_plan", None)
+                        notes = input.get("notes") or input.get("answer") or text
                         return {
                             "intent": intent,
+                            "notes": notes,
+                            "user_query": input.get("user_query"),
+                            "route_plan": route_plan,
                             "context": {
                                 "candidate_devices": candidate_devices,
                                 "candidate_routines": candidate_routines,
@@ -477,10 +520,48 @@ class IntentRouter:
                     "notes": text if text else "Router returned a JSON object but it does not contain tool_calls or text fields.",
                 }
                     
-        return{
+        return {
             "intent": None,
             "notes": f"Router returned non-JSON text: {text}" if text else "Router returned an unparseable response with no intent.",
         }
+
+    def _normalize_route_plan(self, payload: dict[str, Any], *, fallback_query: str) -> list[RoutePlanStep]:
+        """Normalize optional route plan payload into typed planner steps."""
+        raw_steps = payload.get("route_plan")
+        if not isinstance(raw_steps, list):
+            return []
+
+        normalized_steps: list[RoutePlanStep] = []
+        for item in raw_steps:
+            if not isinstance(item, dict):
+                continue
+
+            intent = str(item.get("intent") or "").strip()
+            if not intent:
+                continue
+
+            step_query = item.get("user_query")
+            if not isinstance(step_query, str) or not step_query.strip():
+                step_query = fallback_query
+
+            route_context = item.get("context")
+            if route_context is not None and not isinstance(route_context, dict):
+                route_context = None
+
+            notes = item.get("notes")
+            if notes is not None and not isinstance(notes, str):
+                notes = None
+
+            normalized_steps.append(
+                RoutePlanStep(
+                    intent=intent,
+                    user_query=step_query.strip(),
+                    route_context=route_context,
+                    notes=notes,
+                )
+            )
+
+        return normalized_steps
 
     @staticmethod
     def _extract_text_response(raw_response: dict[str, Any]) -> str | None:

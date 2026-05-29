@@ -2,8 +2,6 @@
   "intent": "group_scene_ops",
   "description": "Post-router execution for group and scene information.",
   "handler": "handler.py",
-  "previous_dependencies": [
-  ],
   "routing_examples": [
     "Are these devices cross-linked? ",
     "How do I make devices 1, 2, and 3 work together?",

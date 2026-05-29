@@ -20,10 +20,8 @@ def debug(msg: str) -> None:
 class RoutineStatusOpsIntentHandler(BaseIntentHandler):
     """Intent handler for enabling, disabling, or toggling automation routines.
 
-    Expects output from a preceding ``routine_filter`` intent as
-    ``dependency_outputs``; that output is serialised as a JSON block and
-    injected into the prompt under the ``nucore_routines_runtime`` placeholder
-    so the LLM knows which routines were matched.
+    Uses route-provided routine context to build prompt placeholders so the
+    LLM knows which routines were matched.
 
     The LLM returns a list of ``{id, operation}`` dicts.  Each entry is
     dispatched to :meth:`~nucore.NuCoreInterface.routine_ops` on the NuCore
@@ -34,21 +32,16 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
         self,
         query,
         *,
-        dependency_outputs: IntentHandlerResult | None = None,
         framework_context=None,
         route_result=None,
     ) -> dict[str, str]:
         """Build the ``nucore_routines_runtime`` prompt placeholder.
 
-        Extracts the ``routine_filter`` dependency output (or falls back to the
-        whole ``dependency_outputs`` dict) and serialises it as a fenced JSON
-        block so the LLM can reference the matched routines by ID.
+        Builds a fenced JSON block so the LLM can reference matched routines by ID.
 
         Args:
             query:               The user query (unused; reserved for subclass
                                  overrides).
-            dependency_outputs:  Dict of ``intent_name → IntentHandlerResult``;
-                                 the ``"routine_filter"`` key is preferred.
             framework_context:   Unused; present for interface compatibility.
             route_result:        Unused; present for interface compatibility.
 
@@ -71,7 +64,8 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
         *,
         route_result=None,
         framework_context: str = None,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
+        raw_response: IntentHandlerResult | None = None,
+        tool_calls=None,
     ):
         """Execute routine status operations returned by the LLM.
 
@@ -84,23 +78,14 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
             query:               The user query string.
             route_result:        Routing metadata stamped on the result.
             framework_context:   Optional extra context string.
-            dependency_outputs:  Outputs from preceding intents; passed to
-                                 :meth:`build_messages` and
-                                 :meth:`get_prompt_runtime_replacements`.
 
         Returns:
             :class:`~intent_handler.IntentHandlerResult` whose ``output`` is a
             list of backend operation results, or a "no operations found" string.
         """
-        messages = await self.build_messages(
-            query,
-            framework_context=framework_context,
-            route_result=route_result,
-            dependency_outputs=dependency_outputs,
-        )
-        response = await self.call_llm(messages=messages)
+        response = raw_response
 
-        tool_calls = response.get_tool_calls()
+        tool_calls = tool_calls if tool_calls is not None else response.get_tool_calls()
         out: list = []
 
         if tool_calls:

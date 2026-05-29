@@ -17,10 +17,8 @@ def debug(msg: str) -> None:
 class NodeOpsIntentHandler(BaseIntentHandler):
     """Intent handler for operations on nodes (devices, groups, folders).
 
-    Expects output from a preceding ``node_filter`` intent as
-    ``dependency_outputs``; that output is serialised as a JSON block and
-    injected into the prompt under the ``nucore_nodes_runtime`` placeholder
-    so the LLM knows which nodes were matched.
+    Uses route-provided context and runtime prompt data to inject node details
+    into prompt placeholders so the LLM knows which nodes were matched.
 
     The LLM returns a list of ``{id, operation}`` dicts.  Each entry is
     dispatched to :meth:`~nucore.NuCoreInterface.node_ops` on the NuCore
@@ -31,7 +29,6 @@ class NodeOpsIntentHandler(BaseIntentHandler):
         self,
         query,
         *,
-        dependency_outputs: IntentHandlerResult | None = None,
         framework_context=None,
         route_result=None,
     ) -> dict[str, str]:
@@ -44,8 +41,6 @@ class NodeOpsIntentHandler(BaseIntentHandler):
         Args:
             query:               The user query (unused; reserved for subclass
                                  overrides).
-            dependency_outputs:  Dict of ``intent_name → IntentHandlerResult``
-                                 from preceding intents in the execution chain.
             framework_context:   Unused; present for interface compatibility.
             route_result:        Unused; present for interface compatibility.
 
@@ -72,7 +67,8 @@ class NodeOpsIntentHandler(BaseIntentHandler):
         *,
         route_result=None,
         framework_context: str = None,
-        dependency_outputs: IntentHandlerResult | str | dict[str, Any] | None = None,
+        raw_response: IntentHandlerResult | None = None,
+        tool_calls=None,
     ):
         """Execute node operations based on LLM tool calls and return results. 
 
@@ -80,23 +76,14 @@ class NodeOpsIntentHandler(BaseIntentHandler):
             query:               The user query string.
             route_result:        Routing metadata stamped on the result.
             framework_context:   Optional extra context string.
-            dependency_outputs:  Outputs from preceding intents; passed to
-                                 :meth:`build_messages` and
-                                 :meth:`get_prompt_runtime_replacements`.
 
         Returns:
             :class:`~intent_handler.IntentHandlerResult` whose ``output`` is a
             list of backend operation results, or a "no operations found" string.
         """
-        messages = await self.build_messages(
-            query,
-            framework_context=framework_context,
-            route_result=route_result,
-            dependency_outputs=dependency_outputs,
-        )
-        response = await self.call_llm(messages=messages)
+        response = raw_response
 
-        tool_calls = response.get_tool_calls()
+        tool_calls = tool_calls if tool_calls is not None else response.get_tool_calls()
 
         if tool_calls:
             for tool_call in tool_calls:
