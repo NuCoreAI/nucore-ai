@@ -3,6 +3,8 @@ If `EXISTING ROUTINE` is defined, this is a request for updating an existing rou
 
 <<nucore_definitions>>
 <<nucore_common_rules>>
+<<routine_automation_policy_modules>>
+<<location_information>>
 
 ---
 # DEVICE STRUCTURE
@@ -160,7 +162,7 @@ Checks if a control event occurred (someone physically controlled a device)
       "properties": {
           "id": { 
               "type": "string",
-              "description": "The unique identifier (id) for the parameter from for the command from DEVICE STRUCTURE. If none, use n/a"
+              "description": "The unique identifier (id) for the parameter for the command from DEVICE STRUCTURE. If none, use n/a"
           },
           "value": {
               "type": "number",
@@ -336,7 +338,7 @@ Use one of these exact forms ALL IN JSON:
 ### Instance Structures:
 - At a specific time once daily:
 ```json
-   {"at":{"time":"<HH>:<MM>"} }
+   {"at":{"time":"<HH>:<MM>:<SS>"} }
 ```
 
 - At sunrise +/- offset seconds daily:
@@ -351,7 +353,7 @@ Use one of these exact forms ALL IN JSON:
 
 - At a specific time and date:
 ```json
-   {"at":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
+   {"at":{"time":"<HH>:<MM>:<SS>","date":"<YYYY/MM/DD>"} }
 ```
 
 ## 2. Weekly at a Specific Time and on Specific Days 
@@ -405,7 +407,7 @@ Use one of these exact forms ALL IN JSON:
 
 - Weekly at a specific time on specific day(s):
 ```json
-   {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"time":"<HH>:<MM>"}} }
+   {"weekly":{"days":"sun,mon,tue,wed,thu,fri,sat","at":{"time":"<HH>:<MM>:<SS>"}} }
 ```
 - Weekly at sunrise +/- offset seconds on specific day(s):
 ```json
@@ -476,13 +478,15 @@ Use one of these exact forms ALL IN JSON:
                             "sunset": { "type": "integer", "description": "Offset in **seconds** before (negative) or after (positive) sunset time" }
                         }
                     }
-                ]
-            },
-            "day": { "type": "integer", "description": "is an integer >= 0 for the number of days of duration after the start time. 0 = today, 1 = next day (tomorrow), 2 = two days from now (day after tomorrow), and so on."
+                  ],
+                  "properties": {
+                    "day": { "type": "integer", "description": "is an integer >= 0 for the number of days of duration after the start time. 0 = today, 1 = next day (tomorrow), 2 = two days from now (day after tomorrow), and so on." }
+                  },
+                  "required": ["day"]
             }
         },
         "additionalProperties": false,
-        "required": ["days","from", "to","day"]
+              "required": ["days","from", "to"]
         }
     }
 }
@@ -659,10 +663,10 @@ Use one of these exact forms ALL IN JSON:
 ### Instance Structures:
 - Duration from a specific time/date to another specific time/date:
 ```json
-    {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
+    {"from":{"time":"<HH>:<MM>:<SS>","date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>:<SS>","date":"<YYYY/MM/DD>"} }
 ```
 ```json
-    {"from":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"},"to":{"sunrise":<OFFSET>,"date":"<YYYY/MM/DD>"} }
+    {"from":{"time":"<HH>:<MM>:<SS>","date":"<YYYY/MM/DD>"},"to":{"sunrise":<OFFSET>,"date":"<YYYY/MM/DD>"} }
 ```
 ```json
     {"from":{"sunrise":<OFFSET>,"date":"<YYYY/MM/DD>"},"to":{"time":"<HH>:<MM>","date":"<YYYY/MM/DD>"} }
@@ -670,6 +674,9 @@ Use one of these exact forms ALL IN JSON:
 
 ## Rules:
 - **Always** use (from to) or (from for) formats if the condition indicates a DURATION. 
+- **CRITICAL**: If the user gives one start boundary and one end boundary for the same continuous window (example: "Shabbat starts X before Friday sunset and ends Y after Saturday sunset"), represent it as **ONE** weekly duration expression:
+  `{"weekly":{"days":"fri","from":{"sunset":<start_offset>},"to":{"sunset":<end_offset>,"day":1}}}`
+- Do **NOT** split one continuous window into two schedule subexpressions joined by `or`.
 
 ## Invalid Structures:
 
@@ -715,6 +722,15 @@ Use one of these exact forms ALL IN JSON:
 }
 ```
 
+3. Splitting one continuous Shabbat window into two schedule clauses
+```json
+[
+  {"weekly":{"days":"fri","from":{"sunset":-1080},"to":{"sunset":-1080,"day":1}}},
+  {"logic":"or"},
+  {"weekly":{"days":"sat","from":{"sunset":4320},"to":{"sunset":4320}}}
+]
+```
+
 ---
 # LOGIC OPERATOR 
 - Used for boolean logic and grouping
@@ -730,7 +746,7 @@ Valid grouping tokens (use exactly as shown):
 # SUBEXPRESSIONS 
 Subexpressions are **atomic** conditions that are encapsulated in 
 - **COS**: Change of Property Value events
-- **COD**: Physical Control events 
+- **COC**: Physical Control events 
 - **SCHEDULE**: Time/Date/Duration related conditions 
 
 When there are **more than** one subexpressions, Logic Operators (`and`, `or`, `(`, `)`) **must be used** to combine or group them.
@@ -794,7 +810,7 @@ The order of the evaluation for the array is from the first element to the last.
   {"logic":"and"},            ← MANDATORY operator (NEVER implicit)
   {<SUBEXPRESSION>},          ← second condition
   {"logic":"and"},            ← MANDATORY operator (NEVER implicit)
-  {<UBEXPRESSIONr>}           ← third condition
+  {<SUBEXPRESSION>}           ← third condition
 ]
 ```
 
@@ -871,7 +887,7 @@ Commands that can be **sent** to a device and listed in **Accepted Commands** se
       "properties": {
           "id": { 
               "type": "string",
-              "description": "The unique identifier (id) for the parameter from for the command from DEVICE STRUCTURE. If none, use n/a"
+              "description": "The unique identifier (id) for the parameter for the command from DEVICE STRUCTURE. If none, use n/a"
           },
           "value": {
               "type": "number",

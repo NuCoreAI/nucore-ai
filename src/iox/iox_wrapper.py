@@ -15,7 +15,7 @@ from nucore.node import Node
 from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
-from typing import Literal
+from typing import Literal, Any
 from utils import get_logger
 
 logger = get_logger(__name__)
@@ -378,7 +378,16 @@ class IoXWrapper(NuCoreInterface):
         for node in self.nodes.values():
             if node.name == device_str:
                 return node.address
-        logger.error(f"Device not found: {device_str}")
+
+        #it migght be a group
+        node = self.groups.get(device_str, None)  # Return None if device_id not found
+        if node:
+            return node.address
+
+        for node in self.groups.values():
+            if node.name == device_str:
+                return node.address
+        logger.error(f"Device/Scene not found: {device_str}")
         return None
     
     def _validate_node_name(self, name: str):
@@ -1105,6 +1114,53 @@ class IoXWrapper(NuCoreInterface):
         return response
 
     # ------------------------------------------------------------------
+    # Timezone management 
+    # ------------------------------------------------------------------
+    async def get_timespecs(self) -> dict[str, str]:
+        """
+        Get a list of timezones that can be set on the device. 
+        :return: Dictionary of timezones or None if failure
+
+        API:
+        /rest/time
+        """
+        try:
+            response = self.get(f'/rest/time')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            
+            #response is in xml, convert to json
+            root = ET.fromstring(response.text)
+#                <DT>
+#                    <NTP>3989354564</NTP>
+#                    <GMT>1780390964</GMT>
+#                    <TMZOffset>-8</TMZOffset>
+#                    <DST>true</DST>
+#                    <DSTRule>NAM</DSTRule>
+#                    <Lat>34.050000</Lat>
+#                    <Long>118.233000</Long>
+#                    <Sunrise>3989022221</Sunrise>
+#                    <SunriseGMT>1780058621</SunriseGMT>
+#                    <Sunset>3989073402</Sunset>
+#                    <SunsetGMT>1780109802</SunsetGMT>
+#                    <IsMilitary>false</IsMilitary>
+#                    <TzId>America/Los_Angeles</TzId>
+#                </DT>
+            #convert to dictionary
+            time_data = {}
+            for child in root:
+                if child.tag == "TzId":
+                    time_data["timezone"] = child.text
+                elif child.tag == "Lat":
+                    time_data["latitude"] = child.text
+                elif child.tag == "Long":
+                    time_data["longitude"] = float(child.text) * -1 #the API returns longitude as a positive value, convert it to negative since that's the standard format for longitude
+
+            return time_data 
+        except Exception as ex: 
+            logger.error(f"Error performing timespecs operation: {ex}")
+
+    # ------------------------------------------------------------------
     # Plugin management  
     # ------------------------------------------------------------------
     
@@ -1137,7 +1193,7 @@ class IoXWrapper(NuCoreInterface):
         """
         raise NotImplementedError("Subclasses must implement the plugin_ops method.")
     
-    async def configure_plugin(self, plugin_id:str, config:dict[str,Any]):
+    async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
         """
         Configure a plugin on the device. 
         :param plugin_id: The ID of the plugin to configure.

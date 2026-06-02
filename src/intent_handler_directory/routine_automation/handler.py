@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from intent_handler import BaseIntentHandler, IntentHandlerResult
@@ -44,7 +45,8 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         Returns:
             Empty dict — the static prompt requires no runtime substitution.
         """
-        out = {}
+        policy_modules = self._load_prompt_modules()
+        location_information = await self.nucore_interface.get_timespecs() if self.nucore_interface else None 
         
         if route_result and route_result.route_context:
             candidate_devices = route_result.route_context.get("candidate_devices", [])
@@ -54,7 +56,12 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
             candidate_routines = route_result.route_context.get("candidate_routines", [])
             if not candidate_routines:
                 candidate_rags = self._get_rags_from_candidates(candidate_devices)
-                return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
+                return {
+                    "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
+                    "<<routine_automation_policy_modules>>": policy_modules,
+                    "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",  
+                }
+            
 
             # we are editing. The first thing to do is to get the candidate routines for editing
             # to the candidate devices if any exist. This is because the router may have filtered out devices that are actually part of the routine.
@@ -65,10 +72,34 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
             candidate_rags = self._get_rags_from_candidates(candidate_devices)
             return {
                         "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
-                        "<<existing_routines>>": "" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"
+                        "<<existing_routines>>": "" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```",
+                        "<<routine_automation_policy_modules>>": policy_modules,
+                        "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",  
                     }
 
-        return {"<<runtime_device_structure>>": "" }
+        return {
+            "<<runtime_device_structure>>": "",
+            "<<routine_automation_policy_modules>>": policy_modules,
+        }
+
+    def _load_prompt_modules(self) -> str:
+        """Load optional intent-local prompt policy modules from prompt_modules/*.md."""
+        modules_dir = Path(self.directory) / "prompt_modules"
+        if not modules_dir.exists() or not modules_dir.is_dir():
+            return ""
+
+        sections: list[str] = []
+        for module_file in sorted(modules_dir.glob("*.md")):
+            try:
+                content = module_file.read_text(encoding="utf-8").strip()
+            except Exception as exc:
+                debug(f"Failed to read prompt module '{module_file.name}': {exc}")
+                continue
+            if not content:
+                continue
+            sections.append(f"---\n# MODULE: {module_file.stem}\n{content}")
+
+        return "\n\n".join(sections).strip()
     
 
     async def handle(
