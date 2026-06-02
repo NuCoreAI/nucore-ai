@@ -226,6 +226,60 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the routine_ops method.")
 
 
+    # ------------------------------------------------------------------
+    # Timezone management 
+    # ------------------------------------------------------------------
+    async def get_timespecs(self) -> dict[str, str]:
+        """
+        Get time configuration and timezone information from the device. 
+
+        API:
+        /rest/time
+        """
+        raise NotImplementedError("Subclasses must implement the get_timespecs method.")
+
+    # ------------------------------------------------------------------
+    # Plugin management  
+    # ------------------------------------------------------------------
+    
+    async def get_active_plugins(self) -> dict[str, str]:
+        """
+        Get a list of active plugins that can be installed on the device. 
+        :return: Dictionary of active plugins or None if failure
+
+        API:
+        /api/plugins/store/list/active
+        """
+        raise NotImplementedError("Subclasses must implement the get_active_plugins method.")
+
+    async def get_installed_plugins(self) -> dict[str, str]:
+        """
+        Get a list of installed plugins on the device. 
+        :return: Dictionary of installed plugins or None if failure
+        """
+        raise NotImplementedError("Subclasses must implement the get_installed_plugins method.")
+    
+    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstsall", "status", "start", "stop"]):
+        """
+        Perform an operation on a plugin.
+        :param plugin_id: The ID of the plugin to operate on.
+        :param operation: The operation to perform (e.g., "start", "stop", "uninstall").
+        :return: response from the API or None if failure 
+
+        Details API: 
+        /api/plugins/store/entry/:nsid
+        """
+        raise NotImplementedError("Subclasses must implement the plugin_ops method.")
+    
+    async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
+        """
+        Configure a plugin on the device. 
+        :param plugin_id: The ID of the plugin to configure.
+        :param config: A dictionary containing the configuration parameters.
+        :return: response from the API or None if failure 
+        """
+        raise NotImplementedError("Subclasses must implement the configure_plugin method.")
+
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
         """
         Subscribe to device events using the nucore API.

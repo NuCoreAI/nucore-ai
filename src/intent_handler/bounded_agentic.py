@@ -83,7 +83,7 @@ class BoundedAgentPolicy:
         )
 
 
-ExecuteChainFn = Callable[[str, RouteResult], Awaitable[IntentHandlerResult | None]]
+ExecuteChainFn = Callable[[str, RouteResult], Awaitable[list[IntentHandlerResult | None] | None]]
 RouteFn = Callable[[str], Awaitable[RouteResult]]
 PostStepHookFn = Callable[[], Awaitable[None]]
 
@@ -105,6 +105,20 @@ class BoundedAgentOrchestrator:
             or previous.route_context != nxt.route_context
         )
 
+    @staticmethod
+    def _is_context_only_tool_entry(entry: Any) -> bool:
+        """Return True when a tool-result entry is only prompt context metadata."""
+        return isinstance(entry, dict) and set(entry.keys()) == {"context"}
+
+    @classmethod
+    def _has_actionable_tool_result(cls, result: IntentHandlerResult) -> bool:
+        """Return True when the result contains a real tool execution payload."""
+        if not result.tool_result:
+            return False
+
+        entries = result.tool_result if isinstance(result.tool_result, list) else [result.tool_result]
+        return any(not cls._is_context_only_tool_entry(entry) for entry in entries)
+
     async def execute(
         self,
         *,
@@ -120,6 +134,7 @@ class BoundedAgentOrchestrator:
         retries = 0
         step_logs: list[AgentStepLog] = []
         all_step_results: list[IntentHandlerResult] = []
+        seen_step_text_outputs: set[str] = set()
 
         current_query = self._resolve_step_query(initial_route, query)
         current_route = initial_route
@@ -131,17 +146,68 @@ class BoundedAgentOrchestrator:
             step_latency_ms = int((time.perf_counter() - step_started) * 1000)
 
             if results is not None:
-                all_step_results.extend(results)
+                step_results = [r for r in results if isinstance(r, IntentHandlerResult)]
+                if not step_results:
+                    step_logs.append(
+                        AgentStepLog(
+                            step=step,
+                            intent=current_route.intent,
+                            query=current_query,
+                            latency_ms=step_latency_ms,
+                            status="empty_result",
+                            notes="step_returned_no_result",
+                        )
+                    )
+                    break
+
+                new_step_text_outputs: set[str] = set()
+                duplicate_output_found = False
+                for step_result in step_results:
+                    step_text_output = step_result.get_text_output()
+                    if not isinstance(step_text_output, str):
+                        continue
+                    normalized_text = step_text_output.strip()
+                    if not normalized_text:
+                        continue
+                    if normalized_text in seen_step_text_outputs:
+                        duplicate_output_found = True
+                        break
+                    new_step_text_outputs.add(normalized_text)
+
+                if duplicate_output_found:
+                    step_logs.append(
+                        AgentStepLog(
+                            step=step,
+                            intent=current_route.intent,
+                            query=current_query,
+                            latency_ms=step_latency_ms,
+                            status="duplicate_output",
+                            notes="stopped_on_identical_clarification",
+                        )
+                    )
+                    break
+
+                seen_step_text_outputs.update(new_step_text_outputs)
+                all_step_results.extend(step_results)
+
+                should_stop_after_tool = (
+                    current_route.intent == "routine_automation"
+                    and any(self._has_actionable_tool_result(step_result) for step_result in step_results)
+                )
+
                 step_logs.append(
                     AgentStepLog(
                         step=step,
                         intent=current_route.intent,
                         query=current_query,
                         latency_ms=step_latency_ms,
-                        status="ok",
-                        notes=decision.reason,
+                        status="completed_tool_execution" if should_stop_after_tool else "ok",
+                        notes="routine_automation_tool_executed" if should_stop_after_tool else decision.reason,
                     )
                 )
+
+                if should_stop_after_tool:
+                    break
 
                 total_latency_ms = int((time.perf_counter() - started) * 1000)
                 if step >= budget.max_steps or total_latency_ms >= budget.max_latency_ms:
