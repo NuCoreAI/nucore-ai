@@ -11,8 +11,6 @@
 
 ## Ambiguous temporal references
 When resolving temporal windows, check for ambiguous temporal references before finalizing the resolved context.
-
-- Nightfall: requires an explicit offset or user-approved default.
 - Dawn or sunrise: may require clarification on the exact definition/offset used.
 - Dusk: treat as ambiguous unless an explicit definition/offset is available.
 - Holiday-based triggers: confirm year and any custom timing unless trusted runtime temporal context already provides them.

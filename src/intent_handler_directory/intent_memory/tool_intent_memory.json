@@ -1,0 +1,60 @@
+{
+  "name": "tool_intent_memory",
+  "description": "SQLite-backed CRUD for per-intent persistent memory.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["create", "read", "update", "delete", "render_markdown"],
+        "description": "CRUD action."
+      },
+      "intent": {
+        "type": "string",
+        "description": "Target intent namespace for memory isolation (for example: routine_automation, hebcal)."
+      },
+      "section": {
+        "type": "string",
+        "description": "Section heading (for example: ALIASES, OFFSETS, USER DEFINED)."
+      },
+      "key": {
+        "type": "string",
+        "description": "Optional stable key for idempotent upsert/update/delete."
+      },
+      "id": {
+        "type": "integer",
+        "description": "Optional record id for update/delete."
+      },
+      "entry_markdown": {
+        "type": "string",
+        "description": "Markdown line or block to persist."
+      },
+      "source": {
+        "type": "string",
+        "enum": ["explicit_user", "implicit_llm", "system"],
+        "description": "Source of memory write."
+      },
+      "confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Optional confidence for implicit writes."
+      },
+      "context": {
+        "type": "string",
+        "description": "Optional context for when/why the memory applies."
+      },
+      "query": {
+        "type": "string",
+        "description": "Optional text filter for read operations."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "description": "Max rows for read operations."
+      }
+    },
+    "required": ["action", "intent"]
+  }
+}
