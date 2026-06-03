@@ -1,0 +1,22 @@
+{
+  "intent": "intent_memory",
+  "description": "SQLite-backed persistent memory CRUD for intent-specific facts.",
+  "handler": "handler.py",
+  "routing_examples": [
+    "Remember that MBR HWY means master hallway",
+    "Persist sunset offset for candle lighting as -18 minutes",
+    "Show saved aliases for routine automation",
+    "Delete saved memory key mbr_hwy_alias"
+  ],
+  "router_hints": [
+    "Use this intent for remember/save/persist/forget operations.",
+    "Use for CRUD over persistent memory records scoped by intent name.",
+    "Prefer markdown-style entries for human readability."
+  ],
+  "tool_files": [
+    "tool_intent_memory.json"
+  ],
+  "llm_config": {
+    "temperature": 0.0
+  }
+}

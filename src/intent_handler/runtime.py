@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -488,6 +489,22 @@ class IntentRuntime:
             handler.set_runtime_llm_config(step_llm_config)
             handler.set_current_history(history)
 
+            memory_context = await self._load_intent_memory_context(
+                target_intent=intent_name,
+                query=query,
+                route_result=route_result,
+                framework_context=framework_context,
+            )
+            if memory_context:
+                contexts.append(
+                    self._make_step_context_entry(
+                        intent="intent_memory",
+                        query=query,
+                        stage="memory_hydration",
+                        context=memory_context,
+                    )
+                )
+
             # Dependency intents receive a derived RouteResult that carries the
             # original routing metadata while naming the dependency as its intent.
             step_route_result = (
@@ -691,6 +708,54 @@ class IntentRuntime:
     def _build_route_context_envelope(self, step_contexts: list[dict[str, Any]]) -> dict[str, Any]:
         """Return the route-context envelope exposed to handlers."""
         return {"step_contexts": list(step_contexts)}
+
+    async def _load_intent_memory_context(
+        self,
+        *,
+        target_intent: str,
+        query: str,
+        route_result: RouteResult,
+        framework_context: str | None,
+    ) -> dict[str, Any] | None:
+        """Load per-intent memory context from ``intent_memory`` handler when available.
+
+        Runtime does not read storage directly. Instead, it dynamically loads the
+        ``intent_memory`` handler (if present) and invokes its context provider
+        function.
+        """
+        if not target_intent or target_intent == "intent_memory":
+            return None
+
+        available = set(self.registry.names())
+        if "intent_memory" not in available:
+            return None
+
+        try:
+            memory_handler = self._get_or_create_handler("intent_memory")
+        except Exception as exc:
+            logger.debug("Unable to instantiate intent_memory handler: %s", exc)
+            return None
+
+        provider = getattr(memory_handler, "get_memory_context", None)
+        if not callable(provider):
+            return None
+
+        try:
+            loaded = provider(
+                target_intent=target_intent,
+                query=query,
+                route_result=route_result,
+                framework_context=framework_context,
+            )
+            if inspect.isawaitable(loaded):
+                loaded = await loaded
+        except Exception as exc:
+            logger.warning("intent_memory context provider failed: %s", exc)
+            return None
+
+        if isinstance(loaded, dict) and loaded:
+            return loaded
+        return None
 
     def _safe_json_data(self, value: Any) -> Any:
         """Return ``value`` if JSON-serialisable, otherwise its ``str()`` representation."""
