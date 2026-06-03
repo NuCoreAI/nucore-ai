@@ -1,11 +1,4 @@
 {
-  "bounded_agentic": {
-    "enabled": true,
-    "enabled_intents": [],
-    "max_steps": 3,
-    "max_retries": 1,
-    "max_latency_ms": 12000
-  },
   "nucore_runtime": {
     "default": {
       "provider": "claude",

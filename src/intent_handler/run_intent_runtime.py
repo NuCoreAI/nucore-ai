@@ -278,7 +278,7 @@ async def _run_once(
 ) -> None:
     """Execute a single query through the runtime and print the result.
 
-    If the handler returns tool results (agentic loop), the results are
+    If the handler returns tool results, the results are
     stringified and sent back to the runtime via
     :meth:`~IntentRuntime.handle_agent_response` so the LLM can process
     them before producing a final text response.
@@ -303,7 +303,7 @@ async def _run_once(
         text_output = ""
         tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
         if tool_results:
-            # Agentic loop: feed tool results back so the LLM can respond to them.
+            # Feed tool results back so the LLM can respond to them.
             query = result.get_effective_query() or query
             stringified_tool_results = "\n\n"
             context = None

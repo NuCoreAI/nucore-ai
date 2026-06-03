@@ -139,47 +139,6 @@ Streaming is always enabled via runtime wiring and profile resolution.
 
 Runtime profiles are provider-only: use `provider` in each profile and do not rely on legacy `llm` aliases or `supported_llms` fallback behavior.
 
-## Bounded Agentic Mode
-
-The runtime supports an optional bounded-agentic branch that is selected by
-policy after normal routing. It is disabled by default.
-
-Top-level runtime config keys:
-
-```json
-{
-  "bounded_agentic": {
-    "enabled": false,
-    "enabled_intents": ["node_ops"],
-    "max_steps": 2,
-    "max_retries": 1,
-    "max_latency_ms": 15000
-  }
-}
-```
-
-Selection rules:
-
-- Runtime `bounded_agentic.enabled` must be `true`.
-- All intents are agentic by default when bounded-agentic is enabled.
-- Intent-level overrides in `config.json`:
-  - `"agentic": {"enabled": false}` opts out (deterministic mode).
-  - `"agentic": {"enabled": true}` explicitly opts in.
-  - `"agentic": {"always": true}` forces agentic mode.
-- `bounded_agentic.enabled_intents` is still accepted for compatibility and
-  explicit allow-listing, but no longer required for default behavior.
-
-When bounded-agentic runs, execution metadata is attached to
-`IntentHandlerResult.execution_metadata`.
-
-Recommended NuCore starting defaults:
-
-- `enabled: true`
-- `enabled_intents: []`
-- `max_steps: 3`
-- `max_retries: 1`
-- `max_latency_ms: 12000`
-
 ## Directory Layout
 
 Only folders with `config.json` are discovered as runnable intents.
@@ -203,7 +162,6 @@ Each runnable intent folder must contain:
 | `router_hints` | Router hints |
 | `tool_files` | Extra tool files; runtime also auto-discovers `tool_*.json` |
 | `llm_config` | Per-intent overlay fields used when no full intent profile exists |
-| `agentic` | Optional object for bounded-agentic policy (`enabled`, `always`) |
 
 ## Handler Contract
 
