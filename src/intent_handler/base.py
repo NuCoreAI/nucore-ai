@@ -200,6 +200,58 @@ class BaseIntentHandler(ABC):
         """
         return {}
 
+    async def get_step_context_update(
+        self,
+        *,
+        query: str,
+        route_result: RouteResult | None = None,
+        framework_context: str | None = None,
+        result: IntentHandlerResult | None = None,
+    ) -> dict[str, Any] | None:
+        """Return optional structured context to append to runtime step_contexts.
+
+        Handlers can override this to publish deterministic context that later
+        steps may consume. The runtime stores the returned dict as one entry in
+        the shared ``step_contexts`` list for the current multi-intent flow.
+        """
+        return None
+
+    def get_route_step_contexts(self, route_result: RouteResult | None) -> list[dict[str, Any]]:
+        """Return normalized ``step_contexts`` from ``route_result``.
+
+        Supports both modern envelope shape:
+        ``{"step_contexts": [{"context": {...}}, ...]}``
+        and legacy flat dict route contexts.
+        """
+        if route_result is None or route_result.route_context is None:
+            return []
+
+        context_payload = route_result.route_context
+        if isinstance(context_payload, dict) and isinstance(context_payload.get("step_contexts"), list):
+            normalized: list[dict[str, Any]] = []
+            for item in context_payload.get("step_contexts", []):
+                if isinstance(item, dict):
+                    normalized.append(item)
+            return normalized
+
+        if isinstance(context_payload, dict):
+            return [{"context": context_payload}]
+
+        return []
+
+    def get_route_context_value(
+        self,
+        route_result: RouteResult | None,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        """Return the most recent value for ``key`` from normalized step contexts."""
+        for item in reversed(self.get_route_step_contexts(route_result)):
+            context = item.get("context") if isinstance(item, dict) else None
+            if isinstance(context, dict) and key in context:
+                return context[key]
+        return default
+
     async def get_tool_result_context(
         self,
         registry: Any,

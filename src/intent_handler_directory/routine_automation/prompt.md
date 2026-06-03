@@ -4,6 +4,10 @@ If `EXISTING ROUTINE` is defined, this is a request for updating an existing rou
 <<nucore_definitions>>
 <<nucore_common_rules>>
 <<routine_automation_policy_modules>>
+<<temporal_resolution_context>>
+
+---
+# TEMPORAL RESOLUTION 
 <<location_information>>
 
 ---

@@ -1,3 +1,4 @@
+import datetime
 import json
 import sys
 import os
@@ -1147,12 +1148,16 @@ class IoXWrapper(NuCoreInterface):
 #                    <TzId>America/Los_Angeles</TzId>
 #                </DT>
             #convert to dictionary
-            time_data = {}
+            #include current date/time in the response since that's useful for the LLM to know when setting routines that are time-based, and also include timezone, latitude, and longitude since those are useful for calculating sunrise/sunset times for routines that are based on sunrise/sunset
+            time_data = {
+                "current_time": datetime.datetime.now().isoformat(),
+            }
             for child in root:
+
                 if child.tag == "TzId":
                     time_data["timezone"] = child.text
                 elif child.tag == "Lat":
-                    time_data["latitude"] = child.text
+                    time_data["latitude"] = float(child.text)
                 elif child.tag == "Long":
                     time_data["longitude"] = float(child.text) * -1 #the API returns longitude as a positive value, convert it to negative since that's the standard format for longitude
 
