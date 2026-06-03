@@ -84,6 +84,8 @@ class StreamHandler(ABC):
                 print(chunk, end="", flush=True)
         else:
             print(chunk, end="", flush=True)
+            if is_end:
+                print()  # Print a newline at the end of the stream for readability.
 
 
 class RouterStreamHandler(StreamHandler):

@@ -47,19 +47,31 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         """
         policy_modules = self._load_prompt_modules()
         location_information = await self.nucore_interface.get_timespecs() if self.nucore_interface else None 
+        temporal_resolution = self.get_route_context_value(route_result, "temporal_resolution", None)
+        temporal_resolution_block = (
+            ""
+            if not temporal_resolution
+            else (
+                "---\n"
+                "# TEMPORAL RESOLUTION\n"
+                "Use this resolved holiday window as trusted schedule input.\n"
+                f"```json\n{json.dumps(temporal_resolution, indent=2)}\n```"
+            )
+        )
         
         if route_result and route_result.route_context:
-            candidate_devices = route_result.route_context.get("candidate_devices", [])
+            candidate_devices = self.get_route_context_value(route_result, "candidate_devices", [])
             if not candidate_devices:
                 candidate_devices = []
             
-            candidate_routines = route_result.route_context.get("candidate_routines", [])
+            candidate_routines = self.get_route_context_value(route_result, "candidate_routines", [])
             if not candidate_routines:
                 candidate_rags = self._get_rags_from_candidates(candidate_devices)
                 return {
                     "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
                     "<<routine_automation_policy_modules>>": policy_modules,
                     "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",  
+                    "<<temporal_resolution_context>>": temporal_resolution_block,
                 }
             
 
@@ -75,11 +87,14 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
                         "<<existing_routines>>": "" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```",
                         "<<routine_automation_policy_modules>>": policy_modules,
                         "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",  
+                        "<<temporal_resolution_context>>": temporal_resolution_block,
                     }
 
         return {
             "<<runtime_device_structure>>": "",
             "<<routine_automation_policy_modules>>": policy_modules,
+            "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",
+            "<<temporal_resolution_context>>": temporal_resolution_block,
         }
 
     def _load_prompt_modules(self) -> str:

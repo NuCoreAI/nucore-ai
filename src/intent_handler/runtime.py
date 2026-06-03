@@ -423,15 +423,25 @@ class IntentRuntime:
         framework_context: str | None,
     ) -> list[IntentHandlerResult | None]:
         """Execute router-planned multi-intent steps in the returned order."""
-        results: list[IntentHandlerResult | None] = [] 
+        results: list[IntentHandlerResult | None] = []
+        step_contexts = self._normalize_step_contexts(initial_route.route_context)
 
         for index, step in enumerate(route_plan, start=1):
+            if step.route_context:
+                step_contexts.append(
+                    self._make_step_context_entry(
+                        intent=step.intent,
+                        query=step.user_query,
+                        stage="planned",
+                        context=step.route_context,
+                    )
+                )
+
             step_route = RouteResult(
                 intent=step.intent,
                 confidence=initial_route.confidence,
                 notes=step.notes or initial_route.notes,
-                #route_context=step.route_context,
-                route_context=initial_route.route_context,
+                route_context=self._build_route_context_envelope(step_contexts),
                 resolved_query=step.user_query,
                 raw_response=initial_route.raw_response,
             )
@@ -447,6 +457,7 @@ class IntentRuntime:
                 route_result=step_route,
                 history=history,
                 framework_context=framework_context,
+                step_contexts=step_contexts,
             ))
             if results is None:
                 results = []
@@ -461,10 +472,12 @@ class IntentRuntime:
         route_result: RouteResult,
         history: Any,
         framework_context: str | None,
+        step_contexts: list[dict[str, Any]] | None = None,
     ) -> list[IntentHandlerResult | None]:
         """Execute the routed intent for one resolved route."""
 
         execution_chain = self._resolve_execution_chain(route_result.intent)
+        contexts = step_contexts if step_contexts is not None else self._normalize_step_contexts(route_result.route_context)
 
         results: list[IntentHandlerResult | None] = []
 
@@ -486,9 +499,20 @@ class IntentRuntime:
                     notes=f"Dependency step for '{route_result.intent}'",
                     resolved_query=route_result.resolved_query,
                     raw_response=route_result.raw_response,
-                    route_context=route_result.route_context,
+                    route_context=self._build_route_context_envelope(contexts),
                 )
             )
+
+            if intent_name == route_result.intent:
+                step_route_result = RouteResult(
+                    intent=route_result.intent,
+                    confidence=route_result.confidence,
+                    notes=route_result.notes,
+                    resolved_query=route_result.resolved_query,
+                    raw_response=route_result.raw_response,
+                    route_context=self._build_route_context_envelope(contexts),
+                    route_plan=route_result.route_plan,
+                )
 
             effective_query = step_route_result.resolved_query or query
 
@@ -532,6 +556,23 @@ class IntentRuntime:
             if result:
                 result.set_route_result(route_result=step_route_result)
                 result.set_effective_query(effective_query)
+
+                context_update = await handler.get_step_context_update(
+                    query=effective_query,
+                    route_result=step_route_result,
+                    framework_context=framework_context,
+                    result=result,
+                )
+                if isinstance(context_update, dict) and context_update:
+                    contexts.append(
+                        self._make_step_context_entry(
+                            intent=intent_name,
+                            query=effective_query,
+                            stage="result",
+                            context=context_update,
+                        )
+                    )
+
                 result.add_tool_result_context(
                     context=await handler.get_tool_result_context(
                         registry=self.registry,
@@ -607,6 +648,49 @@ class IntentRuntime:
         if not target_intent:
             return []
         return [target_intent]
+
+    def _normalize_step_contexts(self, route_context: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """Normalize route context into a list of step-context entries."""
+        if not route_context:
+            return []
+
+        if isinstance(route_context, dict) and isinstance(route_context.get("step_contexts"), list):
+            normalized: list[dict[str, Any]] = []
+            for item in route_context.get("step_contexts", []):
+                if isinstance(item, dict):
+                    normalized.append(item)
+            return normalized
+
+        if isinstance(route_context, dict):
+            return [
+                self._make_step_context_entry(
+                    intent="router",
+                    query=None,
+                    stage="router",
+                    context=route_context,
+                )
+            ]
+        return []
+
+    def _make_step_context_entry(
+        self,
+        *,
+        intent: str,
+        query: str | None,
+        stage: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build one normalized step-context entry."""
+        return {
+            "intent": intent,
+            "query": query,
+            "stage": stage,
+            "context": context,
+        }
+
+    def _build_route_context_envelope(self, step_contexts: list[dict[str, Any]]) -> dict[str, Any]:
+        """Return the route-context envelope exposed to handlers."""
+        return {"step_contexts": list(step_contexts)}
 
     def _safe_json_data(self, value: Any) -> Any:
         """Return ``value`` if JSON-serialisable, otherwise its ``str()`` representation."""

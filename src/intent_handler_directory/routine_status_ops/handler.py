@@ -50,8 +50,9 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
             block, or a ``"No routine runtime information available."`` fallback.
         """
         if route_result and route_result.route_context:
-            # If the router provided candidate devices in the route context, use those directly.
-            candidate_routines = await _get_routine_summary_from_candidates(self, route_result.route_context.get("candidate_routines", []))
+            # Pull latest candidate routines from accumulated multi-step contexts.
+            candidate_routine_ids = self.get_route_context_value(route_result, "candidate_routines", [])
+            candidate_routines = await _get_routine_summary_from_candidates(self, candidate_routine_ids)
             return {"<<nucore_routines_runtime>>": f"```json\n{json.dumps(self.nucore_interface.condensed_routines)}\n```" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"}
 
         return {
