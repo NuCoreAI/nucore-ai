@@ -5,10 +5,9 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 
-from .bounded_agentic import BoundedAgentOrchestrator, BoundedAgentPolicy
 from .base import BaseIntentHandler
 from .loader import IntentHandlerRegistry
-from .models import IntentHandlerResult, ModeDecision, RoutePlanStep, RouteResult
+from .models import IntentHandlerResult, RoutePlanStep, RouteResult
 from .router import IntentRouter
 from .session_store import SessionStore
 from .stream_handler import RouterStreamHandler, StreamHandler
@@ -151,7 +150,6 @@ def _load_runtime_config(
     default_max_turns = int(default_profile.get("max_turns", 20))
     return {
         "nucore_runtime": normalized_profiles,
-        "bounded_agentic": dict(payload.get("bounded_agentic") or {}),
         "supported_llms": supported_llms,
         "default_llm": "default",
         "router_llm": "router" if "router" in supported_llms else "default",
@@ -230,8 +228,6 @@ class IntentRuntime:
         self.stream_handler.set_websocket(websocket)
         self.router_stream_handler.set_websocket(websocket)
         self.runtime_config: dict[str, Any] = {}
-        self._bounded_agent_policy: BoundedAgentPolicy = BoundedAgentPolicy.from_runtime_config({})
-        self._bounded_agent_orchestrator: BoundedAgentOrchestrator = BoundedAgentOrchestrator()
         # Handler instance cache: intent_name → handler object.
         self._handler_instances: dict[str, BaseIntentHandler] = {}
         # Signature cache: intent_name → (handler_mtime_ns, config_mtime_ns, prompt_mtime_ns).
@@ -282,7 +278,6 @@ class IntentRuntime:
             path=self.runtime_config_path,
             stream_handler=self.stream_handler,
         )
-        self._bounded_agent_policy = BoundedAgentPolicy.from_runtime_config(self.runtime_config)
         self._validate_runtime_config()
         self._reconcile_handler_cache()
         # Reset stream state so stale chunk counters from a previous call don't
@@ -367,8 +362,7 @@ class IntentRuntime:
         2. Route the query to an intent via :meth:`route`.
           3. If the router returns a multi-intent ``route_plan``, execute each
               planned step in order using its step-specific query.
-          4. Otherwise execute one intent (deterministic or bounded-agentic
-              depending on policy).
+                    4. Otherwise execute one intent deterministically.
           5. After execution completes, append the final text response to the
            session history (when a session ID is provided).
 
@@ -411,29 +405,6 @@ class IntentRuntime:
                 route_plan=route_plan,
                 history=history,
                 framework_context=framework_context,
-            )
-
-        mode_decision = self._mode_decision_for_route(route_result)
-        if mode_decision.mode == "bounded_agentic":
-
-            async def execute_chain_step(step_query: str, step_route: RouteResult) -> IntentHandlerResult | None:
-                return await self._execute_resolved_route(
-                    query=step_query,
-                    route_result=step_route,
-                    history=history,
-                    framework_context=framework_context,
-                )
-
-            async def reroute_step(step_query: str) -> RouteResult:
-                return await self.route(step_query, history=history)
-
-            return await self._bounded_agent_orchestrator.execute(
-                query=query,
-                initial_route=route_result,
-                decision=mode_decision,
-                execute_chain=execute_chain_step,
-                reroute=reroute_step,
-                post_step_hook=self.nucore_interface._refresh_routines_database,
             )
 
         return await self._execute_resolved_route(
@@ -571,14 +542,6 @@ class IntentRuntime:
                 results.append(result)
 
         return results
-
-    def _mode_decision_for_route(self, route_result: RouteResult) -> ModeDecision:
-        """Return deterministic vs bounded-agentic mode decision for a routed request."""
-        if not route_result.intent:
-            return ModeDecision(mode="deterministic", reason="no_routed_intent")
-
-        definition = self.registry.get(route_result.intent)
-        return self._bounded_agent_policy.decide(route_result, intent_config=definition.config)
 
     def available_intents(self) -> list[str]:
         """Return the names of all currently loaded intent handlers."""

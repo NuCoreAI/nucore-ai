@@ -108,52 +108,6 @@ class RouteResult:
 
 
 # ---------------------------------------------------------------------------
-# Bounded agentic orchestration
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class AgentBudget:
-    """Execution limits applied to bounded-agentic requests.
-
-    Attributes:
-        max_steps:      Maximum planner/execution loop iterations.
-        max_retries:    Maximum reroute retries after failed steps.
-        max_latency_ms: Soft latency budget for the full request.
-    """
-
-    max_steps: int = 2
-    max_retries: int = 1
-    max_latency_ms: int = 15000
-
-
-@dataclass(frozen=True)
-class ModeDecision:
-    """Router-adjacent decision describing how a request should execute.
-
-    Attributes:
-        mode:    ``"deterministic"`` or ``"bounded_agentic"``.
-        reason:  Human-readable policy reason for observability.
-        budget:  Budget applied when ``mode`` is ``"bounded_agentic"``.
-    """
-
-    mode: str
-    reason: str
-    budget: AgentBudget | None = None
-
-
-@dataclass(frozen=True)
-class AgentStepLog:
-    """One step in a bounded-agentic execution trace."""
-
-    step: int
-    intent: str | None
-    query: str
-    latency_ms: int
-    status: str
-    notes: str | None = None
-
-
-# ---------------------------------------------------------------------------
 # Handler result
 # ---------------------------------------------------------------------------
 

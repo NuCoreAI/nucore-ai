@@ -80,11 +80,17 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the _load method.")
     
     async def _refresh_routines_database(self):
+        """
+            Refresh routines database if necessary.
+            :return True if routines were refreshed, False otherwise.
+            return is mandatory because we want to make sure the caller knows whether the routines were refreshed or not so that it can decide whether to refresh the prompt or not.
+        """
         await self._refresh_device_structure() # make sure we have the latest device structure before refreshing routines
         if not self.routines_changed:
             return False # already refreshed no need to check again
         if await self._load_routines(): # load routines from the device
             self.routines_changed = False
+        return True
 
     @abstractmethod
     async def _load_routines(self):

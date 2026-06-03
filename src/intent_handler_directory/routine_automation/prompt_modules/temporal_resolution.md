@@ -16,7 +16,7 @@ When user requests include implicit dates/times (holiday names, religious window
 - If sources conflict, pick the most authoritative source and be consistent.
 - If a required value still cannot be trusted, ask a focused clarification question.
 
-## Agentic behavior
-- In bounded-agentic mode, do as much end-to-end resolution as possible before asking the user.
+## Resolution behavior
+- Do as much end-to-end resolution as possible before asking the user.
 - Ask clarification only when critical inputs are missing and cannot be inferred safely.
 - Keep routine output schema-valid; do not add extra fields to routine JSON.
