@@ -13,7 +13,7 @@ from .stream_handler import StreamHandler
 
 
 class IntentHandlerRegistry:
-    """Discovers, loads, and caches intent handler definitions from a directory tree.
+    """Discovers, loads, and caches intent handler definitions from one or more directory trees.
 
     Directory layout expected under ``root_directory``::
 
@@ -36,16 +36,32 @@ class IntentHandlerRegistry:
     changes on disk.
     """
 
-    def __init__(self, root_directory: str | Path, websocket:Any=None) -> None:
+    def __init__(self, root_directory: str | Path | Iterable[str | Path], websocket: Any = None) -> None:
         """Initialise the registry.
     
         Args:
-            root_directory: Absolute or relative path to the directory that
-                            contains one sub-directory per intent handler.
-                            The path is resolved to an absolute form immediately.
-            websocket: Optional websocket instance for real-time updates.   
+            root_directory: Absolute or relative path (or iterable of paths)
+                            that contains one sub-directory per intent handler.
+                            All paths are resolved to absolute form immediately.
+            websocket: Optional websocket instance for real-time updates.
         """
-        self.root_directory = Path(root_directory).expanduser().resolve()
+        if isinstance(root_directory, (str, Path)):
+            roots = [root_directory]
+        else:
+            roots = list(root_directory)
+        if not roots:
+            raise ValueError("At least one intent handler root directory is required")
+
+        resolved_roots: list[Path] = []
+        seen_roots: set[Path] = set()
+        for root in roots:
+            resolved = Path(root).expanduser().resolve()
+            if resolved in seen_roots:
+                continue
+            seen_roots.add(resolved)
+            resolved_roots.append(resolved)
+
+        self.root_directories = tuple(resolved_roots)
         self.runtime_assets_directory = Path(__file__).resolve().parent / "runtime_assets"
         self.common_modules_directory = Path(__file__).resolve().parent / "runtime_assets" / "common_modules"
         self._definitions: dict[str, IntentDefinition] = {}
@@ -63,7 +79,7 @@ class IntentHandlerRegistry:
     # ------------------------------------------------------------------
 
     def refresh(self) -> None:
-        """Re-scan the root directory and reload all intent definitions.
+        """Re-scan all configured root directories and reload intent definitions.
 
         Clears the handler class and common-module caches, re-reads every
         ``config.json`` / ``prompt.md`` pair found in sub-directories, expands
@@ -71,15 +87,16 @@ class IntentHandlerRegistry:
         graph for cycles and unknown references.
 
         Raises:
-            FileNotFoundError: If ``root_directory`` does not exist.
-            NotADirectoryError: If ``root_directory`` is not a directory.
+            FileNotFoundError: If any configured root directory does not exist.
+            NotADirectoryError: If any configured root path is not a directory.
             ValueError: If no runnable intents are found, or if dependency
                         validation fails.
         """
-        if not self.root_directory.exists():
-            raise FileNotFoundError(f"Intent handler directory not found: {self.root_directory}")
-        if not self.root_directory.is_dir():
-            raise NotADirectoryError(f"Intent handler path is not a directory: {self.root_directory}")
+        for root_directory in self.root_directories:
+            if not root_directory.exists():
+                raise FileNotFoundError(f"Intent handler directory not found: {root_directory}")
+            if not root_directory.is_dir():
+                raise NotADirectoryError(f"Intent handler path is not a directory: {root_directory}")
 
         # Invalidate module-level caches so hot-reloaded files take effect.
         self._handler_class_cache = {}
@@ -93,17 +110,24 @@ class IntentHandlerRegistry:
                     self._modules_cache[module_name] = module_handle.read()
 
         definitions: dict[str, IntentDefinition] = {}
-        for child in sorted(self.root_directory.iterdir()):
-            if not child.is_dir() or child.name.startswith("."):
-                continue
-            # Only treat sub-directories that contain a config.json as runnable intents.
-            if not (child / "config.json").exists():
-                continue
-            definition = self._load_definition(child)
-            definitions[definition.name] = definition
+        for root_directory in self.root_directories:
+            for child in sorted(root_directory.iterdir()):
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                # Only treat sub-directories that contain a config.json as runnable intents.
+                if not (child / "config.json").exists():
+                    continue
+                definition = self._load_definition(child)
+                if definition.name in definitions:
+                    raise ValueError(
+                        f"Duplicate intent handler name '{definition.name}' found in "
+                        f"'{child}' and '{definitions[definition.name].directory}'"
+                    )
+                definitions[definition.name] = definition
 
         if not definitions:
-            raise ValueError(f"No intent handlers found in {self.root_directory}")
+            roots = ", ".join(str(path) for path in self.root_directories)
+            raise ValueError(f"No intent handlers found in configured roots: {roots}")
 
         self._definitions = definitions
 
