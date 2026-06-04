@@ -21,6 +21,6 @@
     "tool_routine_status_ops.json"
   ],
   "llm_config": {
-    "temperature": 0.1
+    "temperature": 0.0
   }
 }
