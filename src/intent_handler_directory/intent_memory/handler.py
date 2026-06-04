@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from threading import Lock
@@ -266,7 +267,12 @@ class IntentMemorySQLiteStore:
         return "\n".join(lines).strip()
 
 
-_MEMORY_DB_PATH = Path(__file__).resolve().parents[2] / "intent_handler" / "runtime_assets" / "memory_store" / "intent_memory.sqlite3"
+_MEMORY_DB_PATH = Path(
+    os.getenv(
+        "NUCORE_INTENT_MEMORY_DB_PATH",
+        str(Path(__file__).resolve().parents[2] / "intent_handler" / "runtime_assets" / "memory_store" / "intent_memory.sqlite3"),
+    )
+).expanduser().resolve()
 _MEMORY_STORE = IntentMemorySQLiteStore(_MEMORY_DB_PATH)
 
 
