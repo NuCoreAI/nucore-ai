@@ -1,0 +1,44 @@
+{
+  "extensions": [
+    {
+      "id": "hebcal",
+      "name": "NuCore AI Hebcal Extension",
+      "description": "Extension that integrates Hebcal's API to provide Jewish calendar data, including holidays, parashot, and candle lighting times.",
+      "tags": [
+        "shabbat",
+        "pessach",
+        "passover",
+        "rosh hashanah",
+        "yom kippur",
+        "sukkot",
+        "hanukkah",
+        "purim",
+        "jewish calendar",
+        "holiday reminders",
+        "candle lighting times"
+      ],
+      "git_url": "https://github.com/mkohanim/nucore.ai.hebcal.ext",
+      "ref": "main",
+      "author": "Michel Kohanim",
+      "author_url": "https://github.com/mkohanim"
+    },
+    {
+      "id": "url_fetcher",
+      "name": "NuCore AI URL Fetcher Extension",
+      "description": "Extension that fetches data from URLs and APIs, providing a flexible way to integrate external data sources.",
+      "tags": [
+        "url",
+        "fetch",
+        "api",
+        "data integration",
+        "http",
+        "json",
+        "web scraping"
+      ],
+      "git_url": "https://github.com/NuCoreAI/nucore.ai.urlfetcher.ext",
+      "ref": "main",
+      "author": "Michel Kohanim",
+      "author_url": "https://github.com/mkohanim"
+    }
+  ]
+}

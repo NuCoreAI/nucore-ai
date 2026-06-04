@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -149,6 +150,10 @@ def _load_runtime_config(
         normalized_profiles[profile_name] = normalized_profile
 
     default_max_turns = int(default_profile.get("max_turns", 20))
+    configured_data_directory = payload.get("path_to_data_directory")
+    if configured_data_directory is not None and not isinstance(configured_data_directory, str):
+        raise ValueError("path_to_data_directory must be a string when provided")
+
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
@@ -156,6 +161,7 @@ def _load_runtime_config(
         "router_llm": "router" if "router" in supported_llms else "default",
         "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
+        "path_to_data_directory": configured_data_directory,
     }
 
 
@@ -188,6 +194,7 @@ class IntentRuntime:
         llm_client: LLMAdapter,
         nucore_interface: NuCoreInterface,
         runtime_config_path: str | Path ,
+        path_to_data_directory: str | Path | None = None,
         stream_handler: StreamHandler | None = None, 
         websocket: Any = None,
     ) -> None:
@@ -206,6 +213,8 @@ class IntentRuntime:
                                       handler.
             runtime_config_path:      Path to runtime profile JSON containing
                                       top-level ``nucore_runtime``.
+            path_to_data_directory:   Directory used for mutable runtime data
+                                      (installed extensions, local databases).
             stream_handler:           Optional stream handler whose callback is
                                       wired into LLM configs for token streaming.
             websocket:                Optional WebSocket connection passed to the stream handler for real-time streaming output.
@@ -217,7 +226,23 @@ class IntentRuntime:
         if llm_client is None or nucore_interface is None or runtime_config_path is None:
             raise ValueError("llm_client, nucore_interface, and runtime_config_path are required")
         self.intent_handler_directory = Path(intent_handler_directory).expanduser().resolve()
-        self.registry = IntentHandlerRegistry(self.intent_handler_directory, websocket=websocket)
+        self.runtime_assets_directory = Path(__file__).resolve().parent / "runtime_assets"
+        if path_to_data_directory is not None:
+            self.path_to_data_directory = Path(path_to_data_directory).expanduser().resolve()
+        else:
+            self.path_to_data_directory = (Path.home() / ".local" / "share" / "nucore-ai").resolve()
+        self.path_to_data_directory.mkdir(parents=True, exist_ok=True)
+        os.environ["NUCORE_PATH_TO_DATA_DIRECTORY"] = str(self.path_to_data_directory)
+        memory_store_directory = self.path_to_data_directory / "memory_store"
+        memory_store_directory.mkdir(parents=True, exist_ok=True)
+        os.environ["NUCORE_INTENT_MEMORY_DB_PATH"] = str(memory_store_directory / "intent_memory.sqlite3")
+
+        self.extension_intent_directory = (self.path_to_data_directory / "extensions" / "intents").resolve()
+        self.extension_intent_directory.mkdir(parents=True, exist_ok=True)
+        self.registry = IntentHandlerRegistry(
+            [self.intent_handler_directory, self.extension_intent_directory],
+            websocket=websocket,
+        )
         self.llm_client = llm_client
         self.nucore_interface = nucore_interface
         self.router = IntentRouter(self.registry, llm_client, nucore_interface)
@@ -254,8 +279,24 @@ class IntentRuntime:
 
     def _get_monitored_directories(self) -> Sequence[Path]:
         """Return the list of directories watched by the background poll loop."""
-        assets_directory = Path(__file__).resolve().parent / "runtime_assets"
-        return [self.intent_handler_directory, assets_directory]
+        monitored_directories: list[Path] = []
+        core_intent_directory = (Path(__file__).resolve().parents[1] / "intent_handler_directory").resolve()
+
+        # Core intent handlers are intentionally immutable at runtime.
+        if self.intent_handler_directory != core_intent_directory:
+            monitored_directories.append(self.intent_handler_directory)
+
+        monitored_directories.append(self.extension_intent_directory)
+
+        monitored_directories.append(self.runtime_assets_directory)
+        deduped_directories: list[Path] = []
+        seen: set[Path] = set()
+        for path in monitored_directories:
+            if path in seen:
+                continue
+            seen.add(path)
+            deduped_directories.append(path)
+        return deduped_directories
 
 
     # ------------------------------------------------------------------
@@ -279,6 +320,7 @@ class IntentRuntime:
             path=self.runtime_config_path,
             stream_handler=self.stream_handler,
         )
+        self.runtime_config["path_to_data_directory"] = str(self.path_to_data_directory)
         self._validate_runtime_config()
         self._reconcile_handler_cache()
         # Reset stream state so stale chunk counters from a previous call don't
@@ -334,8 +376,7 @@ class IntentRuntime:
             context:           Additional context to provide to the router to be used in system message. 
             agent_response:    The response from the agent to convert to human-readable form.
             framework_context: Optional extra context string forwarded to the handler.
-            session_id:        Session ID for history look-up (currently unused
-                               for agent responses — history is not appended).
+            session_id:        Session ID for history look-up 
 
         Returns:
             Nothing

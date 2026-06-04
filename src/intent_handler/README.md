@@ -232,6 +232,50 @@ Runtime supports hot-reload style monitoring:
 - `stop_directory_monitor() -> None`
 - `poll_directory_changes() -> tuple[DirectoryChangeEvent, ...] | None`
 
+Core intent handlers are treated as immutable runtime assets and are not
+hot-reloaded. Installed extension intents are monitored and can be reloaded.
+
+## Extension Marketplace
+
+Marketplace lifecycle logic is implemented inside the
+`extension_marketplace_management` intent package. Runtime only monitors and
+loads installed extension intents from the configured data directory.
+
+Use the `extension_marketplace_management` intent actions via
+`tool_extension_marketplace`:
+
+- `discover`
+- `list_installed`
+- `install`
+- `update`
+- `uninstall`
+
+Curated catalog location:
+
+- `<path_to_data_directory>/extensions/catalog.json`
+
+Default template source copied to the catalog at runtime startup:
+
+- `src/intent_handler_directory/extension_marketplace_management/extension_catalog.json`
+
+Minimal catalog shape:
+
+```json
+{
+  "extensions": [
+    {
+      "id": "hebcal",
+      "name": "Hebcal",
+      "description": "Jewish calendar utilities",
+      "git_url": "https://github.com/your-org/intent-hebcal.git",
+      "ref": "main",
+      "author": "Your Org",
+      "author_url": "https://github.com/your-org"
+    }
+  ]
+}
+```
+
 ## Key Files
 
 - `src/intent_handler/runtime.py`
