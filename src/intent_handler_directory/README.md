@@ -199,9 +199,12 @@ In interactive CLI mode (`_run_loop`) history is enabled automatically with `ses
 | Intent | Description |
 |---|---|
 | `command_control_status` | Device commands and real-time status |
+| `extension_marketplace_management` | Discover/install/update/uninstall curated marketplace extensions |
+| `group_scene_ops` | Group and scene queries |
+| `intent_memory` | Enables implicit and explicit storage and recall of clarifications, user events, etc. |
+| `node_ops` | Node operations such as rename, enable, disable, move, etc. | 
 | `routine_automation` | Create or edit routine logic |
 | `routine_status_ops` | Enable/disable/run existing routines |
-| `group_scene_ops` | Group and scene queries |
 
 ## Runtime Files (Do Not Treat as Intents)
 
