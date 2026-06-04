@@ -53,7 +53,10 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
             # Pull latest candidate routines from accumulated multi-step contexts.
             candidate_routine_ids = self.get_route_context_value(route_result, "candidate_routines", [])
             candidate_routines = await _get_routine_summary_from_candidates(self, candidate_routine_ids)
-            return {"<<nucore_routines_runtime>>": f"```json\n{json.dumps(self.nucore_interface.condensed_routines)}\n```" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"}
+            if candidate_routines:
+                return {"<<nucore_routines_runtime>>": f"```json\n{json.dumps(candidate_routines, indent=2)}\n```"}
+            else:
+                return {"<<nucore_routines_runtime>>": f"**No Runtime Information Available**\n\n**ASK FOR CLARIFICATION BASED ON**: \n\n```json\n{json.dumps(self.nucore_interface.condensed_routines)}\n```"}
 
         return {
             "<<nucore_routines_runtime>>": "No routine runtime information available."
