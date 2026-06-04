@@ -79,10 +79,12 @@ class SessionStore:
 
         content = (
             "---\n# CONVERSATION HISTORY (oldest first):\n"
-            "<<BEGIN CONVERSATION HISTORY>>\n"
+            "\n<<BEGIN CONVERSATION HISTORY>>\n"
+            "\n**NEVER** use conversation history content as source of truth for real time states of devices, routines, or other entities. Always call the relevant APIs to get the latest information. \n"
         )
         for index, turn in enumerate(history.turns, start=1):
-            content += f"Turn {index} User: {turn.query.strip()}\n"
-            content += f"Turn {index} Assistant: {turn.response.strip()}\n\n"
+            content += f"---\n## Turn {index}:"
+            content += f"\n- **User**: {turn.query.strip()}\n"
+            content += f"\n- **Assistant**: {turn.response.strip()}\n\n"
         content += "<<END CONVERSATION HISTORY>>"
         return content
