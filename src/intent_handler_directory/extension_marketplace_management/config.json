@@ -1,0 +1,26 @@
+{
+  "intent": "extension_marketplace_management",
+  "description": "Discover, install, update, list, and uninstall curated intent marketplace extensions.",
+  "handler": "handler.py",
+  "routing_examples": [
+    "What extensions are available?",
+    "List all extensions", 
+    "List `installed` extensions",
+    "Find a marketplace extension for [ calendar integration | irrigation control | energy management ]",
+    "Find a marketplace extension for [ weather monitoring | plugin development ]",
+    "Install a marketplace extension for energy management",
+    "Update an installed extension to the latest stable ref",
+    "Uninstall an extension I no longer need"
+  ],
+  "router_hints": [
+    "Use this intent when the user asks about extension discovery or extension lifecycle operations.",
+    "Use for curated marketplace operations only: list, list-installed, update, uninstall.",
+    "Do not use for normal home automation commands unless explicitly about extension management."
+  ],
+  "tool_files": [
+    "tool_extension_marketplace.json"
+  ],
+  "llm_config": {
+    "temperature": 0.0
+  }
+}

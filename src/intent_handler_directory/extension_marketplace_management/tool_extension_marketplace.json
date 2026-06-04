@@ -1,0 +1,30 @@
+{
+  "name": "tool_extension_marketplace",
+  "description": "Manage curated intent marketplace extensions: list_installed, install, update, uninstall.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "list_installed",
+          "install",
+          "update",
+          "uninstall"
+        ]
+      },
+      "extension_id": {
+        "type": "string",
+        "description": "Catalog extension identifier, required for install/update/uninstall. Must exactly match an id returned by discover (do not normalize punctuation)."
+      },
+      "target_ref": {
+        "type": "string",
+        "description": "Optional Git ref or SHA for install/update."
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}
