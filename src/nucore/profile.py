@@ -169,6 +169,7 @@ class Profile:
         Returns:
             ``True`` on success.
         """
+        editors_dict = {}
         for fidx, f in enumerate(raw.get("families", [])):
             # Validate keys / format
             if "id" not in f:
@@ -180,7 +181,6 @@ class Profile:
             #mpg names hack
             for _, i in enumerate(f.get("instances", [])):
                 # Build Editors for reference first
-                editors_dict = {}
                 for edict in i.get("editors", []):
                     if "id" not in edict:
                         debug("Editor missing 'id'")
