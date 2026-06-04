@@ -10,10 +10,12 @@
     "Rename hallway to left hallway",
     "Disable the washing machine",
     "Create a family room group",
-    "Make a new folder for upstairs"
+    "Make a new folder for upstairs",
+    "Tell me about kitchen keypad"
   ],
   "router_hints": [
-    "Use this intent to handle any operations related to nodes, including enabling, disabling, deleting, moving, and renaming nodes. Nodes can be devices, groups, or folders." 
+    "Use this intent to get concrete and detailed information about a specific node, group, or folder. This can include its current state, its properties, and its relationships to other nodes. For example, 'Tell me about kitchen keypad' should return detailed information about the kitchen keypad device.",
+    "Also, you can use this intent to handle any operations related to nodes, including enabling, disabling, deleting, moving, and renaming nodes. Nodes can be devices, groups, or folders." 
   ],
   "tool_files": [
     "tool_node_ops.json"
