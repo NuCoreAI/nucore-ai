@@ -90,6 +90,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Required path to runtime profile JSON containing top-level 'nucore_runtime'",
     )
     parser.add_argument(
+        "--path-to-data-directory",
+        "--path_to_data_directory",
+        dest="path_to_data_directory",
+        type=str,
+        default=None,
+        help="Optional writable data directory. Overrides runtime config path_to_data_directory when provided.",
+    )
+    parser.add_argument(
         "--secrets-file",
         type=str,
         default=None,
@@ -428,6 +436,14 @@ def main(args:Any=None, websocket=None) -> None:
         stream_handler=None,  # Stream handler will be set later after defining the callback
     )
 
+    resolved_data_directory: Path | None = None
+    if args.path_to_data_directory:
+        resolved_data_directory = Path(args.path_to_data_directory).expanduser().resolve()
+    else:
+        configured_data_directory = runtime_config.get("path_to_data_directory")
+        if isinstance(configured_data_directory, str) and configured_data_directory.strip():
+            resolved_data_directory = Path(configured_data_directory).expanduser().resolve()
+
     # Build the LLM dispatch adapter from the resolved config.
     llm_adapter = build_default_dispatch_adapter(runtime_config, env=secrets_env)
 
@@ -448,6 +464,7 @@ def main(args:Any=None, websocket=None) -> None:
         llm_client=llm_adapter,
         nucore_interface=nucore_interface,
         runtime_config_path=runtime_config_path,
+        path_to_data_directory=resolved_data_directory,
         stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
         websocket=websocket,
     )
