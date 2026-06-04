@@ -60,6 +60,9 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+src/intent_handler/runtime_assets/memory_store/*.sqlite3
+src/intent_handler/runtime_assets/memory_store/*.sqlite3-shm
+src/intent_handler/runtime_assets/memory_store/*.sqlite3-wal
 
 # Flask stuff:
 instance/
