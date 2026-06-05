@@ -4,6 +4,7 @@ import sys
 import os
 import base64
 import xml.etree.ElementTree as ET
+from urllib.parse import quote
 
 import requests
 import websockets
@@ -13,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
 from nucore.nodedef import Property
 from nucore.node import Node
-from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM
+from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM, is_enumeration_uom
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 from typing import Literal, Any
@@ -263,13 +264,137 @@ class IoXWrapper(NuCoreInterface):
         Returns:
             Parsed JSON response dict, or ``None`` on failure or parse error.
         """
-        response = self.get("/api/groups")
+        response = self.get("/api/groups/links")
         if response == None or response.status_code != 200:
             return None
         try:
             return response.json()
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing JSON response for group links: {e}")
+            return None
+
+    def _group_scene_response(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Execute and normalize a group-scene backend request response."""
+        headers = {"Content-Type": "application/json"}
+        payload = json.dumps(body) if body is not None else None
+
+        try:
+            if method == "GET":
+                response = self.get(path)
+            elif method == "POST":
+                response = self.post(path, payload or "{}", headers)
+            elif method == "PATCH":
+                response = self.patch(path, payload or "{}", headers)
+            elif method == "DELETE":
+                response = self.delete(path, payload, headers)
+            else:
+                return {
+                    "successful": False,
+                    "stage": "execution",
+                    "method": method,
+                    "path": path,
+                    "error": f"unsupported method: {method}",
+                }
+        except Exception as exc:
+            return {
+                "successful": False,
+                "stage": "execution",
+                "method": method,
+                "path": path,
+                "error": f"request failed: {exc}",
+            }
+
+        if response is None:
+            return {
+                "successful": False,
+                "stage": "execution",
+                "method": method,
+                "path": path,
+                "error": "no response",
+            }
+
+        out: dict[str, Any] = {
+            "successful": 200 <= int(getattr(response, "status_code", 0)) < 300,
+            "method": method,
+            "path": path,
+            "status_code": int(getattr(response, "status_code", 0)),
+        }
+        try:
+            out["data"] = response.json()
+        except Exception:
+            out["data"] = getattr(response, "text", "")
+        return out
+
+    def group_scene_add_member(
+        self,
+        group_address: str,
+        link_address: str,
+        is_controller: bool,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a member to a group as controller or responder."""
+        payload: dict[str, Any] = {
+            "nodeAddress": link_address,
+            "isController": is_controller,
+        }
+        if name is not None:
+            payload["name"] = name
+        return self._group_scene_response(
+            method="POST",
+            path=f"/api/groups/members/{quote(group_address, safe='')}",
+            body=payload,
+        )
+
+    def group_scene_remove_member(self, controller_address: str, link_address: str) -> dict[str, Any]:
+        """Remove a member node from a group."""
+        return self._group_scene_response(
+            method="DELETE",
+            path=f"/api/groups/members/{quote(controller_address, safe='')}",
+            body={"nodeAddress": link_address},
+        )
+
+    def group_scene_update_link(
+        self,
+        group_address: str,
+        controller_address: str,
+        link: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update link settings for a controller/member pair in a group."""
+        payload = {
+            "controllerAddress": controller_address,
+            "link": link,
+        }
+        return self._group_scene_response(
+            method="PATCH",
+            path=f"/api/groups/links/{quote(group_address, safe='')}",
+            body=payload,
+        )
+
+    def group_scene_get_node_roles(self, node_address: str) -> dict[str, Any] | None:
+        """Get node role capabilities for group membership decisions."""
+        path = f"/api/groups/nodeRoles/{quote(node_address, safe='')}"
+        response = self.get(path)
+        if response is None or response.status_code != 200:
+            return None
+        try:
+            return response.json()
+        except json.JSONDecodeError as exc:
+            logger.error(f"Error parsing JSON response for group node roles: {exc}")
+            return None
+
+    def group_scene_get_link_types(self, controller_address: str, responder_address: str) -> dict[str, Any] | None:
+        """Get available link types for a controller/responder pair."""
+        path = (
+            f"/api/groups/linkTypes?controller={quote(controller_address, safe='')}&"
+            f"responder={quote(responder_address, safe='')}"
+        )
+        response = self.get(path)
+        if response is None or response.status_code != 200:
+            return None
+        try:
+            return response.json()
+        except json.JSONDecodeError as exc:
+            logger.error(f"Error parsing JSON response for group link types: {exc}")
             return None
 
     async def get_properties(self, device_id: str) -> dict[str, Property]:
@@ -677,7 +802,7 @@ class IoXWrapper(NuCoreInterface):
                         uom_id = condition.get("uom")
                         precision = condition.get("precision")
                         value = condition.get("value")
-                        if uom_id is not None and int(uom_id) != 25 and precision is not None and value is not None:
+                        if uom_id is not None and not is_enumeration_uom(uom_id) and precision is not None and value is not None:
                             condition["value"] = int(value * (10 ** int(precision)))
 
                         out_routine['if'].append(condition)
@@ -703,7 +828,7 @@ class IoXWrapper(NuCoreInterface):
                                 uom_id = param.get("uom")
                                 precision = param.get("precision")
                                 value = param.get("value")
-                                if precision is not None and uom_id is not None and int(uom_id) != 25 and value is not None:
+                                if precision is not None and uom_id is not None and not is_enumeration_uom(uom_id) and value is not None:
                                     param["value"] = value * (10 ** int(precision))
 
                         out_routine['if'].append(condition)
@@ -730,7 +855,7 @@ class IoXWrapper(NuCoreInterface):
                             value = param.get("value", None)
                             if precision is not None:
                                 prec = int(precision)
-                                if uom_id is not None and int(uom_id) != 25: 
+                                if uom_id is not None and not is_enumeration_uom(uom_id): 
                                     value = value * (10 ** prec)
                                     param["value"] = value 
                     out_routine['then'].append(then)
@@ -755,7 +880,7 @@ class IoXWrapper(NuCoreInterface):
                             value = param.get("value", None)
                             if precision is not None:
                                 prec = int(precision)
-                                if uom_id is not None and int(uom_id) != 25: 
+                                if uom_id is not None and not is_enumeration_uom(uom_id): 
                                     value = value * (10 ** prec)
                                     param["value"] = value
                     out_routine['else'].append(else_)

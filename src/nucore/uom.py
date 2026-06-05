@@ -933,6 +933,23 @@ PREDEFINED_UOMS = {
     ),
 }
 
+def is_enumeration_uom(uom_id) -> bool:
+    """
+    Return ``True`` if the given UOM identifier is an index to an enumerated list
+
+    Args:
+        uom_id: UOM identifier as an ``int`` or ``str``.
+    Returns:
+        ``True`` if *uom_id* is an index to an enumerated list, ``False`` otherwise.
+    """ 
+    enums = [ 25, 146, 148 ]
+    uom=None 
+    if isinstance(uom_id, str):
+        uom= int(uom_id)
+    elif isinstance(uom_id, int):
+        uom = uom_id
+
+    return uom in enums
 
 def get_uom_by_id(uom_id) -> "UOMEntry | None":
     """Return the ``UOMEntry`` for the given numeric or string UOM identifier.
