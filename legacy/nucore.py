@@ -10,7 +10,7 @@ import asyncio
 
 from nucore import Profile
 from nucore import Property, Node
-from nucore import get_uom_by_id
+from nucore import get_uom_by_id, is_enumeration_uom
 from nucore import NuCoreBackendAPI 
 from nucore import NuCoreError
 from config import AIConfig
@@ -335,7 +335,7 @@ class NuCore:
                         uom_id = condition.get("uom", None)
                         precision = condition.get("precision", None)
                         value = condition.get("value", None)
-                        if uom_id is None or int(uom_id) == 25 or precision is None or value is None:
+                        if uom_id is None or is_enumeration_uom(uom_id) or precision is None or value is None:
                             continue
                         value = value * (10 ** precision)
                         condition["value"] = int(value)
@@ -360,7 +360,7 @@ class NuCore:
                             value = param.get("value", None)
                             if precision is not None:
                                 prec = int(precision)
-                                if uom_id is not None and int(uom_id) != 25: 
+                                if uom_id is not None and not is_enumeration_uom(uom_id): 
                                     value = value * (10 ** prec)
                                     param["value"] = value 
                     out_routine['then'].append(then)
@@ -384,7 +384,7 @@ class NuCore:
                             value = param.get("value", None)
                             if precision is not None:
                                 prec = int(precision)
-                                if uom_id is not None and int(uom_id) != 25: 
+                                if uom_id is not None and not is_enumeration_uom(uom_id): 
                                     value = value * (10 ** prec)
                                     param["value"] = value
                     out_routine['else'].append(else_)
