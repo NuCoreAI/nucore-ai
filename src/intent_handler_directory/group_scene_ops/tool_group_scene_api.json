@@ -1,0 +1,41 @@
+{
+    "name": "tool_group_scene_api",
+    "description": "Execute one high-level group/scene operation. Handler and backend perform all prechecks and details.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+        "operation": {
+            "type": "string",
+            "enum": [
+            "group_scene_add_member",
+            "group_scene_update_link",
+            "group_scene_remove_member"
+            ],
+            "description": "**Mandatory** Group/scene operation to execute."
+        },
+        "controller_address": {
+            "type": "string",
+            "description": "**Mandatory** for all operations. Can be the scene address."
+        },
+        "link_address": {
+            "type": "string",
+            "description": "**Mandatory** for add/remove/update operations."
+        },
+        "is_controller": {
+            "type": "boolean",
+            "description": "Only for group_scene_add_member. Defaults to false when omitted."
+        },
+        "name": {
+            "type": "string",
+            "description": "Optional name for renaming a link when adding to a group/scene"
+        },
+        "link": {
+            "type": "object",
+            "description": "Only for group_scene_update_link. Link settings object; handler injects link_address as link.node.",
+            "additionalProperties": true
+        } 
+        },
+        "required": ["operation", "controller_address"],
+        "additionalProperties": false
+    }
+}

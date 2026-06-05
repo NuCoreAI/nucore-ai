@@ -11,12 +11,20 @@
     "What is a group?",
     "What is a controller?",
     "Tell me about [group_name]",
-    "Explain [group_name] to me"
+    "Explain [group_name] to me",
+    "Move kitchen keypad to kitchen [ group | scene ]",
+    "Add the living room lamp to the movie night scene as a controller",
+    "Remove the bedroom light from the bedtime scene",
+    "Change the living room settings in the movie night scene to turn on at 50% brightness within 3 seconds",
+    "Create a cross-link between the hallway motion sensor and the hallway light group",
+    "Give me a scene where keypad 1 and keypad 2 are controllers (cross linked) and dimmer 3 is a responder"
   ],
   "router_hints": [
-    "Use this intent to answer any question about *groups* and *scenes*, including: their links, features, what they do, how to manage them, and informational queries. Examples: 'tell me about [group name]', 'what is [group name]', 'show me [group name]', 'explain [group name]', 'what devices are in [group name]'"
+    "Use this intent for any group or scene question, including explanations, diagnostics, adding a member, removing a member, and updating member link definitions." 
   ],
   "tool_files": [
+    "tool_group_scene_api.json",
+    "tool_group_scene_multi_device_scene.json"
   ],
   "llm_config": {
     "temperature": 0.1

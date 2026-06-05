@@ -1,0 +1,43 @@
+{
+  "name": "tool_group_scene_multi_device_scene",
+  "description": "Create or update a multi-device scene membership in one step by providing a controller/scene and a list of member devices with controller/responder roles.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "group_address": {
+        "type": "string",
+        "description": "Optional. Scene/group address to receive all listed members. If omitted, a new scene/group will be created. If provided and already a scene/group, the listed members will be added to it with the provided roles. If provided and not already a scene/group, an error will be returned." 
+      },
+      "group_name": {
+        "type": "string",
+        "description": "Optional. Name for the new group/scene if group_address is not provided, nucore will provide its own"
+      },
+      "devices": {
+        "type": "array",
+        "description": "Mandatory list of device role definitions for this scene/group.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "link_address": {
+              "type": "string",
+              "description": "Mandatory runtime device address/ID."
+            },
+            "role": {
+              "type": "string",
+              "enum": ["controller", "responder"],
+              "description": "Device role in the scene."
+            },
+            "name": {
+              "type": "string",
+              "description": "Optional member label when adding to the scene."
+            }
+          },
+          "required": ["link_address", "role"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["controller_address", "devices"],
+    "additionalProperties": false
+  }
+}
