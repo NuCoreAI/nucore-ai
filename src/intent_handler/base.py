@@ -551,7 +551,7 @@ class BaseIntentHandler(ABC):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_rags_from_candidates(self, candidate_devices:list[dict[str, Any]]) -> str:
+    def _get_rags_from_candidates(self, candidate_devices:list[dict[str, Any]], dedupe:bool = True) -> str:
         """Filter the full RAG store to the devices nominated by the LLM tool call.
 
         Iterates the candidate list in ``candidate_devices``, discards entries below
@@ -560,6 +560,7 @@ class BaseIntentHandler(ABC):
 
         Args:
             candidate_devices: A list of dicts with ``device_id`` and ``score`` keys.
+            dedupe: Whether to de-duplicate the device documents.
 
         Returns:
             De-duplicated device document string ready for downstream prompt
@@ -577,10 +578,12 @@ class BaseIntentHandler(ABC):
         for d in candidate_devices:
             if float(d.get('score', 0)) >= score_threshold:
                 try:
-                    matched_candidate_ids.add(d['device_id'])
+                    device_id = str(d.get('device_id', '')).strip()
+                    if "|" in device_id:
+                        device_id = device_id.split("|")[0].strip()  # Handle "device_id": "12345|Device type (node, group, folder)"
+                    matched_candidate_ids.add(device_id)
                 except Exception:
                     pass
-
         # Build a filtered RAGData containing only the matched devices.
         filtered_rags = RAGData(documents=[], ids=[])
         for idx, id_ in enumerate(full_rags["ids"]):
@@ -593,7 +596,7 @@ class BaseIntentHandler(ABC):
                 )
 
         rag_docs = filtered_rags["documents"]
-        if not rag_docs:
+        if not rag_docs or len(rag_docs) == 0:
             return ""
 
         # Concatenate documents then de-duplicate overlapping content.
@@ -601,5 +604,7 @@ class BaseIntentHandler(ABC):
         for rag_doc in rag_docs:
             device_docs += "\n" + rag_doc
 
-        deduper = DedupeDevices()
-        return deduper.dedupe(device_docs)
+        if dedupe:
+            deduper = DedupeDevices()
+            return deduper.dedupe(device_docs)
+        return device_docs
