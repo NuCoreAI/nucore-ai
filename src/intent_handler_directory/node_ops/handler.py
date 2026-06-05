@@ -51,7 +51,7 @@ class NodeOpsIntentHandler(BaseIntentHandler):
 
         if route_result:
             candidate_devices = self.get_route_context_value(route_result, "candidate_devices", [])
-            candidate_rags = self._get_rags_from_candidates(candidate_devices)
+            candidate_rags = self._get_rags_from_candidates(candidate_devices, dedupe=False)  # RAG content is already de-duplicated at the source, and further deduping can remove important context.
             return {"<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags}
 
         return {

@@ -8,7 +8,7 @@ text.
 """
 
 from dataclasses import dataclass, field
-from .uom import UOMEntry, supported_uoms
+from .uom import UOMEntry, supported_uoms, is_enumeration_uom
 
 # Sentinel string used to mark deferred/linked editor references in prompt output.
 REFERENCE_DELIMITER = "REFERENCE"
@@ -53,7 +53,7 @@ class EditorSubsetRange:
                 ``block()`` context-manager for indentation.
         """
         uom_label = self.uom.label if self.uom.label else ' '
-        if self.uom.id == "25":
+        if is_enumeration_uom(self.uom.id):
             uom_label = f"{self.id}_{self.uom.label}"
 
         with writer.block():
