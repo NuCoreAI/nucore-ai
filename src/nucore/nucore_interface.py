@@ -13,6 +13,7 @@ import threading
 import asyncio
 
 from .profile import Profile
+from .group import Group, GroupMemberType
 from .nodedef import Property
 from typing import Any, Literal
 from abc import ABC, abstractmethod
@@ -47,6 +48,38 @@ class NuCoreInterface(ABC):
         self.json_output = json_output
         self._subscribe_thread: threading.Thread | None = None
         self._subscribe_lock = threading.Lock()
+
+    def get_groups_for_device(self, device_address: str, controller_only: bool = False) -> list[Group]:
+        """Return all groups that contain the given device address.
+
+        Args:
+            device_address: Device/group node address to search for.
+            controller_only: When True, only return groups where the device is
+                a controller member.
+
+        Returns:
+            List of :class:`~nucore.group.Group` instances containing the
+            device.
+        """
+        address = (device_address or "").strip()
+        if not address:
+            return []
+
+        out: list[Group] = []
+        for group in self.groups.values():
+            if not isinstance(group, Group):
+                continue
+
+            member = group.members.get(address, None)
+            if member is None:
+                continue
+
+            if controller_only and member.type != GroupMemberType.MEMBER_IS_CONTROLLER:
+                continue
+
+            out.append(group)
+
+        return out
 
 
     async def _refresh_device_structure(self) -> bool:
@@ -231,6 +264,45 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the routine_ops method.")
 
+    # ------------------------------------------------------------------
+    # Group/scene API orchestration
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def group_scene_add_member(
+        self,
+        group_address: str,
+        link_address: str,
+        is_controller: bool,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a node as controller/responder member to a group."""
+        raise NotImplementedError("Subclasses must implement group_scene_add_member.")
+
+    @abstractmethod
+    def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
+        """Remove a node member from a group."""
+        raise NotImplementedError("Subclasses must implement group_scene_remove_member.")
+
+    @abstractmethod
+    def group_scene_update_link(
+        self,
+        group_address: str,
+        controller_address: str,
+        link: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create or update link behavior for a group member pair."""
+        raise NotImplementedError("Subclasses must implement group_scene_update_link.")
+
+    @abstractmethod
+    def group_scene_get_node_roles(self, node_address: str) -> dict[str, Any] | None:
+        """Fetch node role capability details for a group member candidate."""
+        raise NotImplementedError("Subclasses must implement group_scene_get_node_roles.")
+
+    @abstractmethod
+    def group_scene_get_link_types(self, controller_address: str, link_address: str) -> dict[str, Any] | None:
+        """Fetch supported link types for a controller/responder pair."""
+        raise NotImplementedError("Subclasses must implement group_scene_get_link_types.")
 
     # ------------------------------------------------------------------
     # Timezone management 
