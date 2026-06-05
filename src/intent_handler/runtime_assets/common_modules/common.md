@@ -79,19 +79,19 @@ All parameters and properties use integer uom values from DEVICE STRUCTURE
   - uom (the integer, **not** the uom_label )
   - precision
   - min/max (if present)
-  - enums (if uom== 25)
+  - enums (if uom == 25 or uom == 146 or uom == 148)
 
 3. **CRITICAL: Use ONLY the uom from step 2. Do NOT invent or substitute different uom**
 
 4. Once you have the EXACT values from DEVICE STRUCTURE, convert <customer_value>: 
 
-## Case 1: uom == 25 (ENUMERATION)
+## Case 1: uom == 25 or uom == 146 or uom == 148 (ENUMERATION)
 1. Look at the `enums` list in the editor for property or command parameter 
 2. Compare customer's value to each enum LABEL 
 3. If there is one clear semantic match, use its enum KEY for <customer_value>
 4. If ambiguous or no clear match, request clarification and do not guess
 
-## Case 2: Customer provides a unit that's NOT supported by the parameter/property AND uom ≠ 25 
+## Case 2: Customer provides a unit that's NOT supported by the parameter/property AND  (uom ≠ 25 and uom ≠ 146 and uom ≠ 148) 
 → **Convert the customer's value to match the uom found in DEVICE STRUCTURE**
 
 **Conversion rules:**
@@ -99,7 +99,7 @@ All parameters and properties use integer uom values from DEVICE STRUCTURE
 - If there's a suitable conversion (e.g. from dollar to cents, seconds to minutes, etc.) do it 
 - If there are no suitable conversions, request clarification and do not pass through an incompatible value
 
-## Case 3: Customer does NOT provide a unit AND uom ≠ 25
+## Case 3: Customer does NOT provide a unit AND (uom ≠ 25 and uom ≠ 146 and uom ≠ 148)
 → **Use customer's value AS-IS with the parameter/property default uom from DEVICE STRUCTURE**
 
 ## Range validation (MANDATORY for numeric editors with min/max)
