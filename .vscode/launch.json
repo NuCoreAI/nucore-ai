@@ -5,22 +5,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "LAN-assistant", 
-            "type": "debugpy",
-            "request": "launch",
-            "program": "src/assistant/generic_assistant.py",
-            "console": "integratedTerminal",
-            "args": [
-               "--url=https://192.168.6.149" ,
-               "--username=nucore@universal-devices.com",
-               "--password=nucore_rules!",
-               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
-               "--prompt_type=per-device",
-               "--json_output=true"
-            ],
-            "justMyCode": false
-        },
-        {
             "name": "LAN-chat", 
             "type": "debugpy",
             "request": "launch",
@@ -37,68 +21,88 @@
             "justMyCode": false
         },
         {
-            "name": "OpenAI-assistant", 
+            "name": "LAN-LakeEncino", 
             "type": "debugpy",
             "request": "launch",
-            "program": "src/assistant/openai_assistant.py",
+            "program": "src/assistant/generic_assistant.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=https://192.168.6.149" ,
-               "--username=nucore@universal-devices.com",
-               "--password=nucore_rules!",
-               "--model_url=openai",
-               "--prompt_type=per-device",
+               "--url=https://192.168.6.134" ,
+               "--username=michel@universal-devices.com",
+               "--password=Cohen26K!",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
+               "--prompt_type=shared-features",
                "--json_output=true"
             ],
             "justMyCode": false
         },
         {
-            "name": "OpenAI-chat", 
+            "name": "Chat-Claude-IntentHandler-LakeEncino",
             "type": "debugpy",
             "request": "launch",
             "program": "src/assistant/chat.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=https://192.168.6.149" ,
-               "--username=nucore@universal-devices.com",
-               "--password=nucore_rules!",
-               "--model_url=openai",
-               "--prompt_type=per-device",
-               "--json_output=true"
+               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--secrets-file=secrets/secrets.json",
+               "--backend-api-base-url=https://192.168.6.134" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=michel@universal-devices.com",
+               "--backend-api-password=Cohen26K!",
+               "--prompt_type=shared-features",
+               "--json-output=true",
             ],
             "justMyCode": false
         },
         {
-            "name": "Claude-assistant", 
+            "name": "Claude-IntentHandler-LakeEncino",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/assistant/claude_assistant.py",
+            "program": "src/intent_handler/run_intent_runtime.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=https://192.168.6.149" ,
-               "--username=nucore@universal-devices.com",
-               "--password=nucore_rules!",
-               "--model_url=claude",
-               "--prompt_type=per-device",
-               "--json_output=true"
+               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--secrets-file=secrets/secrets.json",
+               "--backend-api-base-url=https://192.168.6.134" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=michel@universal-devices.com",
+               "--backend-api-password=Cohen26K!",
+               "--prompt_type=shared-features",
+               "--json-output=true",
             ],
             "justMyCode": false
         },
         {
-            "name": "Claude-chat", 
+            "name": "OpenAI-IntentHandler-LakeEncino",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/assistant/chat.py",
+            "program": "src/intent_handler/run_intent_runtime.py",
             "console": "integratedTerminal",
             "args": [
-               "--url=https://192.168.6.149" ,
-               "--username=nucore@universal-devices.com",
-               "--password=nucore_rules!",
-               "--model_url=claude",
-               "--prompt_type=per-device",
-               "--json_output=true"
+               "--backend-api-base-url=https://192.168.6.134" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=michel@universal-devices.com",
+               "--backend-api-password=Cohen26K!",
+               "--prompt_type=shared-features",
+               "--json-output=true",
             ],
             "justMyCode": false
-        }
+        },
+        {
+            "name": "LLamacpp-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/intent_handler/run_intent_runtime.py",
+            "console": "integratedTerminal",
+            "args": [
+               "--backend-api-base-url=https://192.168.6.134" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=michel@universal-devices.com",
+               "--backend-api-password=Cohen26K!",
+               "--prompt_type=shared-features",
+               "--json-output=true",
+            ],
+            "justMyCode": false
+        },
     ]
 }
