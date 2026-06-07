@@ -35,7 +35,7 @@ class ExtensionMarketplaceManagementIntentHandler(BaseIntentHandler):
         query,
         *,
         route_result=None,
-        framework_context: str = None,
+        framework_context: dict = None,
         raw_response: IntentHandlerResult | None = None,
         tool_calls=None,
     ) -> IntentHandlerResult | None:

@@ -120,14 +120,14 @@ The base class automatically:
 
 ## `framework_context`
 
-An optional free-form string passed in by the **caller** of `handle_query`. When present it is appended to the user turn of the LLM message as a `# FRAMEWORK CONTEXT:` section before the user query. Use it to carry external state (session info, user preferences, system status) that the calling application knows about.
+An optional dictionary of context from eisyui by the **caller** of `handle_query`. It includes the page and url of where the customer is on eisyui page and additional context that might be valuable. When present it is appended to the user turn of the LLM message as a `# FRAMEWORK CONTEXT:` section before the user query. Use it to carry external state (session info, user preferences, system status) that the calling application knows about.
 
 Example:
 
 ```python
 result = await runtime.handle_query(
     "Turn on the patio lights",
-    framework_context="User is authenticated. Location: home. Time zone: America/Los_Angeles.",
+    framework_context="eisyui page, url, and additional information that we may deem important"
 )
 ```
 

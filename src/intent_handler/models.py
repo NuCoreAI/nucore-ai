@@ -206,6 +206,10 @@ class IntentHandlerResult:
             if isinstance(content, str) and content.strip():
                 return content
 
+            notes = self.output.get("notes", None)
+            if isinstance(notes, str) and notes.strip():
+                return notes
+
         return None
 
     def get_tool_calls(self) -> list[ToolCall]:

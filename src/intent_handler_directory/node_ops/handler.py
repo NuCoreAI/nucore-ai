@@ -63,7 +63,7 @@ class NodeOpsIntentHandler(BaseIntentHandler):
         query,
         *,
         route_result=None,
-        framework_context: str = None,
+        framework_context: dict = None,
         raw_response: IntentHandlerResult | None = None,
         tool_calls=None,
     ):
@@ -72,7 +72,7 @@ class NodeOpsIntentHandler(BaseIntentHandler):
         Args:
             query:               The user query string.
             route_result:        Routing metadata stamped on the result.
-            framework_context:   Optional extra context string.
+            framework_context:   Optional runtime context dictionary from eisyui showing which page/url we are on.
 
         Returns:
             :class:`~intent_handler.IntentHandlerResult` whose ``output`` is a

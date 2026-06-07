@@ -363,7 +363,7 @@ class IntentRuntime:
         context: str,
         agent_response: str,
         *,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         session_id: str | None = None,
     ) -> IntentHandlerResult:
         """Feed a tool/agent result back through the ``router`` to generate a final response. 
@@ -375,7 +375,7 @@ class IntentRuntime:
             query:             Stringified tool results to process.
             context:           Additional context to provide to the router to be used in system message. 
             agent_response:    The response from the agent to convert to human-readable form.
-            framework_context: Optional extra context string forwarded to the handler.
+            framework_context: Optional runtime context dictionary from eisyui showing which page/url we are on.
             session_id:        Session ID for history look-up 
 
         Returns:
@@ -394,7 +394,7 @@ class IntentRuntime:
         self,
         query: str,
         *,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         session_id: str | None = None,
     ) -> list[IntentHandlerResult]:
         """Route a query, execute selected intent(s), and return the final result.
@@ -410,8 +410,7 @@ class IntentRuntime:
 
         Args:
             query:             Raw user input.
-            framework_context: Optional extra context string forwarded to every
-                               handler in the chain.
+            framework_context: Optional runtime context dictionary from eisyui showing which page/url we are on.
             session_id:        Optional session identifier.  When provided,
                                conversation history is loaded before the call
                                and updated after it.
@@ -437,6 +436,7 @@ class IntentRuntime:
             nl_text = route_result.notes or ""
             return IntentHandlerResult(
                 intent="",
+                stream_handler=self.router_stream_handler,
                 output={"text": nl_text},
             )
 
@@ -462,7 +462,7 @@ class IntentRuntime:
         initial_route: RouteResult,
         route_plan: list[RoutePlanStep],
         history: Any,
-        framework_context: str | None,
+        framework_context: dict | None,
     ) -> list[IntentHandlerResult | None]:
         """Execute router-planned multi-intent steps in the returned order."""
         results: list[IntentHandlerResult | None] = []
@@ -513,7 +513,7 @@ class IntentRuntime:
         query: str,
         route_result: RouteResult,
         history: Any,
-        framework_context: str | None,
+        framework_context: dict | None,
         step_contexts: list[dict[str, Any]] | None = None,
     ) -> list[IntentHandlerResult | None]:
         """Execute the routed intent for one resolved route."""
@@ -756,7 +756,7 @@ class IntentRuntime:
         target_intent: str,
         query: str,
         route_result: RouteResult,
-        framework_context: str | None,
+        framework_context: dict | None,
     ) -> dict[str, Any] | None:
         """Load per-intent memory context from ``intent_memory`` handler when available.
 

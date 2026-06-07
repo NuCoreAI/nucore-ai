@@ -41,16 +41,20 @@ class EisyUIContext:
                 return None
             if type == "message":
                 self.message = message.get("message", None)
-                if not self.message:
-                    return None
-                if self.context is None:
-                    return self.message
-                return f"\n\n## User UI Context: {json.dumps(self.context, indent=2)} \n\n ## User Message: {self.message}"
+                return self.message.strip() if self.message else None
             logger.warning(f"Received message with unrecognized type: {type}")
             return None
         except Exception as e:
             # it's a regular string
-            return message
+            return message_data.strip() if message_data else None
+        
+    def get_context(self)->dict:
+        """Get the current context stored in the UI context object."""
+        return self.context
+    
+    def get_message(self)->str:
+        """Get the last user message stored in the UI context object."""
+        return self.message
 
 
 def _stringify_tool_result(tool_result: Any) -> str:
@@ -343,7 +347,8 @@ async def _run_once(
     query = eisy_ui_context.process_message(query)
     if not query:
         return
-    results = await runtime.handle_query(query, session_id=session_id)
+    session_id = session_id or "default"
+    results = await runtime.handle_query(query, framework_context=eisy_ui_context.get_context(), session_id=session_id)
     if not results:
         return
     if not isinstance(results, list):
@@ -379,9 +384,8 @@ async def _run_once(
                 streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
                 if streamed_chunks > 0:
                     # Response was already printed live by the stream handler; just add newline.
-                    print()
+                    await result.get_stream_handler().send_chunk(text_output, True)
                     return
-                await result.get_stream_handler().send_chunk(text_output, True)
 
         if text_output:
             if session_id:
