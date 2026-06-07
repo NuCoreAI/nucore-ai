@@ -2,13 +2,15 @@ from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 from intent_handler.run_intent_runtime import main as run_intent_runtime_main
 from intent_handler.run_intent_runtime import _build_parser, _run_once
 from utils import get_logger
 logger = get_logger(__name__)
+import json
 
 import uvicorn
-import json
+from pathlib import Path
 
 app = FastAPI()
 global eisy_args
@@ -22,17 +24,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+root_dir = Path(__file__).resolve().parent
+
+global INDEX_HTML, CERT_FILE, KEY_FILE
+STATIC_DIR = root_dir / "static" 
+CERT_FILE = root_dir / "certs" / "certificate.pem" 
+KEY_FILE = root_dir / "certs" / "private_key.pem" 
+INDEX_HTML = STATIC_DIR / "index.html"
 
 # Mount the static files directory
-app.mount("/static", StaticFiles(directory="/usr/home/admin/workspace/nucore/nucore-ai/src/assistant/static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Store active connections
 active_connections = []
 
 @app.get("/")
 async def get():
-    with open("/usr/home/admin/workspace/nucore/nucore-ai/src/assistant/static/index.html") as f:
+    global INDEX_HTML
+    with open(INDEX_HTML) as f:
         return HTMLResponse(f.read())
+
+async def _process_message_queue(eisy_ai, message_queue: asyncio.Queue):
+    while True:
+        user_message = await message_queue.get()
+        if user_message is None:
+            message_queue.task_done()
+            break
+        try:
+            await _run_once(eisy_ai, user_message)
+        finally:
+            message_queue.task_done()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -40,32 +61,29 @@ async def websocket_endpoint(websocket: WebSocket):
     active_connections.append(websocket)
     global eisy_args
     eisy_ai = run_intent_runtime_main(args=eisy_args, websocket=websocket)
+    message_queue: asyncio.Queue = asyncio.Queue()
+    processor_task = asyncio.create_task(_process_message_queue(eisy_ai, message_queue))
     
     try:
         while True:
             data = await websocket.receive_text()    
-            
-            # Parse the received JSON data
-            message_data = json.loads(data)
-            user_message = message_data.get("message", "")
-
-            if user_message:
-                await _run_once(eisy_ai, user_message)
+            await message_queue.put(data)
             
     except Exception as e:
         print(f"Error: {e}")
     finally:
+        await message_queue.put(None)
+        await processor_task
         active_connections.remove(websocket)
 
-def NuCoreChat():
-    
+def NuCoreChat(args=None):
     # Run the server with HTTPS
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=8000,  # Standard HTTPS port
-        ssl_keyfile="/usr/home/admin/workspace/nucore/nucore-ai/src/assistant/certs/private_key.pem",
-        ssl_certfile="/usr/home/admin/workspace/nucore/nucore-ai/src/assistant/certs/certificate.pem",
+        ssl_keyfile=KEY_FILE if KEY_FILE else None,
+        ssl_certfile=CERT_FILE if CERT_FILE else None,
         #reload=True
     )
     

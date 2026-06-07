@@ -13,6 +13,45 @@ from utils import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
+class EisyUIContext:
+    """Class to represent context messages from the Eisy UI."""
+    def __init__(self):
+        self.context:dict = None
+        self.message:str = None
+
+    def process_message(self, message_data: str)->str:
+        """
+            Process an incoming message from the Eisy UI. 
+            If it's a context message, store the context and return None. 
+            If it's a user message, prepend the context (if any) and return the 
+            combined message.
+            Always keep the last context since the UI sends a context with every user
+            interaction with the UI, so the context is always up-to-date for the latest user message.
+
+            :param message_data: The raw JSON string received from the WebSocket, expected to contain a "type" field.
+            :return str: The processed message to send to the runtime, or None if no message should be sent.
+
+        """
+        try:
+            message= json.loads(message_data)
+            type = message.get("type", "")
+            if type == "context":
+                self.context = message.get("context", None)
+                self.message = None
+                return None
+            if type == "message":
+                self.message = message.get("message", None)
+                if not self.message:
+                    return None
+                if self.context is None:
+                    return self.message
+                return f"\n\n## User UI Context: {json.dumps(self.context, indent=2)} \n\n ## User Message: {self.message}"
+            logger.warning(f"Received message with unrecognized type: {type}")
+            return None
+        except Exception as e:
+            # it's a regular string
+            return message
+
 
 def _stringify_tool_result(tool_result: Any) -> str:
     """Return a readable text form for a backend/tool result.
@@ -90,9 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Required path to runtime profile JSON containing top-level 'nucore_runtime'",
     )
     parser.add_argument(
-        "--path-to-data-directory",
         "--path_to_data_directory",
-        dest="path_to_data_directory",
         type=str,
         default=None,
         help="Optional writable data directory. Overrides runtime config path_to_data_directory when provided.",
@@ -279,6 +316,8 @@ def _load_backend_api_cached(
     except (ImportError, AttributeError) as e:
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
 
+
+eisy_ui_context = EisyUIContext()
 async def _run_once(
     runtime: IntentRuntime,
     query: str,
@@ -300,6 +339,10 @@ async def _run_once(
         query:      The user query string to process.
         session_id: Optional session identifier for conversation tracking.
     """
+    global eisy_ui_context
+    query = eisy_ui_context.process_message(query)
+    if not query:
+        return
     results = await runtime.handle_query(query, session_id=session_id)
     if not results:
         return
