@@ -64,7 +64,7 @@ class StreamHandler(ABC):
             Any value; the return is ignored by the runtime but is available
             to callers that invoke the callback directly.
         """
-        if not chunk:
+        if chunk == None:
             return
         self.stream_state["chunks"] += 1
         await self.send_chunk(chunk, is_end)
@@ -74,6 +74,8 @@ class StreamHandler(ABC):
             if self.websocket.client_state.name != "CONNECTED":
                 logger.error("WebSocket is not connected. Cannot send message.")
                 return None
+            if is_end:
+                pass
             payload={
                 "sender": "bot",
                 "message": chunk,
@@ -82,6 +84,7 @@ class StreamHandler(ABC):
             await self.websocket.send_text(json.dumps(payload))
             if logger.getEffectiveLevel() == logging.DEBUG:
                 print(chunk, end="", flush=True)
+                logger.debug("Payload sent to WebSocket: %s", json.dumps(payload))
         else:
             print(chunk, end="", flush=True)
             if is_end:

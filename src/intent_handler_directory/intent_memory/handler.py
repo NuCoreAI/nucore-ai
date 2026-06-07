@@ -285,7 +285,7 @@ class IntentMemoryIntentHandler(BaseIntentHandler):
         target_intent: str,
         query: str | None = None,
         route_result=None,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
     ) -> dict[str, Any] | None:
         """Return normalized memory facts for ``target_intent``.
 
@@ -338,7 +338,7 @@ class IntentMemoryIntentHandler(BaseIntentHandler):
         query,
         *,
         route_result=None,
-        framework_context: str = None,
+        framework_context: dict | None = None,
         raw_response: IntentHandlerResult | None = None,
         tool_calls=None,
     ) -> IntentHandlerResult | None:

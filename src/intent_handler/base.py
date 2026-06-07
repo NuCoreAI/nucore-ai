@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from abc import ABC, abstractmethod
+import json
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +102,7 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         route_result: RouteResult | None = None,
         extra_user_sections: dict[str, str] | None = None,
         history: ConversationHistory | None = None,
@@ -121,7 +122,7 @@ class BaseIntentHandler(ABC):
         Args:
             query:              The user's current query string.
             framework_context:  Optional context injected by the framework
-                                (e.g. time, location) prepended to the user turn.
+                                (eisyui context of where we are on the page) prepended to the user turn.
             route_result:       Route result from the router, forwarded to prompt
                                 rendering for placeholder substitution.
             extra_user_sections: Additional named sections appended to the user
@@ -146,6 +147,8 @@ class BaseIntentHandler(ABC):
         # each separated by a visual rule.
         user_parts = []
         if framework_context:
+            if isinstance(framework_context, dict):
+                framework_context = json.dumps(framework_context, indent=2)
             user_parts.append(f"---\n# FRAMEWORK CONTEXT:\n{framework_context.strip()}")
         if extra_user_sections:
             for section_name, section_value in extra_user_sections.items():
@@ -187,7 +190,7 @@ class BaseIntentHandler(ABC):
         self,
         query: str,
         *,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         route_result: RouteResult | None = None,
     ) -> dict[str, str]:
         """Return a mapping of prompt placeholder keys to their runtime values.
@@ -205,7 +208,7 @@ class BaseIntentHandler(ABC):
         *,
         query: str,
         route_result: RouteResult | None = None,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         result: IntentHandlerResult | None = None,
     ) -> dict[str, Any] | None:
         """Return optional structured context to append to runtime step_contexts.
@@ -256,7 +259,7 @@ class BaseIntentHandler(ABC):
         self,
         registry: Any,
         query: str | None = None,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         route_result: RouteResult | None = None,
     ) -> Any: 
         """Build prompt context for agent-response/tool-result handling.
@@ -321,7 +324,7 @@ class BaseIntentHandler(ABC):
         query: str,
         *,
         prompt: str | None = None,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         route_result: RouteResult | None = None,
     ) -> str:
         """Render the prompt template by substituting all runtime placeholders.
@@ -518,7 +521,7 @@ class BaseIntentHandler(ABC):
         query: str,
         *,
         route_result: RouteResult | None = None,
-        framework_context: str | None = None,
+        framework_context: dict | None = None,
         raw_response: IntentHandlerResult | None = None,
         tool_calls: list[ToolCall] | None = None,
     ) -> IntentHandlerResult:
@@ -538,7 +541,7 @@ class BaseIntentHandler(ABC):
         Args:
             query:              The (possibly resolved) user query string.
             route_result:       Route metadata from the router.
-            framework_context:  Optional runtime context string.
+            framework_context:  Optional runtime context dictionary from eisyui showing which page/url we are on.
             raw_response:       LLM response returned by ``call_llm``.
             tool_calls:         Tool calls extracted from ``raw_response``.
 

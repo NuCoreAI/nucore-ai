@@ -122,7 +122,7 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         query,
         *,
         route_result=None,
-        framework_context: str = None,
+        framework_context: dict = None,
         raw_response: IntentHandlerResult | None = None,
         tool_calls=None,
     ):
@@ -139,7 +139,7 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
                                  and stamped on the result (set twice to ensure
                                  it is present both before and after tool
                                  dispatch).
-            framework_context:   Optional extra context string.
+            framework_context:   Optional runtime context dictionary from eisyui showing which page/url we are on.
 
         Returns:
             :class:`~intent_handler.IntentHandlerResult` with tool results
