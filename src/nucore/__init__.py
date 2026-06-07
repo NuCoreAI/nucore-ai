@@ -16,10 +16,10 @@ from .profile import Profile, Family, Instance, RuntimeProfile
 from .group import Group, GroupMember, GroupMemberType
 from .folder import Folder
 from .nodedef import Property
-from .uom import UOMEntry, get_uom_by_id
+from .uom import UOMEntry, get_uom_by_id, is_enumeration_uom
 from .nucore_error import NuCoreError
 
 __all__ = ["NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreInterface", 
            "Command", "CommandParameter", "Editor", "LinkDef", "RuntimeProfile",
-           "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id,
+           "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id, is_enumeration_uom,
            "NodeBase", "NodeHierarchy", "NodeTypes", "Group", "GroupMember", "GroupMemberType", "Folder", "PromptFormatTypes"]
