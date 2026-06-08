@@ -433,6 +433,8 @@ class IntentRuntime:
         # Return the response as a synthetic result so the caller can persist it
         # in session history, enabling the next turn to reference this reply.
         if route_result.intent is None:
+            if self.router_stream_handler.get_stream_chunk_count() > 0:
+                return None
             nl_text = route_result.notes or ""
             return IntentHandlerResult(
                 intent="",
