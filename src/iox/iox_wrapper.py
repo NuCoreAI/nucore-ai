@@ -1302,7 +1302,14 @@ class IoXWrapper(NuCoreInterface):
         API:
         /api/plugins/store/list/active
         """
-        raise NotImplementedError("Subclasses must implement the get_active_plugins method.")
+        try:
+            response = self.get(f'/api/plugins/store/list/active')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error performing get active plugins operation: {ex}")
+            return None
 
     async def get_installed_plugins(self) -> dict[str, str]:
         """
