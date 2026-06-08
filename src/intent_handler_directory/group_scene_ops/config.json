@@ -3,6 +3,8 @@
   "description": "Post-router execution for group and scene information.",
   "handler": "handler.py",
   "routing_examples": [
+    "Tell me about [group_name] scene",
+    "Explain [group_name] scene to me",
     "Are these devices cross-linked? ",
     "How do I make devices 1, 2, and 3 work together?",
     "What happens when I activate this device? ",
@@ -10,8 +12,6 @@
     "What is a scene?",
     "What is a group?",
     "What is a controller?",
-    "Tell me about [group_name]",
-    "Explain [group_name] to me",
     "Move kitchen keypad to kitchen [ group | scene ]",
     "Add the living room lamp to the movie night scene as a controller",
     "Remove the bedroom light from the bedtime scene",
