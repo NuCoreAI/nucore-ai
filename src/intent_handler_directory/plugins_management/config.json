@@ -1,0 +1,23 @@
+{
+  "intent": "plugins_management",
+  "description": "Discover, install, update, list, and uninstall plugins that extend the functionality of NuCore.",
+  "handler": "handler.py",
+  "routing_examples": [
+    "What plugins are available for [ some device | purpose | service ]?",
+    "What plugins do I have installed?",
+    "Configure [ plugin_name ] plugin",  
+    "Start [ plugin_name ] plugin",  
+    "Stop [ plugin_name ] plugin",  
+    "Restart [ plugin_name ] plugin",  
+    "Delete [ plugin_name ] plugin"
+  ],
+  "router_hints": [
+    "Use this intent when the user asks about plugin discovery or plugin lifecycle operations (install, start, stop, restart, delete)."
+  ],
+  "tool_files": [
+    "tool_plugins.json"
+  ],
+  "llm_config": {
+    "temperature": 0.0
+  }
+}

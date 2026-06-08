@@ -1,0 +1,29 @@
+{
+  "name": "tool_plugins",
+  "description":  "Manage plugin discovery or plugin lifecycle operations (install, configure, start, stop, restart, uninstall).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "install",
+          "configure",
+          "start",
+          "stop",
+          "restart",
+          "uninstall"
+        ]
+      },
+      "plugin_id": {
+        "type": "string",
+        "description": "Plugin identifier, required for install/configure/start/stop/restart/uninstall" 
+      }
+    },
+    "required": [
+      "action",
+      "plugin_id"
+    ],
+    "additionalProperties": false
+  }
+}
