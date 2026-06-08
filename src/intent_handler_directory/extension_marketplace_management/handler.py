@@ -57,8 +57,9 @@ class ExtensionMarketplaceManagementIntentHandler(BaseIntentHandler):
     def __list_extensions(self, extensions: list[dict[str, Any]]) -> str:
         if not extensions:
             return "No NuCore.ai extensions found."
+        out = "" 
         for ext in extensions:
-            out += f"**Extension Id**: {ext.get('extension_id', 'N/A')}\n\n"
+            out += f"**Extension Id**: {ext.get('id', 'N/A')}\n\n"
             out += f"**Name**: {ext.get('name', 'N/A')}\n\n"
             out += f"```json\n{json.dumps(ext)}\n```\n"
         return out
