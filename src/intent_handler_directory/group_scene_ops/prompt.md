@@ -167,7 +167,17 @@ Minimum content to include in the final answer:
 - Do not speculate.
 - For any tool call, use addresses only; do not send names.
 
+---
+# UI NAVIGATION RULES
+- Add a `UI Navigation` section at the bottom of every response when one or more specific entities are referenced.
+- Include only links for entities that are present in the provided context.
+- Use Markdown links and preserve the entity display name exactly as provided in context.
+- Do not invent IDs, names, or links for entities not present in context.
+- If no specific entity is referenced, omit the `UI Navigation` section.
 
+## UI LINK FORMATS: 
+- node, scene, folder:
+	`[ node name ](/nodes/{node_id})`
 
 ---
 # Your Task 

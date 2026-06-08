@@ -21,6 +21,18 @@ Operations apply to nodes, scenes, and folders (all are considered nodes).
 | `add_group`   | Add a scene or a group. |
 | `move`        | Move a node into a group or a folder. You can also group nodes to have the same hierarchy if the parent node is also a node with the same base address | 
 
+---
+# UI NAVIGATION RULES
+- Add a `UI Navigation` section at the bottom of every response when one or more specific entities are referenced.
+- Include only links for entities that are present in the provided context.
+- Use Markdown links and preserve the entity display name exactly as provided in context.
+- Do not invent IDs, names, or links for entities not present in context.
+- If no specific entity is referenced, omit the `UI Navigation` section.
+
+## UI LINK FORMATS: 
+- node, scene, folder:
+	`[ node name ](/nodes/{node_id})`
+
 ────────────────────────────────
 # YOUR TASK
 
