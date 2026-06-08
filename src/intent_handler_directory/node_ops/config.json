@@ -9,7 +9,9 @@
     "Rename hallway to left hallway",
     "Disable the washing machine",
     "Make a new folder for upstairs",
-    "Tell me about kitchen keypad"
+    "Tell me about kitchen keypad",
+    "Explain guest bathroom",
+    "Why do you think living room is a thermostat"
   ],
   "router_hints": [
     "Use this intent to get concrete and detailed information about a specific node, group, or folder. This can include its current state, its properties, and its relationships to other nodes. For example, 'Tell me about kitchen keypad' should return detailed information about the kitchen keypad device.",
