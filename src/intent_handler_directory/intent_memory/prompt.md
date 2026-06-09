@@ -11,7 +11,7 @@
 - Implicit: only if user clearly states a stable convention or recurring preference.
 
 ## WHEN TO READ
-- On requests like show/list/what did you remember/retrieve.
+- On requests like show/list/what did you remember/retrieve/recall.
 
 ## OUTPUT STYLE
 - Plain short response that reflects tool results.
