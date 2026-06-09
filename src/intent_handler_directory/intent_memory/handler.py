@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from pathlib import Path
@@ -62,6 +63,13 @@ class IntentMemorySQLiteStore:
         return raw if raw else "USER DEFINED"
 
     @staticmethod
+    def _normalize_key(key: str | None, entry_markdown: str) -> str:
+        raw_key = (key or "").strip()
+        if raw_key:
+            return raw_key
+        return hashlib.md5(entry_markdown.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
@@ -91,39 +99,27 @@ class IntentMemorySQLiteStore:
         entry = (entry_markdown or "").strip()
         if not entry:
             raise ValueError("entry_markdown is required")
+        normalized_key = self._normalize_key(key, entry)
 
         with self._lock, self._connect() as conn:
-            if key:
-                conn.execute(
-                    """
-                    INSERT INTO intent_memory(intent, section, key, entry_markdown, source, confidence, context)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(intent, section, key) WHERE KEY IS NOT NULL
-                    DO UPDATE SET
-                        entry_markdown = excluded.entry_markdown,
-                        source = excluded.source,
-                        confidence = excluded.confidence,
-                        context = excluded.context,
-                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                    """,
-                    (intent, section_name, key, entry, source, confidence, context),
-                )
-                row = conn.execute(
-                    "SELECT * FROM intent_memory WHERE intent = ? AND section = ? AND key = ?",
-                    (intent, section_name, key),
-                ).fetchone()
-            else:
-                cur = conn.execute(
-                    """
-                    INSERT INTO intent_memory(intent, section, key, entry_markdown, source, confidence, context)
-                    VALUES (?, ?, NULL, ?, ?, ?, ?)
-                    """,
-                    (intent, section_name, entry, source, confidence, context),
-                )
-                row = conn.execute(
-                    "SELECT * FROM intent_memory WHERE id = ?",
-                    (cur.lastrowid,),
-                ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO intent_memory(intent, section, key, entry_markdown, source, confidence, context)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(intent, section, key) WHERE key IS NOT NULL
+                DO UPDATE SET
+                    entry_markdown = excluded.entry_markdown,
+                    source = excluded.source,
+                    confidence = excluded.confidence,
+                    context = excluded.context,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                """,
+                (intent, section_name, normalized_key, entry, source, confidence, context),
+            )
+            row = conn.execute(
+                "SELECT * FROM intent_memory WHERE intent = ? AND section = ? AND key = ?",
+                (intent, section_name, normalized_key),
+            ).fetchone()
 
         if row is None:
             raise RuntimeError("Failed to create memory record")
