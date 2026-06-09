@@ -19,3 +19,5 @@
 - **Responder** – Reacts to commands
 `Scene` defines how **responders** react when a specific **controller** issues the **On** command. A `Group` in NuCore is always a `Scene` where NuCore is the **controller**, and all its members are Responders.
 `Routine`: An if-then-else automation unit. The `If` condition is evaluated; when `true` the `Then` actions execute, when `false` the `Else` actions execute.
+`UD Mobile`: The mobile app for local and remote management of UD products including NuCore.
+`Push Notification`: Use the `Send Message` command on `UD Mobile` to send push notifications. Default parameters are: `Sound`=*Clock Radio Alarm*, `Content`=*General Notification*.
