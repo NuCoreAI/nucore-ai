@@ -15,7 +15,7 @@
       },
       "section": {
         "type": "string",
-        "description": "Section heading (for example: ALIASES, OFFSETS, USER DEFINED)."
+        "description": "Section heading (for example: ALIASES, OFFSETS, USER DEFINED, DATES)."
       },
       "key": {
         "type": "string",
