@@ -5,12 +5,14 @@
   "routing_examples": [
     "Remember that MBR HWY means master hallway",
     "Persist sunset offset for candle lighting as -18 minutes",
+    "Show all saved memory", 
     "Show saved aliases for routine automation",
-    "Delete saved memory key mbr_hwy_alias"
+    "Delete saved memory key mbr_hwy_alias",
+    "Forget all saved memory"
   ],
   "router_hints": [
-    "Use this intent for remember/save/persist/forget operations.",
-    "Use for CRUD over persistent memory records scoped by intent name.",
+    "Use this intent for remember/save/persist/forget operations and events.",
+    "Use this intent for memory retrieval when the user is explicitly asking to show, list, recall, retrieve saved information.",
     "Prefer markdown-style entries for human readability."
   ],
   "tool_files": [
