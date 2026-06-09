@@ -26,10 +26,6 @@ from utils import get_logger
 
 logger = get_logger(__name__)
 
-def debug(msg):
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
-
-
 @dataclass
 class Instance:
     """
@@ -134,7 +130,7 @@ class Profile:
             uom_id = rng["uom"]
             uom = get_uom_by_id(uom_id)
             if not uom:
-                debug(f"UOM '{uom_id}' not found")
+                logger.debug(f"UOM '{uom_id}' not found")
             # MinMaxRange or Subset
             if "min" in rng and "max" in rng:
                 ranges.append(
@@ -155,11 +151,11 @@ class Profile:
                     )
                 )
             else:
-                debug(f"Range must have either min/max or subset: {rng}")
+                logger.debug(f"Range must have either min/max or subset: {rng}")
          
         editor = Editor(id=edict["id"], is_reference=False, ranges=ranges)
         return editor
-    
+
     def __parse_profile__(self, raw) -> bool:
         """Build Profile object tree from a raw dict, with validation and lookups.
 
@@ -171,11 +167,26 @@ class Profile:
         """
         editors_dict = {}
         for fidx, f in enumerate(raw.get("families", [])):
+            def add_editor(id:str, editor: Editor):
+                if not id:
+                    logger.debug("Editor missing 'id'")
+                    return
+                editors_dict[str(id).lower()] = self.__build_editor__(edict)
+
+            def get_editor(id:str):
+                if not id:
+                    logger.debug("Editor reference missing 'id'")
+                    return None
+                editor = editors_dict.get(str(id).lower())
+                if not editor:
+                    logger.debug(f"Editor '{id}' not found for reference")
+                return editor
+
             # Validate keys / format
             if "id" not in f:
-                debug(f"Family {fidx} missing 'id'")
+                logger.debug(f"Family {fidx} missing 'id'")
             if isinstance(f, str):
-                debug(f"Family {fidx} is a string, expected dict")
+                logger.debug(f"Family {fidx} is a string, expected dict")
                 continue
             instances = []
             #mpg names hack
@@ -183,10 +194,11 @@ class Profile:
                 # Build Editors for reference first
                 for edict in i.get("editors", []):
                     if "id" not in edict:
-                        debug("Editor missing 'id'")
+                        logger.debug("Editor missing 'id'")
                         continue
                     if edict["id"] not in editors_dict:
-                        editors_dict[edict["id"]] = self.__build_editor__(edict)
+                        #editors_dict[edict["id"]] = self.__build_editor__(edict)
+                        add_editor(edict["id"], self.__build_editor__(edict))
                 # Build LinkDefs
                 linkdefs = []
                 for ldict in i.get("linkdefs", []):
@@ -194,12 +206,12 @@ class Profile:
                     params = []
                     for p in ldict.get("parameters", []):
                         if "editor" not in p:
-                            debug(f"LinkDef param missing 'editor': {p}")
+                            logger.debug(f"LinkDef param missing 'editor': {p}")
                             continue
                         eid = p["editor"]
-                        editor = editors_dict.get(eid)
+                        editor = get_editor(eid)
                         if not editor:
-                            debug(f"Editor '{eid}' not found for linkdef param")
+                            logger.debug(f"Editor '{eid}' not found for linkdef param")
                         params.append(
                             LinkParameter(
                                 id=p["id"],
@@ -226,15 +238,15 @@ class Profile:
                     props = {} 
                     for pdict in ndict.get("properties", {}):
                         eid = pdict["editor"]
-                        editor = editors_dict.get(eid)
+                        editor = get_editor(eid)
                         if not editor:
-                            debug(
+                            logger.debug(
                                 f"Editor '{eid}' not found for property '{pdict.get('id')}' in nodedef '{ndict['id']}'"
                             )
 
                         pid=pdict.get("id")
                         if pid is None:
-                            debug(f"Property missing 'id' in nodedef '{ndict['id']}'")
+                            logger.debug(f"Property missing 'id' in nodedef '{ndict['id']}'")
                             continue
                         props[pid]=NodeProperty(
                                 id=pid,
@@ -254,9 +266,9 @@ class Profile:
                             params = []
                             for p in cdict.get("parameters", []):
                                 eid = p["editor"]
-                                editor = editors_dict.get(eid)
+                                editor = get_editor(eid)
                                 if not editor:
-                                    debug(
+                                    logger.debug(
                                         f"Editor '{eid}' not found for command param"
                                     )
                                 params.append(
@@ -332,7 +344,7 @@ class Profile:
                 for group in groups:
                     g_links[group['id']] = group
             except KeyError as e:
-                debug(f"Error parsing group links: {e}")
+                logger.debug(f"Error parsing group links: {e}")
 
         for node_elem in elements:
             node_flag=int(node_elem.get("flag"))
@@ -347,7 +359,7 @@ class Profile:
             if node.node_def_id:
                 node.node_def = self.lookup.get(f"{node.node_def_id}.{node.family}.{node.instance}")
                 if not node.node_def:
-                    debug(f"[WARN] No NodeDef found for: {node.node_def_id}")
+                    logger.debug(f"[WARN] No NodeDef found for: {node.node_def_id}")
                 else:
                     #register node in nodedef
                     if node.node_def.id not in self.runtime_profiles:
@@ -379,7 +391,7 @@ class Profile:
                 folder = Folder(node_elem)
                 self.folders[folder.address] = folder
             except Exception as e:
-                debug(f"Error parsing folder: {e}")
+                logger.debug(f"Error parsing folder: {e}")
                 continue
         
         return self.runtime_profiles, self.nodes, self.groups, self.folders

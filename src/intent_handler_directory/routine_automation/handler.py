@@ -10,10 +10,6 @@ from utils import _get_candidate_devices_from_routines, _get_full_routines_from_
 
 logger = get_logger(__name__)
 
-def debug(msg: str) -> None:
-    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
-
 
 class RoutineAutomationIntentHandler(BaseIntentHandler):
     """Intent handler for creating and managing automation routines.
@@ -108,7 +104,7 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
             try:
                 content = module_file.read_text(encoding="utf-8").strip()
             except Exception as exc:
-                debug(f"Failed to read prompt module '{module_file.name}': {exc}")
+                logger.debug(f"Failed to read prompt module '{module_file.name}': {exc}")
                 continue
             if not content:
                 continue

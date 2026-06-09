@@ -20,8 +20,6 @@ from abc import ABC, abstractmethod
 from utils import get_logger
 
 logger = get_logger(__name__)
-def debug(msg):
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
 
 class PromptFormatTypes:
     """Constants for the two supported device-data prompt formats."""
@@ -381,7 +379,7 @@ class NuCoreInterface(ABC):
                         )
                     )
                 except Exception as ex:
-                    debug(f"Failed to subscribe to events: {str(ex)}")
+                    logger.debug(f"Failed to subscribe to events: {str(ex)}")
                 finally:
                     with self._subscribe_lock:
                         self._subscribe_thread = None
@@ -417,7 +415,7 @@ class NuCoreInterface(ABC):
         :param event: The event data received.
         """
         if message is None or 'node' not in message or 'control' not in message:
-            debug(f"Received invalid message format {message}")
+            logger.debug(f"Received invalid message format {message}")
             return
         
         control = message['control']

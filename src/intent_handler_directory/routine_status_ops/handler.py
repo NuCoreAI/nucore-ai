@@ -12,11 +12,6 @@ from utils import _get_routine_summary_from_candidates
 logger = get_logger(__name__)
 
 
-def debug(msg: str) -> None:
-    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
-
-
 class RoutineStatusOpsIntentHandler(BaseIntentHandler):
     """Intent handler for enabling, disabling, or toggling automation routines.
 
@@ -102,12 +97,12 @@ class RoutineStatusOpsIntentHandler(BaseIntentHandler):
                     routine_id = tool.get("id")
                     operation = tool.get("operation")
                     if routine_id is None or operation is None:
-                        debug(f"Tool call missing 'id' or 'operation' field: {tool}")
+                        logger.debug(f"Tool call missing 'id' or 'operation' field: {tool}")
                         continue
                     rc = await self.nucore_interface.routine_ops(routine_id=routine_id, operation=operation)
                     response.add_tool_result(rc if rc is not None else f"Operation '{operation}' on routine '{routine_id}' failed.")
         else:
-            debug("No tool calls found in the response.")
+            logger.debug("No tool calls found in the response.")
 
         response.set_route_result(route_result=route_result)
         return response
