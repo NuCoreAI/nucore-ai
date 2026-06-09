@@ -37,7 +37,7 @@ class IntentMemorySQLiteStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     intent TEXT NOT NULL,
                     section TEXT NOT NULL,
-                    key TEXT,
+                    key TEXT NOT NULL,
                     entry_markdown TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'explicit_user',
                     confidence REAL,
@@ -98,7 +98,7 @@ class IntentMemorySQLiteStore:
                     """
                     INSERT INTO intent_memory(intent, section, key, entry_markdown, source, confidence, context)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(intent, section, key)
+                    ON CONFLICT(intent, section, key) WHERE KEY IS NOT NULL
                     DO UPDATE SET
                         entry_markdown = excluded.entry_markdown,
                         source = excluded.source,
@@ -293,7 +293,8 @@ class IntentMemoryIntentHandler(BaseIntentHandler):
         with persisted facts. Runtime should not access storage directly.
         """
         if not target_intent:
-            return None
+            logger.warning("get_memory_context called without target_intent; using default")
+            target_intent = "__default__"
 
         records = _MEMORY_STORE.retrieve(intent=target_intent, limit=200)
         if not records:
@@ -375,7 +376,8 @@ class IntentMemoryIntentHandler(BaseIntentHandler):
         action = str(payload.get("action", "")).strip().lower()
         target_intent = str(payload.get("intent", "")).strip()
         if not target_intent:
-            return "Invalid tool call: intent is required"
+            logger.warning("Memory tool call missing intent: %s; using default", payload)
+            target_intent="__default__"
 
         section = payload.get("section")
         key = payload.get("key")
