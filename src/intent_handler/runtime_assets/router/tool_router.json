@@ -15,7 +15,7 @@
       }, 
       "candidate_devices": {
         "type": "array",
-        "description": "Optional list of candidate devices/groups/scenes relevant to the user query, with relevance scores. This is intended to be used by downstream intents like command_control and routine_automation to help narrow down device candidates for LLM processing.",
+        "description": "Optional list of candidate devices/groups/scenes relevant to the user query, with relevance scores. This is intended to be used by downstream intents like command_control and routine_automation to help narrow down device candidates for LLM processing. If the user query mentions `push notification`, then include `UD Mobile` in the candidate device list with a high relevance score to help the LLM understand that the user is requesting a push notification to their mobile device." , 
         "items": {
           "type": "object",
           "required": ["device_id", "score"],
