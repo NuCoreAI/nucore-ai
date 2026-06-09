@@ -9,10 +9,6 @@ from utils import get_logger
 logger = get_logger(__name__)
 
 
-def debug(msg: str) -> None:
-    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
-
 
 class NodeOpsIntentHandler(BaseIntentHandler):
     """Intent handler for operations on nodes (devices, groups, folders).
@@ -93,7 +89,7 @@ class NodeOpsIntentHandler(BaseIntentHandler):
                     if operation == "add_group" or operation == "add_folder":
                         new_name = tool.get("new_name")
                         if not new_name:
-                            debug(f"Tool call for '{operation}' missing required 'new_name' field: {tool}")
+                            logger.debug(f"Tool call for '{operation}' missing required 'new_name' field: {tool}")
                             continue
                         rc = await self.nucore_interface.add_node(node_name=new_name, type="group" if operation == "add_group" else "folder")
                         response.add_tool_result(rc if rc is not None else f"Operation '{operation}' on node '{new_name}' failed.")
@@ -124,7 +120,7 @@ class NodeOpsIntentHandler(BaseIntentHandler):
 
                     response.add_tool_result(rc if rc is not None else f"Operation '{operation}' on node '{node_id}' failed.")
         else:
-            debug("No tool calls found in the response.")
+            logger.debug("No tool calls found in the response.")
 
         response.set_route_result(route_result=route_result)
         return response

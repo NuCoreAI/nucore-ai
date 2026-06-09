@@ -6,10 +6,6 @@ from typing import Any
 
 logger = get_logger(__name__)
 
-def debug(msg: str) -> None:
-    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
-
 async def _get_routine_summary_from_candidates(intent_handler, candidates) -> list[dict[str, Any]]:
     """Fetch routine summaries for candidates that meet the score threshold.
 
@@ -27,7 +23,7 @@ async def _get_routine_summary_from_candidates(intent_handler, candidates) -> li
     """
     score_threshold = intent_handler.config.get("threshold", 0.80)
     if not candidates:
-        debug("No candidates provided to _get_routine_summary_from_candidates.")
+        logger.debug("No candidates provided to _get_routine_summary_from_candidates.")
         return []
 
 
@@ -37,26 +33,26 @@ async def _get_routine_summary_from_candidates(intent_handler, candidates) -> li
             try:
                 routine = await intent_handler.nucore_interface.get_routine_summary(r['routine_id'])
                 if not routine:
-                    debug("Received None routine summary from Nucore interface.")
+                    logger.debug("Received None routine summary from Nucore interface.")
                     continue
                 if isinstance(routine, list):
                     routine= routine[0] if routine else None
                     if not routine:
-                        debug("Received empty list routine summary from Nucore interface.")
+                        logger.debug("Received empty list routine summary from Nucore interface.")
                         continue
                 # Enrich each summary dict with the full routine logic.
                 if 'id' not in routine:
-                    debug(f"Routine summary missing 'id' field: {routine}")
+                    logger.debug(f"Routine summary missing 'id' field: {routine}")
                     continue
                 else:
                     routine_id = _convert_routine_id_to_int(routine['id'])
                     if routine_id is None:
-                        debug(f"Failed to convert routine ID {routine['id']} to int, skipping enrichment with full routine logic.")
+                        logger.debug(f"Failed to convert routine ID {routine['id']} to int, skipping enrichment with full routine logic.")
                         continue
                     routine['id'] = routine_id
                     full_routine = intent_handler.nucore_interface.all_routines.get(routine_id)
                     if full_routine is None:
-                        debug(f"No full routine found for routine ID: {routine_id}")
+                        logger.debug(f"No full routine found for routine ID: {routine_id}")
                     else:
                         # Attach the complete routine trigger/action logic for downstream use.
                         routine['routine_logic'] = _replace_device_id_with_name(intent_handler, full_routine)
@@ -88,13 +84,13 @@ async def _get_full_routines_from_candidates(intent_handler, candidates) -> list
         if float(r.get('score', 0)) >= score_threshold:
             try:
                 if not r.get('routine_id', None):
-                    debug(f"Candidate routine entry missing 'routine_id': {r}")
+                    logger.debug(f"Candidate routine entry missing 'routine_id': {r}")
                     continue
                 #routine_id = _convert_routine_id_to_int(r['routine_id'])
                 routine_id = int(r['routine_id'])
                 full_routine = intent_handler.nucore_interface.all_routines.get(routine_id)
                 if full_routine is None:
-                    debug(f"No full routine found for routine ID: {routine_id}")
+                    logger.debug(f"No full routine found for routine ID: {routine_id}")
                 else:
                     out.append(full_routine)
             except Exception:
@@ -164,10 +160,10 @@ def _convert_routine_id_to_int(routine_id: Any) -> int | None:
             # base-16 parsing handles both "0x…" prefixed and bare hex strings.
             return int(routine_id, 16)
         except ValueError:
-            debug(f"Failed to convert routine ID {routine_id} to int using both decimal and hex parsing.")
+            logger.debug(f"Failed to convert routine ID {routine_id} to int using both decimal and hex parsing.")
             return None
 
-    debug(f"Routine ID {routine_id} is neither int nor str, cannot convert to int.")
+    logger.debug(f"Routine ID {routine_id} is neither int nor str, cannot convert to int.")
     return None
 
 def _get_candidate_devices_from_routines(candidate_routines: list[dict[str, Any]]) -> list[dict[str, Any]]: 

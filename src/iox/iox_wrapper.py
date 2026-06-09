@@ -23,10 +23,6 @@ from utils import get_logger
 logger = get_logger(__name__)
 
 
-def debug(msg: str) -> None:
-    """Log a debug-level message prefixed with ``[PROFILE FORMAT ERROR]``."""
-    logger.debug(f"[PROFILE FORMAT ERROR] {msg}")
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -1615,7 +1611,7 @@ class IoXWrapper(NuCoreInterface):
         if self.formatter_type == PromptFormatTypes.DEVICE:
             return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders ) 
         
-        debug(f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
+        logger.debug(f"Unknown formatter type: {self.formatter_type}, defaulting to per-device format.")
         return device_rag_formatter.format(nodes=self.nodes, groups=self.groups, folders=self.folders)
     
     def _format_nodes(self):
