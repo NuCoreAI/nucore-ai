@@ -677,10 +677,13 @@ Use one of these exact forms ALL IN JSON:
 ```
 
 ## Rules:
-- **Always** use (from to) or (from for) formats if the condition indicates a DURATION. 
+- **Always** use (from to) or (from for) formats if the condition indicates a DURATION **UNLESS** it's `monthly` or `annual`
+- **CRITICAL**: If the condition is a single instant in time (not a duration), use `at` (with `date` when applicable). Do **NOT** use `from`/`to` for a point-in-time trigger.
+- For `annual` or `monthly` point-in-time triggers, represent each resolved occurrence as an `at` schedule and join multiple occurrences with `{"logic":"or"}` when needed.
+- If start and end resolve to the same timestamp, treat it as a point-in-time trigger and use `at`, not `from`/`to`.
 - **CRITICAL**: If the user gives one start boundary and one end boundary for the same continuous window (example: "Shabbat starts X before Friday sunset and ends Y after Saturday sunset"), represent it as **ONE** weekly duration expression:
   `{"weekly":{"days":"fri","from":{"sunset":<start_offset>},"to":{"sunset":<end_offset>,"day":1}}}`
-- Do **NOT** split one continuous window into two schedule subexpressions joined by `or`.
+- UNLESS `annual` or `monthly` Do **NOT** split one continuous window into two schedule subexpressions joined by `or`.
 
 ## Invalid Structures:
 
@@ -724,15 +727,6 @@ Use one of these exact forms ALL IN JSON:
       "logic": "and" <-- WRONG
   }
 }
-```
-
-3. Splitting one continuous Shabbat window into two schedule clauses
-```json
-[
-  {"weekly":{"days":"fri","from":{"sunset":-1080},"to":{"sunset":-1080,"day":1}}},
-  {"logic":"or"},
-  {"weekly":{"days":"sat","from":{"sunset":4320},"to":{"sunset":4320}}}
-]
 ```
 
 ---
