@@ -8,20 +8,27 @@ from intent_handler import BaseIntentHandler, IntentHandlerResult
 from utils import get_logger
 from utils import _get_candidate_devices_from_routines, _get_full_routines_from_candidates
 
+# handler.py is loaded standalone via importlib.util.spec_from_file_location
+# (see loader.py), so it is not part of the intent_handler_directory package
+# at import time — a bare `from routine_compiler import ...` would not
+# resolve. Import via the fully-qualified package path instead, mirroring
+# the pattern extension_marketplace_management/handler.py uses for its own
+# sibling module.
+from intent_handler_directory.routine_automation import compile_routine_source, RoutineCompileError
+
 logger = get_logger(__name__)
 
 
-class RoutineAutomationIntentHandler(BaseIntentHandler):
-    """Intent handler for creating and managing automation routines.
+class RoutineAutomationPythonIntentHandler(BaseIntentHandler):
+    """Experimental intent handler for creating/updating automation routines.
 
-    The LLM is expected to call ``tool_routine_automation`` with a list of
-    routine definitions.  Each definition is forwarded to
-    :meth:`~nucore.NuCoreInterface.create_automation_routine` on the NuCore
-    backend.  Results for every routine in the batch are accumulated and
-    attached to the response as tool results.
-
-    This handler has no prompt placeholders — ``get_prompt_runtime_replacements``
-    returns replacements derived from route context and runtime state.
+    Identical in shape to :mod:`routine_automation` (same RAG-based device
+    candidate injection, same existing-routine/temporal-resolution context),
+    except the LLM describes routine logic as a small Python-like snippet
+    (``tool_routine_automation_python``'s ``code`` field) instead of nested
+    JSON. :func:`routine_compiler.compile_routine_source` translates that
+    snippet into the exact routine dict the original JSON-based handler
+    produces, so the NuCore backend call below is unchanged.
     """
 
     async def get_prompt_runtime_replacements(
@@ -31,18 +38,8 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         framework_context=None,
         route_result=None,
     ) -> dict:
-        """Return an empty replacement dict (no dynamic placeholders needed).
-
-        Args:
-            query:              The user query (unused).
-            framework_context:  Unused for this handler.
-            route_result:       Unused for this handler.
-
-        Returns:
-            Empty dict — the static prompt requires no runtime substitution.
-        """
         policy_modules = self._load_prompt_modules()
-        location_information = await self.nucore_interface.get_timespecs() if self.nucore_interface else None 
+        location_information = await self.nucore_interface.get_timespecs() if self.nucore_interface else None
         temporal_resolution = self.get_route_context_value(route_result, "temporal_resolution", None)
         temporal_resolution_block = (
             ""
@@ -54,37 +51,37 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
                 f"```json\n{json.dumps(temporal_resolution, indent=2)}\n```"
             )
         )
-        
+
         if route_result and route_result.route_context:
             candidate_devices = self.get_route_context_value(route_result, "candidate_devices", [])
             if not candidate_devices:
                 candidate_devices = []
-            
+
             candidate_routines = self.get_route_context_value(route_result, "candidate_routines", [])
             if not candidate_routines:
                 candidate_rags = self._get_rags_from_candidates(candidate_devices)
                 return {
                     "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
                     "<<routine_automation_policy_modules>>": policy_modules,
-                    "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",  
+                    "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",
                     "<<temporal_resolution_context>>": temporal_resolution_block,
                 }
-            
 
-            # we are editing. The first thing to do is to get the candidate routines for editing
-            # to the candidate devices if any exist. This is because the router may have filtered out devices that are actually part of the routine.
+            # We are editing. Resolve candidate routines to their full logic first,
+            # since the router may have filtered out devices that are actually
+            # part of the existing routine's if/then/else.
             candidate_routines = await _get_full_routines_from_candidates(self, candidate_routines)
             extra_devices = _get_candidate_devices_from_routines(candidate_routines)
             if extra_devices:
                 candidate_devices.extend(extra_devices)
             candidate_rags = self._get_rags_from_candidates(candidate_devices)
             return {
-                        "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
-                        "<<existing_routines>>": "" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```",
-                        "<<routine_automation_policy_modules>>": policy_modules,
-                        "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",  
-                        "<<temporal_resolution_context>>": temporal_resolution_block,
-                    }
+                "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
+                "<<existing_routines>>": "" if not candidate_routines else f"```json\n{json.dumps(candidate_routines, indent=2)}\n```",
+                "<<routine_automation_policy_modules>>": policy_modules,
+                "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",
+                "<<temporal_resolution_context>>": temporal_resolution_block,
+            }
 
         return {
             "<<runtime_device_structure>>": "",
@@ -111,7 +108,6 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
             sections.append(f"---\n# MODULE: {module_file.stem}\n{content}")
 
         return "\n\n".join(sections).strip()
-    
 
     async def handle(
         self,
@@ -122,35 +118,22 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
         raw_response: IntentHandlerResult | None = None,
         tool_calls=None,
     ):
-        """Call the LLM and dispatch any ``tool_routine_automation`` tool calls.
+        """Call the LLM and dispatch any ``tool_routine_automation_python`` tool calls.
 
-        After receiving the LLM response, iterates over all returned tool calls
-        and routes each to :meth:`_process_routine_automation`.  Tool results
-        are accumulated on the response object so the runtime or downstream
-        handlers can inspect them.
-
-        Args:
-            query:               The user query string.
-            route_result:        Routing metadata forwarded to message assembly
-                                 and stamped on the result (set twice to ensure
-                                 it is present both before and after tool
-                                 dispatch).
-            framework_context:   Optional runtime context dictionary from eisyui showing which page/url we are on.
-
-        Returns:
-            :class:`~intent_handler.IntentHandlerResult` with tool results
-            attached and route metadata set.
+        Compiles each routine's ``code`` field with the AST-based compiler,
+        then forwards the resulting routine dict to the NuCore backend exactly
+        like the JSON-based handler does. Compile failures are returned as
+        tool results (visible as the routine's outcome) rather than raised,
+        matching the error-handling shape of the rest of the runtime.
         """
-        
         response = raw_response
         response.set_route_result(route_result=route_result)
 
-        # Dispatch each tool call and collect the backend results.
         tools = tool_calls if tool_calls is not None else response.get_tool_calls()
         if tools:
             for tool in tools:
-                if tool.name == "tool_routine_automation":
-                    result = await self._process_routine_automation(tool)
+                if tool.name == "tool_routine_automation_python":
+                    result = await self._process_routine_automation_python(tool)
                 else:
                     result = f"Unknown tool called: {tool.name}"
                 response.add_tool_result(tool_result=result)
@@ -162,35 +145,47 @@ class RoutineAutomationIntentHandler(BaseIntentHandler):
     # Tool handlers
     # ------------------------------------------------------------------
 
-    async def _process_routine_automation(self, tool) -> list | str:
-        """Submit a batch of automation routine definitions to the NuCore backend.
-
-        Iterates over the list of routine dicts in ``tool.args`` and calls
-        :meth:`~nucore.NuCoreInterface.create_automation_routine` for each
-        one, collecting the individual results into a list.
+    async def _process_routine_automation_python(self, tool) -> list | str:
+        """Compile and submit a batch of routine DSL snippets to the NuCore backend.
 
         Args:
             tool: :class:`~intent_handler.adapters.ToolCall` whose ``args`` is
-                  a list of routine definition dicts.
+                  a list of ``{"name","id","comment","code"}`` dicts.
 
         Returns:
-            List of results (one per routine) from the backend, or an error
-            string when the call cannot be made.
+            List of per-routine results (backend result, or a compile-error
+            string for routines that failed to translate).
         """
         if tool is None or tool.args is None:
             return "Invalid tool call: missing arguments"
         if self.nucore_interface is None:
             return "NuCore interface/backend not available"
-        try:
-            result = []
-            for routine in tool.args:
-                id = routine.get('id', None)
-                if id is None or id == "":
-                    result.append(await self.nucore_interface.create_automation_routine(routine))
-                else:
-                    #this is an update
-                    result.append(await self.nucore_interface.update_routine(routine))
-            return result
-        except Exception as e:
-            return f"Error processing routine automation tool: {str(e)}"
 
+        result: list[Any] = []
+        for routine_spec in tool.args:
+            name = routine_spec.get("name")
+            routine_id = routine_spec.get("id")
+            comment = routine_spec.get("comment", "")
+            code = routine_spec.get("code", "")
+
+            try:
+                compiled = compile_routine_source(
+                    name=name,
+                    routine_id=routine_id,
+                    comment=comment,
+                    source=code,
+                )
+            except RoutineCompileError as exc:
+                logger.debug(f"Routine '{name}' failed to compile: {exc}", extra={"code": code})
+                result.append(f"Routine '{name}' failed to compile: {exc}")
+                continue
+
+            try:
+                if routine_id is None or routine_id == "":
+                    result.append(await self.nucore_interface.create_automation_routine(compiled))
+                else:
+                    result.append(await self.nucore_interface.update_routine(compiled))
+            except Exception as e:
+                result.append(f"Error processing routine automation tool: {str(e)}")
+
+        return result
