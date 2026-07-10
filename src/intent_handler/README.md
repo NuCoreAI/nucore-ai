@@ -15,7 +15,7 @@ Example profile:
   "nucore_runtime": {
     "default": {
       "provider": "claude",
-      "model": "claude-sonnet-4-20250514",
+      "model": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "max_turns": 20,

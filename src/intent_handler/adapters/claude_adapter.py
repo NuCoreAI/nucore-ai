@@ -52,7 +52,7 @@ class ClaudeAdapter(LLMAdapter):
             - ``raw``: original SDK response as a dict
         """
         cfg = dict(config or {})
-        model = cfg.get("model") or "claude-sonnet-4-20250514"
+        model = cfg.get("model") or "claude-sonnet-5"
 
         # Separate system messages from the turn-by-turn conversation.
         system_parts: list[str] = []
