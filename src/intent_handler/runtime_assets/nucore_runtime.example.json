@@ -4,7 +4,7 @@
     "default": {
       "provider": "claude",
       "model": "claude-haiku-4-5-20251001",
-      "model_2": "claude-sonnet-4-20250514",
+      "model_2": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "max_turns": 5,
@@ -13,8 +13,8 @@
     },
     "router": {
       "provider": "claude",
-      "model_2": "claude-haiku-4-5-20251001",
-      "model": "claude-sonnet-4-20250514",
+      "model": "claude-haiku-4-5-20251001",
+      "model_2": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "temperature": 0.2,
@@ -23,7 +23,7 @@
     "routine_automation": {
       "provider": "claude",
       "model": "claude-haiku-4-5-20251001",
-      "model_2": "claude-sonnet-4-20250514",
+      "model_2": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "temperature": 0.1,
@@ -31,7 +31,7 @@
     },
     "routine_status_ops": {
       "provider": "claude",
-      "model_2": "claude-sonnet-4-20250514",
+      "model_2": "claude-sonnet-5",
       "model": "claude-haiku-4-5-20251001",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
