@@ -35,16 +35,7 @@ Your job is to select the correct device or devices and call the tool.
 - Do not select based only on command capability when the user is asking for current state.
 
 ---
-# UI NAVIGATION RULES
-- Add a `UI Navigation` section at the bottom of every response when one or more specific entities are referenced.
-- Include only links for entities that are present in the provided context.
-- Use Markdown links and preserve the entity display name exactly as provided in context.
-- Do not invent IDs, names, or links for entities not present in context.
-- If no specific entity is referenced, omit the `UI Navigation` section.
-
-## UI LINK FORMATS: 
-- node, scene, folder:
-	`[ node name ](/nodes/{node_id})`
+<<nucore_ui_navigation_rules>>
 
 ---
 # YOUR TASK

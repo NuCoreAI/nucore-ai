@@ -90,17 +90,7 @@ Operations apply to **routines only** (`"folder": false`). They cannot be applie
 - Operations issued on a disabled routine are valid (for example: you can `enable` a disabled routine). Do not block the call — just execute it.
 
 ────────────────────────────────
-# UI NAVIGATION RULES
-- Add a `UI Navigation` section at the bottom of every response when one or more specific entities are referenced.
-- Include only links for entities that are present in the provided context.
-- Use Markdown links and preserve the entity display name exactly as provided in context.
-- Do not invent IDs, names, or links for entities not present in context.
-- If no specific entity is referenced, omit the `UI Navigation` section.
-
-## UI LINK FORMATS: 
-- routines/programs:
-	`[ routine name ](/programs/{program_id})`
-- make sure `program_id` is in Hex
+<<nucore_ui_navigation_rules>>
 
 ────────────────────────────────
 # YOUR TASK
