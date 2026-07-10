@@ -1,8 +1,8 @@
 {
   "intent": "routine_automation",
-  "description": "Experimental post-router execution for routine automation, using a Python-like DSL instead of nested JSON for the if/then/else logic.",
+  "description": "Post-router execution for routine automation.",
   "handler": "handler.py",
-  "routable": true,
+  "routable": false,
   "routing_examples": [
     "Turn on the patio lights on Mondays and Wednesday at sunset and turn off at sunrise next day",
     "If I am not home by 7pm, turn on the porch light and set the thermostat to 72 degrees",
@@ -15,7 +15,7 @@
     "If you made a mistake or if the user want to change something you created, **always** update the existing routine instead of creating a new one."
   ],
   "tool_files": [
-    "tool_routine_automation_python.json"
+    "tool_routine_automation.json"
   ],
   "llm_config": {
     "temperature": 0.0

@@ -27,6 +27,6 @@
     "tool_group_scene_multi_device_scene.json"
   ],
   "llm_config": {
-    "temperature": 0.1
+    "temperature": 0.0
   }
 }
