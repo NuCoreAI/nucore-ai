@@ -1,0 +1,93 @@
+{
+  "name": "tool_router",
+  "description": "Results from intent detection based on the user query for downstream intent handlers. ",
+  "input_schema": {
+    "type": "object",
+    "required": ["user_query"],
+    "properties": {
+      "intent": {
+        "type": ["string", "null"],
+        "description": "Primary intent of the user query. Use null when Natural Language Mode should answer directly without routing to an intent handler."
+      },
+      "user_query": {
+        "type": "string",
+        "description": "The original user query."
+      }, 
+      "candidate_devices": {
+        "type": "array",
+        "description": "Optional list of candidate devices/groups/scenes relevant to the user query, with relevance scores. This is intended to be used by downstream intents like command_control and routine_automation to help narrow down device candidates for LLM processing. If the user query mentions `push notification`, then include `UD Mobile` in the candidate device list with a high relevance score to help the LLM understand that the user is requesting a push notification to their mobile device." , 
+        "items": {
+          "type": "object",
+          "required": ["device_id", "score"],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "The unique device or group/scene identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "candidate_routines": {
+        "type": "array",
+        "description": "Optional list of candidate routines/folders relevant to the user query, with relevance scores. This is intended to be used by downstream intents like routine_status_ops to help narrow down routine candidates for LLM processing.",
+        "items": {
+          "type": "object",
+          "required": ["routine_id", "score"],
+          "properties": {
+            "routine_id": {
+              "type": "string",
+              "description": "The unique routine/folder identifier"
+            },
+            "score": {
+              "type": "number",
+              "description": "Relevance score from 0.0 to 1.0 inclusive (higher is better)",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "to_edit": {
+              "type": "boolean",
+              "description": "Indicates if query is requesting for the routine to be edited. This can be used to differentiate between queries that request creation of routines from scratch vs. those that request edits to existing routines, which can help downstream intent handlers decide whether to use the candidate routine list for LLM processing or not. If editing is requested, and additional devices are mentioned in the user query, then also provide a candidate_device list to help the LLM narrow down device candidates for the routine edit. If not editing, then this field can be false or omitted, and downstream intent handlers can choose to ignore the candidate routine list for LLM processing and treat the query as a request to create a new routine from scratch." 
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "route_plan": {
+        "type": "array",
+        "description": "Optional ordered plan for multi-intent queries. Each step names the intent and a step-specific user_query. Runtime executes steps in order.",
+        "items": {
+          "type": "object",
+          "required": ["intent", "user_query"],
+          "properties": {
+            "intent": {
+              "type": "string",
+              "description": "Intent name for this step."
+            },
+            "user_query": {
+              "type": "string",
+              "description": "Step-specific query text to execute for this intent."
+            },
+            "context": {
+              "type": "object",
+              "description": "Optional step-specific routing context (for candidate devices/routines, etc.).",
+              "additionalProperties": true
+            },
+            "notes": {
+              "type": "string",
+              "description": "Optional notes for this planning step."
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    },
+    "additionalProperties": true
+  }
+}

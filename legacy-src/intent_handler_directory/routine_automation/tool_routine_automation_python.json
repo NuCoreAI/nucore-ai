@@ -1,0 +1,36 @@
+{
+  "name": "tool_routine_automation_python",
+  "description": "Creates or updates automation/optimization routines by describing the routine logic as a small Python-like snippet instead of nested JSON.",
+  "input_schema": {
+    "type": "object",
+    "required": ["args"],
+    "properties": {
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The name of the routine."
+            },
+            "id": {
+              "type": ["integer", "null"],
+              "description": "The routine ID to edit, or null if creating a new routine."
+            },
+            "comment": {
+              "type": "string",
+              "description": "A short description of what this routine does."
+            },
+            "code": {
+              "type": "string",
+              "description": "Python-like source implementing the routine. Must be either exactly one top-level `if <condition>: ... else: ...` statement, or, for a routine with no condition/trigger (actions only), a sequence of only action statements with no `if` at all -- using only the documented builtin functions (device(...), wait(...), repeat(...), every(...), at(...), weekly_at(...), weekly_between(...), weekly_for(...), between(...), param(...)). No imports, assignments, elif, while, or any other Python construct is allowed. See the system prompt for the full grammar and worked examples."
+            }
+          },
+          "required": ["name", "code"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}
