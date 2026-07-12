@@ -1,0 +1,6 @@
+# Auto-populated by run_real_device_tests.py: every fuzzy query flagged for
+# review in a run is appended here (deduped by query text) so it's replayed
+# deterministically on every subsequent run until someone removes it.
+# Do not hand-author entries here -- edit results/seeds by re-running the
+# harness, or prune manually once a corner case is confirmed fixed.
+[]
