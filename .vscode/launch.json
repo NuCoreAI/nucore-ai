@@ -1,0 +1,140 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "LAN-chat", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/chat.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--url=https://192.168.6.149" ,
+               "--username=${env:DEV_BACKEND_API_USER_NAME}",
+               "--password=${env:DEV_BACKEND_API_PASSWORD}",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
+               "--prompt_type=per-device",
+               "--json_output=true"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "LAN-LakeEncino", 
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/generic_assistant.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--url=https://192.168.4.21" ,
+               "--username=${env:DEV_BACKEND_API_USER_NAME}",
+               "--password=${env:DEV_BACKEND_API_PASSWORD}",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
+               "--prompt_type=shared-features",
+               "--json_output=true"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Chat-Claude-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/assistant/chat.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
+               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--provider=claude",
+               "--model=claude-haiku-4-5-20251001",
+               "--log-level=ERROR",
+               "--secrets-file=secrets/keys.json",
+               "--json-output=true",
+               "--stream"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Claude-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/intent_handler/run_intent_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
+               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--secrets-file=secrets/keys.json",
+               "--log-level=ERROR",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Claude-Test-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tests/real_device/run_real_device_tests.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
+               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--secrets-file=secrets/keys.json",
+               "--log-level=ERROR",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "OpenAI-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/intent_handler/run_intent_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.6.134" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
+               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--provider=openai",
+               "--model=gpt-5-mini-2025-08-07",
+               "--secrets-file=secrets/keys.json",
+               "--json-output=true",
+               "--stream"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "LLamacpp-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/intent_handler/run_intent_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.6.134" ,
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
+               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--provider=llamacpp",
+               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
+               "--json-output=true",
+               "--stream"
+            ],
+            "justMyCode": false
+        },
+    ]
+}

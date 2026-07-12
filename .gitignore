@@ -184,10 +184,6 @@ cython_debug/
 #  you could uncomment the following to ignore the enitre vscode folder
 # .vscode/
 
-# launch.json carries hardcoded hub credentials and provider API keys for
-# local debug runs -- keep it out of version control.
-.vscode/launch.json
-
 # Ruff stuff:
 .ruff_cache/
 
