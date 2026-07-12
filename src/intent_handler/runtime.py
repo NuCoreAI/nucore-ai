@@ -40,6 +40,102 @@ _PROVIDER_CAPABILITIES: dict[str, dict[str, Any]] = {
 }
 
 
+_FAILURE_MARKERS = ("error", "failed", "invalid tool call", "not available")
+
+
+def tool_results_indicate_failure(tool_results: list[Any] | None) -> bool:
+    """Best-effort heuristic: did any tool result in this turn represent a failure?
+
+    There is no formal success/failure protocol on tool results in this
+    runtime -- handlers conventionally signal failure with a human-readable
+    string ("Error processing ...", "... failed to compile: ...", "Invalid
+    tool call: ...") or a dict with ``"successful": False`` /
+    ``"status": "error"``. This scans for those existing conventions so a
+    failed attempt is not mistaken for a completed task.
+
+    Public (not underscore-prefixed) because it also defines "did this turn
+    succeed" for callers outside the runtime -- e.g. the real-device test
+    harness under ``tests/real_device`` reuses it verbatim rather than
+    re-implementing the same failure heuristic.
+    """
+
+    def _one_is_failure(value: Any) -> bool:
+        if isinstance(value, dict):
+            if value.get("successful") is False:
+                return True
+            status = value.get("status")
+            if isinstance(status, str) and status.strip().lower() == "error":
+                return True
+            return False
+        if isinstance(value, str):
+            lowered = value.lower()
+            return any(marker in lowered for marker in _FAILURE_MARKERS)
+        if isinstance(value, list):
+            return any(_one_is_failure(v) for v in value)
+        return False
+
+    return any(_one_is_failure(tr) for tr in (tool_results or []))
+
+
+def _normalize_tool_result(value: Any) -> Any:
+    """Recursively convert a tool result into something JSON-serialisable.
+
+    Extracts the JSON body (or text) from any HTTP response object found
+    ANYWHERE inside the value -- not just when it's the top-level value.
+    Handlers commonly batch results into a list (e.g. one entry per routine
+    in a multi-routine tool call), so a response object is almost never
+    top-level in practice; without this recursion, ``json.dumps(...,
+    default=str)`` silently falls back to the object's ``__str__`` (e.g.
+    ``<Response [200]>``) the moment it's nested one level deep, discarding
+    the actual payload (including, for routine creation, the new routine's
+    id -- which is exactly what a UI Navigation link needs).
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {k: _normalize_tool_result(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_tool_result(v) for v in value]
+
+    status_code = getattr(value, "status_code", None)
+    if status_code is not None:
+        payload: dict[str, Any] = {"status_code": status_code}
+        try:
+            body = value.json()
+        except Exception:
+            body = None
+        if body is not None:
+            payload["body"] = body
+        else:
+            text = getattr(value, "text", None)
+            if isinstance(text, str) and text.strip():
+                payload["body"] = text.strip()
+        return payload
+
+    return str(value)
+
+
+def _stringify_tool_results_for_prompt(tool_results: list[Any] | None) -> str:
+    """Render tool results as readable text for inclusion in a follow-up prompt.
+
+    Used both to build the pending-clarification failure summary and to feed
+    the tool-result synthesis call (see
+    :meth:`IntentRuntime._synthesize_tool_result_response`).
+    """
+    if not tool_results:
+        return "(no tool results)"
+    try:
+        return json.dumps(_normalize_tool_result(tool_results), indent=2, default=str)
+    except Exception:
+        return str(tool_results)
+
+
+def _summarize_failed_tool_results(tool_results: list[Any] | None) -> str:
+    """Build a short, router-readable description of why a turn's tool call(s) failed."""
+    summary = _stringify_tool_results_for_prompt(tool_results).strip()
+    return summary[:500] or "(the previous attempt failed for an unspecified reason)"
+
+
 def _normalize_provider_name(provider: str | None) -> str:
     value = str(provider or "").strip().lower()
     if value == "anthropic":
@@ -366,20 +462,26 @@ class IntentRuntime:
         framework_context: dict | None = None,
         session_id: str | None = None,
     ) -> IntentHandlerResult:
-        """Feed a tool/agent result back through the ``router`` to generate a final response. 
+        """Feed a tool/agent result back through the ``router`` to generate a final response.
 
-        Called after :meth:`handle_query` returns tool results that need to be
-        converted into a final user-facing text response by the LLM.
+        No longer part of the automatic flow: :meth:`handle_query` now
+        synthesizes the final human-readable response itself, inline, using
+        the handler's own rich context (see
+        :meth:`_synthesize_tool_result_response`) rather than requiring the
+        caller to make this second call with a generic, context-poor prompt.
+        Kept as a standalone utility for callers that want to manually
+        convert an arbitrary agent response using the router's generic
+        prompt instead.
 
         Args:
             query:             Stringified tool results to process.
-            context:           Additional context to provide to the router to be used in system message. 
+            context:           Additional context to provide to the router to be used in system message.
             agent_response:    The response from the agent to convert to human-readable form.
             framework_context: Optional runtime context dictionary from eisyui showing which page/url we are on.
-            session_id:        Session ID for history look-up 
+            session_id:        Session ID for history look-up
 
         Returns:
-            Nothing
+            The synthesized :class:`~models.IntentHandlerResult`.
         """
         default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
         active_llm_key = self.runtime_config.get("default_llm")
@@ -388,7 +490,10 @@ class IntentRuntime:
 
         history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
 
-        return await self.router.handle_agent_response(query, context=context, agent_response=agent_response,history=history)
+        result = await self.router.handle_agent_response(query, context=context, agent_response=agent_response, history=history)
+        if result is not None:
+            self._record_turn(session_id, query, result.notes)
+        return result
 
     async def handle_query(
         self,
@@ -436,6 +541,11 @@ class IntentRuntime:
             if self.router_stream_handler.get_stream_chunk_count() > 0:
                 return None
             nl_text = route_result.notes or ""
+            self._record_turn(session_id, query, nl_text)
+            if history:
+                # Router chose to answer directly rather than continue any
+                # pending clarification -- treat that as resolved/abandoned.
+                history.clear_pending()
             return IntentHandlerResult(
                 intent="",
                 stream_handler=self.router_stream_handler,
@@ -444,19 +554,23 @@ class IntentRuntime:
 
         route_plan = route_result.route_plan or []
         if len(route_plan) > 1:
-            return await self._execute_route_plan(
+            results = await self._execute_route_plan(
                 initial_route=route_result,
                 route_plan=route_plan,
                 history=history,
                 framework_context=framework_context,
             )
+        else:
+            results = await self._execute_resolved_route(
+                query=query,
+                route_result=route_result,
+                history=history,
+                framework_context=framework_context,
+            )
 
-        return await self._execute_resolved_route(
-            query=query,
-            route_result=route_result,
-            history=history,
-            framework_context=framework_context,
-        )
+        self._record_turns(session_id, query, results)
+        self._update_pending_intent(session_id, results)
+        return results
 
     async def _execute_route_plan(
         self,
@@ -633,16 +747,78 @@ class IntentRuntime:
                         )
                     )
 
-                result.add_tool_result_context(
-                    context=await handler.get_tool_result_context(
-                        registry=self.registry,
+                tool_results = result.get_tool_results()
+                tool_calls_failed = tool_results_indicate_failure(tool_results) if tool_results else False
+                if tool_results:
+                    # A tool actually ran -- synthesize the final human-readable
+                    # response in the SAME rich context the handler already used to
+                    # execute it (full system prompt, device structure, rules),
+                    # rather than a separate, stripped-down "translator" call that
+                    # only sees a generic instruction. That hand-off was exactly
+                    # where context got lost (e.g. a newly-created routine's id,
+                    # needed for the UI Navigation link, never made it across).
+                    # When there's no tool result at all -- a plain clarifying
+                    # question, say -- the handler's own text is already the final
+                    # response, so this step is skipped entirely.
+                    result = await self._synthesize_tool_result_response(
+                        handler=handler,
                         query=effective_query,
-                        framework_context=framework_context,
                         route_result=step_route_result,
-                    ))
+                        framework_context=framework_context,
+                        history=history,
+                        tool_results=tool_results,
+                    )
+                    result.set_route_result(route_result=step_route_result)
+                    result.set_effective_query(effective_query)
+
+                result.execution_metadata = {
+                    "had_tool_calls": bool(extracted_tool_calls),
+                    "tool_calls_failed": tool_calls_failed,
+                }
                 results.append(result)
 
         return results
+
+    async def _synthesize_tool_result_response(
+        self,
+        *,
+        handler: BaseIntentHandler,
+        query: str,
+        route_result: RouteResult,
+        framework_context: dict | None,
+        history: Any,
+        tool_results: list[Any],
+    ) -> IntentHandlerResult:
+        """Produce the final human-readable response in the handler's own rich context.
+
+        Reuses :meth:`~base.BaseIntentHandler.build_messages` -- the exact
+        system prompt, device structure, and rules the model already had for
+        the call that produced the tool call -- instead of starting a fresh,
+        generic "convert this to plain language" prompt that only knows
+        whatever a handler manually threaded through via the old
+        ``get_tool_result_prompt`` hook. This is what
+        :meth:`handle_agent_response` used to do as a second call the caller
+        had to remember to make separately; folding it in here means
+        :meth:`handle_query` always returns a complete, grounded answer on
+        its own, with nothing lost between calls.
+        """
+        stringified_results = _stringify_tool_results_for_prompt(tool_results)
+        messages = await handler.build_messages(
+            query,
+            framework_context=framework_context,
+            route_result=route_result,
+            history=history,
+            extra_user_sections={
+                "tool_execution_results": (
+                    "The tool call(s) above have already been executed. Here are the results:\n\n"
+                    f"{stringified_results}\n\n"
+                    "Write the final response to show the user now: a concise, plain-language "
+                    "summary of what was done (or why it failed), following all the rules above "
+                    "(including UI Navigation). Do not call any tool again."
+                ),
+            },
+        )
+        return await handler.call_llm(messages=messages, tools=[])
 
     def available_intents(self) -> list[str]:
         """Return the names of all currently loaded intent handlers."""
@@ -799,6 +975,96 @@ class IntentRuntime:
         if isinstance(loaded, dict) and loaded:
             return loaded
         return None
+
+    def _record_turn(self, session_id: str | None, query: str | None, response_text: str | None) -> None:
+        """Persist one query/response pair into session history.
+
+        Centralised here (rather than left to each caller, as the CLI used to
+        do on its own via ``run_intent_runtime.py``) so every caller of
+        :meth:`handle_query`/:meth:`handle_agent_response` gets consistent
+        multi-turn memory for free -- including the router's own next
+        classification call, which reads from the same session history.
+        """
+        if not session_id or not query or not response_text:
+            return
+        self.session_store.get(session_id).append(query=query, response=response_text)
+
+    def _record_turns(
+        self,
+        session_id: str | None,
+        fallback_query: str,
+        results: list[IntentHandlerResult | None] | None,
+    ) -> None:
+        """Record history for every result -- each is already terminal text.
+
+        Tool-result synthesis now happens inline inside
+        :meth:`_execute_resolved_route` (see
+        :meth:`_synthesize_tool_result_response`), so by the time a result
+        reaches here its ``tool_result`` has already been converted into the
+        final human-readable text (or was never set, for a plain clarifying
+        response). The ``get_tool_results()`` check is kept as a defensive
+        skip only: it should never be true here, but if some future path
+        ever returns a result before synthesis, this avoids recording raw
+        tool output into history instead of readable text.
+        """
+        if not session_id or not results:
+            return
+        for result in results:
+            if result is None or result.get_tool_results():
+                continue
+            text_output = result.get_text_output()
+            if text_output:
+                effective_query = result.get_effective_query() or fallback_query
+                self._record_turn(session_id, effective_query, text_output)
+
+    def _update_pending_intent(
+        self,
+        session_id: str | None,
+        results: list[IntentHandlerResult | None] | None,
+    ) -> None:
+        """Track which intent (if any) is mid-clarification or mid-failure for this session.
+
+        A turn whose tool call actually *succeeded* means the ambiguity was
+        resolved and the task executed -- clear any pending state. A turn
+        whose tool call *failed* (compile error, backend rejection, etc.) is
+        NOT treated as resolved: it stays pending, marked as failed, so the
+        router knows not to blindly reuse whatever devices or conclusions
+        that failed attempt landed on if the user retries. A turn that
+        produced only plain text from a routed intent (no tool call at all)
+        is, by construction of every intent's prompt in this runtime
+        ("ambiguous? ask for clarification"), either a clarifying question or
+        a final informational answer -- either way it becomes the new pending
+        state. The router only ever uses this as a soft hint (see
+        :meth:`IntentRouter._format_pending_clarification`), never a hard
+        override.
+
+        Reads ``result.execution_metadata`` (set in
+        :meth:`_execute_resolved_route`) rather than ``get_tool_results()``,
+        because tool-result synthesis now happens inline: by the time a
+        result reaches here, its raw tool result has already been replaced
+        with the synthesized human-readable text, so ``get_tool_results()``
+        can no longer answer "did a tool call actually run this turn".
+        """
+        if not session_id:
+            return
+        history = self.session_store.get(session_id)
+        for result in results or []:
+            if result is None:
+                continue
+            route_result = getattr(result, "route_result", None)
+            intent_name = getattr(route_result, "intent", None)
+            metadata = getattr(result, "execution_metadata", None) or {}
+            if metadata.get("had_tool_calls"):
+                if metadata.get("tool_calls_failed"):
+                    if intent_name:
+                        failure_text = result.get_text_output() or "(the previous attempt failed)"
+                        history.set_pending(intent_name, failure_text, failed=True)
+                else:
+                    history.clear_pending()
+            elif intent_name:
+                text_output = result.get_text_output()
+                if text_output:
+                    history.set_pending(intent_name, text_output, failed=False)
 
     def _safe_json_data(self, value: Any) -> Any:
         """Return ``value`` if JSON-serialisable, otherwise its ``str()`` representation."""

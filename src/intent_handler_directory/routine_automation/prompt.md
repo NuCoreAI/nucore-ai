@@ -33,7 +33,7 @@ else:
     <else actions>
 ```
 
-`else:` is optional — omit it entirely if there is nothing to do when the condition is false. No other top-level statements are allowed: no imports, no variable assignments, no `elif`, no function definitions, no loops outside the documented `repeat(...)`/`every(...)` pattern below.
+`else:` is optional — omit it entirely if there is nothing to do when the condition is false; do not write `else: pass`. No other top-level statements are allowed: no imports, no variable assignments, no `elif`, no function definitions, no loops outside the documented `repeat(...)`/`every(...)` pattern below.
 
 ## Condition expressions (the `if` line)
 
@@ -67,34 +67,43 @@ Example — thermostat mode was NOT set to Cool (enum value 3):
 device("n002_t421800120477").was_controlled(command="CLIMD", eq="isnot", params=[param(id="n/a", value=3, uom=25, precision=0)])
 ```
 
+### Duration values
+Wherever a wait time, a repeat interval, or a sunrise/sunset offset is needed, express it with:
+```python
+duration(hour=<H>, minute=<M>, second=<S>)
+```
+- All three keyword arguments are optional and default to `0` — use only the units you need: `duration(minute=10)` for ten minutes, `duration(second=30)` for thirty seconds.
+- **Never do unit math yourself** — do not multiply minutes by 60, do not convert "90 minutes" into "1 hour 30 minutes". Write the numbers exactly as the user stated them (`duration(minute=90)` is fine) and the compiler normalizes it.
+- For sunrise/sunset offsets specifically: a negative component means **before** the event, a positive component means **after**. `"10 minutes before sunset"` → `duration(minute=-10)`. `"30 minutes after sunrise"` → `duration(minute=30)`. `duration()` with no arguments means exactly at the event (zero offset).
+- `duration(...)` is the **only** accepted form for these values — a bare number (`wait(seconds=5)`, `sunset=-600`, `every(hours=2, ...)`) is invalid.
+
 ### Schedule
 Definitions:
-- Offsets (`sunrise=`/`sunset=`) are integer **seconds** before (negative) or after (positive) the event. `"10 minutes before sunset"` → `sunset=-600`. `"30 minutes after sunrise"` → `sunrise=1800`.
 - `days=` is a comma-separated subset of `sun,mon,tue,wed,thu,fri,sat`, lowercase, no spaces.
 - `to_day=`/date-boundary integers: `0` = same day, `1` = next day, `2` = two days later, etc.
 - Time strings are `"HH:MM:SS"` (24-hour). Dates are `"YYYY/MM/DD"`.
-- Exactly one of `time=`, `sunrise=`, or `sunset=` (and their `from_`/`to_` prefixed variants) must be given per time reference — never combine two in the same reference.
+- Exactly one of `time=`, `sunrise=`, or `sunset=` (and their `from_`/`to_` prefixed variants) must be given per time reference — never combine two in the same reference. `sunrise=`/`sunset=` always take a `duration(...)` value (see above), never a raw number.
 
 Five schedule shapes, matching exactly what the engine supports — do not invent others:
 
 ```python
-at(time="18:00:00")                                  # a specific time, every day
-at(sunrise=-600)                                      # sunrise offset, every day
-at(sunset=600, date="2026/07/10")                     # sunset offset, one specific date
-weekly_at(days="mon,wed", time="18:00:00")            # specific time, specific days
-weekly_at(days="mon,wed", sunrise=-600)                # sunrise offset, specific days
-weekly_between(days="tue", from_sunset=-600, to_time="01:00:00", to_day=1)   # duration using from/to with day boundary
-weekly_for(days="mon,wed,fri", from_sunrise=1800, hours=2, minutes=0, seconds=0)  # duration using from + a fixed period
+at(time="18:00:00")                                              # a specific time, every day
+at(sunrise=duration(minute=-10))                                  # sunrise offset, every day
+at(sunset=duration(minute=10), date="2026/07/10")                 # sunset offset, one specific date
+weekly_at(days="mon,wed", time="18:00:00")                        # specific time, specific days
+weekly_at(days="mon,wed", sunrise=duration(minute=-10))            # sunrise offset, specific days
+weekly_between(days="tue", from_sunset=duration(minute=-10), to_time="01:00:00", to_day=1)   # duration using from/to with day boundary
+weekly_for(days="mon,wed,fri", from_sunrise=duration(minute=30), duration=duration(hour=2))  # duration using from + a fixed period
 between(from_time="08:00:00", from_date="2026/07/10", to_time="17:00:00", to_date="2026/07/12")  # duration spanning specific dates
 ```
 
 `weekly_between`'s `from_`/`to_` sides are fully independent — each is separately one of `time`/`sunrise`/`sunset`, so all nine combinations are valid, not just the one shown above. For example:
 ```python
-weekly_between(days="mon", from_sunrise=0, to_sunset=0, to_day=0)     # sunrise to sunset, same day
-weekly_between(days="mon", from_sunset=0, to_sunset=1800, to_day=1)   # sunset to sunset, next day
-weekly_between(days="mon", from_sunset=-600, to_sunrise=600, to_day=1) # sunset to sunrise, next day
-weekly_between(days="mon", from_sunrise=0, to_sunrise=0, to_day=1)    # sunrise to sunrise, next day
-weekly_between(days="mon", from_time="15:00:00", to_time="18:00:00", to_day=0) # time to time, same day
+weekly_between(days="mon", from_sunrise=duration(), to_sunset=duration(), to_day=0)               # sunrise to sunset, same day
+weekly_between(days="mon", from_sunset=duration(), to_sunset=duration(minute=30), to_day=1)        # sunset to sunset, next day
+weekly_between(days="mon", from_sunset=duration(minute=-10), to_sunrise=duration(minute=10), to_day=1)  # sunset to sunrise, next day
+weekly_between(days="mon", from_sunrise=duration(), to_sunrise=duration(), to_day=1)               # sunrise to sunrise, next day
+weekly_between(days="mon", from_time="15:00:00", to_time="18:00:00", to_day=0)                     # time to time, same day
 ```
 Mix and match `from_time`/`from_sunrise`/`from_sunset` with `to_time`/`to_sunrise`/`to_sunset` freely — pick whichever pair matches the user's wording.
 
@@ -128,26 +137,33 @@ device("<DEVICE_ID>").command("<command_id>", params=[param(...), param(...)])
 
 ### Wait
 ```python
-wait(seconds=<n>)
-wait(seconds=<n>, random=True)
+wait(duration(minute=<n>))
+wait(duration(minute=<n>), random=True)
 ```
-`random=True` means wait a random duration between 0 and `<n>` seconds instead of exactly `<n>`.
+`random=True` means wait a random duration between 0 and the given duration instead of exactly that duration. Write the duration exactly as the user stated it (`duration(minute=5)`, `duration(hour=1, minute=30)`, `duration(second=90)`) — never pre-convert it to seconds yourself.
+
+**Only include a `wait(...)` when one of these is true:**
+- The user explicitly stated a delay/pause/duration between two actions.
+- The action is a deliberate flash/pulse/blink (turn something on, briefly, then immediately off) — the wait is what makes it a flash rather than just "on".
+- A specific device documented in DEVICE STRUCTURE notes it needs a settling time between two particular commands.
+
+**Never** add a `wait(...)` between two device commands just because they're adjacent, or as a generic stylistic pause — if the user didn't ask for a delay and it isn't a flash/pulse, there is no wait between those actions.
 
 ### Repeat
 Two forms, expressed as an ordinary `for` loop over a documented iterator — the loop body is exactly the sequence of actions that repeats:
 ```python
 for _ in repeat(count=3, random=False):
     device("light2_ID").command("DFON")
-    wait(seconds=1)
+    wait(duration(second=1))
     device("light2_ID").command("DFOF")
-    wait(seconds=1)
+    wait(duration(second=1))
 
-for _ in every(hours=2, minutes=0, seconds=0):
+for _ in every(duration(hour=2)):
     device("dev1_ID").command("DFON")
-    wait(seconds=60)
+    wait(duration(minute=1))
 ```
 - `repeat(count=<n>, random=False)` repeats the loop body exactly `<n>` times; `random=True` repeats a random number of times from 0 to `<n>`.
-- `every(hours=, minutes=, seconds=)` repeats the loop body on that fixed interval, indefinitely, while the routine's condition remains true.
+- `every(duration(...))` repeats the loop body on that fixed interval, indefinitely, while the routine's condition remains true. As with `wait`, write the interval exactly as stated (`every(duration(minute=90))` is fine — no need to convert it to "1 hour 30 minutes" yourself).
 - Repeat loops cannot be nested inside another repeat loop.
 - Actions outside the loop, before or after it, run once as normal sequential statements.
 
@@ -158,10 +174,10 @@ for _ in every(hours=2, minutes=0, seconds=0):
 
 User Request: "On Mondays at 3pm for 3 hours OR Tuesdays 10 minutes before sunset till 1am next day AND entrance is on AND pool is off, then randomly turn on living room every 3 hours and kitchen every 3 hours"
 ```python
-if (weekly_at(days="mon", time="15:00:00") or weekly_between(days="tue", from_sunset=-600, to_time="01:00:00", to_day=1)) and device("1C 8D 25 1").status("ST", uom=51, precision=0) == 100 and device("28 87 5C 1").status("ST", uom=51, precision=0) == 0:
-    for _ in every(hours=3, minutes=0, seconds=0):
+if (weekly_at(days="mon", time="15:00:00") or weekly_between(days="tue", from_sunset=duration(minute=-10), to_time="01:00:00", to_day=1)) and device("1C 8D 25 1").status("ST", uom=51, precision=0) == 100 and device("28 87 5C 1").status("ST", uom=51, precision=0) == 0:
+    for _ in every(duration(hour=3)):
         device("25 80 3C 1").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
-        wait(seconds=10, random=True)
+        wait(duration(second=10), random=True)
         device("E 1F FE 1").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
 ```
 
@@ -169,17 +185,17 @@ if (weekly_at(days="mon", time="15:00:00") or weekly_between(days="tue", from_su
 
 Scenario: "On Monday, Wednesday, and Fridays at 30 minutes after sunrise run front yard irrigation zones sequentially for different durations, with wait times between zones"
 ```python
-if weekly_for(days="mon,wed,fri", from_sunrise=1800, hours=2, minutes=0, seconds=0) and (device("n001_oadr3ven").status("ST", uom=103, precision=4) < 0.5 or device("n003_chargea5rf7219").status("ST", uom=51, precision=1) > 100):
+if weekly_for(days="mon,wed,fri", from_sunrise=duration(minute=30), duration=duration(hour=2)) and (device("n001_oadr3ven").status("ST", uom=103, precision=4) < 0.5 or device("n003_chargea5rf7219").status("ST", uom=51, precision=1) > 100):
     device("11 CC A2 1").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
-    wait(seconds=1200)
+    wait(duration(minute=20))
     device("11 CC A2 1").command("DFOF")
-    wait(seconds=60)
+    wait(duration(minute=1))
     device("11 CC A2 2").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
-    wait(seconds=1200)
+    wait(duration(minute=20))
     device("11 CC A2 2").command("DFOF")
-    wait(seconds=60)
+    wait(duration(minute=1))
     device("11 CC A2 3").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
-    wait(seconds=600)
+    wait(duration(minute=10))
     device("11 CC A2 3").command("DFOF")
 ```
 
@@ -187,26 +203,26 @@ if weekly_for(days="mon,wed,fri", from_sunrise=1800, hours=2, minutes=0, seconds
 
 Scenario: "After sunset when pool is off and temperature is above 75°F, turn on pool, set thermostat to cool at 72°F, dim living room lights, and turn on landscape lighting"
 ```python
-if between(from_sunset=0, to_time="23:59", to_day=0) and device("28 87 5C 1").status("ST", uom=51, precision=0) == 0 and device("ZY004_1").status("ST", uom=17, precision=0) > 75:
+if between(from_sunset=duration(), to_time="23:59", to_day=0) and device("28 87 5C 1").status("ST", uom=51, precision=0) == 0 and device("ZY004_1").status("ST", uom=17, precision=0) > 75:
     device("28 87 5C 1").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
     device("ZY004_1").command("CLIMD", params=[param(id="n/a", value=2, uom=67, precision=0)])
-    wait(seconds=2)
     device("ZY004_1").command("CLISPC", params=[param(id="n/a", value=72, uom=17, precision=0)])
-    wait(seconds=5)
     device("25 80 3C 1").command("DON", params=[param(id="n/a", value=30, uom=51, precision=0)])
     device("11 0 35 1").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])
 ```
+Note there is no `wait(...)` anywhere here — the scenario never asked for a delay, so none was added, even between the mode-change and setpoint-change commands on the same thermostat.
 
-4. Combined COS and COC logic, with `else`
+4. Combined COS and COC logic, with `else` — a deliberate flash: turn on, briefly, then off
 
 ```python
 if device("n003_chargea5rf7219").status("GV4", uom=51, precision=1) > 1000 or device("n002_t421800120477").status("CLISP", uom=17, precision=0) < 73 or device("ZB24569_011_1").was_controlled(command="DON", eq="is"):
     device("ZB24569_011_1").command("DON")
-    wait(seconds=2)
+    wait(duration(second=2))
     device("ZB24569_011_1").command("DOF")
 else:
     device("ZB24569_011_1").command("DOF")
 ```
+The `wait(...)` here is what makes this a *flash* (on, pause, off) rather than just turning the device on — it falls under the flash/pulse exception above, not a general "pause between commands" habit.
 
 5. Comfort Level Automation
 
@@ -226,6 +242,7 @@ else:
 4. Nesting a `repeat`/`every` loop inside another one.
 5. Splitting one continuous schedule window into two schedule calls joined by `and`/`or` — use a single `weekly_between`/`weekly_for`/`between` call instead (unless it is `annual`/`monthly`).
 6. Giving more than one of `time=`/`sunrise=`/`sunset=` (or their `from_`/`to_` variants) in a single schedule time reference.
+7. Passing a raw number for `wait(...)`, `every(...)`, `weekly_for(...)`'s period, or a `sunrise=`/`sunset=` offset — always use `duration(hour=, minute=, second=)`, and never do the unit multiplication/conversion yourself.
 
 ---
 # DEVICE SELECTION RULES

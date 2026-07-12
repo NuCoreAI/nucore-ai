@@ -19,11 +19,32 @@ repair turn.
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 from typing import Any
 
 
 class RoutineCompileError(Exception):
     """Raised when routine source cannot be translated to the NuCore routine schema."""
+
+
+@dataclass(frozen=True)
+class _Duration:
+    """Internal representation of a ``duration(hour=, minute=, second=)`` call.
+
+    This is never exposed to the LLM as JSON -- it exists purely so the model
+    never has to do unit arithmetic (multiplying minutes by 60, decomposing
+    "90 minutes" into hours+minutes, etc). The compiler is the only thing
+    that ever converts it: to a single signed total-seconds integer for
+    wait/sunrise/sunset offsets, or to a normalised non-negative
+    hours/minutes/seconds triple for repeat's "every" period.
+    """
+
+    hour: float = 0
+    minute: float = 0
+    second: float = 0
+
+    def total_seconds(self) -> int:
+        return int(round(self.hour * 3600 + self.minute * 60 + self.second))
 
 
 _COMPARE_OPS: dict[type, str] = {
@@ -208,11 +229,16 @@ def _compile_schedule(func_name: str, expr: ast.Call) -> dict[str, Any]:
     if func_name == "weekly_for":
         days = _require_days(kwargs)
         from_block = _at_block(kwargs.get("from_time"), kwargs.get("from_sunrise"), kwargs.get("from_sunset"))
-        for_block = {
-            "hours": kwargs.get("hours", 0),
-            "minutes": kwargs.get("minutes", 0),
-            "seconds": kwargs.get("seconds", 0),
-        }
+        period = kwargs.get("duration") if "duration" in kwargs else (_args[0] if _args else None)
+        period_seconds = _seconds_from_duration(
+            period,
+            "weekly_for(...) requires a duration(...) call for the period, e.g. "
+            "weekly_for(days=..., from_sunrise=..., duration=duration(hour=2)).",
+        )
+        if period_seconds < 0:
+            raise RoutineCompileError("weekly_for(...) duration must not be negative.")
+        hours, minutes, seconds = _decompose_seconds(period_seconds)
+        for_block = {"hours": hours, "minutes": minutes, "seconds": seconds}
         return {"weekly": {"days": days, "from": from_block, "for": for_block}}
 
     if func_name == "between":
@@ -233,7 +259,17 @@ def _at_block(time_val: Any, sunrise_val: Any, sunset_val: Any) -> dict[str, Any
         raise RoutineCompileError(
             "Exactly one of time=, sunrise=, or sunset= must be given for a schedule time reference."
         )
-    return dict(provided)
+    key, value = provided[0]
+    if key == "time":
+        if not isinstance(value, str):
+            raise RoutineCompileError("time= must be a \"HH:MM:SS\" string.")
+        return {"time": value}
+    seconds = _seconds_from_duration(
+        value,
+        f"{key}= requires a duration(...) call, e.g. {key}=duration(minute=-10) for 10 minutes before "
+        f"or {key}=duration(minute=10) for 10 minutes after -- never a raw number.",
+    )
+    return {key: seconds}
 
 
 def _require_days(kwargs: dict[str, Any]) -> str:
@@ -250,6 +286,12 @@ def _require_days(kwargs: dict[str, Any]) -> str:
 def _compile_actions(stmts: list[ast.stmt], *, allow_repeat: bool) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for stmt in stmts:
+        if isinstance(stmt, ast.Pass):
+            # `pass` is a no-op, same as it is in real Python -- most commonly
+            # written for an intentionally empty `else:` block. Silently
+            # contributing zero actions is correct: the NuCore schema already
+            # allows an empty then/else array.
+            continue
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
             actions.append(_compile_action_call(stmt.value))
         elif isinstance(stmt, ast.For):
@@ -259,7 +301,7 @@ def _compile_actions(stmts: list[ast.stmt], *, allow_repeat: bool) -> list[dict[
         else:
             raise RoutineCompileError(
                 f"Unsupported statement `{type(stmt).__name__}` in routine actions. Only device "
-                "commands, `wait(...)`, and `for _ in repeat(...)/every(...):` are allowed."
+                "commands, `wait(...)`, `pass`, and `for _ in repeat(...)/every(...):` are allowed."
             )
     return actions
 
@@ -267,10 +309,14 @@ def _compile_actions(stmts: list[ast.stmt], *, allow_repeat: bool) -> list[dict[
 def _compile_action_call(expr: ast.Call) -> dict[str, Any]:
     func = expr.func
     if isinstance(func, ast.Name) and func.id == "wait":
-        _args, kwargs = _call_args(expr)
-        seconds = kwargs.get("seconds")
-        if seconds is None:
-            raise RoutineCompileError("`wait(seconds=...)` requires `seconds`.")
+        args, kwargs = _call_args(expr)
+        duration_val = kwargs.get("duration") if "duration" in kwargs else (args[0] if args else None)
+        seconds = _seconds_from_duration(
+            duration_val,
+            "wait(...) requires a duration(...) call, e.g. wait(duration(minute=5)) -- never a raw number.",
+        )
+        if seconds < 0:
+            raise RoutineCompileError("wait(...) duration must not be negative.")
         return {"wait": {"duration": seconds, "random": bool(kwargs.get("random", False))}}
 
     if isinstance(func, ast.Attribute) and func.attr == "command":
@@ -296,19 +342,22 @@ def _compile_repeat(stmt: ast.For) -> list[dict[str, Any]]:
     if stmt.orelse:
         raise RoutineCompileError("`for...else` is not supported.")
 
-    _args, kwargs = _call_args(call)
+    args, kwargs = _call_args(call)
     if call.func.id == "repeat":
         count = kwargs.get("count")
         if count is None:
             raise RoutineCompileError("`repeat(count=..., ...)` requires `count`.")
         marker = {"repeat": {"type": "for", "count": count, "random": bool(kwargs.get("random", False))}}
     else:
-        marker = {"repeat": {
-            "type": "every",
-            "hours": kwargs.get("hours", 0),
-            "minutes": kwargs.get("minutes", 0),
-            "seconds": kwargs.get("seconds", 0),
-        }}
+        duration_val = kwargs.get("duration") if "duration" in kwargs else (args[0] if args else None)
+        period_seconds = _seconds_from_duration(
+            duration_val,
+            "every(...) requires a duration(...) call, e.g. every(duration(hour=2)) -- never raw hours/minutes/seconds.",
+        )
+        if period_seconds < 0:
+            raise RoutineCompileError("every(...) duration must not be negative.")
+        hours, minutes, seconds = _decompose_seconds(period_seconds)
+        marker = {"repeat": {"type": "every", "hours": hours, "minutes": minutes, "seconds": seconds}}
 
     body = _compile_actions(stmt.body, allow_repeat=False)
     if not body:
@@ -370,11 +419,14 @@ def _literal(node: ast.expr) -> Any:
         return -value if isinstance(node.op, ast.USub) else value
     if isinstance(node, ast.List):
         return [_literal(elt) for elt in node.elts]
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "param":
-        return _param_call(node)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id == "param":
+            return _param_call(node)
+        if node.func.id == "duration":
+            return _duration_call(node)
     raise RoutineCompileError(
-        "Only literal values (numbers, strings, booleans, None, lists, and `param(...)`) are allowed; "
-        f"got `{ast.dump(node)}`."
+        "Only literal values (numbers, strings, booleans, None, lists, `param(...)`, and "
+        f"`duration(...)`) are allowed; got `{ast.dump(node)}`."
     )
 
 
@@ -386,3 +438,32 @@ def _param_call(node: ast.Call) -> dict[str, Any]:
         "uom": kwargs.get("uom"),
         "precision": kwargs.get("precision"),
     }
+
+
+def _duration_call(node: ast.Call) -> _Duration:
+    args, kwargs = _call_args(node)
+    if args:
+        raise RoutineCompileError("duration(...) takes only keyword arguments: hour=, minute=, second=.")
+    unknown = set(kwargs) - {"hour", "minute", "second"}
+    if unknown:
+        raise RoutineCompileError(
+            f"duration(...) does not accept {', '.join(sorted(unknown))}; use hour=, minute=, and/or second= only."
+        )
+    for key, value in kwargs.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise RoutineCompileError(f"duration({key}=...) must be a number.")
+    return _Duration(hour=kwargs.get("hour", 0), minute=kwargs.get("minute", 0), second=kwargs.get("second", 0))
+
+
+def _decompose_seconds(total_seconds: int) -> tuple[int, int, int]:
+    """Split a non-negative total-seconds count into a normalised (hours, minutes, seconds) triple."""
+    hours, remainder = divmod(int(round(total_seconds)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return hours, minutes, seconds
+
+
+def _seconds_from_duration(value: Any, error_message: str) -> int:
+    """Require ``value`` to be a :class:`_Duration` and return its signed total seconds."""
+    if not isinstance(value, _Duration):
+        raise RoutineCompileError(error_message)
+    return value.total_seconds()

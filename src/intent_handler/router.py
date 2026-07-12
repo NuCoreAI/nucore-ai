@@ -131,12 +131,15 @@ class IntentRouter:
 
         # Build history block and user content for all providers.
         history_block = SessionStore._format_history_content(history)
+        pending_block = self._format_pending_clarification(history)
 
         def _make_user_content() -> str:
-            """Combine optional history block and the user query into one content string."""
+            """Combine optional history/pending-clarification blocks and the user query."""
             parts = []
             if history_block:
                 parts.append(history_block)
+            if pending_block:
+                parts.append(pending_block)
             parts.append(f"---\n# USER QUERY:\n{query.strip()}")
             return "\n\n".join(parts)
 
@@ -326,6 +329,55 @@ class IntentRouter:
     # ------------------------------------------------------------------
     # Prompt block builders
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_pending_clarification(history: ConversationHistory | None) -> str:
+        """Render a soft routing hint when the previous turn left something pending.
+
+        This does not force the router's decision -- it gives the router
+        context it structurally cannot otherwise have: which intent asked
+        what (or failed at what), so a short/direct reply (a bare number,
+        "yes"/"no", "retry") can be recognised as a continuation instead of
+        being classified from scratch with no content to go on.
+
+        Two distinct cases, because they call for different router behavior:
+        - Pending *clarification*: the intent asked a question; a short reply
+          should route back to it with high confidence, same as answering it.
+        - Pending *failure*: the intent's last attempt errored. A retry-style
+          reply should still route back to it, but the router must NOT assume
+          any device/value the failed attempt landed on was correct -- that is
+          exactly how one bad resolution compounds across repeated retries.
+        """
+        if history is None or not history.pending_intent:
+            return ""
+
+        question = (history.pending_question or "").strip() or "(no details captured)"
+
+        if history.pending_failed:
+            return (
+                "---\n# PENDING CLARIFICATION (previous attempt FAILED)\n"
+                f"The previous attempt at intent `{history.pending_intent}` failed:\n\n"
+                f"> {question}\n\n"
+                "If the user's current message reads as wanting to retry, continue, or fix that "
+                "(e.g. \"retry\", \"go ahead\", \"try again\", a short correction), route back to "
+                f"`{history.pending_intent}`. But do NOT assume any device, value, or other "
+                "conclusion from the failed attempt was correct -- let that intent re-derive "
+                "everything fresh from the original request rather than reusing the failed "
+                "attempt's choices. If the current message is not related to this at all (for "
+                "example a plain expression of frustration with no actionable content, or an "
+                "unrelated new request), do not route back here."
+            )
+
+        return (
+            "---\n# PENDING CLARIFICATION\n"
+            f"The previous turn routed to intent `{history.pending_intent}`, which asked the "
+            "user the following and has not yet completed its task:\n\n"
+            f"> {question}\n\n"
+            "If the user's current message reads as a short/direct reply to this question "
+            "(for example a bare number, \"yes\"/\"no\", or a brief selection) rather than an "
+            f"independent new request, route back to `{history.pending_intent}` with high "
+            "confidence instead of trying to classify the reply on its own."
+        )
 
     def _format_intent_block(self, definition: IntentDefinition) -> str:
         """Render a single intent as a YAML-like bullet block for the prompt."""

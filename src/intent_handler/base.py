@@ -255,68 +255,6 @@ class BaseIntentHandler(ABC):
                 return context[key]
         return default
 
-    async def get_tool_result_context(
-        self,
-        registry: Any,
-        query: str | None = None,
-        framework_context: dict | None = None,
-        route_result: RouteResult | None = None,
-    ) -> Any: 
-        """Build prompt context for agent-response/tool-result handling.
-
-        During the tool-results follow-up step, the runtime can ask the active
-        handler for context that should be injected into the system prompt used
-        to transform ``agent_response`` into a user-facing response.
-
-        Subclasses can customize this by overriding
-        :meth:`get_tool_result_prompt`. When a custom prompt is returned, this
-        method expands common NuCore placeholders via ``registry`` and then
-        applies runtime replacements via :meth:`render_prompt_text`.
-
-        Returns ``None`` when no custom tool-result prompt is supplied.
-        """
-        context = await self.get_tool_result_prompt()
-        if context is None:
-            return None
-        context = registry.expand_common_module_placeholders(context) 
-        context = context.strip()
-        if not context:
-            return None
-        context = await self.render_prompt_text(
-            query=query,
-            prompt=context,
-            framework_context=framework_context,
-            route_result=route_result,
-        )
-
-        return context
-
-    
-    async def get_tool_result_prompt(self) -> str | None:
-        """Return an optional prompt template for agent-response handling.
-
-        Override this method in subclasses when tool-result follow-up should use
-        a different system prompt than :attr:`prompt_text`.
-
-        Typical usage:
-        1. Include shared NuCore modules (for example
-           ``<<nucore_definitions>>`` and ``<<nucore_common_rules>>``).
-        2. Include intent-specific runtime placeholders that are filled by
-           :meth:`get_prompt_runtime_replacements`.
-
-        Example snippet::
-
-            <<nucore_definitions>>
-            <<nucore_common_rules>>
-
-            ---
-            # DEVICE STRUCTURE
-            <<runtime_device_structure>>
-
-        Return ``None`` to indicate that no dedicated tool-result prompt is
-        provided, allowing the default response flow to continue.
-        """
-        return None
 
 
     async def render_prompt_text(

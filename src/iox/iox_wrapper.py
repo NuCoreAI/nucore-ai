@@ -9,6 +9,7 @@ from urllib.parse import quote
 import requests
 import websockets
 import urllib3
+import re 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
@@ -1398,13 +1399,19 @@ class IoXWrapper(NuCoreInterface):
             headers = {
                 "Authorization": f"Basic {encoded_credentials}"
             }
+            def sanitize_bare_ampersands(xml_text: str) -> str:
+                # Replace & not starting a valid XML entity.
+                return re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)', '&amp;', xml_text)
+
             async with websockets.connect(ws_url, ssl=ssl_context, additional_headers=headers) as websocket:
                 if on_connect_callback:
                     await on_connect_callback()
                 try:
                     async for message in websocket:
+
                         if on_message_callback:
                             try:
+                                message = sanitize_bare_ampersands(message)
                                 #parse the xml message
                                 root = ET.fromstring(message)
                                 control = root.find('control')
@@ -1426,10 +1433,9 @@ class IoXWrapper(NuCoreInterface):
                                     'node': node.text if node is not None else None,
                                     'fmtAct': fmtAct.text if fmtAct is not None else None,
                                     'fmtName': fmtName.text if fmtName is not None else None,
-                                    'eventInfo': ET.tostring(eventInfo) if eventInfo is not None else None
+                                    'eventInfo': eventInfo.text if eventInfo is not None else None
                                 }
-                                if on_message_callback:
-                                    await on_message_callback(event_data)
+                                await on_message_callback(event_data)
                             except Exception as ex:
                                 logger.error(f"Failed to process incoming message: {str(ex)}: {message}")
                                 continue

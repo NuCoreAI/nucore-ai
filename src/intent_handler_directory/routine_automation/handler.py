@@ -62,6 +62,7 @@ class RoutineAutomationPythonIntentHandler(BaseIntentHandler):
                 candidate_rags = self._get_rags_from_candidates(candidate_devices)
                 return {
                     "<<runtime_device_structure>>": "" if not candidate_rags else candidate_rags,
+                    "<<existing_routines>>": "",
                     "<<routine_automation_policy_modules>>": policy_modules,
                     "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",
                     "<<temporal_resolution_context>>": temporal_resolution_block,
@@ -85,6 +86,7 @@ class RoutineAutomationPythonIntentHandler(BaseIntentHandler):
 
         return {
             "<<runtime_device_structure>>": "",
+            "<<existing_routines>>": "",
             "<<routine_automation_policy_modules>>": policy_modules,
             "<<location_information>>": "Get from the user" if not location_information else f"```json\n{json.dumps(location_information, indent=2)}\n```",
             "<<temporal_resolution_context>>": temporal_resolution_block,
@@ -140,13 +142,6 @@ class RoutineAutomationPythonIntentHandler(BaseIntentHandler):
 
         response.set_route_result(route_result=route_result)
         return response
-
-    async def get_tool_result_prompt(self) -> str:
-        return (
-            "<<nucore_definitions>>\n\n<<nucore_common_rules>>\n\n<<nucore_ui_navigation_rules>>\n\n"
-            "---\n# DEVICE STRUCTURE\n\n<<runtime_device_structure>>\n\n"
-            "---\n# EXISTING ROUTINE\n\n<<existing_routines>>"
-        )
 
     # ------------------------------------------------------------------
     # Tool handlers

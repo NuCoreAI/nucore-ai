@@ -57,48 +57,6 @@ class EisyUIContext:
         return self.message
 
 
-def _stringify_tool_result(tool_result: Any) -> str:
-    """Return a readable text form for a backend/tool result.
-
-    The translator needs the actual response payload, not the Python repr of
-    an HTTP response object (for example ``<Response [200]>``).
-    """
-    if tool_result is None:
-        return "null"
-
-    if isinstance(tool_result, (str, int, float, bool)):
-        return str(tool_result)
-
-    if isinstance(tool_result, (dict, list)):
-        try:
-            return json.dumps(tool_result, indent=2, default=str)
-        except Exception:
-            return str(tool_result)
-
-    status_code = getattr(tool_result, "status_code", None)
-    if status_code is not None:
-        payload: dict[str, Any] = {"status_code": status_code}
-
-        try:
-            body = tool_result.json()
-        except Exception:
-            body = None
-
-        if body is not None:
-            payload["body"] = body
-        else:
-            text = getattr(tool_result, "text", None)
-            if isinstance(text, str) and text.strip():
-                payload["body"] = text.strip()
-
-        try:
-            return json.dumps(payload, indent=2, default=str)
-        except Exception:
-            return str(payload)
-
-    return str(tool_result)
-
-
 def _default_intent_dir() -> Path:
     """Resolve the default intent handler directory for both repo and installed runs."""
     repo_path = Path(__file__).resolve().parents[1] / "intent_handler_directory"
@@ -329,10 +287,12 @@ async def _run_once(
 ) -> None:
     """Execute a single query through the runtime and print the result.
 
-    If the handler returns tool results, the results are
-    stringified and sent back to the runtime via
-    :meth:`~IntentRuntime.handle_agent_response` so the LLM can process
-    them before producing a final text response.
+    ``handle_query`` now returns complete, already-synthesized results --
+    when a tool call runs, the runtime produces the final human-readable text
+    itself (in the same rich context the tool call was made in) rather than
+    handing raw tool results back to the caller to translate. So this
+    function only ever needs to print ``get_text_output()``; there is no
+    separate translation step for it to orchestrate.
 
     When a stream handler was active during the call, the response tokens
     were already printed live; this function just emits a trailing newline
@@ -356,41 +316,18 @@ async def _run_once(
     for result in results:
         if result is None:
             continue
-        text_output = ""
-        tool_results = result.get_tool_results() if isinstance(result, IntentHandlerResult) else None
-        if tool_results:
-            # Feed tool results back so the LLM can respond to them.
-            query = result.get_effective_query() or query
-            stringified_tool_results = "\n\n"
-            context = None
-            for tr in tool_results: 
-                if isinstance(tr, dict) and "context" in tr:
-                    context = tr["context"]
-                    continue
+        text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
+        if result.get_stream_handler() is not None:
+            streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
+            if streamed_chunks > 0:
+                # Response was already printed live by the stream handler; just add newline.
+                await result.get_stream_handler().send_chunk(text_output, True)
+                continue
+        print(text_output)
 
-                stringified_tool_results += _stringify_tool_result(tr)
-            
-            result = await runtime.handle_agent_response(query, context, stringified_tool_results, session_id=session_id)
-            if result is None:
-                return
-            text_output = result.notes if result.notes else "Unknown output from translator"
-            if runtime.stream_handler:
-                await runtime.stream_handler.send_chunk(f"\n{text_output}", True)  # Separate tool results from final response with extra newlines for readability in the stream output.
-            else:
-                print(f"\n{text_output}")  # Separate tool results from final response with extra newlines for readability in the console output.
-        else:
-            text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
-            if result.get_stream_handler() is not None:
-                streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
-                if streamed_chunks > 0:
-                    # Response was already printed live by the stream handler; just add newline.
-                    await result.get_stream_handler().send_chunk(text_output, True)
-                    return
-
-        if text_output:
-            if session_id:
-                runtime.session_store.get(session_id).append(query=query, response=text_output)
-
+        # History is now recorded inside IntentRuntime itself (handle_query),
+        # so every caller gets consistent multi-turn memory without having to
+        # replicate this bookkeeping.
 
     return
 

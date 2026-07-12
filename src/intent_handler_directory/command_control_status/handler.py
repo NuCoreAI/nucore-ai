@@ -95,9 +95,6 @@ class CommandControlStatusIntentHandler(BaseIntentHandler):
         response.set_route_result(route_result=route_result)
         return response
 
-    async def get_tool_result_prompt(self)->str:
-        return "<<nucore_definitions>>\n\n<<nucore_common_rules>>\n\n<<nucore_ui_navigation_rules>>\n\n---\n# DEVICE STRUCTURE\n\n<<runtime_device_structure>> "
-
     # ------------------------------------------------------------------
     # Tool handlers
     # ------------------------------------------------------------------

@@ -38,10 +38,10 @@ Use these sources in order of relevance:
 	- `intent`: one discovered intent name.
 	- `user_query`: the subset/rewrite of the request for that intent only.
 - Keep step order executable: prerequisites before dependent operations.
-- **Near matches?** Route to the best match UNLESS there are multiple equally valid options.
-  - Example: "pool" → only one device with "pool" in name → route (don't ask)
+- **Near matches?** Route to the best match UNLESS there are multiple plausible options.
+  - Example: "pool" → only one device with "pool" in its name → route (don't ask)
   - Example: "room lights" → three rooms, multiple lights → ask for clarification
-  - Example: "pool" AND "pool pump" both exist, but query is just "pool" → route to exact match
+  - Example: "pool" AND "pool pump" both exist, and the query is just "pool" → **this is ambiguous, not a single exact match.** Do not silently guess which one the user meant. Include both as `candidate_devices` with comparable scores (do not favor one just because its name is a shorter/more literal substring match) and let the downstream intent decide whether to ask the user, per its own device-selection rules. Silently picking one is how a wrong device gets locked in and then repeated on every later retry.
 - **Ambiguous without history?** Check CONVERSATION HISTORY first. If the reference can be resolved from history, route — do not ask for clarification.
 - When CONVERSATION HISTORY is present, use it **only** to resolve pronoun or references for devices or routines such as "it", "them", "the same device", or "that routine". Treat the resolved reference as if the user had stated it explicitly in the current query.
 - **Never use CONVERSATION HISTORY to answer a query.** Even if the identical question appears in history with a full answer, you must still route to the correct intent. Prior answers in history are not your output — routing JSON is.
@@ -58,11 +58,13 @@ Use these sources in order of relevance:
 - Do not use history as a substitute answer source.
 
 ## Confirmation Responses
-If the user's message is a confirmation ("yes", "yep", "correct", "confirming", "go ahead", "do it", "that one", etc.):
-1. Look at the **last assistant turn** in CONVERSATION HISTORY (closest to <<END CONVERSATION HISTORY>>).
+If the user's message is a confirmation ("yes", "yep", "correct", "confirming", "go ahead", "do it", "that one", "retry", "try again", etc.):
+0. **First check whether a `# PENDING CLARIFICATION` section is present in this turn.** If it is, follow its specific instructions instead of steps 1-3 below — in particular, if it says the previous attempt FAILED, do not assume any device/value that attempt landed on was correct; let the target intent re-derive it fresh.
+1. Otherwise, look at the **last assistant turn** in CONVERSATION HISTORY (closest to <<END CONVERSATION HISTORY>>).
 2. If the assistant proposed or asked about a specific action (e.g. "Should I enable the Movie Time routine?"), treat the confirmation as the user explicitly requesting that action.
 3. Reconstruct the full intent query (e.g. "enable Movie Time routine") and route it — do not ask for more clarification.
 4. Apply this confirmation flow only when the user message is primarily a confirmation phrase (short acknowledgment) and not a full actionable command.
+5. **Do not apply this flow to pure venting or complaints** ("you are horrible", "this is broken", "I give up", etc.) even if a clarification or failure is pending. Those carry no actionable content — route to **Natural Language Mode** and respond directly to what the user said instead of re-attempting the pending task.
 
 ## Pronoun Resolution
 If the user refers to a device, routine, or scene with a pronoun or vague reference:

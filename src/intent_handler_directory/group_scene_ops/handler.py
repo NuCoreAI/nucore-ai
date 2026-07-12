@@ -90,12 +90,6 @@ class GroupSceneOperationsIntentHandler(BaseIntentHandler):
         response.set_route_result(route_result=route_result)
         return response
 
-    async def get_tool_result_prompt(self) -> str:
-        return (
-            "<<nucore_definitions>>\n\n<<nucore_common_rules>>\n\n<<nucore_ui_navigation_rules>>\n\n"
-            "---\n# DEVICE STRUCTURE\n\n<<runtime_device_structure>>"
-        )
-
     def _normalize_steps(self, args: Any) -> list[dict[str, Any]]:
         if isinstance(args, list):
             return [item for item in args if isinstance(item, dict)]

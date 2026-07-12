@@ -150,16 +150,6 @@ class IntentHandlerResult:
         """Return the attached stream handler, or ``None``."""
         return self.stream_handler
 
-    def add_tool_result_context(self, context: Any) -> None:
-        """Append context to the internal list of tool results.
-        No-ops when ``context`` is ``None``.
-        """
-        if context is None:
-            return
-        if self.tool_result is None:
-            self.tool_result = []
-        self.tool_result.append({"context": context})
-
     def add_tool_result(self, tool_result: Any) -> None:
         """Append a tool execution result to the internal list.
 
@@ -287,12 +277,27 @@ class ConversationHistory:
     ``max_turns``.
 
     Attributes:
-        turns:     Ordered list of turns from oldest to newest.
-        max_turns: Maximum number of turns to retain (default 20).
+        turns:            Ordered list of turns from oldest to newest.
+        max_turns:        Maximum number of turns to retain (default 20).
+        pending_intent:   Name of the intent that is mid-clarification (asked
+                          the user something and has not yet completed its
+                          task) or whose last attempt failed, or ``None`` when
+                          nothing is pending.
+        pending_question: The clarifying text the pending intent asked (or a
+                          description of the failure), used to give the
+                          router context on the next turn.
+        pending_failed:   ``True`` when ``pending_intent`` is pending because
+                          its last attempt errored, rather than because it
+                          asked a clarifying question. The router should not
+                          blindly reuse conclusions (e.g. device selections)
+                          from a failed attempt.
     """
 
     turns: list[ConversationTurn] = field(default_factory=list)
     max_turns: int = 20
+    pending_intent: str | None = None
+    pending_question: str | None = None
+    pending_failed: bool = False
 
     def append(self, query: str, response: str) -> None:
         """Add a new turn and evict the oldest if the window is full."""
@@ -305,3 +310,19 @@ class ConversationHistory:
         if n is None:
             return list(self.turns)
         return self.turns[-n:]
+
+    def set_pending(self, intent: str | None, question: str | None, *, failed: bool = False) -> None:
+        """Record that ``intent`` is mid-clarification, awaiting a reply to ``question``.
+
+        Pass ``failed=True`` when this is being set because the intent's last
+        attempt errored, rather than because it asked the user a question.
+        """
+        self.pending_intent = intent
+        self.pending_question = question
+        self.pending_failed = failed
+
+    def clear_pending(self) -> None:
+        """Clear any pending clarification state (task completed, or abandoned)."""
+        self.pending_intent = None
+        self.pending_question = None
+        self.pending_failed = False
