@@ -178,11 +178,15 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  and can be added to the global gitignore or merged into this file. However, if you prefer,
 #  you could uncomment the following to ignore the enitre vscode folder
 # .vscode/
+
+# launch.json carries hardcoded hub credentials and provider API keys for
+# local debug runs -- keep it out of version control.
+.vscode/launch.json
 
 # Ruff stuff:
 .ruff_cache/
@@ -217,3 +221,7 @@ finetuning_data/old/
 finetuning_data/secrets/
 logs/
 secrets/
+
+# Real-device test harness run output (ephemeral, machine/run-specific)
+tests/real_device/results/
+tests/real_device/.data/
