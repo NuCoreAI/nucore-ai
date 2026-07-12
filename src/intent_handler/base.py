@@ -8,7 +8,6 @@ from typing import Any
 
 from .models import ConversationHistory, IntentDefinition, IntentHandlerResult, RouteResult
 from .adapters import LLMAdapter, ToolCall
-from .session_store import SessionStore
 from nucore import NuCoreInterface
 from utils.logger import _write_debug_prompt
 from rag import RAGData, DedupeDevices 
@@ -143,8 +142,11 @@ class BaseIntentHandler(ABC):
         )
 
         # Build current user turn: optional framework context, any extra
-        # sections, history (with consistent labels), and the user query —
-        # each separated by a visual rule.
+        # sections, and the user query — each separated by a visual rule.
+        # Prior turns are NOT flattened in here; they're sent as real
+        # alternating user/assistant messages below so the model treats
+        # them as actual conversation history rather than an inert text
+        # block competing with everything else in this turn's prompt.
         user_parts = []
         if framework_context:
             if isinstance(framework_context, dict):
@@ -154,30 +156,38 @@ class BaseIntentHandler(ABC):
             for section_name, section_value in extra_user_sections.items():
                 if section_value:
                     user_parts.append(f"---\n# {section_name.upper()}:\n{section_value.strip()}")
-        formatted_history = SessionStore._format_history_content(history)
-        if formatted_history:
-            user_parts.append(formatted_history)
         user_parts.append(f"\n\n---\n# USER QUERY:\n{query.strip()}")
         current_user_content = "\n\n".join(user_parts).strip()
 
+        history_messages: list[dict[str, str]] = []
+        for turn in (history.turns if history else []):
+            history_messages.append({"role": "user", "content": turn.query})
+            history_messages.append({"role": "assistant", "content": turn.response})
+
         if self._supports_system_role():
-            # Standard layout: system prompt → current user turn (which already includes history block).
+            # Standard layout: system prompt, then real history turns, then the current user turn.
             messages = [
                 {"role": "system", "content": resolved_prompt_text},
+                *history_messages,
                 {"role": "user", "content": current_user_content},
             ]
         else:
-            # Non-system-role layout: inline system instructions with the user content.
-            messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        "---\n# SYSTEM INSTRUCTIONS:\n"
-                        f"{resolved_prompt_text}\n\n"
-                        f"{current_user_content}"
-                    ),
-                }
-            ]
+            # Non-system-role layout: inline system instructions into the first
+            # message sent to the model (the oldest history turn, or the
+            # current turn when there's no history yet), then real history
+            # turns, then the current user turn.
+            system_preamble = f"---\n# SYSTEM INSTRUCTIONS:\n{resolved_prompt_text}\n\n"
+            if history_messages:
+                first_turn = history_messages[0]
+                messages = [
+                    {"role": "user", "content": system_preamble + first_turn["content"]},
+                    *history_messages[1:],
+                    {"role": "user", "content": current_user_content},
+                ]
+            else:
+                messages = [
+                    {"role": "user", "content": system_preamble + current_user_content},
+                ]
 
         return messages
 

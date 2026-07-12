@@ -22,12 +22,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Load secrets/.env directly rather than relying on VS Code's debug-adapter
+# "envFile" mechanism -- see the matching comment in run_intent_runtime.py
+# for why that mechanism doesn't reliably deliver these values here.
+_default_env_file = Path(__file__).resolve().parents[2] / "secrets" / ".env"
+if _default_env_file.exists():
+    load_dotenv(_default_env_file)
 
 from harness import snapshot, verify
 from harness.inventory import get_live_inventory
@@ -224,11 +234,18 @@ async def run_generated_case(runtime: Any, case: GeneratedCase) -> CaseResult:
 async def _run_all(args: argparse.Namespace) -> int:
     intents = [i for i in (args.only.split(",") if args.only else ALL_INTENTS) if i]
 
+    # launch.json's ${env:...} substitution can't see envFile-provided values (they're
+    # injected into this process's own environment only after VS Code has already
+    # resolved args) -- so launch.json leaves these blank and we fall back to
+    # os.environ here instead, which envFile does correctly populate.
+    backend_api_username = args.backend_api_username or os.environ.get("BACKEND_API_USER_NAME")
+    backend_api_password = args.backend_api_password or os.environ.get("BACKEND_API_PASSWORD")
+
     connection_config = HarnessConnectionConfig(
         backend_api_classpath=args.backend_api_classpath,
         backend_api_base_url=args.backend_api_base_url,
-        backend_api_username=args.backend_api_username,
-        backend_api_password=args.backend_api_password,
+        backend_api_username=backend_api_username,
+        backend_api_password=backend_api_password,
         runtime_config_path=Path(args.runtime_config),
         secrets_file=Path(args.secrets_file) if args.secrets_file else None,
         intent_dir=Path(args.intent_dir) if args.intent_dir else None,

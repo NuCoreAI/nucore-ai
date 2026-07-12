@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -208,7 +209,12 @@ class IntentHandlerResult:
         Handles the canonical dict format ``{"id": ..., "name": ...,
         "input": {...}}`` produced by the LLM adapters after normalisation.
         The ``input`` dict is unwrapped one level when it contains a nested
-        ``"args"`` key (legacy provider shape).
+        ``"args"`` key (legacy provider shape). Every tool's ``args`` is
+        declared as a JSON array in its schema, but some models over-
+        serialize it into a JSON-encoded string instead of real structured
+        JSON; that's recovered with a best-effort ``json.loads``. If the
+        result still isn't a list, it's dropped rather than handed to a
+        handler that expects to iterate dict entries out of it.
 
         Returns an empty list when ``output`` is absent or not a dict.
         """
@@ -225,6 +231,13 @@ class IntentHandlerResult:
                         # Unwrap nested "args" key produced by some providers.
                         if "args" in args:
                             args = args["args"]
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except Exception:
+                                    args = []
+                            if not isinstance(args, list):
+                                args = []
                     except Exception:
                         args = {}
                     tool_calls.append(ToolCall(

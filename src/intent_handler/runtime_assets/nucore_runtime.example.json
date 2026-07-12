@@ -9,7 +9,7 @@
       "url": null,
       "max_turns": 5,
       "temperature": 0.2,
-      "max_tokens": 32000
+      "max_tokens": 64000
     },
     "router": {
       "provider": "claude",
@@ -18,7 +18,7 @@
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "temperature": 0.1,
-      "max_tokens": 32000
+      "max_tokens": 64000
     },
     "routine_automation": {
       "provider": "claude",
@@ -27,7 +27,7 @@
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "temperature": 0.0,
-      "max_tokens": 32000
+      "max_tokens": 64000
     },
     "routine_status_ops": {
       "provider": "claude",
@@ -36,7 +36,7 @@
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "temperature": 0.0,
-      "max_tokens": 32000
+      "max_tokens": 64000
     }
   }
 }

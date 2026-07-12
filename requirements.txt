@@ -27,3 +27,4 @@ uvicorn[standard]
 udi_interface
 websockets
 PyYAML
+python-dotenv

@@ -13,8 +13,8 @@
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [
                "--url=https://192.168.6.149" ,
-               "--username=${env:DEV_BACKEND_API_USER_NAME}",
-               "--password=${env:DEV_BACKEND_API_PASSWORD}",
+               "--username=",
+               "--password=", 
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
                "--prompt_type=per-device",
                "--json_output=true"
@@ -30,8 +30,8 @@
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [
                "--url=https://192.168.4.21" ,
-               "--username=${env:DEV_BACKEND_API_USER_NAME}",
-               "--password=${env:DEV_BACKEND_API_PASSWORD}",
+               "--username=",
+               "--password=",
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
                "--prompt_type=shared-features",
                "--json_output=true"
@@ -48,8 +48,8 @@
             "args": [
                "--backend-api-base-url=https://192.168.4.21" ,
                "--backend-api-classpath=iox.IoXWrapper",
-               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
-               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--backend-api-username=",
+               "--backend-api-password=",
                "--provider=claude",
                "--model=claude-haiku-4-5-20251001",
                "--log-level=ERROR",
@@ -68,8 +68,8 @@
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [
                "--backend-api-base-url=https://192.168.4.21" ,
-               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
-               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--backend-api-username=",
+               "--backend-api-password=",
                "--backend-api-classpath=iox.IoXWrapper",
                "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
                "--secrets-file=secrets/keys.json",
@@ -88,8 +88,8 @@
             "args": [
                "--backend-api-base-url=https://192.168.4.21" ,
                "--backend-api-classpath=iox.IoXWrapper",
-               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
-               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--backend-api-username=",
+               "--backend-api-password=",
                "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
                "--secrets-file=secrets/keys.json",
                "--log-level=ERROR",
@@ -107,8 +107,8 @@
             "args": [
                "--backend-api-base-url=https://192.168.6.134" ,
                "--backend-api-classpath=iox.IoXWrapper",
-               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
-               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--backend-api-username=",
+               "--backend-api-password=",
                "--provider=openai",
                "--model=gpt-5-mini-2025-08-07",
                "--secrets-file=secrets/keys.json",
@@ -127,8 +127,8 @@
             "args": [
                "--backend-api-base-url=https://192.168.6.134" ,
                "--backend-api-classpath=iox.IoXWrapper",
-               "--backend-api-username=${env:BACKEND_API_USER_NAME}",
-               "--backend-api-password=${env:BACKEND_API_PASSWORD}",
+               "--backend-api-username=",
+               "--backend-api-password=",
                "--provider=llamacpp",
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
                "--json-output=true",

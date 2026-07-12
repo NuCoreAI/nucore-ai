@@ -81,20 +81,32 @@ def compile_routine_source(
         raise RoutineCompileError(f"Python syntax error: {exc}") from exc
 
     body = tree.body
-    if len(body) != 1 or not isinstance(body[0], ast.If):
-        raise RoutineCompileError(
-            "Routine source must contain exactly one top-level "
-            "`if <condition>: ... else: ...` statement and nothing else "
-            "(no imports, assignments, or extra statements)."
-        )
+    if not body:
+        raise RoutineCompileError("Routine 'code' has no statements.")
 
-    if_node = body[0]
-    if len(if_node.orelse) == 1 and isinstance(if_node.orelse[0], ast.If):
-        raise RoutineCompileError("`elif` is not supported. Use a single `if`/`else` only.")
+    if len(body) == 1 and isinstance(body[0], ast.If):
+        if_node = body[0]
+        if len(if_node.orelse) == 1 and isinstance(if_node.orelse[0], ast.If):
+            raise RoutineCompileError("`elif` is not supported. Use a single `if`/`else` only.")
 
-    condition = _compile_condition(if_node.test)
-    then_actions = _compile_actions(if_node.body, allow_repeat=True)
-    else_actions = _compile_actions(if_node.orelse, allow_repeat=True)
+        condition = _compile_condition(if_node.test)
+        then_actions = _compile_actions(if_node.body, allow_repeat=True)
+        else_actions = _compile_actions(if_node.orelse, allow_repeat=True)
+    else:
+        # No top-level `if` at all: an unconditional routine consisting only
+        # of action statements. NuCore treats an empty `if` list as "always
+        # true" (see iox_wrapper.create_automation_routine), so these actions
+        # simply have no trigger condition of their own -- e.g. a
+        # manually-run macro with only actions, no condition or trigger.
+        if any(isinstance(stmt, ast.If) for stmt in body):
+            raise RoutineCompileError(
+                "Routine source must be either exactly one top-level "
+                "`if <condition>: ... else: ...` statement, or, for a routine with no "
+                "condition/trigger, only action statements and no `if` at all."
+            )
+        condition = []
+        then_actions = _compile_actions(body, allow_repeat=True)
+        else_actions = []
 
     return {
         "name": name,

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import argparse
+import argparse,os
 import asyncio
 import functools, json
 from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 from intent_handler import IntentHandlerResult, IntentRuntime, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
 from nucore import NuCoreInterface, PromptFormatTypes
@@ -12,6 +14,18 @@ from utils import configure_logging, get_logger
 
 
 logger = get_logger(__name__)
+
+# Load secrets/.env directly rather than relying on VS Code's debug-adapter
+# "envFile" mechanism -- that only applies when launched via the debugger
+# (never from a plain terminal), and only affects the debuggee's own
+# environment after launch.json's own ${env:...} substitution has already
+# run, so it can't feed CLI arg values either way. Loading it here works
+# identically regardless of how this script is started, and never
+# overwrites variables already set in the real environment (load_dotenv's
+# default behavior).
+_default_env_file = Path(__file__).resolve().parents[2] / "secrets" / ".env"
+if _default_env_file.exists():
+    load_dotenv(_default_env_file)
 
 class EisyUIContext:
     """Class to represent context messages from the Eisy UI."""
@@ -321,7 +335,7 @@ async def _run_once(
             streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
             if streamed_chunks > 0:
                 # Response was already printed live by the stream handler; just add newline.
-                await result.get_stream_handler().send_chunk(text_output, True)
+                await result.get_stream_handler().send_chunk("", True)
                 continue
         print(text_output)
 
@@ -431,12 +445,19 @@ def main(args:Any=None, websocket=None) -> None:
     # Build the LLM dispatch adapter from the resolved config.
     llm_adapter = build_default_dispatch_adapter(runtime_config, env=secrets_env)
 
+    # launch.json's ${env:...} substitution can't see envFile-provided values (they're
+    # injected into this process's own environment only after VS Code has already
+    # resolved args) -- so launch.json leaves these blank and we fall back to
+    # os.environ here instead, which envFile does correctly populate.
+    backend_api_username = args.backend_api_username or os.environ.get("BACKEND_API_USER_NAME")
+    backend_api_password = args.backend_api_password or os.environ.get("BACKEND_API_PASSWORD")
+
     global nucore_interface
     nucore_interface = _load_backend_api(
         classpath=args.backend_api_classpath,
         base_url=args.backend_api_base_url,
-        username=args.backend_api_username,
-        password=args.backend_api_password,
+        username=backend_api_username,
+        password=backend_api_password,
         json_output=args.json_output,
     )
 
