@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -45,37 +45,6 @@ class ToolCall:
     args: dict[str, Any]
     provider: str
     raw: Any = None
-
-@dataclass(frozen=True)
-class ProviderCapabilities:
-    """Declares what optional features a specific LLM provider supports.
-
-    These flags are used by the dispatch layer to adapt request construction
-    and response parsing without hard-coding provider-specific branches.
-
-    Attributes:
-        supports_parallel_calls:        Provider may return multiple tool calls
-                                        in a single response turn.
-        supports_streaming_tool_args:   Provider can stream partial tool
-                                        argument JSON before the call is complete.
-        requires_tool_result_id:        Provider requires that tool results
-                                        reference the original ``call_id``
-                                        (e.g. OpenAI).
-        supports_strict_json_schema:    Provider enforces the ``strict`` flag on
-                                        tool input schemas.
-        tool_choice_mode:               Default tool-choice strategy to send
-                                        (``"auto"``, ``"any"``, ``"none"``).
-        max_tools_per_request:          Maximum number of tool definitions that
-                                        can be included in a single request.
-    """
-    supports_parallel_calls: bool = False
-    supports_streaming_tool_args: bool = False
-    requires_tool_result_id: bool = True
-    supports_strict_json_schema: bool = True
-    tool_choice_mode: str = "auto"
-    max_tools_per_request: int = 128
-
-    from dataclasses import dataclass, field
 
 
 # ---------------------------------------------------------------------------

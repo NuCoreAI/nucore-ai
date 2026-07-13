@@ -453,48 +453,6 @@ class IntentRuntime:
         router_llm_config = self._resolve_router_llm_config()
         return await self.router.route(query, llm_config_override=router_llm_config, history=history)
 
-    async def handle_agent_response(
-        self,
-        query: str,
-        context: str,
-        agent_response: str,
-        *,
-        framework_context: dict | None = None,
-        session_id: str | None = None,
-    ) -> IntentHandlerResult:
-        """Feed a tool/agent result back through the ``router`` to generate a final response.
-
-        No longer part of the automatic flow: :meth:`handle_query` now
-        synthesizes the final human-readable response itself, inline, using
-        the handler's own rich context (see
-        :meth:`_synthesize_tool_result_response`) rather than requiring the
-        caller to make this second call with a generic, context-poor prompt.
-        Kept as a standalone utility for callers that want to manually
-        convert an arbitrary agent response using the router's generic
-        prompt instead.
-
-        Args:
-            query:             Stringified tool results to process.
-            context:           Additional context to provide to the router to be used in system message.
-            agent_response:    The response from the agent to convert to human-readable form.
-            framework_context: Optional runtime context dictionary from eisyui showing which page/url we are on.
-            session_id:        Session ID for history look-up
-
-        Returns:
-            The synthesized :class:`~models.IntentHandlerResult`.
-        """
-        default_max_turns: int = int(self.runtime_config.get("default_max_turns", 20))
-        active_llm_key = self.runtime_config.get("default_llm")
-        active_llm_cfg = self.runtime_config.get("supported_llms", {}).get(active_llm_key or "", {})
-        max_turns: int = int(active_llm_cfg.get("max_turns", default_max_turns))
-
-        history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
-
-        result = await self.router.handle_agent_response(query, context=context, agent_response=agent_response, history=history)
-        if result is not None:
-            self._record_turn(session_id, query, result.notes)
-        return result
-
     async def handle_query(
         self,
         query: str,
@@ -814,7 +772,7 @@ class IntentRuntime:
                     f"{stringified_results}\n\n"
                     "Write the final response to show the user now: a concise, plain-language "
                     "summary of what was done (or why it failed), following all the rules above "
-                    "(including UI Navigation). Do not call any tool again."
+                    "**Include UI Navigation**. Do not call any tool again."
                 ),
             },
         )
