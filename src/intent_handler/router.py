@@ -192,6 +192,7 @@ class IntentRouter:
                 route_plan=route_plan,
                 raw_response=raw_response,
                 abandons_pending=bool(payload.get("abandons_pending", False)),
+                is_clarifying_question=bool(payload.get("is_clarifying_question", False)),
             )
 
         intent_name = payload.get("intent")
@@ -491,6 +492,7 @@ class IntentRouter:
                             "user_query": input.get("user_query"),
                             "route_plan": route_plan,
                             "abandons_pending": bool(input.get("abandons_pending", False)),
+                            "is_clarifying_question": bool(input.get("is_clarifying_question", False)),
                             "context": {
                                 "candidate_devices": candidate_devices,
                                 "candidate_routines": candidate_routines,

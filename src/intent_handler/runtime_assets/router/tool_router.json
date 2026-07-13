@@ -9,9 +9,17 @@
         "type": ["string", "null"],
         "description": "Primary intent of the user query. Use null when Natural Language Mode should answer directly without routing to an intent handler."
       },
+      "notes": {
+        "type": "string",
+        "description": "REQUIRED when `intent` is null (Natural Language Mode): this is your complete, final answer text shown directly to the user -- e.g. a definitional explanation, or a static/inventory answer read from DEVICE DATABASE or ROUTINES DATABASE. Put your FULL answer here, however long it needs to be -- if the user asked to list every device, include every device; do not summarize, truncate, or omit items to keep this field short. When `intent` is non-null, this is optional short reasoning/notes for the downstream intent handler, not shown to the user directly."
+      },
       "abandons_pending": {
         "type": "boolean",
-        "description": "Only meaningful when `intent` is null AND a `# PENDING CLARIFICATION` block is present in this prompt. Set to true ONLY when the user's current message is clearly about something else entirely, unrelated to the pending clarification's question -- i.e. they are abandoning it, not answering it. Leave false (the default) for everything else, including when you're simply unsure how to route a short/ambiguous reply: false does not end the conversation, it just means the pending clarification stays available for a future turn to resolve. Do not set true just because you personally couldn't match the reply to an intent."
+        "description": "Only meaningful when `intent` is null AND an internal pending-clarification context block is present in this prompt. Set to true ONLY when the user's current message is clearly about something else entirely, unrelated to the pending clarification's question -- i.e. they are abandoning it, not answering it. Leave false (the default) for everything else, including when you're simply unsure how to route a short/ambiguous reply: false does not end the conversation, it just means the pending clarification stays available for a future turn to resolve. Do not set true just because you personally couldn't match the reply to an intent."
+      },
+      "is_clarifying_question": {
+        "type": "boolean",
+        "description": "Only meaningful when `intent` is null (Natural Language Mode). Set to true ONLY when YOUR OWN answer is itself a question awaiting the user's reply (e.g. asking which of several devices they mean) -- NOT when your answer is a complete, final response that fully answers the query (e.g. \"You have 12 devices: ...\", a definitional explanation, a static/inventory answer from DEVICE DATABASE or ROUTINES DATABASE). Leave false (the default) for complete answers. This controls whether the runtime tracks your answer as awaiting a follow-up reply -- setting it true on a complete answer would incorrectly make the NEXT unrelated query get compared against this one first."
       },
       "user_query": {
         "type": "string",

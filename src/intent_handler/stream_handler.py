@@ -108,4 +108,18 @@ class RouterStreamHandler(StreamHandler):
         Args:
             chunk: A string token from the router LLM stream.
         """
-        await  super().handle_stream_chunk(chunk, is_end)
+        await super().handle_stream_chunk(chunk, is_end)
+
+    async def send_chunk(self, chunk: str, is_end: bool = False) -> None:
+        """Suppress all output -- this is intentionally a no-op.
+
+        The router's real answer (``intent``/``notes``/etc.) always lives in
+        a structured tool-call payload, never in freeform streamed text; at
+        most some incidental preamble text streams alongside the tool call,
+        and it is never the router's actual answer. The base class's
+        ``send_chunk`` would otherwise print/send that incidental text to the
+        user, which -- since the real answer is printed separately once the
+        full response is available -- would show confusing partial text
+        before the real answer, or leak internal-only chatter to the client.
+        """
+        return None

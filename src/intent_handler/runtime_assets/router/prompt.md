@@ -90,8 +90,8 @@ Do not invent details not present in the provided sources.
 
 ---
 # OUTPUT FORMAT
-- If routing: output only a JSON object that conforms exactly to `tool_router.json` input schema.
+- ALWAYS call the `tool_router` tool -- never respond with plain, un-tooled text, for routing OR for Natural Language Mode.
 - For single-intent routing, set `intent` and `user_query`.
 - For multi-intent routing, include `route_plan` with ordered steps. Keep `intent` set to the primary/first step intent.
-- If Natural Language Mode: output plain conversational text only (no JSON or code).
+- For Natural Language Mode, set `intent` to null and put your COMPLETE answer in `notes` -- this is the only thing the user sees, so it must be the full, final answer text (however long it needs to be), never a placeholder or a truncated summary.
 - Never include extra commentary about your routing process.

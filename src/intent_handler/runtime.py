@@ -427,6 +427,8 @@ class IntentRuntime:
         """Reset per-call stream handler state (chunk counter, buffered data, etc.)."""
         if self.stream_handler is not None:
             self.stream_handler.reset_stream_state()
+        if self.router_stream_handler is not None:
+            self.router_stream_handler.reset_stream_state()
 
     def get_stream_chunk_count(self) -> int:
         """Return the number of streaming chunks received during the last generation call."""
@@ -481,6 +483,11 @@ class IntentRuntime:
             return None
 
         config = dict(self._resolve_router_llm_config())
+        # This is a single-word yes/no/unsure answer, not a full generation --
+        # cap max_tokens so it stays well under the provider's "large
+        # max_tokens requires streaming" threshold, then it's safe (and
+        # simpler) to skip streaming machinery entirely for this call.
+        config["max_tokens"] = 16
         config["stream"] = False
         config.pop("stream_handler", None)
 
@@ -639,21 +646,31 @@ class IntentRuntime:
                     # unresolved, subject to the TTL so a stuck session can't
                     # wedge forever.
                     history.note_pending_still_unresolved()
-                elif nl_text:
+                elif nl_text and route_result.is_clarifying_question:
                     # Nothing was pending before, and the router answered
                     # directly rather than routing to an intent -- there is
                     # no intent handler to track a clarifying question for
                     # us here, so this is the ONLY place that can notice the
                     # router itself just asked one (e.g. "is it paired?"
-                    # could mean several things..."). Track it the same way
-                    # a text-only intent reply already is: assume it might
-                    # need a follow-up.
+                    # could mean several things..."). Only do this when the
+                    # router explicitly says its own answer IS a question
+                    # awaiting a reply -- NOT for every NL-mode answer, since
+                    # most of them (e.g. "how many devices do I have?") are
+                    # complete, final answers with nothing pending at all.
+                    # Marking those as pending too made pending_intent sticky
+                    # across nearly every turn, which then made unrelated
+                    # follow-up queries get incorrectly compared against it.
                     history.set_pending(ConversationHistory.ROUTER_PENDING, nl_text, failed=False)
-            if self.router_stream_handler.get_stream_chunk_count() > 0:
-                return None
+            # NOTE: deliberately not gating on router_stream_handler's chunk
+            # count here (and not attaching it as this result's stream_handler
+            # below). The router's real answer (`nl_text`, from the
+            # structured tool-call payload) is NEVER what streams through
+            # that handler -- at most some incidental preamble text streams,
+            # which RouterStreamHandler suppresses entirely. Treating "some
+            # chunk streamed" as "the answer was already shown" silently
+            # dropped real answers whenever the model emitted any preamble.
             return IntentHandlerResult(
                 intent="",
-                stream_handler=self.router_stream_handler,
                 output={"text": nl_text},
             )
 
@@ -1291,8 +1308,13 @@ class IntentRuntime:
         provider = _normalize_provider_name(selected.get("provider"))
         selected["provider"] = provider
         selected["llm_key"] = selected_key
-        # Override the stream handler with the router-specific one so chunk
-        # counts for routing calls are tracked separately from handler calls.
+        # The underlying API call must still use the SDK's streaming path
+        # (Anthropic requires it outright for requests whose max_tokens could
+        # take >10 minutes -- see ClaudeAdapter.generate()), so `stream` and
+        # `stream_handler` stay on. What changed is NOT whether this call
+        # streams, but whether the runtime treats any resulting stream
+        # activity as "the router's answer was already shown to the user" --
+        # it never was; see the NL-mode branch in handle_query().
         if selected.get("stream"):
             selected["stream_handler"] = self.router_stream_handler.handle_stream_chunk
         return selected

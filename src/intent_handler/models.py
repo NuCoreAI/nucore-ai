@@ -104,6 +104,14 @@ class RouteResult:
                          state. Defaults to ``False`` -- i.e. an ambiguous or
                          unparseable router turn does NOT, by itself, count as
                          abandonment; see :meth:`ConversationHistory.note_pending_still_unresolved`.
+        is_clarifying_question: Only meaningful when ``intent`` is ``None``.
+                         ``True`` means the router's own Natural Language Mode
+                         answer is itself a question awaiting the user's
+                         reply. Defaults to ``False`` -- a complete/final
+                         answer (e.g. a static inventory answer like "you have
+                         12 devices") should NOT be tracked as a pending
+                         clarification, or every subsequent unrelated query
+                         would get compared against it first.
     """
 
     intent: str
@@ -114,6 +122,7 @@ class RouteResult:
     route_plan: list[RoutePlanStep] | None = None
     raw_response: dict[str, Any] = field(default_factory=dict)
     abandons_pending: bool = False
+    is_clarifying_question: bool = False
 
 
 # ---------------------------------------------------------------------------
