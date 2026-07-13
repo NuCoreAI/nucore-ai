@@ -59,10 +59,18 @@ class GeminiAdapter(LLMAdapter):
         if not api_key:
             raise ValueError("Gemini API key not provided. Set GEMINI_API_KEY or config.api_key")
 
-        # Translate standard roles to Gemini's "user" / "model" vocabulary.
+        # System-role messages go in the dedicated systemInstruction field
+        # (not the contents array) -- this is both the semantically correct
+        # slot and the one Gemini's automatic/implicit context caching keys
+        # off of. Everything else is translated to Gemini's "user" / "model"
+        # role vocabulary.
+        system_parts: list[str] = []
         contents = []
         for msg in messages:
             role = msg.get("role", "user")
+            if role == "system":
+                system_parts.append(msg.get("content", ""))
+                continue
             gemini_role = "model" if role == "assistant" else "user"
             contents.append({"role": gemini_role, "parts": [{"text": msg.get("content", "")}]})
 
@@ -73,6 +81,8 @@ class GeminiAdapter(LLMAdapter):
                 "maxOutputTokens": int(cfg.get("max_tokens", 4096)),
             },
         }
+        if system_parts:
+            payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
         if tools:
             payload["tools"] = tools
         if expect_json:

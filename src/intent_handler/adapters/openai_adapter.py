@@ -19,6 +19,15 @@ class OpenAIAdapter(LLMAdapter):
 
     provider_name = "openai"
 
+    # gpt-5-mini (a reasoning model) rejects temperature/max_tokens, so the
+    # default OpenAI path omits them. Subclasses for providers without that
+    # restriction (e.g. llama.cpp) can opt back in.
+    _forward_temperature_and_max_tokens = False
+    # Some OpenAI-compatible servers (e.g. llama.cpp builds) reject the
+    # response_format object; subclasses can disable it and rely on prompt
+    # instructions for JSON output instead.
+    _supports_response_format = True
+
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
         """Initialise the adapter.
 
@@ -57,11 +66,12 @@ class OpenAIAdapter(LLMAdapter):
         }
         if tools:
             kwargs["tools"] = tools
-#        if "temperature" in cfg:
-#            kwargs["temperature"] = cfg["temperature"]
-#        if "max_tokens" in cfg:
-#            kwargs["max_tokens"] = cfg["max_tokens"]
-        if expect_json:
+        if self._forward_temperature_and_max_tokens:
+            if "temperature" in cfg:
+                kwargs["temperature"] = cfg["temperature"]
+            if "max_tokens" in cfg:
+                kwargs["max_tokens"] = cfg["max_tokens"]
+        if expect_json and self._supports_response_format:
             # Ask the model to guarantee JSON output (no extra prose).
             kwargs["response_format"] = {"type": "json_object"}
 

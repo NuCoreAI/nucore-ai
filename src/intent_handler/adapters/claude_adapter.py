@@ -70,12 +70,22 @@ class ClaudeAdapter(LLMAdapter):
             "model": model,
             "messages": anthropic_messages,
             "max_tokens": int(cfg.get("max_tokens", 4096)),
-            # Ephemeral cache control keeps system prompts out of token counts
-            # on repeated calls with the same system content.
-            "cache_control": {"type": "ephemeral"},
         }
         if system_parts:
-            kwargs["system"] = "\n\n".join(system_parts)
+            # Mark the system block itself as the cache breakpoint. The
+            # top-level `cache_control` kwarg instead marks the *last*
+            # cacheable block in the request -- which is the current (always
+            # different) user turn, not this static system prompt -- so a
+            # fresh single-turn call never got a cache hit on the system
+            # prompt no matter how many times the same device/routine
+            # database was sent before.
+            kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": "\n\n".join(system_parts),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         if tools:
             kwargs["tools"] = tools
         if "temperature" in cfg:
