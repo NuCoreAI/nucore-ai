@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .adapters import ToolCall
 from intent_handler.stream_handler import StreamHandler
@@ -97,6 +97,13 @@ class RouteResult:
                  multi-intent requests.
         raw_response:    Full raw response dict from the routing LLM for
                          debugging or downstream inspection.
+        abandons_pending: Only meaningful when ``intent`` is ``None`` (Natural
+                         Language Mode). ``True`` means the router explicitly
+                         judged the current message as unrelated to any
+                         pending clarification, so it's safe to discard that
+                         state. Defaults to ``False`` -- i.e. an ambiguous or
+                         unparseable router turn does NOT, by itself, count as
+                         abandonment; see :meth:`ConversationHistory.note_pending_still_unresolved`.
     """
 
     intent: str
@@ -106,6 +113,7 @@ class RouteResult:
     resolved_query: str | None = None
     route_plan: list[RoutePlanStep] | None = None
     raw_response: dict[str, Any] = field(default_factory=dict)
+    abandons_pending: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -304,13 +312,27 @@ class ConversationHistory:
                           asked a clarifying question. The router should not
                           blindly reuse conclusions (e.g. device selections)
                           from a failed attempt.
+        pending_turns:    Number of consecutive turns the router has answered
+                          in Natural Language Mode (i.e. routed to no intent)
+                          without explicitly resolving or abandoning the
+                          pending clarification. See
+                          :meth:`note_pending_still_unresolved`.
     """
+
+    PENDING_TTL_TURNS: ClassVar[int] = 3
+    # Sentinel for ``pending_intent`` when the CLARIFYING QUESTION itself came
+    # from the router's own Natural Language Mode answer rather than from a
+    # specific intent handler -- there is no real intent name to route back
+    # to, but the pending-clarification machinery still needs to track that
+    # something is awaiting a reply.
+    ROUTER_PENDING: ClassVar[str] = "__router__"
 
     turns: list[ConversationTurn] = field(default_factory=list)
     max_turns: int = 20
     pending_intent: str | None = None
     pending_question: str | None = None
     pending_failed: bool = False
+    pending_turns: int = 0
 
     def append(self, query: str, response: str) -> None:
         """Add a new turn and evict the oldest if the window is full."""
@@ -333,9 +355,29 @@ class ConversationHistory:
         self.pending_intent = intent
         self.pending_question = question
         self.pending_failed = failed
+        self.pending_turns = 0
 
     def clear_pending(self) -> None:
         """Clear any pending clarification state (task completed, or abandoned)."""
         self.pending_intent = None
         self.pending_question = None
         self.pending_failed = False
+        self.pending_turns = 0
+
+    def note_pending_still_unresolved(self) -> None:
+        """Record that a turn passed without resolving or abandoning the
+        pending clarification (the router answered in Natural Language Mode
+        but did not flag ``abandons_pending``).
+
+        A single such turn is *not* treated as abandonment -- a soft router
+        hint can be missed on one bare/ambiguous reply (e.g. "1") without
+        that permanently discarding otherwise-recoverable context. But this
+        can't be trusted to self-correct forever either, so after
+        :attr:`PENDING_TTL_TURNS` consecutive misses the pending state is
+        force-cleared so a stuck session can't wedge indefinitely.
+        """
+        if not self.pending_intent:
+            return
+        self.pending_turns += 1
+        if self.pending_turns >= self.PENDING_TTL_TURNS:
+            self.clear_pending()

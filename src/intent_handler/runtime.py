@@ -9,7 +9,7 @@ from typing import Any, Callable, Sequence
 
 from .base import BaseIntentHandler
 from .loader import IntentHandlerRegistry
-from .models import IntentHandlerResult, RoutePlanStep, RouteResult
+from .models import ConversationHistory, IntentHandlerResult, RoutePlanStep, RouteResult
 from .router import IntentRouter
 from .session_store import SessionStore
 from .stream_handler import RouterStreamHandler, StreamHandler
@@ -453,6 +453,79 @@ class IntentRuntime:
         router_llm_config = self._resolve_router_llm_config()
         return await self.router.route(query, llm_config_override=router_llm_config, history=history)
 
+    async def _classify_pending_continuation(
+        self, query: str, history: ConversationHistory
+    ) -> bool | None:
+        """Decide whether ``query`` continues/answers ``history.pending_question``.
+
+        This is deliberately a single narrow yes/no/unsure judgment -- "does
+        this reply answer THIS one question" -- rather than folding that
+        judgment into the router's full N-way intent classification. A bare
+        reply like "1" carries no signal on its own; a model asked to pick
+        the best-matching intent from scratch has nothing to anchor it to,
+        which is why that soft hint gets missed. Given the exact pending
+        question and nothing else to think about, the same model is far more
+        likely to get it right.
+
+        Returns:
+            True  -- continues/answers the pending question; caller should
+                     route back to ``history.pending_intent`` directly.
+            False -- clearly about something else; caller should abandon the
+                     pending clarification.
+            None  -- genuinely unclear, or the classification call itself
+                     failed; caller should fall back to the router's own
+                     soft-hint judgment (unchanged existing behavior).
+        """
+        question = (history.pending_question or "").strip()
+        if not question:
+            return None
+
+        config = dict(self._resolve_router_llm_config())
+        config["stream"] = False
+        config.pop("stream_handler", None)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You decide whether a user's new message answers/continues a "
+                    "specific pending question, or is unrelated to it. Respond "
+                    "with EXACTLY one word: CONTINUE, NEW, or UNSURE. No other text."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Pending question the assistant just asked:\n{question}\n\n"
+                    f"User's new message:\n{query.strip()}\n\n"
+                    "CONTINUE if the new message answers or continues this question "
+                    "(including short/bare replies like a number or letter selecting "
+                    "one of its options). NEW if the new message is clearly about "
+                    "something else entirely. UNSURE if you genuinely cannot tell. "
+                    "Respond with exactly one word."
+                ),
+            },
+        ]
+
+        try:
+            raw_response = await self.llm_client.generate(
+                messages=messages, config=config, expect_json=False
+            )
+        except Exception:
+            logger.warning(
+                "Pending-continuation classification call failed; falling back to router.",
+                exc_info=True,
+            )
+            return None
+
+        text = IntentRouter._extract_text_response(raw_response) if isinstance(raw_response, dict) else None
+        verdict = (text or "").strip().upper()
+        if verdict.startswith("CONTINUE"):
+            return True
+        if verdict.startswith("NEW"):
+            return False
+        return None
+
     async def handle_query(
         self,
         query: str,
@@ -488,7 +561,52 @@ class IntentRuntime:
 
         history = self.session_store.get(session_id, max_turns=max_turns) if session_id else None
 
-        route_result = await self.route(query, history=history)
+        route_result: RouteResult | None = None
+        if history and history.pending_intent:
+            # Ask a narrow, dedicated question -- "does this reply continue
+            # THIS specific pending question" -- instead of relying on the
+            # general router to notice it as a side effect of picking an
+            # intent from scratch. A bare "1" is nearly impossible for the
+            # router to connect to a numbered list it can't see in full
+            # context; this check has that exact context and nothing else
+            # to think about.
+            continuation = await self._classify_pending_continuation(query, history)
+            if continuation is True:
+                # Merge the original question and the reply into one
+                # self-contained query -- this doesn't depend on whichever
+                # component handles it next (a specific intent, or the
+                # router again) correctly inferring the connection from a
+                # hint or from conversation history; it's just stated.
+                combined_query = (
+                    f"{history.pending_question}\n\n"
+                    f"(The user is now answering the above with): {query.strip()}"
+                )
+                if (
+                    history.pending_intent != ConversationHistory.ROUTER_PENDING
+                    and history.pending_intent in set(self.registry.names())
+                ):
+                    route_result = RouteResult(
+                        intent=history.pending_intent,
+                        confidence=1.0,
+                        notes="Deterministically routed back to pending clarification.",
+                        resolved_query=combined_query,
+                    )
+                else:
+                    # Pending clarification came from the router's own
+                    # Natural Language Mode answer (no specific intent to
+                    # bypass to), or names an intent that no longer exists --
+                    # let the router decide, but hand it the merged context
+                    # explicitly instead of relying on the hint block alone.
+                    route_result = await self.route(combined_query, history=history)
+            elif continuation is False:
+                history.clear_pending()
+            # continuation is None (genuinely unclear): fall through to the
+            # normal router call below with the ORIGINAL query, which still
+            # carries the pending-clarification hint and the TTL-based
+            # recovery from before.
+
+        if route_result is None:
+            route_result = await self.route(query, history=history)
         if route_result is None:
             return None
 
@@ -496,14 +614,43 @@ class IntentRuntime:
         # Return the response as a synthetic result so the caller can persist it
         # in session history, enabling the next turn to reference this reply.
         if route_result.intent is None:
-            if self.router_stream_handler.get_stream_chunk_count() > 0:
-                return None
             nl_text = route_result.notes or ""
+            # Record the turn and update pending-clarification state BEFORE
+            # checking whether this was already streamed -- both need to
+            # happen regardless of streaming, otherwise every streamed
+            # Natural Language Mode reply (which is every router reply in
+            # this runtime, since refresh() always installs a real
+            # stream_handler) never gets recorded into history at all, and
+            # the router's own clarifying questions can never be tracked as
+            # pending. The early return below only skips re-emitting a
+            # duplicate IntentHandlerResult for text already streamed live.
             self._record_turn(session_id, query, nl_text)
             if history:
-                # Router chose to answer directly rather than continue any
-                # pending clarification -- treat that as resolved/abandoned.
-                history.clear_pending()
+                if route_result.abandons_pending:
+                    # Router explicitly judged this as unrelated to the
+                    # pending clarification -- safe to discard it.
+                    history.clear_pending()
+                elif history.pending_intent:
+                    # Something was already pending and this turn's Natural
+                    # Language Mode answer didn't resolve or abandon it. Keep
+                    # the ORIGINAL pending_intent/pending_question -- it's
+                    # more specific than whatever generic follow-up text this
+                    # turn produced -- and just note that another turn passed
+                    # unresolved, subject to the TTL so a stuck session can't
+                    # wedge forever.
+                    history.note_pending_still_unresolved()
+                elif nl_text:
+                    # Nothing was pending before, and the router answered
+                    # directly rather than routing to an intent -- there is
+                    # no intent handler to track a clarifying question for
+                    # us here, so this is the ONLY place that can notice the
+                    # router itself just asked one (e.g. "is it paired?"
+                    # could mean several things..."). Track it the same way
+                    # a text-only intent reply already is: assume it might
+                    # need a follow-up.
+                    history.set_pending(ConversationHistory.ROUTER_PENDING, nl_text, failed=False)
+            if self.router_stream_handler.get_stream_chunk_count() > 0:
+                return None
             return IntentHandlerResult(
                 intent="",
                 stream_handler=self.router_stream_handler,

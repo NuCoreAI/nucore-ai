@@ -9,10 +9,14 @@
         "type": ["string", "null"],
         "description": "Primary intent of the user query. Use null when Natural Language Mode should answer directly without routing to an intent handler."
       },
+      "abandons_pending": {
+        "type": "boolean",
+        "description": "Only meaningful when `intent` is null AND a `# PENDING CLARIFICATION` block is present in this prompt. Set to true ONLY when the user's current message is clearly about something else entirely, unrelated to the pending clarification's question -- i.e. they are abandoning it, not answering it. Leave false (the default) for everything else, including when you're simply unsure how to route a short/ambiguous reply: false does not end the conversation, it just means the pending clarification stays available for a future turn to resolve. Do not set true just because you personally couldn't match the reply to an intent."
+      },
       "user_query": {
         "type": "string",
         "description": "The original user query."
-      }, 
+      },
       "candidate_devices": {
         "type": "array",
         "description": "Optional list of candidate devices/groups/scenes relevant to the user query, with relevance scores. This is intended to be used by downstream intents like command_control and routine_automation to help narrow down device candidates for LLM processing. If the user query mentions `push notification`, then include `UD Mobile` in the candidate device list with a high relevance score to help the LLM understand that the user is requesting a push notification to their mobile device." , 

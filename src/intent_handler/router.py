@@ -190,7 +190,8 @@ class IntentRouter:
                 ),
                 resolved_query=payload.get("user_query") or query,
                 route_plan=route_plan,
-                raw_response=raw_response
+                raw_response=raw_response,
+                abandons_pending=bool(payload.get("abandons_pending", False)),
             )
 
         intent_name = payload.get("intent")
@@ -267,28 +268,44 @@ class IntentRouter:
 
         if history.pending_failed:
             return (
-                "---\n# PENDING CLARIFICATION (previous attempt FAILED)\n"
-                f"The previous attempt at intent `{history.pending_intent}` failed:\n\n"
-                f"> {question}\n\n"
+                "<internal_routing_context private=\"true\">\n"
+                "This entire block is private routing metadata for YOU, the router. It is NEVER "
+                "to be quoted, summarized, reformatted, or otherwise shown to the user -- it "
+                "contains no user-facing content, only instructions for how to set your `intent` "
+                "and `abandons_pending` fields.\n"
+                f"The previous attempt at intent {history.pending_intent!r} failed with: "
+                f"{question!r}\n"
                 "If the user's current message reads as wanting to retry, continue, or fix that "
                 "(e.g. \"retry\", \"go ahead\", \"try again\", a short correction), route back to "
-                f"`{history.pending_intent}`. But do NOT assume any device, value, or other "
-                "conclusion from the failed attempt was correct -- let that intent re-derive "
-                "everything fresh from the original request rather than reusing the failed "
-                "attempt's choices. If the current message is not related to this at all (for "
-                "example a plain expression of frustration with no actionable content, or an "
-                "unrelated new request), do not route back here."
+                f"that intent. But do NOT assume any device, value, or other conclusion from the "
+                "failed attempt was correct -- let that intent re-derive everything fresh from the "
+                "original request rather than reusing the failed attempt's choices. If the current "
+                "message is clearly about something else entirely -- not a retry, not related to "
+                "this failure at all -- set `abandons_pending: true` and route/answer normally. If "
+                "you're simply unsure, leave `abandons_pending` false; it costs nothing to leave "
+                "this open for another turn.\n"
+                "</internal_routing_context>"
             )
 
         return (
-            "---\n# PENDING CLARIFICATION\n"
-            f"The previous turn routed to intent `{history.pending_intent}`, which asked the "
-            "user the following and has not yet completed its task:\n\n"
-            f"> {question}\n\n"
-            "If the user's current message reads as a short/direct reply to this question "
-            "(for example a bare number, \"yes\"/\"no\", or a brief selection) rather than an "
-            f"independent new request, route back to `{history.pending_intent}` with high "
-            "confidence instead of trying to classify the reply on its own."
+            "<internal_routing_context private=\"true\">\n"
+            "This entire block is private routing metadata for YOU, the router. It is NEVER to "
+            "be quoted, summarized, reformatted, or otherwise shown to the user -- it contains no "
+            "user-facing content, only instructions for how to set your `intent` and "
+            "`abandons_pending` fields.\n"
+            f"The previous turn routed to intent {history.pending_intent!r}, which asked the user "
+            f"the following and has not yet completed its task: {question!r}\n"
+            "If the user's current message reads as a short/direct reply to this question (for "
+            "example a bare number, \"yes\"/\"no\", or a brief selection) rather than an "
+            f"independent new request, route back to that intent with high confidence instead of "
+            "trying to classify the reply on its own. Only if the current message is clearly about "
+            "something else entirely -- unrelated to this question -- should you set "
+            "`abandons_pending: true` (only relevant when you answer directly with `intent: "
+            "null`). If you're simply unsure how the reply relates, leave `abandons_pending` "
+            "false: this pending clarification will still be here on the next turn, so a false "
+            "negative here costs nothing, while a false positive discards context the user may "
+            "still need.\n"
+            "</internal_routing_context>"
         )
 
     def _format_intent_block(self, definition: IntentDefinition) -> str:
@@ -473,6 +490,7 @@ class IntentRouter:
                             "notes": notes,
                             "user_query": input.get("user_query"),
                             "route_plan": route_plan,
+                            "abandons_pending": bool(input.get("abandons_pending", False)),
                             "context": {
                                 "candidate_devices": candidate_devices,
                                 "candidate_routines": candidate_routines,
