@@ -7,7 +7,7 @@
       "model_2": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
-      "max_turns": 5,
+      "max_turns": 20,
       "temperature": 0.2,
       "max_tokens": 64000
     },
