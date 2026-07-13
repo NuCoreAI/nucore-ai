@@ -70,6 +70,8 @@ class StreamHandler(ABC):
         await self.send_chunk(chunk, is_end)
 
     async def send_chunk(self, chunk: str, is_end: bool = False) -> None:
+        if (chunk is None or chunk == '') and not is_end:
+            return
         if self.websocket:
             if self.websocket.client_state.name != "CONNECTED":
                 logger.error("WebSocket is not connected. Cannot send message.")
