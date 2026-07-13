@@ -333,10 +333,12 @@ class IntentHandlerRegistry:
 
         # Instantiate the stream handler class (if any) once at definition load
         # time so handler instances don't have to manage that themselves.
-        stream_handler_class = self._load_stream_handler_class(configured_intent, stream_handler_path, None)
-        if stream_handler_class is not None:
-            stream_handler_class = stream_handler_class()
-            stream_handler_class.set_websocket(self.websocket)
+        stream = config.get("stream", True)
+        if stream:
+            stream_handler_class = self._load_stream_handler_class(configured_intent, stream_handler_path, None)
+            if stream_handler_class is not None:
+                stream_handler_class = stream_handler_class()
+                stream_handler_class.set_websocket(self.websocket)
 
         return IntentDefinition(
             name=configured_intent,
@@ -380,7 +382,7 @@ class IntentHandlerRegistry:
                         :class:`~base.BaseIntentHandler`.
         """
         if stream_handler_path is None:
-            return None
+            return StreamHandler #default
         cache_key = (stream_handler_path, stream_handler_class)
         try:
             mtime_ns = stream_handler_path.stat().st_mtime_ns
@@ -408,11 +410,11 @@ class IntentHandlerRegistry:
                 raise ValueError(
                     f"Handler class '{class_name}' not found in {stream_handler_path}"
                 )
-            if not inspect.isclass(stream_handler_class) or not issubclass(stream_handler_class, BaseIntentHandler):
+            if not inspect.isclass(stream_handler_class) or not issubclass(stream_handler_class, StreamHandler):
                 raise TypeError(
-                    f"Handler class '{class_name}' in {stream_handler_path} must subclass BaseIntentHandler"
+                    f"Handler class '{class_name}' in {stream_handler_path} must subclass StreamHandler"
                 )
-            self.stream_handler_class_cache[cache_key] = (mtime_ns, stream_handler_class)
+            self._stream_handler_class_cache[cache_key] = (mtime_ns, stream_handler_class)
             return stream_handler_class
 
         # Auto-discovery: module must expose exactly one StreamHandler subclass.
