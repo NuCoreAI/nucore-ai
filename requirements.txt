@@ -28,3 +28,6 @@ udi_interface
 websockets
 PyYAML
 python-dotenv
+##### In case you want to use litellm:
+# orjson
+# litellm
