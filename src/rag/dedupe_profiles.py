@@ -16,6 +16,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -59,23 +60,44 @@ class DedupeProfiles:
                 groups[key].append(p["id"])
                 items_by_key[key] = items
 
-            prefix = {"props": "pc", "accepts-cmds": "ac", "sends-cmds": "sc"}[section]
+            prefix = {"props": "props", "accepts-cmds": "accepts", "sends-cmds": "sends"}[section]
             collections = {}
-            idx = 0
+            used_ids: set[str] = set()
             for key, pids in sorted(groups.items(), key=lambda x: -len(x[1])):
                 if len(pids) < 2 or not key or key == ("",):
                     continue
                 # Skip empty item lists
                 if all(s == "[]" for s in key):
                     continue
-                idx += 1
+                # Name the collection after the shortest (then alphabetically first)
+                # profile id that uses it -- readable, and reuses an identifier the
+                # reader already recognizes from PROFILES instead of a bare counter.
+                anchor = min(pids, key=lambda p: (len(p), p))
+                coll_id = DedupeProfiles._unique_id(f"{prefix}_like_{anchor}", used_ids)
+                used_ids.add(coll_id)
                 collections[key] = {
-                    "id": f"{prefix}_{idx}",
+                    "id": coll_id,
                     "items": items_by_key[key],
                     "profile_ids": pids,
                 }
             result[section] = collections
         return result
+
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """Turn a display name into a lowercase snake_case identifier fragment."""
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+        return slug or "item"
+
+    @staticmethod
+    def _unique_id(candidate: str, used: set[str]) -> str:
+        """Append a numeric suffix if candidate collides with an already-used id."""
+        if candidate not in used:
+            return candidate
+        n = 2
+        while f"{candidate}_{n}" in used:
+            n += 1
+        return f"{candidate}_{n}"
 
 
     @staticmethod
@@ -86,10 +108,9 @@ class DedupeProfiles:
         - enum_defs: {section: {id: definition}} for the shared section
         - enum_lookup: {canon_json: ref_id}
         """
-        PREFIX = {"props": "prop", "accepts-cmds": "acmd", "sends-cmds": "scmd"}
         enum_defs: dict[str, dict] = {s: {} for s in SECTIONS}
         enum_lookup: dict[str, str] = {}
-        counters: dict[str, int] = {s: 0 for s in SECTIONS}
+        used_ids: set[str] = set()
 
         seen: set[str] = set()
         # Scan all profiles (covers both collection and extra items)
@@ -102,8 +123,12 @@ class DedupeProfiles:
                     if canon in seen:
                         continue
                     seen.add(canon)
-                    counters[section] += 1
-                    ref_id = f"{PREFIX[section]}_{counters[section]}"
+                    # Each item's own display name (e.g. "Ramp Rate") already
+                    # tells a reader what the enum is -- use it instead of a
+                    # bare per-section counter.
+                    name = next(iter(item))
+                    ref_id = DedupeProfiles._unique_id(f"{DedupeProfiles._slugify(name)}_enum", used_ids)
+                    used_ids.add(ref_id)
                     enum_defs[section][ref_id] = item
                     enum_lookup[canon] = ref_id
 
@@ -262,21 +287,24 @@ class DedupeProfiles:
         "# parseable with ast.literal_eval). Same information a JSON profiles/shared\n"
         "# structure would hold, just without repeating field names on every row.\n"
         "#\n"
-        "# COLLECTIONS: id -> list of items shared by 2+ profiles.\n"
-        "#   id prefix: pc_=props, ac_=accepts-cmds, sc_=sends-cmds.\n"
+        "# COLLECTIONS: id -> list of items shared by 2+ profiles. Ids are named\n"
+        "#   '{section}_like_{a_profile_id_that_uses_it}', section is props/accepts/sends\n"
+        "#   -- e.g. 'accepts_like_DimmerLampSwitch_ADV'.\n"
         "# ENUMS: id -> (name, values) -- large value lists, referenced by id.\n"
-        "#   id prefix: prop_=property enum, acmd_=accepts-cmd enum.\n"
+        "#   Ids are named '{slugified_item_name}_enum', e.g. 'ramp_rate_enum'.\n"
         "#\n"
-        "# PROFILES: id -> (props, accepts_cmds, sends_cmds, devices). One entry per\n"
+        "# PROFILES: id -> a dict with any of the following keys. One entry per\n"
         "#   device/group TYPE, with its own physical device/group instances nested\n"
         "#   directly inside it (NOT a separate table) -- a profile's properties stay\n"
         "#   physically adjacent to the devices that have them.\n"
-        "#   props/accepts_cmds/sends_cmds is None, or a list of items, each either:\n"
-        "#     (name, values)            -- an inline property/command, values is a list\n"
-        "#     ('$ref', enum_id)         -- substitute ENUMS[enum_id]\n"
-        "#     ('$collection', coll_id)  -- substitute every item in COLLECTIONS[coll_id]\n"
-        "#                                  (may appear alongside further inline items)\n"
-        "#   devices: list of (kind, device_id, name, parent_id, parent_type) tuples.\n"
+        "#   'extends': [collection_id, ...] -- substitute every item in\n"
+        "#     COLLECTIONS[collection_id], one entry per props/accepts/sends collection\n"
+        "#     this profile uses (its section is implied by the id's own prefix).\n"
+        "#   'props'/'accepts'/'sends': [item, ...] -- inline items for that section, IN\n"
+        "#     ADDITION to anything already pulled in via 'extends'. Each item is either:\n"
+        "#       (name, values)      -- an inline property/command, values is a list\n"
+        "#       ('$ref', enum_id)   -- substitute ENUMS[enum_id]\n"
+        "#   'devices': list of (kind, device_id, name, parent_id, parent_type) tuples.\n"
         "#     kind is 'device' or 'group'. parent_type is folder/node/group; parent_id\n"
         "#     'none' means top-level (parent_type is '' in that case).\n"
         "#\n"
@@ -292,19 +320,18 @@ class DedupeProfiles:
         return f"({name!r}, {values!r})"
 
     @staticmethod
-    def _py_repr_section(value: Any) -> str:
-        """Render a profile's props/accepts-cmds/sends-cmds value as a Python list literal."""
+    def _split_section(value: Any) -> tuple[str | None, list[str]]:
+        """Split a profile's props/accepts-cmds/sends-cmds value into the
+        collection id it extends (or None) and its rendered inline items
+        (either genuinely inline items, or extras alongside a collection)."""
         if not value:
-            return "None"
-        parts: list[str] = []
+            return None, []
         if isinstance(value, dict) and "$collection" in value:
-            parts.append(f"('$collection', {value['$collection']!r})")
-            for item in value.get("extras") or []:
-                parts.append(DedupeProfiles._py_repr_one_item(item))
-        elif isinstance(value, list):
-            for item in value:
-                parts.append(DedupeProfiles._py_repr_one_item(item))
-        return "[" + ", ".join(parts) + "]"
+            inline = [DedupeProfiles._py_repr_one_item(i) for i in (value.get("extras") or [])]
+            return value["$collection"], inline
+        if isinstance(value, list):
+            return None, [DedupeProfiles._py_repr_one_item(i) for i in value]
+        return None, []
 
     @staticmethod
     def _split_parent(parent: str) -> tuple[str, str]:
@@ -356,13 +383,23 @@ class DedupeProfiles:
                             f"({kind!r}, {device['id']!r}, {device['name']!r}, "
                             f"{parent_id!r}, {parent_type!r})"
                         )
-                lines.append(
-                    f"  {profile['id']!r}: ("
-                    f"{DedupeProfiles._py_repr_section(profile.get('props'))}, "
-                    f"{DedupeProfiles._py_repr_section(profile.get('accepts-cmds'))}, "
-                    f"{DedupeProfiles._py_repr_section(profile.get('sends-cmds'))}, "
-                    f"[{', '.join(devices)}]),"
-                )
+                extends: list[str] = []
+                entry_parts: list[str] = []
+                for section_key, field in (
+                    ("props", "props"),
+                    ("accepts-cmds", "accepts"),
+                    ("sends-cmds", "sends"),
+                ):
+                    coll_id, inline = DedupeProfiles._split_section(profile.get(section_key))
+                    if coll_id:
+                        extends.append(coll_id)
+                    if inline:
+                        entry_parts.append(f"'{field}': [{', '.join(inline)}]")
+
+                if extends:
+                    entry_parts.insert(0, f"'extends': {extends!r}")
+                entry_parts.append(f"'devices': [{', '.join(devices)}]")
+                lines.append(f"  {profile['id']!r}: {{{', '.join(entry_parts)}}},")
             lines.append("}")
 
         if folders:
