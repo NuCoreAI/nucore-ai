@@ -7,6 +7,7 @@ ranges and provides helpers for rendering them as JSON or YAML-style prompt
 text.
 """
 
+import json
 from dataclasses import dataclass, field
 from .uom import UOMEntry, supported_uoms, is_enumeration_uom
 
@@ -26,21 +27,45 @@ class EditorSubsetRange:
     subset: str
     names: dict = field(default_factory=dict)
 
+    def _enum_dict(self) -> dict:
+        """Expand ``subset``/``names`` into a plain {value: label} mapping.
+
+        Shared by ``to_dict`` (Python-literal rendering) and
+        ``get_json_description`` (JSON rendering) so the two output
+        formats can't drift apart the way ``is_reference`` did.
+        """
+        enums: dict = {}
+        if not self.names:
+            return enums
+        for s in self.subset.split(","):
+            s = s.strip()
+            if "-" in s:
+                # It's a range 'a-b'
+                for k, v in self.names.items():
+                    if k and v:
+                        enums[k] = v
+            else:
+                val_name = self.names.get(s)
+                enums[s] = val_name if val_name else s
+        return enums
+
+    def to_dict(self) -> dict:
+        """Plain-dict description of this range (uom/label/precision/enums)."""
+        out = {
+            "uom": self.uom.id if self.uom.id else 0,
+            "uom_label": self.uom.label if self.uom.label else " ",
+            "precision": 0,
+        }
+        enums = self._enum_dict()
+        if enums:
+            out["enums"] = enums
+        return out
+
     def get_json_description(self, comma:bool):
         """
         Returns a JSON description of the subset.
         """
-        out = f"{{\"uom\":{self.uom.id if self.uom.id else 0 },\"uom_label\":\"{self.uom.label if self.uom.label else ' '}\""
-        out += f",\"precision\":0"
-        names = self.get_json_names()
-        if names:
-            out += ",\"enums\":{"
-            for idx, name in enumerate(names):
-                out += f"{name}"
-                if idx < len(names) - 1:
-                    out += ","
-            out += "}"
-        out += "}"
+        out = json.dumps(self.to_dict(), separators=(",", ":"))
         if comma:
             out += ","
         return out
@@ -138,23 +163,28 @@ class EditorMinMaxRange:
     step: float = None
     names: dict = field(default_factory=dict)
 
+    def to_dict(self) -> dict:
+        """Plain-dict description of this range (uom/label/min/max/precision/[step]/[enums])."""
+        out = {
+            "uom": self.uom.id if self.uom.id else 0,
+            "uom_label": self.uom.label if self.uom.label else " ",
+            "min": self.min,
+            "max": self.max,
+            "precision": self.prec if self.prec else 0,
+        }
+        if self.step is not None:
+            out["step"] = self.step
+        if self.names:
+            enums = {k: v for k, v in self.names.items() if k and v}
+            if enums:
+                out["enums"] = enums
+        return out
+
     def get_json_description(self, comma:bool):
         """
         Returns a JSON description of the range.
         """
-        out = f"{{\"uom\":{self.uom.id if self.uom.id else 0 },\"uom_label\":\"{self.uom.label if self.uom.label else ' '}\""
-        out += f",\"min\":{self.min},\"max\":{self.max},\"precision\":{self.prec if self.prec else 0}"
-        if self.step is not None:
-            out += f",\"step\":{self.step}"
-        names = self.get_json_names()
-        if names:
-            out += ",\"enums\":{"
-            for idx, name in enumerate(names):
-                out += f"{name}"
-                if idx < len(names) - 1:
-                    out += ","
-            out += "}"
-        out += "}"
+        out = json.dumps(self.to_dict(), separators=(",", ":"))
         if comma:
             out += ","
         return out
@@ -214,6 +244,21 @@ class Editor:
     id: str
     is_reference: bool 
     ranges: list[EditorSubsetRange | EditorMinMaxRange]
+
+    def get_python_description(self) -> list[dict] | None:
+        """Return this editor's ranges as a list of plain dicts, for
+        Python-literal (as opposed to JSON) rendering.
+
+        Always a list (even for the common single-range case) to match
+        ``get_json_descriptions``' own convention -- an editor's ranges are
+        always an array there too, since some editors genuinely offer more
+        than one uom/range choice (e.g. a raw 0-255 value alongside a
+        percentage). Returns None when there's nothing to render (no
+        ranges, or a deferred reference).
+        """
+        if self.is_reference or len(self.ranges) == 0:
+            return None
+        return [r.to_dict() for r in self.ranges]
 
     def get_json_descriptions(self) -> str:
         """Return a JSON fragment describing all ranges in this editor.
