@@ -212,6 +212,110 @@ class ProfileRagFormatter(RAGFormatter):
                                 param.editor.write_descriptions(self)
 
 
+    # ------------------------------------------------------------------
+    # Python-literal per-device rendering (used by format_per_device when
+    # json_output is True). Every parameterized command carries its
+    # editor's real id alongside its resolved uom/min/max/enums dict, so a
+    # downstream batch-level pass can tell true editor sharing (same id)
+    # from two editors that just happen to have identical content.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _editor_ref_and_dict(editor):
+        """Return (editor_id, editor_python_dict), or (None, None) if the
+        editor has nothing to render."""
+        if editor is None:
+            return None, None
+        desc = editor.get_python_description()
+        if desc is None:
+            return None, None
+        return editor.id, desc
+
+    def _py_repr_param(self, param) -> str:
+        editor_id, editor_dict = self._editor_ref_and_dict(getattr(param, "editor", None))
+        name = param.name if getattr(param, "name", None) else "n/a"
+        pid = self.encode_id(param.id) if getattr(param, "id", None) else "n/a"
+        if editor_id is None:
+            return f"({name!r}, {pid!r})"
+        return f"({name!r}, {pid!r}, {editor_id!r}, {editor_dict!r})"
+
+    def _py_repr_property(self, prop: NodeProperty) -> str:
+        editor_id, editor_dict = self._editor_ref_and_dict(prop.editor)
+        if editor_id is None:
+            return f"({prop.name!r}, {self.encode_id(prop.id)!r})"
+        return f"({prop.name!r}, {self.encode_id(prop.id)!r}, {editor_id!r}, {editor_dict!r})"
+
+    def _py_repr_command(self, command) -> str:
+        if command.parameters:
+            params = ", ".join(self._py_repr_param(p) for p in command.parameters)
+            return f"({command.name!r}, {command.id!r}, [{params}])"
+        return f"({command.name!r}, {command.id!r})"
+
+    @staticmethod
+    def _flatten_link_dict(d: dict) -> tuple:
+        """Flatten GroupLink.explain_json()'s {"Name [address=X]": {"link_type":
+        ..., "parameters": [{p: v}, ...]}} single-key-dict shape into a plain
+        (name, link_type, {param: value}) tuple."""
+        (label, body), = d.items()
+        params = {}
+        for p in (body.get("parameters") or []):
+            (pk, pv), = p.items()
+            params[pk] = pv
+        return (label, body.get("link_type"), params)
+
+    @classmethod
+    def _links_python(cls, group) -> dict | None:
+        """Flatten Group.explain_json()'s output for Python-literal rendering.
+
+        ``nucore_scene_activation`` is either a plain string (the group
+        controls nothing) or a list of link dicts -- only the list case
+        needs flattening. ``controller_activation_map`` entries can be
+        None for a member with no links; preserved as-is.
+        """
+        raw = group.explain_json()
+        out: dict = {}
+        activation = raw.get("nucore_scene_activation")
+        if isinstance(activation, list):
+            out["nucore_scene_activation"] = [cls._flatten_link_dict(d) for d in activation]
+        elif activation is not None:
+            out["nucore_scene_activation"] = activation
+
+        cmap = raw.get("controller_activation_map")
+        if cmap:
+            out["controller_activation_map"] = {
+                member_label: ([cls._flatten_link_dict(d) for d in links] if links else links)
+                for member_label, links in cmap.items()
+            }
+        return out or None
+
+    def format_device_python(self, node: Node) -> str:
+        """Render one device/group as a bare Python dict literal (no
+        surrounding variable assignment -- callers extract and
+        ast.literal_eval each one from its own ```python fence)."""
+        parent = self.__get_parent_node__(node)
+        entry_parts = [
+            f"'name': {node.name!r}",
+            f"'id': {self.encode_id(node.address)!r}",
+            f"'kind': {('group' if isinstance(node, Group) else 'device')!r}",
+        ]
+        if parent:
+            entry_parts.append(
+                f"'parent': {{'name': {parent.name!r}, 'id': {self.encode_id(parent.address)!r}}}"
+            )
+        if node.node_def:
+            entry_parts.append(f"'profile': {node.node_def.id!r}")
+            props = ", ".join(self._py_repr_property(p) for p in node.node_def.properties.values())
+            entry_parts.append(f"'properties': [{props}]")
+            accepts = ", ".join(self._py_repr_command(c) for c in node.node_def.cmds.accepts)
+            entry_parts.append(f"'accepts': [{accepts}]")
+            sends = ", ".join(self._py_repr_command(c) for c in node.node_def.cmds.sends)
+            entry_parts.append(f"'sends': [{sends}]")
+        if isinstance(node, Group):
+            links = self._links_python(node)
+            if links is not None:
+                entry_parts.append(f"'links': {links!r}")
+        return "{" + ", ".join(entry_parts) + "}"
+
     def __get_parent_node__(self, node:Node)->Node:
         try:
             pnode = node.pnode if isinstance(node, Node) else node.parent
@@ -308,38 +412,32 @@ class ProfileRagFormatter(RAGFormatter):
             raise ValueError("Invalid runtime profile provided to format")
 
         chunk = RagChunk(node.address, len(self.lines))
-        self.write(DEVICE_SECTION_HEADER)   
+        self.write(DEVICE_SECTION_HEADER)
+
         if self.json_output:
-            self.write("```json") 
-        self.add_node(node, True)
-        with self.block():
-            if node.node_def:
-                if self.json_output:
-                    self.write("\"Properties\":[")
-                else:
+            # Python-literal rendering: no per-row field-name repetition, and
+            # every parameterized command carries its editor's real id (not
+            # just its resolved uom/min/max) so a downstream batch-level pass
+            # can tell true editor sharing from two editors that just happen
+            # to look alike.
+            self.write("```python")
+            self.write(self.format_device_python(node))
+            self.write("```")
+        else:
+            self.add_node(node, True)
+            with self.block():
+                if node.node_def:
                     self.write("Properties:")
-                for idx, (prop_id, prop) in enumerate(node.node_def.properties.items()): 
-                    self.add_property(prop, self.json_output and idx < len(node.node_def.properties) - 1)
-                if self.json_output:
-                    self.write("],\"Accepts Commands\":[")
-                else:
+                    for prop_id, prop in node.node_def.properties.items():
+                        self.add_property(prop, False)
                     self.write("Accepts Commands:")
-                for idx, cmd in enumerate(node.node_def.cmds.accepts):
-                    self.add_command(cmd, self.json_output and idx < len(node.node_def.cmds.accepts) - 1)
-                if self.json_output:
-                    self.write("],\"Sends Commands\":[")
-                else:
+                    for cmd in node.node_def.cmds.accepts:
+                        self.add_command(cmd, False)
                     self.write("Sends Commands:")
-                for idx, cmd in enumerate(node.node_def.cmds.sends):
-                    self.add_command(cmd, self.json_output and idx < len(node.node_def.cmds.sends) - 1)
-                if self.json_output:
-                    self.write("]")
-        if self.json_output:
-            if isinstance(node, Group):
-                self.write(", \"Links Info\":")
-                self.write(json.dumps(node.explain_json()))
-            self.write("}\n```") 
-        chunk.end_index = len(self.lines) - 1   
+                    for cmd in node.node_def.cmds.sends:
+                        self.add_command(cmd, False)
+
+        chunk.end_index = len(self.lines) - 1
         chunk.nodes = [ node ]
         if node.node_def:
             chunk.cmds = list(node.node_def.cmds.sends) + list(node.node_def.cmds.accepts)
