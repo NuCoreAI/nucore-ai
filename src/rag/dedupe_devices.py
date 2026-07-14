@@ -1,296 +1,172 @@
 #!/usr/bin/env python3
 """
-Device Editor Deduper
+Device Editor/Profile Deduper
 
-Reads device data in ===Device=== delimited format with full JSON properties,
-extracts shared/duplicate editor definitions into a ===Collections=== section,
-and rewrites each device to reference collections via $ref.
+Reads device data as ```python-fenced ===Device=== blocks (bare dict
+literals produced by ProfileRagFormatter.format_device_python), and
+factors out what's shared across the batch:
+
+  - Editors referenced by 2+ properties/commands (by their real editor
+    id, tagged inline by the producer -- not by re-deriving sharing from
+    content hashing, which can't tell two coincidentally-identical
+    editors apart from one truly shared editor) go into an EDITORS table,
+    referenced by id.
+  - Devices that share a profile (2+ devices with the same 'profile'
+    nodeDefId necessarily have byte-for-byte identical properties/
+    accepts/sends, since they come from the same NodeDef) go into a
+    PROFILES table, referenced by id -- mirroring DedupeProfiles' pattern
+    on the router side.
 
 Usage:
-    python dedupe_device_editors.py <input_file> [output_file]
+    python dedupe_devices.py <input_file> [output_file]
 """
 
-import json
+import ast
 import re
-import sys
-import copy
-from collections import OrderedDict
+from collections import defaultdict
 from utils import get_logger
 
 logger = get_logger(__name__)
+
 
 class DedupeDevices:
     def __init__(self):
         pass
 
     @staticmethod
-    def canonical_json(obj):
-        """Stable JSON string for fingerprinting."""
-        return json.dumps(obj, sort_keys=True, separators=(',', ':'))
-
-
-    @staticmethod
-    def generate_name(editor, ctx_id, used_names):
-        """Generate a descriptive collection name from editor content and first-seen context."""
-        uom_label = editor.get("uom_label", "").lower().replace("%", "pct").replace(" ", "_")
-        base = f"{ctx_id}_{uom_label}" if ctx_id else uom_label
-        base = re.sub(r'[^a-zA-Z0-9_]', '_', base).strip('_')
-
-        name = base
-        i = 2
-        while name in used_names:
-            name = f"{base}_{i}"
-            i += 1
-        return name
-
-
-    @staticmethod
-    def collect_editors(device):
-        """Yield (editor_dict, context_id, context_name) for every editor in a device."""
-        for prop in device.get("Properties", []):
-            for ed in prop.get("editors", []):
-                yield ed, prop.get("id", ""), prop.get("name", "")
-
-        for section in ("Accepts Commands", "Sends Commands"):
-            for cmd in device.get(section, []):
-                for param in cmd.get("parameters", []):
-                    for ed in param.get("editors", []):
-                        yield ed, cmd.get("id", ""), cmd.get("name", "")
-
-
-    @staticmethod
-    def _dedupe_commands(modified, collections, used_names, min_occurrences=2):
-        """
-        Group commands that co-occur across devices into shared command collections.
-        Instead of one $ref per command, creates a single collection array of commands
-        shared by multiple devices, so each device references the group + its unique commands.
-        """
-        for section in ("Accepts Commands", "Sends Commands"):
-            # Build a map: command_key -> set of device indices that have it
-            cmd_to_devices = {}
-            cmd_obj = {}
-            for dev_idx, dev in enumerate(modified):
-                for cmd in dev.get(section, []):
-                    key = DedupeDevices.canonical_json(cmd)
-                    if key not in cmd_to_devices:
-                        cmd_to_devices[key] = set()
-                        cmd_obj[key] = cmd
-                    cmd_to_devices[key].add(dev_idx)
-
-            # Group commands by their device signature (frozenset of device indices)
-            sig_to_keys = {}
-            for key, dev_set in cmd_to_devices.items():
-                if len(dev_set) >= min_occurrences:
-                    sig = frozenset(dev_set)
-                    if sig not in sig_to_keys:
-                        sig_to_keys[sig] = []
-                    sig_to_keys[sig].append(key)
-
-            # For each signature group, create a shared collection (ordered by first appearance)
-            sig_to_name = {}
-            for sig, keys in sig_to_keys.items():
-                # Preserve original order: sort keys by first device index, then position in that device
-                first_dev = min(sig)
-                dev_cmds = modified[first_dev].get(section, [])
-                dev_keys_ordered = [DedupeDevices.canonical_json(c) for c in dev_cmds]
-                keys_sorted = sorted(keys, key=lambda k: dev_keys_ordered.index(k) if k in dev_keys_ordered else len(dev_keys_ordered))
-
-                cmd_list = [cmd_obj[k] for k in keys_sorted]
-                prefix = "shared_accepts" if section == "Accepts Commands" else "shared_sends"
-                base = prefix
-                name = base
-                i = 2
-                while name in used_names:
-                    name = f"{base}_{i}"
-                    i += 1
-                used_names.add(name)
-                collections[name] = cmd_list
-                sig_to_name[sig] = name
-
-            # Replace matching commands in each device with a single $ref + remaining unique commands
-            shared_keys = set(cmd_to_devices.keys()) & {k for keys in sig_to_keys.values() for k in keys}
-            for dev_idx, dev in enumerate(modified):
-                if section not in dev:
-                    continue
-                new_cmds = []
-                refs_added = set()
-                for cmd in dev[section]:
-                    key = DedupeDevices.canonical_json(cmd)
-                    if key in shared_keys:
-                        # Find which signature group this command belongs to
-                        for sig, keys in sig_to_keys.items():
-                            if key in keys and dev_idx in sig:
-                                ref_name = sig_to_name[sig]
-                                if ref_name not in refs_added:
-                                    new_cmds.append({"$ref": ref_name})
-                                    refs_added.add(ref_name)
-                                break
-                        else:
-                            new_cmds.append(cmd)  # not in any group for this device
-                    else:
-                        new_cmds.append(cmd)
-                dev[section] = new_cmds
-
-
-    @staticmethod
-    def replace_editors(device, key_to_name):
-        """Replace editors in-place with {"$ref": name} where applicable."""
-        for prop in device.get("Properties", []):
-            if "editors" in prop:
-                for i, ed in enumerate(prop["editors"]):
-                    key = DedupeDevices.canonical_json(ed)
-                    if key in key_to_name:
-                        prop["editors"][i] = {"$ref": key_to_name[key]}
-
-        for section in ("Accepts Commands", "Sends Commands"):
-            for cmd in device.get(section, []):
-                for param in cmd.get("parameters", []):
-                    if "editors" in param:
-                        for i, ed in enumerate(param["editors"]):
-                            key = DedupeDevices.canonical_json(ed)
-                            if key in key_to_name:
-                                param["editors"][i] = {"$ref": key_to_name[key]}
-
-
-    @staticmethod
-    def parse_devices(content):
-        """Parse ===Device=== delimited content into a list of device JSON dicts."""
+    def parse_devices(content: str) -> list[dict]:
+        """Extract and ast.literal_eval each ```python-fenced ===Device=== block."""
         devices = []
-        chunks = re.split(r'===Device===\s*', content)
-        for chunk in chunks:
+        for chunk in re.split(r"===Device===\s*", content):
             chunk = chunk.strip()
             if not chunk:
                 continue
-            m = re.search(r'```json\s*\n?(.*?)\n?\s*```', chunk, re.DOTALL)
-            if m:
-                try:
-                    devices.append(json.loads(m.group(1).strip()))
-                except json.JSONDecodeError as e:
-                    logger.warning(f"skipping bad JSON: {e}")
+            m = re.search(r"```python\s*\n?(\{.*?\})\s*\n?```", chunk, re.DOTALL)
+            if not m:
+                continue
+            try:
+                devices.append(ast.literal_eval(m.group(1).strip()))
+            except (ValueError, SyntaxError) as e:
+                logger.warning(f"skipping unparsable device block: {e}")
         return devices
 
     @staticmethod
-    def _dedupe(devices, min_occurrences=2):
-        """
-        Extract editors appearing min_occurrences+ times into collections.
-        Returns (collections_dict, modified_devices).
-        """
-        # Phase 1: count every editor occurrence, keep first context for naming
-        editor_count = {}
-        editor_obj = {}
-        editor_ctx = {}
-
-        for dev in devices:
-            for ed, ctx_id, ctx_name in DedupeDevices.collect_editors(dev):
-                key = DedupeDevices.canonical_json(ed)
-                editor_count[key] = editor_count.get(key, 0) + 1
-                if key not in editor_obj:
-                    editor_obj[key] = ed
-                    editor_ctx[key] = (ctx_id, ctx_name)
-
-        # Phase 2: build collections (most frequent first)
-        collections = OrderedDict()
-        key_to_name = {}
-        used_names = set()
-
-        for key, count in sorted(editor_count.items(), key=lambda x: -x[1]):
-            if count >= min_occurrences:
-                ed = editor_obj[key]
-                ctx_id, _ = editor_ctx[key]
-                name = DedupeDevices.generate_name(ed, ctx_id, used_names)
-                used_names.add(name)
-                collections[name] = ed
-                key_to_name[key] = name
-
-        # Phase 3: deep-copy devices and replace editors with $ref
-        modified = []
-        for dev in devices:
-            d = copy.deepcopy(dev)
-            DedupeDevices.replace_editors(d, key_to_name)
-            modified.append(d)
-
-        # Phase 4: group shared commands into union collections
-        DedupeDevices._dedupe_commands(modified, collections, used_names, min_occurrences)
-
-        return collections, modified
+    def _iter_editor_tuples(device: dict) -> list[tuple[list, int, str, list]]:
+        """Locate every 4-tuple (name, id, editor_id, editor_dict) in this
+        device's properties/accepts/sends (including nested command
+        parameters). Returns (container_list, index, editor_id, editor_dict)
+        so callers can mutate container[index] in place."""
+        locs: list[tuple[list, int, str, list]] = []
+        props = device.get("properties")
+        if props:
+            for i, item in enumerate(props):
+                if len(item) == 4:
+                    locs.append((props, i, item[2], item[3]))
+        for section in ("accepts", "sends"):
+            cmds = device.get(section)
+            if not cmds:
+                continue
+            for cmd in cmds:
+                if len(cmd) < 3 or not isinstance(cmd[2], list):
+                    continue
+                params = cmd[2]
+                for j, p in enumerate(params):
+                    if len(p) == 4:
+                        locs.append((params, j, p[2], p[3]))
+        return locs
 
     @staticmethod
-    def compact_device_json(device):
-        """Format a device JSON in the original compact style (one property/command per line)."""
-        lines = []
-        lines.append('{' + f'"name":"{device["name"]}","id":"{device["id"]}"')
+    def _replace_editor_refs(devices: list[dict], min_occurrences: int = 2) -> dict:
+        """Mutate every 4-tuple editor occurrence in place into a 3-tuple:
+        (name, id, editor_id) when the editor is shared by >= min_occurrences
+        properties/commands across the whole batch (a $ref into the
+        returned EDITORS dict), otherwise (name, id, editor_dict) inline.
+        """
+        per_device_locs = [DedupeDevices._iter_editor_tuples(d) for d in devices]
 
-        # Properties
-        if device.get("Properties"):
-            lines[-1] += ','
-            lines.append('  "Properties":[')
-            for i, prop in enumerate(device["Properties"]):
-                comma = "," if i < len(device["Properties"]) - 1 else ""
-                lines.append(f'  {json.dumps(prop, separators=(",", ":"))}{comma}')
-            lines.append('  ]')
+        counts: dict[str, int] = {}
+        sample: dict[str, list] = {}
+        for locs in per_device_locs:
+            for _, _, editor_id, editor_dict in locs:
+                counts[editor_id] = counts.get(editor_id, 0) + 1
+                sample[editor_id] = editor_dict
 
-        # Accept Commands
-        if device.get("Accepts Commands"):
-            lines[-1] += ',"Accepts Commands":['
-            for i, cmd in enumerate(device["Accepts Commands"]):
-                comma = "," if i < len(device["Accepts Commands"]) - 1 else ""
-                lines.append(f'    {json.dumps(cmd, separators=(",", ":"))}{comma}')
-            lines.append('  ]')
-
-        # Send Commands
-        if device.get("Sends Commands"):
-            lines[-1] += ',"Sends Commands":['
-            for i, cmd in enumerate(device["Sends Commands"]):
-                comma = "," if i < len(device["Sends Commands"]) - 1 else ""
-                lines.append(f'    {json.dumps(cmd, separators=(",", ":"))}{comma}')
-            lines.append('  ]')
-
-        # Links Info
-        if device.get("Links Info"):
-            lines[-1] += ',"Links Info":' + json.dumps(device["Links Info"], separators=(",", ":"))
-
-        lines.append('}')
-        return "\n".join(lines)
-
+        editors: dict[str, list] = {}
+        for locs in per_device_locs:
+            for container, idx, editor_id, editor_dict in locs:
+                item = container[idx]
+                if counts[editor_id] >= min_occurrences:
+                    editors[editor_id] = sample[editor_id]
+                    container[idx] = item[:2] + (editor_id,)
+                else:
+                    container[idx] = item[:2] + (editor_dict,)
+        return editors
 
     @staticmethod
-    def format_output(collections, devices):
-        """Reassemble the ===Collections=== + ===Device=== delimited output."""
+    def _split_profiles(devices: list[dict], min_occurrences: int = 2) -> tuple[dict, list[dict]]:
+        """Factor out properties/accepts/sends for any profile shared by
+        >= min_occurrences devices in the batch into a PROFILES table
+        (devices sharing a profile have identical content there by
+        construction -- same NodeDef, no comparison needed). Devices with
+        a unique profile in this batch keep their content inline."""
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for device in devices:
+            profile = device.get("profile")
+            if profile:
+                groups[profile].append(device)
+
+        profiles: dict[str, dict] = {}
+        new_devices = []
+        for device in devices:
+            profile = device.get("profile")
+            if profile and len(groups[profile]) >= min_occurrences:
+                if profile not in profiles:
+                    profiles[profile] = {
+                        "properties": device.get("properties") or [],
+                        "accepts": device.get("accepts") or [],
+                        "sends": device.get("sends") or [],
+                    }
+                entry = {k: v for k, v in device.items() if k not in ("properties", "accepts", "sends")}
+            else:
+                entry = dict(device)
+            new_devices.append(entry)
+        return profiles, new_devices
+
+    @staticmethod
+    def format_output(editors: dict, profiles: dict, devices: list[dict]) -> str:
+        """Render EDITORS / PROFILES / DEVICES as ```python-fenced blocks."""
         parts = []
-        if collections:
-            
-            parts.append("===Collections===")
-            parts.append("```json")
-            # Collections stay pretty-printed since they're the reference definitions
-            parts.append(json.dumps(collections, indent=2))
-            parts.append("```")
+        if editors:
+            lines = ["EDITORS = {"]
+            for eid, edict in editors.items():
+                lines.append(f"  {eid!r}: {edict!r},")
+            lines.append("}")
+            parts.append("```python\n" + "\n".join(lines) + "\n```")
 
-        for dev in devices:
-            parts.append("===Device===")
-            parts.append("```json")
-            parts.append(DedupeDevices.compact_device_json(dev))
-            parts.append("```")
+        if profiles:
+            lines = ["PROFILES = {"]
+            for pid, pdict in profiles.items():
+                lines.append(f"  {pid!r}: {pdict!r},")
+            lines.append("}")
+            parts.append("```python\n" + "\n".join(lines) + "\n```")
+
+        dev_lines = ["DEVICES = {"]
+        for device in devices:
+            did = device.get("id")
+            rest = {k: v for k, v in device.items() if k != "id"}
+            dev_lines.append(f"  {did!r}: {rest!r},")
+        dev_lines.append("}")
+        parts.append("```python\n" + "\n".join(dev_lines) + "\n```")
 
         return "\n".join(parts) + "\n"
 
-
-    def dedupe(self, content:dict)->dict:
-        #with open("/tmp/not-deduped.json", 'w') as f:
-        #    f.write(json.dumps(content, indent=2))
+    def dedupe(self, content: str, min_occurrences: int = 2) -> str:
         devices = DedupeDevices.parse_devices(content)
         if not devices:
             logger.warning("No devices found.")
-            return {}
+            return content
 
-#        print(f"Parsed {len(devices)} devices", file=sys.stderr)
+        editors = DedupeDevices._replace_editor_refs(devices, min_occurrences)
+        profiles, devices = DedupeDevices._split_profiles(devices, min_occurrences)
 
-        collections, modified = DedupeDevices._dedupe(devices)
-#        print(f"Extracted {len(collections)} shared editor collections", file=sys.stderr)
-
-        output = DedupeDevices.format_output(collections, modified)
-
-       # orig_size = len(content)
-       # new_size = len(output)
-       # pct = 100 * (orig_size - new_size) / orig_size if orig_size else 0
-       # print(f"Size: {orig_size} -> {new_size} bytes ({pct:.1f}% reduction)", file=sys.stderr)
-        return output
+        return DedupeDevices.format_output(editors, profiles, devices)
