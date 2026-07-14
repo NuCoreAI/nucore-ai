@@ -19,6 +19,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 MIN_ENUMS = 3  # individually extract items with MORE THAN this many enums
 SECTIONS = ("props", "accepts-cmds", "sends-cmds")
@@ -123,6 +124,25 @@ class DedupeProfiles:
         return result
 
     @staticmethod
+    def _build_profile_collection_maps(collections: dict) -> tuple[dict, dict]:
+        """
+        Build profile_id -> {section: collection_id} and
+        profile_id -> {section: set of canon items in that collection}.
+        """
+        profile_collection_map: dict[str, dict[str, str]] = defaultdict(dict)
+        profile_collection_items: dict[str, dict[str, set]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+
+        for section, sec_collections in collections.items():
+            for key, coll in sec_collections.items():
+                for pid in coll["profile_ids"]:
+                    profile_collection_map[pid][section] = coll["id"]
+                    profile_collection_items[pid][section] = set(key)
+
+        return profile_collection_map, profile_collection_items
+
+    @staticmethod
     def _dedupe(data: dict) -> dict:
         profiles = data.get("profiles", [])
         folders = data.get("folders", [])
@@ -133,18 +153,9 @@ class DedupeProfiles:
         # Step 2: Find large-enum items for individual dedup
         enum_defs, enum_lookup = DedupeProfiles.build_enum_lookup(collections, profiles)
 
-        # Build collection lookup: profile_id -> {section: collection_id}
-        profile_collection_map: dict[str, dict[str, str]] = defaultdict(dict)
-        # Also need: profile_id -> {section: set of canon items in collection}
-        profile_collection_items: dict[str, dict[str, set]] = defaultdict(
-            lambda: defaultdict(set)
+        profile_collection_map, profile_collection_items = (
+            DedupeProfiles._build_profile_collection_maps(collections)
         )
-
-        for section, sec_collections in collections.items():
-            for key, coll in sec_collections.items():
-                for pid in coll["profile_ids"]:
-                    profile_collection_map[pid][section] = coll["id"]
-                    profile_collection_items[pid][section] = set(key)
 
         # Build shared section
         shared_section = {
@@ -242,6 +253,126 @@ class DedupeProfiles:
 
         return {"shared": shared_section, "profiles": new_profiles, "folders": folders}
 
+    # ------------------------------------------------------------------
+    # Python-literal rendering (alternative to json.dumps for the deduped dict)
+    # ------------------------------------------------------------------
+
+    PYTHON_LEGEND = (
+        "# Device/group/folder inventory as Python literals (dict/list/tuple only --\n"
+        "# parseable with ast.literal_eval). Same information a JSON profiles/shared\n"
+        "# structure would hold, just without repeating field names on every row.\n"
+        "#\n"
+        "# COLLECTIONS: id -> list of items shared by 2+ profiles.\n"
+        "#   id prefix: pc_=props, ac_=accepts-cmds, sc_=sends-cmds.\n"
+        "# ENUMS: id -> (name, values) -- large value lists, referenced by id.\n"
+        "#   id prefix: prop_=property enum, acmd_=accepts-cmd enum.\n"
+        "#\n"
+        "# PROFILES: id -> (props, accepts_cmds, sends_cmds, devices). One entry per\n"
+        "#   device/group TYPE, with its own physical device/group instances nested\n"
+        "#   directly inside it (NOT a separate table) -- a profile's properties stay\n"
+        "#   physically adjacent to the devices that have them.\n"
+        "#   props/accepts_cmds/sends_cmds is None, or a list of items, each either:\n"
+        "#     (name, values)            -- an inline property/command, values is a list\n"
+        "#     ('$ref', enum_id)         -- substitute ENUMS[enum_id]\n"
+        "#     ('$collection', coll_id)  -- substitute every item in COLLECTIONS[coll_id]\n"
+        "#                                  (may appear alongside further inline items)\n"
+        "#   devices: list of (kind, device_id, name, parent_id, parent_type) tuples.\n"
+        "#     kind is 'device' or 'group'. parent_type is folder/node/group; parent_id\n"
+        "#     'none' means top-level (parent_type is '' in that case).\n"
+        "#\n"
+        "# FOLDERS: id -> (name, parent_id)\n"
+    )
+
+    @staticmethod
+    def _py_repr_one_item(item: dict) -> str:
+        """Render a single {"name": [values]} / {"$ref": id} item as a Python tuple literal."""
+        if "$ref" in item:
+            return f"('$ref', {item['$ref']!r})"
+        (name, values), = item.items()
+        return f"({name!r}, {values!r})"
+
+    @staticmethod
+    def _py_repr_section(value: Any) -> str:
+        """Render a profile's props/accepts-cmds/sends-cmds value as a Python list literal."""
+        if not value:
+            return "None"
+        parts: list[str] = []
+        if isinstance(value, dict) and "$collection" in value:
+            parts.append(f"('$collection', {value['$collection']!r})")
+            for item in value.get("extras") or []:
+                parts.append(DedupeProfiles._py_repr_one_item(item))
+        elif isinstance(value, list):
+            for item in value:
+                parts.append(DedupeProfiles._py_repr_one_item(item))
+        return "[" + ", ".join(parts) + "]"
+
+    @staticmethod
+    def _split_parent(parent: str) -> tuple[str, str]:
+        """Split a "id|type" parent reference into (parent_id, parent_type)."""
+        if not parent or parent == "none":
+            return "none", ""
+        if "|" in parent:
+            parent_id, parent_type = parent.split("|", 1)
+            return parent_id, parent_type
+        return parent, ""
+
+    @staticmethod
+    def render_python(result: dict) -> str:
+        """Render the ``dedupe()`` output (shared/profiles/folders dict) as
+        Python literals instead of JSON -- same information, no per-row field
+        repetition, and parseable with ``ast.literal_eval`` for verification.
+        Device instances are nested directly inside their own profile's entry
+        (not a separate table) so a profile's defining properties stay
+        physically adjacent to its device names."""
+        shared = result.get("shared", {})
+        profiles = result.get("profiles", [])
+        folders = result.get("folders", [])
+        lines: list[str] = [DedupeProfiles.PYTHON_LEGEND]
+
+        collections = shared.get("collections", {})
+        if collections:
+            lines.append("\nCOLLECTIONS = {")
+            for cid, body in collections.items():
+                items = ", ".join(DedupeProfiles._py_repr_one_item(i) for i in body.get("items", []))
+                lines.append(f"  {cid!r}: [{items}],")
+            lines.append("}")
+
+        enums = shared.get("enums", {})
+        if enums:
+            lines.append("\nENUMS = {")
+            for eid, body in enums.items():
+                for name, values in body.items():
+                    lines.append(f"  {eid!r}: ({name!r}, {values!r}),")
+            lines.append("}")
+
+        if profiles:
+            lines.append("\nPROFILES = {")
+            for profile in profiles:
+                devices = []
+                for kind, key in (("device", "devices"), ("group", "groups")):
+                    for device in profile.get(key, []) or []:
+                        parent_id, parent_type = DedupeProfiles._split_parent(device.get("parent", "none"))
+                        devices.append(
+                            f"({kind!r}, {device['id']!r}, {device['name']!r}, "
+                            f"{parent_id!r}, {parent_type!r})"
+                        )
+                lines.append(
+                    f"  {profile['id']!r}: ("
+                    f"{DedupeProfiles._py_repr_section(profile.get('props'))}, "
+                    f"{DedupeProfiles._py_repr_section(profile.get('accepts-cmds'))}, "
+                    f"{DedupeProfiles._py_repr_section(profile.get('sends-cmds'))}, "
+                    f"[{', '.join(devices)}]),"
+                )
+            lines.append("}")
+
+        if folders:
+            lines.append("\nFOLDERS = {")
+            for folder in folders:
+                parent_id, _ = DedupeProfiles._split_parent(folder.get("parent", "none"))
+                lines.append(f"  {folder['id']!r}: ({folder['name']!r}, {parent_id!r}),")
+            lines.append("}")
+
+        return "\n".join(lines)
 
     def dedupe(self, data: dict) -> dict:
         result = DedupeProfiles._dedupe(data)

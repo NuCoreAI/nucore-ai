@@ -9,6 +9,7 @@ from .loader import IntentHandlerRegistry
 from .models import ConversationHistory, IntentDefinition, RoutePlanStep, RouteResult
 from .session_store import SessionStore
 from nucore import NuCoreInterface
+from rag import DedupeRoutines
 from utils.logger import _write_debug_prompt
 
 
@@ -86,7 +87,10 @@ class IntentRouter:
                 if self.nucore_interface.summary_rags
                 else ""
             ))
-        prompt = prompt.replace("<<routines_database>>", f"```json\n{json.dumps(self.nucore_interface.condensed_routines)}\n```")
+        prompt = prompt.replace(
+            "<<routines_database>>",
+            f"```python\n{DedupeRoutines.render_python(self.nucore_interface.condensed_routines)}\n```",
+        )
 
         # Expand any shared module placeholders (e.g. <<nucore_rules>>).
         expanded_prompt = self.registry.expand_common_module_placeholders(prompt)

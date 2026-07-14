@@ -317,10 +317,17 @@ class MinimalRagFormatter(RAGFormatter):
 
 
         # Add as single document with all devices
-        content = "" 
+        content = ""
         if self.json_output:
             if all_lines_json["devices" if not profile_first else "profiles"]:
-                content = f"```json\n{json.dumps(all_lines_json)}\n```"
+                if profile_first:
+                    # Deduped shared/profiles/folders dict -- render as Python
+                    # literals instead of JSON (no per-row field repetition;
+                    # parseable with ast.literal_eval, and models are highly
+                    # fluent in Python literal syntax).
+                    content = f"```python\n{DedupeProfiles.render_python(all_lines_json)}\n```"
+                else:
+                    content = f"```json\n{json.dumps(all_lines_json)}\n```"
         else:
             if all_lines:
                 content = "\n".join(all_lines)

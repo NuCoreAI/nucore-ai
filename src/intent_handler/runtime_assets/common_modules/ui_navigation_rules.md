@@ -11,5 +11,5 @@
 - routines/programs:
 	`[ routine name ](/programs/{program_id})`
 	- make sure `program_id` is in Hex
-- node, scene, folder:
+- commands, node, scene, folder:
 	`[ node name ](/nodes/{node_id})`
