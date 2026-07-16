@@ -1,0 +1,34 @@
+{
+  "name": "group_scene_op",
+  "description": "Manage a group/scene's membership and per-member link behavior: add or remove a device as a controller/responder member, or update how a member is triggered.",
+  "input_schema": {
+    "type": "object",
+    "required": ["operation", "group_address", "link_address"],
+    "properties": {
+      "operation": {
+        "type": "string",
+        "enum": ["add_member", "remove_member", "update_link"]
+      },
+      "group_address": {
+        "type": "string",
+        "description": "Real id of the group/scene, exactly as shown in DEVICE DATABASE."
+      },
+      "link_address": {
+        "type": "string",
+        "description": "Real id of the member device involved in this operation."
+      },
+      "is_controller": {
+        "type": ["boolean", "null"],
+        "description": "For add_member: whether this member controls the scene (true) or responds to it (false, default)."
+      },
+      "name": {
+        "type": ["string", "null"],
+        "description": "Optional display name to associate with the member, for add_member."
+      },
+      "link": {
+        "type": ["object", "null"],
+        "description": "For update_link: the new link behavior parameters (e.g. on-level, ramp rate) to apply."
+      }
+    }
+  }
+}

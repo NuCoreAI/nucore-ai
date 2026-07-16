@@ -79,10 +79,11 @@ lifecycle CRUD over a named resource — install/update/uninstall/list, or start
 Grouped by capability, matching the survey findings on which handlers are already CRUD-shaped
 vs. which need care:
 
-- **Query tools** (read-only, safe to call speculatively): `search_devices(query)`,
-  `get_device_detail(device_id)` (full editor fidelity, lazy — see below),
-  `get_property(device_id, property)`, `search_routines(query)`, `get_routine_detail(id)`,
-  `list_groups`/`get_group_detail(id)`.
+- **Query tools** (read-only, safe to call speculatively): `search_devices(query)` (large-install
+  escape hatch only — see "Context strategy" below; not needed when the compact `DEVICE DATABASE`
+  already fits in the system prompt), `get_device_detail(device_id)` (full editor fidelity, lazy —
+  see below), `get_property(device_id, property)`, `search_routines(query)`,
+  `get_routine_detail(id)`, `list_groups`/`get_group_detail(id)`.
 - **Action tools**: `send_command(device_id, command, value?)`, `node_op(node_id, operation,
   ...)` (enable/disable/rename/move/delete/add_folder/add_group — direct port of `node_ops`),
   `routine_status_op(id, operation)` (direct port of `routine_status_ops`), `group_scene_op(...)`
@@ -118,25 +119,124 @@ understands instead of a bespoke classifier:
   device-schema-editor-refs branch is still the right shape for whatever `get_device_detail`
   returns).
 
-## Value resolution moves to the backend, not the LLM
+### Does candidate-device-finding still need a separate step?
+
+Today the router's whole job is one LLM call that reads the compact `DEVICE DATABASE` plus the
+query and picks candidate device ids (`ROUTER` section above) — a step that exists only because
+the router/intent-handler split assumed the model shouldn't carry the full catalog *and* decide/
+act in the same pass. In the unified design that assumption is gone: the compact `DEVICE
+DATABASE` is *already* sitting in the same context as the tool-calling turn, so for a normal-size
+installation, candidate-finding isn't a mechanism anymore — it's just the model reading names/
+profiles/commands it can already see and putting the right id(s) into its `send_command`/
+`get_device_detail` call, the same way it already resolves simple lookups directly today without
+any tool call. No separate call, no separate prompt section.
+
+The one case where this doesn't hold is an installation large enough that even the deduped
+compact `DEVICE DATABASE` exceeds the context budget — which is the literal reason the router/
+intent-handler split exists at all (see `BACKGROUND` above). For that case, `search_devices(query)`
+stays as an escape hatch, but it must be a **deterministic backend lookup** (substring/token match
+over device names and profiles in Python, no LLM involved), not a hidden classification call —
+otherwise it just reconstructs today's router under a new name and reintroduces the extra LLM
+call this design is trying to remove. Whether real installations actually get large enough to need
+this hasn't been measured yet; worth checking actual device-count distribution before deciding
+whether `search_devices` ships in v1 or gets deferred until it's shown to be necessary.
+
+### Device ids are never backend-resolved from names — only command/property ids are
+
+Everything below applies to command/property/parameter ids only. Device (and group/scene) ids
+must always be real ids the model reads directly out of `PROFILES[...]['devices']` and passes
+through verbatim — never a name the backend tries to resolve. Two reasons this doesn't extend the
+same way command/property names do:
+- **It's the scope anchor.** The exact-match-or-reject argument below only holds because
+  resolution is scoped to one already-known-correct `device_id`; if the device itself were also
+  resolved by fuzzy/backend name matching, there'd be no guarantee `'On Level'` is even being
+  looked up against the right device's namespace in the first place.
+- **Device names collide far more than command/property names do within one profile** — large
+  real installations have duplicate/near-duplicate device names (multiple similarly-named units
+  across rooms) in a way a single device's own command/property list generally doesn't.
+
+This isn't a new constraint — `PROFILES[...]['devices']` entries already always carry the real
+device id (`dedupe_profiles.py:307`), and every tool signature in this proposal already takes
+`device_id`, never a name. Stating it here so it doesn't erode later.
+
+### Command/property ids: resolved by the backend from names, not carried in the prompt
+
+The compact `DEVICE DATABASE` has never carried command/property/parameter ids — only display
+names and enum labels (`minimal_rag_formatter.py:53-95` collects names, never ids). Two options
+were weighed for how a `send_command`/`get_property` call gets a real id:
+
+1. Add ids into the always-loaded compact `DEVICE DATABASE`. Measured cost: +7.5% (+687 tokens on
+   a real 176-device installation captured this session) — cheap and cache-amortized, but a
+   permanent tax on every session regardless of whether it's ever used.
+2. Require a `get_device_detail` round-trip before every action to fetch real ids. Backend compute
+   for this is free (it's just re-rendering `Editor`/`NodeDef` objects already in memory) — but it
+   still costs one full extra model inference turn, on every single action, even parameterless ones
+   like "turn off the light."
+
+Neither is necessary. The model already emits the *name* it read out of the compact `DEVICE
+DATABASE` (verbatim, since that's the only representation it's ever shown) — the backend resolves
+that name to a real id itself, deterministically, using the `NodeDef`/`Editor` objects it already
+holds for that specific `device_id`. No prompt bloat, no extra round-trip for the common case.
+
+**Why this doesn't reopen the safety gap the id-only rule exists for:** the risk isn't the model
+picking the *wrong* real command (a reasoning error, identical whether the model emits a name or
+an id — no representation choice fixes bad judgment). The risk is the model's output not cleanly
+matching *anything* real (typo, paraphrase, case drift) and the backend silently resolving that
+near-miss to a similarly-named-but-wrong item. That risk is real data, not hypothetical: the real
+installation captured this session has `DimmerLampSwitch_ADV` using `'On Level'` as *both* a
+property name (`pc_2`) and an accepts-command name (`ac_2`) — same device, same string, two
+different underlying ids. It resolves cleanly for free because `get_property`/`send_command` are
+different tools, so the tool itself already scopes which namespace `'On Level'` means; no
+ambiguity reaches the backend matcher at all.
+
+The rule that keeps this safe: resolution must be **exact match** (case/whitespace-normalized),
+**scoped to `(device_id, that tool's namespace)`**, with a hard reject-and-request-clarification on
+anything that doesn't match — never a fuzzy/similarity fallback. Fuzzy matching is where a
+confident-but-wrong command (e.g., "Off" resolving to "Fast Off") could execute silently against
+real hardware, which is a worse failure mode than a wrong numeric value since there's no
+range-check to catch it. With strict matching, this degrades exactly as safely as an invalid id
+does today (`common.md`'s existing "if missing/invalid, request clarification" rule extends
+unchanged) — and since the compact `DEVICE DATABASE` already shows the model the exact name string
+to copy, there's no more reason to expect drift here than there would be copying an id verbatim.
+`get_device_detail` stays reserved for what it's actually needed for: editor fidelity (uom/
+precision/enum keys) for numeric/enum-valued commands, not id lookup.
+
+## Value resolution: split between the LLM (parsing) and the backend (arithmetic), not moved wholesale
 
 `common.md` today spends four whole sections (`GLOBAL UOM RULES`, `GLOBAL PRECISION RULES`,
 `GLOBAL CUSTOMER VALUE CONVERSION RULES`, plus half of `GLOBAL ID RULES`) forcing the model to
 be a manual uom/precision/enum-key lookup engine — "never guess a uom," "copy precision exactly,"
-a 4-case value-conversion decision tree. This is the single largest source of bespoke,
-NuCore-specific prompt engineering in the whole system, and it exists to compensate for asking
-the LLM to do something LLMs are not naturally good at (exact numeric protocol encoding) instead
-of something they are (extracting intent from natural language).
+a 4-case value-conversion decision tree. This is real bespoke prompt engineering, but it conflates
+two different jobs that need to stay split:
 
-Proposal: `send_command(device_id, command, value?)` takes `value` as whatever the user said —
-`"72"`, `"72°F"`, `"on"`, `"Program Auto"` — as a plain string. The backend (which already has
-every device's real `Editor` objects, per the device-schema-editor-refs work) does unit
-parsing, enum-label matching, and precision/range validation deterministically in Python, and
-returns a clear error string as the tool result if the value is genuinely ambiguous or
-out-of-range — which the model then relays to the user or asks a follow-up question about,
-exactly like it already handles any other tool error. This deletes most of the current
-`common.md` UOM/precision machinery and moves correctness-critical numeric logic out of
-LLM-generated output and into deterministic, testable code — strictly safer, not just simpler.
+- **Parsing natural language into a structured value is an LLM job, not a backend job.**
+  "A billion dollars," "kinda warm, maybe low 70s," "Program Auto" all require language
+  understanding — recognizing scale words, matching a customer's phrasing to one of several
+  enum labels, deciding when something's too ambiguous to act on. A backend can't regex its way
+  through that; only the model reading the sentence can. An earlier version of this proposal
+  described passing the customer's raw string (`"a billion dollars"`) straight to the backend
+  for "unit parsing" — that was wrong, and would have required the backend to reimplement NL
+  understanding it doesn't have.
+- **Converting a structured value is a backend job, not an LLM job.** Once the model has
+  extracted "the customer means 1,000,000,000 USD" or matched "Program Auto" to the editor's
+  literal enum label, the remaining work — USD→cents arithmetic, F↔C conversion, rounding to
+  the editor's exact precision, min/max range validation, confirming a picked enum label exists
+  in that editor's table and resolving it to its key — is exact, closed-world, and exactly where
+  LLMs are unreliable (arithmetic slips, invented conversion factors, hallucinated enum keys).
+
+Revised proposal: `send_command(device_id, command, value?, unit?)` — the model supplies the
+*parsed* value and, when the customer stated one, the unit or enum label it understood
+(`value=1000000000, unit="USD"`; `value=72, unit="F"`; `value="Program Auto"` for an enum
+command). The backend (which already has every device's real `Editor` objects, per the
+device-schema-editor-refs work) does the conversion, precision rounding, range validation, and
+enum-key resolution deterministically in Python against that specific editor's table, and
+returns a clear error string as the tool result if the unit is unconvertible, the label doesn't
+match, or the value is out of range — which the model then relays to the user or asks a
+follow-up question about, exactly like it already handles any other tool error. The backend
+never receives or interprets free-form customer text; it only ever receives numbers and short
+tokens the model already resolved. This still deletes most of `common.md`'s UOM/precision
+arithmetic rules (the model no longer hand-computes conversions or copies precision digits) while
+keeping natural-language interpretation where it belongs.
 
 ## Multi-turn orchestration: native tool-use loop, not `route_plan`
 
@@ -197,8 +297,10 @@ regardless of which architecture direction is chosen.
 - Removes several bespoke mechanisms (`route_plan` threading, pending-continuation classifier,
   cross-intent memory hydration plumbing) in favor of patterns every major LLM already handles
   natively — directly serves the "any off-the-shelf LLM should understand this" goal.
-- Moves numeric/uom/precision correctness out of LLM-generated text into deterministic backend
-  code — a real reliability improvement, not just a simplification.
+- Moves unit-conversion arithmetic, precision rounding, range validation, and enum-key lookup
+  out of LLM-generated text into deterministic backend code, while leaving natural-language
+  parsing (what did the customer actually mean) with the model, where it belongs — a real
+  reliability improvement, not just a simplification.
 - One glossary/definitions section instead of near-duplicate boilerplate across 8 prompts.
 - Search-then-detail context strategy scales to large installations the same way the router
   already does, without needing a separate hidden classification call to build a candidate list.

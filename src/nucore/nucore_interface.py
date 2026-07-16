@@ -14,7 +14,10 @@ import asyncio
 
 from .profile import Profile
 from .group import Group, GroupMemberType
+from .node import Node
+from .folder import Folder
 from .nodedef import Property
+from .cmd import Command
 from typing import Any, Literal
 from abc import ABC, abstractmethod
 from utils import get_logger
@@ -25,6 +28,11 @@ class PromptFormatTypes:
     """Constants for the two supported device-data prompt formats."""
     DEVICE = "per-device"
     PROFILE = "shared-features"
+
+
+def _normalize_name(name: str | None) -> str:
+    """Case/whitespace-normalize a display name for exact-match comparison."""
+    return " ".join((name or "").strip().casefold().split())
 
 class NuCoreInterface(ABC):
 
@@ -79,6 +87,81 @@ class NuCoreInterface(ABC):
 
         return out
 
+    def get_node(self, device_id: str) -> Node | Group | Folder | None:
+        """Resolve a device_id (as emitted by the compact DEVICE DATABASE) to
+        its real Node/Group/Folder object.
+
+        Checks ``self.nodes``, then ``self.groups``, then ``self.folders`` --
+        the same three-dict-fallback order used throughout ``IoXWrapper``
+        (e.g. ``get_device_name``, ``_get_node_type``). ``device_id`` is
+        decoded first (a no-op today, correct if id-encoding is ever turned
+        on) so this stays compatible with the same ids the compact device
+        database and every existing lookup already use.
+
+        Returns:
+            The matching ``Node``/``Group``/``Folder``, or ``None``.
+        """
+        # Deferred import: src/rag imports from src/nucore at module load
+        # time, so importing it eagerly here would be a circular import.
+        from rag.profile_rag_formatter import ProfileRagFormatter
+
+        address = ProfileRagFormatter.decode_id(device_id)
+        node = self.nodes.get(address)
+        if node is None:
+            node = self.groups.get(address)
+        if node is None:
+            node = self.folders.get(address)
+        return node
+
+    def resolve_property_id(self, device_id: str, name: str) -> str | None:
+        """Exact-match a property display name (as read from the compact
+        DEVICE DATABASE) to its real property id, scoped to this one
+        device's own NodeDef.
+
+        Case/whitespace-normalized exact match only -- never fuzzy. Never
+        looks outside this device's own ``properties``, which is what keeps
+        a name shared between a property and an accepts/sends command (a
+        real, confirmed case in this system -- e.g. "On Level" is both a
+        property and a command on the same device) from resolving
+        ambiguously: the caller picks the namespace by which resolver it
+        calls, the same way ``get_property``/``send_command`` are separate
+        tools.
+
+        Returns:
+            The real property id, or ``None`` if no exact match was found.
+        """
+        node = self.get_node(device_id)
+        if node is None or not getattr(node, "node_def", None):
+            return None
+        target = _normalize_name(name)
+        for prop in node.node_def.properties.values():
+            if prop.name and _normalize_name(prop.name) == target:
+                return prop.id
+        return None
+
+    def resolve_command_id(
+        self, device_id: str, name: str, direction: Literal["accepts", "sends"] = "accepts"
+    ) -> Command | None:
+        """Exact-match a command display name to its real ``Command``,
+        scoped to this device's own ``accepts`` or ``sends`` list (never
+        both combined, and never a device's ``properties`` -- same
+        namespace-scoping rationale as :meth:`resolve_property_id`).
+
+        Returns the matched ``Command`` object (not just its id) since
+        callers need its ``.parameters`` to resolve/validate a value too.
+
+        Returns:
+            The matched ``Command``, or ``None`` if no exact match was found.
+        """
+        node = self.get_node(device_id)
+        if node is None or not getattr(node, "node_def", None):
+            return None
+        commands = node.node_def.cmds.accepts if direction == "accepts" else node.node_def.cmds.sends
+        target = _normalize_name(name)
+        for cmd in commands:
+            if cmd.name and _normalize_name(cmd.name) == target:
+                return cmd
+        return None
 
     async def _refresh_device_structure(self) -> bool:
         """

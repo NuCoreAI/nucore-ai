@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from openai import AsyncOpenAI
-from .base_adapter import LLMAdapter, ToolCall, ToolSpec
+from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
 
 class OpenAIAdapter(LLMAdapter):
@@ -137,6 +137,7 @@ class OpenAIAdapter(LLMAdapter):
             return {
                 "content": "".join(content_parts),
                 "tool_calls": tool_calls,
+                "native_tool_calls": raw_tool_calls,
                 "raw": {
                     "streamed": True,
                     "chunks": len(content_parts),
@@ -163,21 +164,36 @@ class OpenAIAdapter(LLMAdapter):
         return {
             "content": message.content or "",
             "tool_calls": tool_calls,
+            # OpenAI's own tool-call shape, preserved (not just the
+            # provider-agnostic canonical form) so build_tool_round_trip_messages
+            # can echo it back verbatim in the assistant turn -- OpenAI requires
+            # the exact {id, type, function:{name, arguments}} shape it emitted.
+            "native_tool_calls": raw_tool_calls,
             "raw": response.model_dump(),
         }
 
-    def _normalize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    def _normalize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Ensure every message's ``content`` is a plain string.
 
         OpenAI-compatible backends reject messages where ``content`` is a list
         or other non-string type.  Complex content is JSON-serialised as a
         fallback so no information is silently dropped.
+
+        Tool-call round-trip messages (``role: "tool"``, or an assistant
+        message carrying ``tool_calls``) are passed through unmodified
+        instead: OpenAI requires their exact shape (``tool_call_id`` on a
+        tool message, the native ``tool_calls`` list on an assistant
+        message) to recognise a tool-result turn -- coercing them to a plain
+        string would silently break the agentic tool-calling loop.
         """
-        normalized: list[dict[str, str]] = []
+        normalized: list[dict[str, Any]] = []
         for msg in messages or []:
             if not isinstance(msg, dict):
                 continue
             role = str(msg.get("role") or "user")
+            if role == "tool" or (role == "assistant" and "tool_calls" in msg):
+                normalized.append(msg)
+                continue
             content = msg.get("content", "")
             if content is None:
                 content_text = ""
@@ -352,6 +368,37 @@ class OpenAIAdapter(LLMAdapter):
                 )
             )
         return calls
+
+    def build_tool_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        tool_calls: list[ToolCall],
+        tool_results: list[Any],
+    ) -> list[dict[str, Any]]:
+        """Build the assistant tool-call turn + one ``role: "tool"`` message
+        per result.
+
+        Requires the exact native ``{id, type, function:{name, arguments}}``
+        shape OpenAI itself emitted (``raw_response["native_tool_calls"]``,
+        added to :meth:`generate`'s return dict specifically for this) --
+        the provider-agnostic canonical ``tool_calls`` shape isn't enough,
+        since OpenAI validates the echoed-back call shape strictly.
+        """
+        assistant_message: dict[str, Any] = {
+            "role": "assistant",
+            "content": raw_response.get("content") or None,
+            "tool_calls": raw_response.get("native_tool_calls", []),
+        }
+        tool_messages = [
+            {
+                "role": "tool",
+                "tool_call_id": tc.call_id,
+                "content": stringify_tool_result(result),
+            }
+            for tc, result in zip(tool_calls, tool_results)
+        ]
+        return [assistant_message, *tool_messages]
 
     def _coerce_json(self, value: Any) -> dict[str, Any]:
         """Coerce a raw argument value to a dict.

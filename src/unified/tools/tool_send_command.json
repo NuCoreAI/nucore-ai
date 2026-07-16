@@ -1,0 +1,26 @@
+{
+  "name": "send_command",
+  "description": "Send a command to a device to control its behavior (turn on/off, set a value, change mode, run query, etc.). Supply value/unit only for commands that take one -- most commands (on/off/query/etc.) take none.",
+  "input_schema": {
+    "type": "object",
+    "required": ["device_id", "command"],
+    "properties": {
+      "device_id": {
+        "type": "string",
+        "description": "The device's real id, exactly as shown for it in DEVICE DATABASE."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command's exact display name, exactly as shown in this device's 'accepts' list in DEVICE DATABASE -- not an id."
+      },
+      "value": {
+        "type": ["number", "string", "null"],
+        "description": "The value to set, parsed from what the customer said: a plain number, or the exact enum label text shown for this command if it's an enumerated choice (e.g. 'Program Auto'). Never a raw protocol id/key, never pre-converted. Omit for commands that take no value."
+      },
+      "unit": {
+        "type": ["string", "null"],
+        "description": "The unit the customer stated for `value`, if any (e.g. 'celsius', 'minutes'). Omit if the customer didn't state one, or `value` is an enum label."
+      }
+    }
+  }
+}

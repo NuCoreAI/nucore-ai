@@ -342,11 +342,11 @@ class IoXWrapper(NuCoreInterface):
             body=payload,
         )
 
-    def group_scene_remove_member(self, controller_address: str, link_address: str) -> dict[str, Any]:
+    def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
         """Remove a member node from a group."""
         return self._group_scene_response(
             method="DELETE",
-            path=f"/api/groups/members/{quote(controller_address, safe='')}",
+            path=f"/api/groups/members/{quote(group_address, safe='')}",
             body={"nodeAddress": link_address},
         )
 

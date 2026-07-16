@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from intent_handler import IntentHandlerResult, IntentRuntime, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
 from nucore import NuCoreInterface, PromptFormatTypes
+from unified.runtime import UnifiedRuntime
 from utils import configure_logging, get_logger
 
 
@@ -97,6 +98,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Path to intent handler directory",
+    )
+    parser.add_argument(
+        "--unified",
+        action="store_true",
+        help=(
+            "Use the new unified single-prompt + native-tool-calling path "
+            "(design/design.md) instead of router/intent-handler dispatch. "
+            "A new, parallel path -- default behavior when this flag is "
+            "omitted is unchanged."
+        ),
     )
     parser.add_argument(
         "--runtime-config",
@@ -418,12 +429,18 @@ def main(args:Any=None, websocket=None) -> None:
     logger.debug("Logging initialized", extra={"log_config": log_config})
 
     # Resolve paths — prefer explicit CLI args, fall back to auto-detected defaults.
-    intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
+    # The unified path doesn't use an intent handler directory at all (it has
+    # no per-intent prompt.md/tool_files, no router), so it's only resolved
+    # and validated for the classic path.
+    intent_dir = None
+    if not args.unified:
+        intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
+        if not intent_dir.exists() or not intent_dir.is_dir():
+            raise FileNotFoundError(f"Intent handler directory not found: {intent_dir}")
+
     runtime_config_path = Path(args.runtime_config).expanduser().resolve() if args.runtime_config else None
     secrets_env = _load_secrets_file(args.secrets_file) if args.secrets_file else None
 
-    if not intent_dir.exists() or not intent_dir.is_dir():
-        raise FileNotFoundError(f"Intent handler directory not found: {intent_dir}")
     if runtime_config_path is None:
         raise ValueError("--runtime-config is required and must point to a JSON file with top-level 'nucore_runtime'")
     if not runtime_config_path.exists() or not runtime_config_path.is_file():
@@ -464,16 +481,24 @@ def main(args:Any=None, websocket=None) -> None:
     if nucore_interface is None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
 
-    runtime = IntentRuntime(
-        intent_handler_directory=intent_dir,
-        llm_client=llm_adapter,
-        nucore_interface=nucore_interface,
-        runtime_config_path=runtime_config_path,
-        path_to_data_directory=resolved_data_directory,
-        stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
-        websocket=websocket,
-    )
-    logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})
+    if args.unified:
+        runtime = UnifiedRuntime(
+            nucore_interface=nucore_interface,
+            llm_client=llm_adapter,
+            runtime_config=runtime_config,
+        )
+        logger.info("Unified runtime initialized")
+    else:
+        runtime = IntentRuntime(
+            intent_handler_directory=intent_dir,
+            llm_client=llm_adapter,
+            nucore_interface=nucore_interface,
+            runtime_config_path=runtime_config_path,
+            path_to_data_directory=resolved_data_directory,
+            stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
+            websocket=websocket,
+        )
+        logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})
 
     if websocket:
         logger.info("WebSocket connection detected; streaming responses will be sent to the client.")

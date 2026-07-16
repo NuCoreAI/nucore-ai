@@ -6,6 +6,21 @@ from typing import Any
 from dataclasses import dataclass
 
 
+def stringify_tool_result(result: Any) -> str:
+    """Render an arbitrary tool-execution result as a string for a
+    ``tool_result``/``tool`` round-trip message.
+
+    Shared by every adapter's ``build_tool_round_trip_messages`` so results
+    are stringified identically regardless of provider.
+    """
+    if isinstance(result, str):
+        return result
+    try:
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception:
+        return str(result)
+
+
 # ---------------------------------------------------------------------------
 # Data Transfer Objects
 # ---------------------------------------------------------------------------
@@ -128,6 +143,41 @@ class LLMAdapter(ABC):
             A list of message dicts ready to be passed back to :meth:`generate`.
         """
         raise NotImplementedError
+
+    def build_tool_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        tool_calls: list[ToolCall],
+        tool_results: list[Any],
+    ) -> list[dict[str, Any]]:
+        """Return the provider-native message(s) to append after executing
+        *tool_calls*, so the *next* :meth:`generate` call sees a real
+        assistant-tool-call turn plus a real tool-result turn -- enabling a
+        genuine multi-turn agentic tool-calling loop -- instead of a
+        synthesized text summary with tools disabled.
+
+        A concrete (not abstract) method with a ``NotImplementedError``
+        default: most adapters don't need to support this yet, and making it
+        abstract would break every existing adapter that doesn't implement
+        it. Only adapters actually used by :class:`unified.loop.AgenticLoop`
+        need to override this.
+
+        Args:
+            raw_response: The dict :meth:`generate` returned for the turn
+                that produced *tool_calls*.
+            tool_calls:   The canonical :class:`ToolCall` list extracted from
+                *raw_response* (via :meth:`parse_tool_calls`).
+            tool_results: The result of executing each tool call, in the same
+                order as *tool_calls*.
+
+        Returns:
+            A list of message dicts to append to the conversation before the
+            next :meth:`generate` call.
+        """
+        raise NotImplementedError(
+            f"{self.provider_name} adapter does not support the agentic tool round trip yet"
+        )
 
     # ------------------------------------------------------------------
     # Tool spec helpers

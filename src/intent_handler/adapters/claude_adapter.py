@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from anthropic import AsyncAnthropic
-from .base_adapter import LLMAdapter, ToolCall, ToolSpec
+from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
 
 class ClaudeAdapter(LLMAdapter):
@@ -183,4 +183,29 @@ class ClaudeAdapter(LLMAdapter):
             {"type": "tool_use", "id": tc.call_id, "name": tc.name, "input": tc.args}
             for tc in tool_calls
         ]
+
+    def build_tool_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        tool_calls: list[ToolCall],
+        tool_results: list[Any],
+    ) -> list[dict[str, Any]]:
+        """Build the assistant ``tool_use`` turn + user ``tool_result`` turn.
+
+        Works immediately because :meth:`generate` already forwards arbitrary
+        (string or content-block-list) ``content`` into ``anthropic_messages``
+        unmodified -- no other change to :meth:`generate` was needed.
+        """
+        assistant_message = {"role": "assistant", "content": raw_response.get("content", [])}
+        tool_result_blocks = [
+            {
+                "type": "tool_result",
+                "tool_use_id": tc.call_id,
+                "content": stringify_tool_result(result),
+            }
+            for tc, result in zip(tool_calls, tool_results)
+        ]
+        user_message = {"role": "user", "content": tool_result_blocks}
+        return [assistant_message, user_message]
 
