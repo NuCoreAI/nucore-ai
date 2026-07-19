@@ -446,9 +446,16 @@ def main(args:Any=None, websocket=None) -> None:
     if not runtime_config_path.exists() or not runtime_config_path.is_file():
         raise FileNotFoundError(f"Runtime profile file not found: {runtime_config_path}")
 
+    # This first load is only used to build the LLM dispatch adapter's
+    # provider clients (below) and, for --unified, as UnifiedRuntime's own
+    # config -- neither should have a live stream handler wired in (the
+    # unified path doesn't support streaming yet). The classic path's real
+    # stream handler is wired separately: IntentRuntime does its own second
+    # `_load_runtime_config` call internally, with the real StreamHandler()
+    # instance passed to its constructor below.
     runtime_config = _load_runtime_config(
         path=str(runtime_config_path),
-        stream_handler=None,  # Stream handler will be set later after defining the callback
+        stream_handler=None,
     )
 
     resolved_data_directory: Path | None = None

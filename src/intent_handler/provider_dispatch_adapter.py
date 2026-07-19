@@ -182,6 +182,34 @@ class ProviderDispatchLLMAdapter(LLMAdapter):
             return []
         return client.to_canonical_tools(tool_calls)
 
+    def build_tool_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        tool_calls: list[ToolCall],
+        tool_results: list[Any],
+        config: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Delegate to the *same* provider client that produced ``raw_response``.
+
+        Unlike :meth:`export_tools`/:meth:`parse_tool_calls`/:meth:`to_canonical_tools`
+        (which resolve the default provider since they don't depend on which
+        provider made a specific call), this must resolve using the exact
+        same ``config`` that was passed to the :meth:`generate` call that
+        produced *raw_response* -- its shape is provider-specific, and a
+        wrong guess here would try to parse e.g. an OpenAI response shape
+        with the Claude adapter's logic.
+        """
+        client, _ = self.get_adapter_for_provider(config)
+        if not client:
+            raise ValueError("No LLM client available to build tool round-trip messages")
+        return client.build_tool_round_trip_messages(
+            raw_response=raw_response,
+            tool_calls=tool_calls,
+            tool_results=tool_results,
+            config=config,
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

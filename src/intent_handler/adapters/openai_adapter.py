@@ -375,6 +375,7 @@ class OpenAIAdapter(LLMAdapter):
         raw_response: Any,
         tool_calls: list[ToolCall],
         tool_results: list[Any],
+        config: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the assistant tool-call turn + one ``role: "tool"`` message
         per result.

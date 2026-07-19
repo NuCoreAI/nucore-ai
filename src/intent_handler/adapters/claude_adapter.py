@@ -40,13 +40,23 @@ class ClaudeAdapter(LLMAdapter):
         ``system`` role messages are collected and joined into Claude's
         top-level ``system`` parameter; all other roles are forwarded as-is.
 
-        When ``config["stream"]`` is True and ``config["stream_handler"]`` is
-        callable, tokens are forwarded to the handler in real time and the
-        adapter waits for the final message before returning.
+        Always issues the request via the SDK's streaming transport
+        (``self._client.messages.stream``), regardless of ``config["stream"]``
+        -- the Anthropic SDK itself refuses non-streaming calls whose
+        ``max_tokens`` implies the response could take longer than 10
+        minutes (``ValueError: Streaming is required for operations that may
+        take longer than 10 minutes``), so a caller that configures a large
+        ``max_tokens`` without a live UI to stream to still needs the
+        streaming transport under the hood. Whether chunks are actually
+        forwarded anywhere is a separate, independent decision: when
+        ``config["stream_handler"]`` is callable, each text chunk is
+        forwarded to it as it arrives; when it isn't, chunks are collected
+        silently and only the final assembled response is returned -- so a
+        caller with no live handler still gets exactly one result, not a
+        live stream *and* a duplicate final print.
 
         Returns a dict with keys:
-            - ``content``: list of content block dicts (or joined text string
-              for the streaming path)
+            - ``content``: list of content block dicts
             - ``text``:  plain text extracted from text content blocks
             - ``tool_calls``: canonical tool_use dicts (may be empty)
             - ``raw``: original SDK response as a dict
@@ -91,42 +101,30 @@ class ClaudeAdapter(LLMAdapter):
         if "temperature" in cfg:
             kwargs["temperature"] = cfg["temperature"]
 
-        stream = bool(cfg.get("stream", False))
         stream_handler = cfg.get("stream_handler")
-        if stream and callable(stream_handler):
-            # Streaming path: push text chunks to the handler as they arrive,
-            # then collect the final message for tool-call extraction.
-            callback = stream_handler
-            async with self._client.messages.stream(**kwargs) as response_stream:
+        callback = stream_handler if callable(stream_handler) else None
+
+        # Always use the streaming transport (see docstring) -- only forward
+        # chunks to a callback when one is actually configured.
+        async with self._client.messages.stream(**kwargs) as response_stream:
+            if callback is not None:
                 async for text_chunk in response_stream.text_stream:
                     await callback(text_chunk)
-                final_message = await response_stream.get_final_message()
+            final_message = await response_stream.get_final_message()
 
-            content = final_message.content
-            text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
-            raw_response = {"content": [block.model_dump() for block in content]}
-            tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
-            await callback("", is_end=True)  # Signal end of stream to the handler.
-            return {
-                "content": raw_response["content"],
-                "text": "\n".join(text_parts),
-                "tool_calls": tool_calls,
-                "raw": final_message.model_dump(),
-            }
-
-        # Non-streaming path: single round-trip, parse response immediately.
-        response = await self._client.messages.create(**kwargs)
-        content = response.content
+        content = final_message.content
         text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
         content_dicts = [block.model_dump() for block in content]
         raw_response = {"content": content_dicts}
         tool_calls = self.to_canonical_tools(self.parse_tool_calls(raw_response))
+        if callback is not None:
+            await callback("", is_end=True)  # Signal end of stream to the handler.
 
         return {
             "content": content_dicts,
             "text": "\n".join(text_parts),
             "tool_calls": tool_calls,
-            "raw": response.model_dump(),
+            "raw": final_message.model_dump(),
         }
 
     def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
@@ -184,20 +182,45 @@ class ClaudeAdapter(LLMAdapter):
             for tc in tool_calls
         ]
 
+    @staticmethod
+    def _sanitize_content_block(block: dict[str, Any]) -> dict[str, Any]:
+        """Strip a response content block down to the fields the Messages API
+        accepts as *input* when it's echoed back on the next turn.
+
+        ``block.model_dump()`` (in :meth:`generate`) serializes the Anthropic
+        SDK's response objects verbatim, which can carry response-only
+        fields (e.g. a ``text`` block's ``parsed_output``, added by newer
+        SDK/API versions) that the API rejects with "Extra inputs are not
+        permitted" if fed straight back in as request content. Known block
+        types are rebuilt from only their accepted fields; anything
+        unrecognized is passed through as-is (best effort) rather than
+        silently dropped.
+        """
+        block_type = block.get("type")
+        if block_type == "text":
+            return {"type": "text", "text": block.get("text", "")}
+        if block_type == "tool_use":
+            return {"type": "tool_use", "id": block.get("id"), "name": block.get("name"), "input": block.get("input", {})}
+        return block
+
     def build_tool_round_trip_messages(
         self,
         *,
         raw_response: Any,
         tool_calls: list[ToolCall],
         tool_results: list[Any],
+        config: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the assistant ``tool_use`` turn + user ``tool_result`` turn.
 
-        Works immediately because :meth:`generate` already forwards arbitrary
-        (string or content-block-list) ``content`` into ``anthropic_messages``
-        unmodified -- no other change to :meth:`generate` was needed.
+        :meth:`generate` already forwards arbitrary (string or
+        content-block-list) ``content`` into ``anthropic_messages``
+        unmodified -- but the content blocks themselves must be sanitized
+        first (see :meth:`_sanitize_content_block`), since they originate
+        from a *response* object, not hand-built request input.
         """
-        assistant_message = {"role": "assistant", "content": raw_response.get("content", [])}
+        content_blocks = [self._sanitize_content_block(b) for b in raw_response.get("content", [])]
+        assistant_message = {"role": "assistant", "content": content_blocks}
         tool_result_blocks = [
             {
                 "type": "tool_result",

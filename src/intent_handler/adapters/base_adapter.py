@@ -150,6 +150,7 @@ class LLMAdapter(ABC):
         raw_response: Any,
         tool_calls: list[ToolCall],
         tool_results: list[Any],
+        config: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Return the provider-native message(s) to append after executing
         *tool_calls*, so the *next* :meth:`generate` call sees a real
@@ -170,6 +171,14 @@ class LLMAdapter(ABC):
                 *raw_response* (via :meth:`parse_tool_calls`).
             tool_results: The result of executing each tool call, in the same
                 order as *tool_calls*.
+            config:       The same per-call config dict passed to the
+                :meth:`generate` call that produced *raw_response* -- needed
+                by :class:`~provider_dispatch_adapter.ProviderDispatchLLMAdapter`
+                to resolve the *same* concrete provider that actually
+                produced *raw_response* (its shape is provider-specific and
+                otherwise carries no "which provider made this" tag of its
+                own), so this must be threaded through unchanged rather than
+                re-resolved from a default.
 
         Returns:
             A list of message dicts to append to the conversation before the
