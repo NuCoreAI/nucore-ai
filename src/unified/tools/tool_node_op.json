@@ -1,6 +1,6 @@
 {
   "name": "node_op",
-  "description": "Manage a device/group/folder node: enable, disable, delete, rename, move it, or create a new group/folder.",
+  "description": "Manage a device/group/folder node: enable, disable, delete, rename, move it, or create a new group/folder. add_group/add_folder's result includes the new node's real id -- use that as new_parent_id for a following move, never the name you gave it.",
   "input_schema": {
     "type": "object",
     "required": ["operation"],
