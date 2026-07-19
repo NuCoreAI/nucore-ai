@@ -60,6 +60,26 @@
             "justMyCode": false
         },
         {
+            "name": "Unified-Claude-IntentHandler-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/intent_handler/run_intent_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--unified",
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-username=",
+               "--backend-api-password=",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--secrets-file=secrets/keys.json",
+               "--log-level=INFO",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
             "name": "Claude-IntentHandler-LakeEncino",
             "type": "debugpy",
             "request": "launch",
