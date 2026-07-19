@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """
-Extracts shared collections of properties, accepts-cmds, and sends-cmds
-from device profiles into a shared lookup section.
+Deduplicates enum-heavy items shared across device profiles.
 
-Strategy:
-  For each section (props, accepts-cmds, sends-cmds), find the exact set of
-  items shared by 2+ profiles — that becomes a named collection. Each profile
-  then references the collection plus any extra items unique to it.
+Strategy: profile-level indirection (a separate COLLECTIONS lookup table
+that profiles' props/accepts/sends "extend") was measured to cost far more
+than it saves once real installation data is used -- it forces the model to
+chase a profile -> collection -> (possibly) enum reference chain just to
+read a device's capabilities, which is real reliability risk, in exchange
+for savings that are almost entirely concentrated in a small number of
+enum value lists, not the collections themselves. So there is no
+COLLECTIONS table and no 'extends' anymore: every profile's props/accepts/
+sends are always inlined directly, in full.
 
-  Items with >3 enumerations are also individually deduplicated within
-  collections (and extras) to avoid repeating long enum lists.
+The one thing still worth deduplicating is large enum value lists that are
+genuinely shared by multiple profiles (e.g. a 128-entry backlight enum used
+by 6 keypad profiles) -- inlining those into every profile that uses them
+really does cost meaningfully more than referencing them once. That's the
+only indirection left: items with more than MIN_ENUMS enum values, where
+(occurrences - 1) * entry_count clears ENUM_SHARE_COST_THRESHOLD, get
+pulled into a small ENUMS table and referenced via ('$ref', enum_id);
+everything else -- the large majority of items -- is always inline.
 
 Usage:
     python dedupe_profiles.py <input.json> [output.json]
@@ -20,9 +30,12 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
-MIN_ENUMS = 3  # individually extract items with MORE THAN this many enums
+MIN_ENUMS = 3  # only consider items with MORE THAN this many enum values for $ref at all
+# (occurrences - 1) * entry_count must clear this before an enum is worth
+# referencing instead of inlining everywhere it appears -- e.g. an enum
+# shared by 3 profiles needs ~10+ entries, one shared by 6 needs ~4+.
+ENUM_SHARE_COST_THRESHOLD = 20
 SECTIONS = ("props", "accepts-cmds", "sends-cmds")
 
 
@@ -35,53 +48,9 @@ class DedupeProfiles:
         return json.dumps(obj, sort_keys=True)
 
     @staticmethod
-    def _canon_set(items: list[dict]) -> tuple[str, ...]:
-        """Order-independent canonical key for a list of items."""
-        return tuple(sorted(DedupeProfiles._canon(i) for i in items))
-
-    @staticmethod
     def _enum_count(item: dict) -> int:
         name = next(iter(item))
         return len(item[name])
-
-    @staticmethod
-    def build_collections(profiles: list[dict]) -> dict:
-        """
-        For each section, group profiles that share the exact same item list.
-        Returns {section: {canon_key: {"id": ..., "items": [...], "profile_ids": [...]}}}
-        """
-        result = {}
-        for section in SECTIONS:
-            groups: dict[tuple, list[str]] = defaultdict(list)
-            items_by_key: dict[tuple, list[dict]] = {}
-            for p in profiles:
-                items = p.get(section, [])
-                key = DedupeProfiles._canon_set(items)
-                groups[key].append(p["id"])
-                items_by_key[key] = items
-
-            prefix = {"props": "props", "accepts-cmds": "accepts", "sends-cmds": "sends"}[section]
-            collections = {}
-            used_ids: set[str] = set()
-            for key, pids in sorted(groups.items(), key=lambda x: -len(x[1])):
-                if len(pids) < 2 or not key or key == ("",):
-                    continue
-                # Skip empty item lists
-                if all(s == "[]" for s in key):
-                    continue
-                # Name the collection after the shortest (then alphabetically first)
-                # profile id that uses it -- readable, and reuses an identifier the
-                # reader already recognizes from PROFILES instead of a bare counter.
-                anchor = min(pids, key=lambda p: (len(p), p))
-                coll_id = DedupeProfiles._unique_id(f"{prefix}_like_{anchor}", used_ids)
-                used_ids.add(coll_id)
-                collections[key] = {
-                    "id": coll_id,
-                    "items": items_by_key[key],
-                    "profile_ids": pids,
-                }
-            result[section] = collections
-        return result
 
     @staticmethod
     def _slugify(name: str) -> str:
@@ -101,44 +70,60 @@ class DedupeProfiles:
 
 
     @staticmethod
-    def build_enum_lookup(collections: dict, profiles: list[dict]) -> tuple[dict, dict]:
+    def build_enum_lookup(profiles: list[dict]) -> tuple[dict, dict]:
         """
-        Find items with >MIN_ENUMS that appear across all content (collections + extras).
+        Find enum-bearing items (> MIN_ENUMS values) worth referencing
+        instead of inlining everywhere they appear.
+
+        "Worth it" is a real cost comparison, not just an occurrence count:
+        (occurrences - 1) * entry_count -- the number of extra copies that
+        inlining would create, times how expensive each copy is -- must
+        clear ENUM_SHARE_COST_THRESHOLD. An item that only ever appears once
+        costs nothing extra either way and is never referenced; a huge enum
+        appearing many times (the actual expensive case) is. Occurrences are
+        counted per raw appearance, not per distinct profile -- a single
+        profile referencing the same enum in both its props and accepts
+        sections (e.g. a thermostat's Mode is both a readable property and a
+        settable command) genuinely duplicates it twice if inlined, exactly
+        as much as two different profiles sharing it once each would.
+
         Returns (enum_defs, enum_lookup) where:
-        - enum_defs: {section: {id: definition}} for the shared section
+        - enum_defs: {ref_id: item} for the small set of items kept as $ref
         - enum_lookup: {canon_json: ref_id}
         """
-        enum_defs: dict[str, dict] = {s: {} for s in SECTIONS}
-        enum_lookup: dict[str, str] = {}
-        used_ids: set[str] = set()
-
-        seen: set[str] = set()
-        # Scan all profiles (covers both collection and extra items)
+        occurrences: dict[str, int] = defaultdict(int)
+        item_by_canon: dict[str, dict] = {}
         for profile in profiles:
             for section in SECTIONS:
                 for item in profile.get(section, []):
                     if DedupeProfiles._enum_count(item) <= MIN_ENUMS:
                         continue
                     canon = DedupeProfiles._canon(item)
-                    if canon in seen:
-                        continue
-                    seen.add(canon)
-                    # Each item's own display name (e.g. "Ramp Rate") already
-                    # tells a reader what the enum is -- use it instead of a
-                    # bare per-section counter.
-                    name = next(iter(item))
-                    ref_id = DedupeProfiles._unique_id(f"{DedupeProfiles._slugify(name)}_enum", used_ids)
-                    used_ids.add(ref_id)
-                    enum_defs[section][ref_id] = item
-                    enum_lookup[canon] = ref_id
+                    item_by_canon[canon] = item
+                    occurrences[canon] += 1
 
-        enum_defs = {k: v for k, v in enum_defs.items() if v}
+        enum_defs: dict[str, dict] = {}
+        enum_lookup: dict[str, str] = {}
+        used_ids: set[str] = set()
+        for canon, occ in occurrences.items():
+            item = item_by_canon[canon]
+            name = next(iter(item))
+            entry_count = len(item[name])
+            if (occ - 1) * entry_count < ENUM_SHARE_COST_THRESHOLD:
+                continue
+            # Each item's own display name (e.g. "Ramp Rate") already tells
+            # a reader what the enum is -- use it instead of a bare counter.
+            ref_id = DedupeProfiles._unique_id(f"{DedupeProfiles._slugify(name)}_enum", used_ids)
+            used_ids.add(ref_id)
+            enum_defs[ref_id] = item
+            enum_lookup[canon] = ref_id
+
         return enum_defs, enum_lookup
-
 
     @staticmethod
     def replace_enums(items: list[dict], enum_lookup: dict) -> list[dict]:
-        """Replace items that have large enums with $ref."""
+        """Replace items whose enum list was kept in ENUMS with $ref;
+        everything else stays inline."""
         result = []
         for item in items:
             canon = DedupeProfiles._canon(item)
@@ -149,125 +134,27 @@ class DedupeProfiles:
         return result
 
     @staticmethod
-    def _build_profile_collection_maps(collections: dict) -> tuple[dict, dict]:
-        """
-        Build profile_id -> {section: collection_id} and
-        profile_id -> {section: set of canon items in that collection}.
-        """
-        profile_collection_map: dict[str, dict[str, str]] = defaultdict(dict)
-        profile_collection_items: dict[str, dict[str, set]] = defaultdict(
-            lambda: defaultdict(set)
-        )
-
-        for section, sec_collections in collections.items():
-            for key, coll in sec_collections.items():
-                for pid in coll["profile_ids"]:
-                    profile_collection_map[pid][section] = coll["id"]
-                    profile_collection_items[pid][section] = set(key)
-
-        return profile_collection_map, profile_collection_items
-
-    @staticmethod
     def _dedupe(data: dict) -> dict:
+        """Resolve every profile's props/accepts-cmds/sends-cmds fully
+        inline -- no COLLECTIONS table, no 'extends' -- except for the small
+        set of enum value lists :meth:`build_enum_lookup` determines are
+        genuinely worth referencing instead of repeating (see module
+        docstring)."""
         profiles = data.get("profiles", [])
         folders = data.get("folders", [])
 
-        # Step 1: Find per-section collections (exact full-set matches)
-        collections = DedupeProfiles.build_collections(profiles)
+        enum_defs, enum_lookup = DedupeProfiles.build_enum_lookup(profiles)
+        shared_section = {"enums": enum_defs} if enum_defs else {}
 
-        # Step 2: Find large-enum items for individual dedup
-        enum_defs, enum_lookup = DedupeProfiles.build_enum_lookup(collections, profiles)
-
-        profile_collection_map, profile_collection_items = (
-            DedupeProfiles._build_profile_collection_maps(collections)
-        )
-
-        # Build shared section
-        shared_section = {
-            "_schema": (
-                "This JSON describes device, group, and folder profiles with shared structure to reduce repetition.\n"
-                "\n"
-                "TOP-LEVEL KEYS:\n"
-                "  shared    — Lookup tables for collections and enums (defined once, referenced many times)\n"
-                "  profiles  — Array of device, group, and folder profiles, each with props, accepts-cmds, sends-cmds, and devices and group\n"
-                "  "
-                "\n"
-                "SHARED SECTION:\n"
-                "  shared.collections — Named groups of items shared by multiple profiles.\n"
-                "    Each collection has an id (e.g. pc_1, ac_2, sc_3) and an 'items' array.\n"
-                "    Prefixes: pc_ = props collection, ac_ = accepts-cmds collection, sc_ = sends-cmds collection.\n"
-                "\n"
-                "  shared.enums — Items with large enumeration lists, stored once and referenced by id.\n"
-                "    Prefixes: prop_ = property enum, acmd_ = accepts-cmd enum.\n"
-                "\n"
-                "HOW TO READ A PROFILE:\n"
-                "  Each profile has three item sections: props, accepts-cmds, sends-cmds.\n"
-                "  A section can appear in one of these forms:\n"
-                "\n"
-                '  1. Collection reference:  {"$collection": "pc_1"}\n'
-                "     The profile's items for this section are exactly the items in collection pc_1.\n"
-                "\n"
-                '  2. Collection + extras:   {"$collection": "pc_1", "extras": [...]}\n'
-                "     The profile's items = collection pc_1 items UNION the extras array.\n"
-                "\n"
-                "  3. Inline array:          [{\"On\": []}, {\"Off\": []}]\n"
-                "     Items listed directly (no collection matched).\n"
-                "\n"
-                "  4. Absent/empty:          Section is missing or [] — the profile has none of these.\n"
-                "\n"
-                "ENUM REFERENCES:\n"
-                '  Anywhere you see {"$ref": "prop_1"}, replace it with the definition in shared.enums.prop_1.\n'
-                "  This applies inside collections AND inline/extras arrays.\n"
-                "\n"
-                "ITEM FORMAT:\n"
-                '  Each item is {"name": [values]} where name is the property/command name\n'
-                "  and values is the list of allowed enumeration values (empty [] means no parameters).\n"
-            ),
-            "collections": {},
-        }
-
-        # Add collections with enum refs applied
-        for section in SECTIONS:
-            for key, coll in collections[section].items():
-                coll_entry = {
-                    "items": DedupeProfiles.replace_enums(coll["items"], enum_lookup),
-                }
-                shared_section["collections"][coll["id"]] = coll_entry
-
-        # Add enum definitions
-        if enum_defs:
-            shared_section["enums"] = {}
-            for section, defs in enum_defs.items():
-                shared_section["enums"].update(defs)
-
-        # Build profiles
+        # Build profiles: every section is always inlined directly now.
         new_profiles = []
         for profile in profiles:
             new_profile = {"id": profile["id"]}
 
             for section in SECTIONS:
-                coll_id = profile_collection_map.get(profile["id"], {}).get(section)
-                coll_item_canons = profile_collection_items.get(profile["id"], {}).get(
-                    section, set()
-                )
-
-                all_items = profile.get(section, [])
-
-                if coll_id:
-                    # Find extras: items in this profile but not in the collection
-                    extras = [
-                        i for i in all_items if DedupeProfiles._canon(i) not in coll_item_canons
-                    ]
-                    new_profile[section] = {"$collection": coll_id}
-                    if extras:
-                        new_profile[section]["extras"] = DedupeProfiles.replace_enums(
-                            extras, enum_lookup
-                        )
-                else:
-                    # No collection match — include items directly
-                    replaced = DedupeProfiles.replace_enums(all_items, enum_lookup)
-                    if replaced:
-                        new_profile[section] = replaced
+                replaced = DedupeProfiles.replace_enums(profile.get(section, []), enum_lookup)
+                if replaced:
+                    new_profile[section] = replaced
 
             # Preserve devices and other fields
             for k, v in profile.items():
@@ -287,26 +174,33 @@ class DedupeProfiles:
         "# parseable with ast.literal_eval). Same information a JSON profiles/shared\n"
         "# structure would hold, just without repeating field names on every row.\n"
         "#\n"
-        "# COLLECTIONS: id -> list of items shared by 2+ profiles. Ids are named\n"
-        "#   '{section}_like_{a_profile_id_that_uses_it}', section is props/accepts/sends\n"
-        "#   -- e.g. 'accepts_like_DimmerLampSwitch_ADV'.\n"
-        "# ENUMS: id -> (name, values) -- large value lists, referenced by id.\n"
-        "#   Ids are named '{slugified_item_name}_enum', e.g. 'ramp_rate_enum'.\n"
-        "#\n"
         "# PROFILES: id -> a dict with any of the following keys. One entry per\n"
         "#   device/group TYPE, with its own physical device/group instances nested\n"
         "#   directly inside it (NOT a separate table) -- a profile's properties stay\n"
         "#   physically adjacent to the devices that have them.\n"
-        "#   'extends': [collection_id, ...] -- substitute every item in\n"
-        "#     COLLECTIONS[collection_id], one entry per props/accepts/sends collection\n"
-        "#     this profile uses (its section is implied by the id's own prefix).\n"
-        "#   'props'/'accepts'/'sends': [item, ...] -- inline items for that section, IN\n"
-        "#     ADDITION to anything already pulled in via 'extends'. Each item is either:\n"
-        "#       (name, values)      -- an inline property/command, values is a list\n"
-        "#       ('$ref', enum_id)   -- substitute ENUMS[enum_id]\n"
+        "#   'props'/'accepts'/'sends': [item, ...] -- this profile's FULL item list for\n"
+        "#     that section, always inline (never split across another table). Each\n"
+        "#     item is one of:\n"
+        "#       (name, values)      -- a property/command, values is a list of any\n"
+        "#                              enum labels it has (empty [] if none) -- to use\n"
+        "#                              it, pass the exact label text as the value.\n"
+        "#       (name, (min, max))  -- a property/command whose value is a plain\n"
+        "#                              number in that range (a unit may apply) --\n"
+        "#                              pass a plain number as the value.\n"
+        "#       (name, {'on': (min, max), 'off': (min, max)}) -- a command needing\n"
+        "#                              two independent numbers -- pass an object\n"
+        "#                              {'on': <n>, 'off': <n>} as the value.\n"
+        "#       ('$ref', enum_id)   -- substitute ENUMS[enum_id] for this one item's\n"
+        "#                              (name, values) -- used only for the handful of\n"
+        "#                              large enum lists genuinely shared by several\n"
+        "#                              profiles -- everything else is always inlined.\n"
         "#   'devices': list of (kind, device_id, name, parent_id, parent_type) tuples.\n"
         "#     kind is 'device' or 'group'. parent_type is folder/node/group; parent_id\n"
         "#     'none' means top-level (parent_type is '' in that case).\n"
+        "#\n"
+        "# ENUMS: id -> (name, values) -- only the few large enum value lists shared by\n"
+        "#   multiple profiles, referenced via ('$ref', id) above. Ids are named\n"
+        "#   '{slugified_item_name}_enum', e.g. 'ramp_rate_enum'.\n"
         "#\n"
         "# FOLDERS: id -> (name, parent_id)\n"
     )
@@ -318,20 +212,6 @@ class DedupeProfiles:
             return f"('$ref', {item['$ref']!r})"
         (name, values), = item.items()
         return f"({name!r}, {values!r})"
-
-    @staticmethod
-    def _split_section(value: Any) -> tuple[str | None, list[str]]:
-        """Split a profile's props/accepts-cmds/sends-cmds value into the
-        collection id it extends (or None) and its rendered inline items
-        (either genuinely inline items, or extras alongside a collection)."""
-        if not value:
-            return None, []
-        if isinstance(value, dict) and "$collection" in value:
-            inline = [DedupeProfiles._py_repr_one_item(i) for i in (value.get("extras") or [])]
-            return value["$collection"], inline
-        if isinstance(value, list):
-            return None, [DedupeProfiles._py_repr_one_item(i) for i in value]
-        return None, []
 
     @staticmethod
     def _split_parent(parent: str) -> tuple[str, str]:
@@ -356,14 +236,6 @@ class DedupeProfiles:
         folders = result.get("folders", [])
         lines: list[str] = [DedupeProfiles.PYTHON_LEGEND]
 
-        collections = shared.get("collections", {})
-        if collections:
-            lines.append("\nCOLLECTIONS = {")
-            for cid, body in collections.items():
-                items = ", ".join(DedupeProfiles._py_repr_one_item(i) for i in body.get("items", []))
-                lines.append(f"  {cid!r}: [{items}],")
-            lines.append("}")
-
         enums = shared.get("enums", {})
         if enums:
             lines.append("\nENUMS = {")
@@ -383,21 +255,17 @@ class DedupeProfiles:
                             f"({kind!r}, {device['id']!r}, {device['name']!r}, "
                             f"{parent_id!r}, {parent_type!r})"
                         )
-                extends: list[str] = []
                 entry_parts: list[str] = []
                 for section_key, field in (
                     ("props", "props"),
                     ("accepts-cmds", "accepts"),
                     ("sends-cmds", "sends"),
                 ):
-                    coll_id, inline = DedupeProfiles._split_section(profile.get(section_key))
-                    if coll_id:
-                        extends.append(coll_id)
-                    if inline:
-                        entry_parts.append(f"'{field}': [{', '.join(inline)}]")
+                    items = profile.get(section_key)
+                    if items:
+                        rendered = ", ".join(DedupeProfiles._py_repr_one_item(i) for i in items)
+                        entry_parts.append(f"'{field}': [{rendered}]")
 
-                if extends:
-                    entry_parts.insert(0, f"'extends': {extends!r}")
                 entry_parts.append(f"'devices': [{', '.join(devices)}]")
                 lines.append(f"  {profile['id']!r}: {{{', '.join(entry_parts)}}},")
             lines.append("}")
@@ -412,24 +280,6 @@ class DedupeProfiles:
         return "\n".join(lines)
 
     def dedupe(self, data: dict) -> dict:
-        result = DedupeProfiles._dedupe(data)
-
-
-        # Report
-        #orig_size = len(json.dumps(data))
-        #new_size = len(json.dumps(result)) 
-        #reduction = (1 - new_size / orig_size) * 100
-        #colls = result["shared"]["collections"]
-        #enums = result["shared"].get("enums", {})
-
-        #print(f"Collections: {len(colls)}")
-        #for cid, cdef in colls.items():
-        #    print(f"  {cid}: {len(cdef['items'])} items")
-        #print(f"Shared enums: {len(enums)}")
-        #print(f"Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
-        #print(f"Written to: {output_path}")
-
-        #print(f"Size: {orig_size:,} -> {new_size:,} bytes ({reduction:.1f}% reduction)")
-        return result
+        return DedupeProfiles._dedupe(data)
 
 

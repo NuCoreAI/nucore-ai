@@ -14,8 +14,12 @@
         "description": "The command's exact display name, exactly as shown in this device's 'accepts' list in DEVICE DATABASE -- not an id."
       },
       "value": {
-        "type": ["number", "string", "null"],
-        "description": "The value to set, parsed from what the customer said: a plain number, or the exact enum label text shown for this command if it's an enumerated choice (e.g. 'Program Auto'). Never a raw protocol id/key, never pre-converted. Omit for commands that take no value."
+        "type": ["number", "string", "object", "null"],
+        "description": "The value to set, parsed from what the customer said: a plain number (for a (name, (min, max)) item), the exact enum label text (for a (name, [labels]) item), or an object like {\"on\": 8, \"off\": 3} (for a (name, {'on':.., 'off':..}) item) -- see DEVICE DATABASE for which shape this command's value takes. Never a raw protocol id/key, never pre-converted. Omit for commands that take no value.",
+        "properties": {
+          "on": {"type": "number"},
+          "off": {"type": "number"}
+        }
       },
       "unit": {
         "type": ["string", "null"],
