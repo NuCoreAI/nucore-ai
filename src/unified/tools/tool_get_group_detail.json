@@ -1,0 +1,14 @@
+{
+  "name": "get_group_detail",
+  "description": "Describe a group/scene in detail: what happens when it's activated from NuCore, each controller's activation targets, link type per target (native/default/command/ignore), per-link parameters (e.g. on-level, ramp rate), and which controllers are cross-linked. DEVICE DATABASE only lists that a group/scene exists -- call this for any 'explain/describe this scene', 'what happens when I activate X', 'are these cross-linked', or link-behavior diagnostic question.",
+  "input_schema": {
+    "type": "object",
+    "required": ["group_address"],
+    "properties": {
+      "group_address": {
+        "type": "string",
+        "description": "The group/scene's real id, exactly as shown in DEVICE DATABASE."
+      }
+    }
+  }
+}

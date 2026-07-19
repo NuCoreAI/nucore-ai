@@ -1,0 +1,41 @@
+{
+  "name": "multi_device_scene",
+  "description": "Create a new scene/group -- or add members to an existing one -- in a single call, given a list of member devices with controller/responder roles. Prefer this over repeated group_scene_op add_member calls whenever the customer describes a scene/group as a whole (e.g. 'make a scene where keypad 1 and keypad 2 are controllers and the dimmer is a responder').",
+  "input_schema": {
+    "type": "object",
+    "required": ["devices"],
+    "properties": {
+      "group_address": {
+        "type": ["string", "null"],
+        "description": "Real id of an existing scene/group to add these members to, exactly as shown in DEVICE DATABASE. Omit to create a new scene/group."
+      },
+      "group_name": {
+        "type": ["string", "null"],
+        "description": "Name for the new scene/group when group_address is omitted. Omit to let NuCore assign one automatically."
+      },
+      "devices": {
+        "type": "array",
+        "description": "Non-empty list of member devices to add, each with its role in the scene.",
+        "items": {
+          "type": "object",
+          "required": ["link_address", "role"],
+          "properties": {
+            "link_address": {
+              "type": "string",
+              "description": "The device's real id, exactly as shown in DEVICE DATABASE."
+            },
+            "role": {
+              "type": "string",
+              "enum": ["controller", "responder"],
+              "description": "Whether this device triggers the scene (controller) or reacts to it (responder)."
+            },
+            "name": {
+              "type": ["string", "null"],
+              "description": "Optional display name for this member within the scene."
+            }
+          }
+        }
+      }
+    }
+  }
+}

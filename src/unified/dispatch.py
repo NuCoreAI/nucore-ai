@@ -18,6 +18,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "send_command": command_control_status.send_command,
     "node_op": node_ops.node_op,
     "group_scene_op": group_scene_ops.group_scene_op,
+    "get_group_detail": group_scene_ops.get_group_detail,
+    "multi_device_scene": group_scene_ops.multi_device_scene,
     "routine_status_op": routine_status_ops.routine_status_op,
     "create_or_update_routine": routine_automation.create_or_update_routine,
 }
