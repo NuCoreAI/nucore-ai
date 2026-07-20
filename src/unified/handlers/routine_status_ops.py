@@ -1,8 +1,7 @@
 """``routine_status_op`` -- operates on an explicit routine id, no name
 resolution needed.
 
-Fresh dispatch calling directly into ``NuCoreInterface.routine_ops`` --
-does not import or invoke ``intent_handler_directory/routine_status_ops``.
+Dispatch calling directly into ``NuCoreInterface.routine_ops``.
 """
 
 from __future__ import annotations

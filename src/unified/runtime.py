@@ -1,10 +1,6 @@
-"""``UnifiedRuntime`` -- the new, parallel entry point.
-
-Mirrors ``IntentRuntime.handle_query``'s call shape closely enough that
-``run_intent_runtime.py``'s existing ``_run_once``/``_run_loop`` work against
-it unmodified (see ``--unified`` flag in ``run_intent_runtime.py``), but its
-internals are a genuine multi-turn agentic tool-calling loop instead of the
-router/``route_plan``/synthesis pipeline.
+"""``UnifiedRuntime`` -- the runtime: a genuine multi-turn agentic
+tool-calling loop, invoked by ``run_unified_runtime.py``'s ``_run_once``/
+``_run_loop``.
 """
 
 from __future__ import annotations
@@ -12,9 +8,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from intent_handler.adapters import LLMAdapter
-from intent_handler.models import IntentHandlerResult
-from intent_handler.session_store import SessionStore
+from .adapters import LLMAdapter
+from .models import IntentHandlerResult
+from .session_store import SessionStore
 from nucore import NuCoreInterface
 
 from .dispatch import execute_tool
@@ -39,8 +35,8 @@ class UnifiedRuntime:
         self.session_store = SessionStore()
         self.tool_specs = LLMAdapter.tools_spec_from_files(sorted(_TOOLS_DIR.glob("tool_*.json")))
         self.max_iterations = max_iterations
-        # v1 does not support streaming -- present so run_intent_runtime.py's
-        # existing `if runtime.stream_state is not None:` guard is a no-op.
+        # v1 does not support streaming -- present so run_unified_runtime.py's
+        # `if runtime.stream_state is not None:` guard is a no-op.
         self.stream_state = None
 
     def _resolve_llm_config(self) -> dict[str, Any]:
@@ -60,11 +56,11 @@ class UnifiedRuntime:
         return await execute_tool(name, args, nucore_interface=self.nucore_interface)
 
     def reset_stream_handler(self) -> None:
-        """No-op -- v1 does not stream. Present so ``run_intent_runtime.py``'s
-        ``_run_loop`` (shared with the classic path) can call it unconditionally."""
+        """No-op -- v1 does not stream. Present so ``run_unified_runtime.py``'s
+        ``_run_loop`` can call it unconditionally."""
 
     def shutdown(self) -> None:
-        """Best-effort cleanup, mirroring ``IntentRuntime.shutdown``."""
+        """Best-effort cleanup."""
         shutdown_fn = getattr(self.nucore_interface, "shutdown", None)
         if callable(shutdown_fn):
             try:

@@ -31,9 +31,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["assistant*", "rag*", "nucore*", "iox*", "intent_handler*", "intent_handler_directory*", "utils*"]
+include = ["assistant*", "rag*", "nucore*", "iox*", "unified*", "utils*"]
 exclude = ["tests*", "*.tests", "*.tests.*"]
 
 [tool.setuptools.package-data]
-intent_handler = ["runtime_assets/common_modules/*.md", "runtime_assets/*.json", "runtime_assets/router/*.md", "runtime_assets/router/*.json", "runtime_assets/memory_store/*.md", "runtime_assets/memory_store/*.json"]
-intent_handler_directory = ["README.md", "**/*.py", "**/*.md", "**/*.json"]
+unified = ["prompt/*.md", "tools/*.json", "runtime_config.example.json"]

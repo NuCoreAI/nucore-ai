@@ -1,11 +1,8 @@
 """Assembles the single unified system prompt.
 
-Mirrors the substitution pattern ``IntentRouter.build_router_prompt`` already
-uses (``router.py``) -- same compact ``DEVICE DATABASE``/``ROUTINES
-DATABASE`` sources, already proven to fit in a system prompt -- but reads
-``nucore_interface``/``rag`` directly instead of going through
-``IntentHandlerRegistry``'s common-module placeholder expansion, so this
-module has no dependency on the router/intent-handler loading machinery.
+Reads ``nucore_interface``/``rag`` directly to build the compact
+``DEVICE DATABASE``/``ROUTINES DATABASE`` sections -- no config-file/
+directory-loading machinery involved.
 """
 
 from __future__ import annotations

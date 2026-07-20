@@ -1,0 +1,25 @@
+{
+  "path_to_data_directory": "~/.local/share/nucore-ai",
+  "nucore_runtime": {
+    "default": {
+      "provider": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "model_2": "claude-sonnet-5",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "url": null,
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 64000
+    },
+    "unified": {
+      "provider": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "model_2": "claude-sonnet-5",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "url": null,
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 64000
+    }
+  }
+}

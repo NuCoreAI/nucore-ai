@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 import json
-import json
 from typing import Any
 from utils import get_logger
 import logging
@@ -91,35 +90,3 @@ class StreamHandler(ABC):
             print(chunk, end="", flush=True)
             if is_end:
                 print()  # Print a newline at the end of the stream for readability.
-
-
-class RouterStreamHandler(StreamHandler):
-    """No-op stream handler used exclusively by the intent router.
-
-    The router makes its own LLM call to select an intent.  Using a separate
-    stream handler for that call ensures the router's streaming chunk count
-    does not pollute the per-intent handler's ``stream_state``, which the
-    runtime checks to decide whether the response was already printed live.
-    """
-
-    async def handle_stream_chunk(self, chunk: str, is_end: bool = False) -> Any:
-        """Count the chunk but suppress all output.
-
-        Args:
-            chunk: A string token from the router LLM stream.
-        """
-        await super().handle_stream_chunk(chunk, is_end)
-
-    async def send_chunk(self, chunk: str, is_end: bool = False) -> None:
-        """Suppress all output -- this is intentionally a no-op.
-
-        The router's real answer (``intent``/``notes``/etc.) always lives in
-        a structured tool-call payload, never in freeform streamed text; at
-        most some incidental preamble text streams alongside the tool call,
-        and it is never the router's actual answer. The base class's
-        ``send_chunk`` would otherwise print/send that incidental text to the
-        user, which -- since the real answer is printed separately once the
-        full response is available -- would show confusing partial text
-        before the real answer, or leak internal-only chatter to the client.
-        """
-        return None

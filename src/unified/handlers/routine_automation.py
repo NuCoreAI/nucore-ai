@@ -1,11 +1,7 @@
 """``create_or_update_routine`` -- authors/edits a routine's if/then/else
-logic via the v2 DSL, compiled by ``unified.routine_compiler`` (a fresh
-package targeting the new, externally-supplied ``Trigger``/``NewTrigger``
-schema -- see that package's own ``__init__.py`` docstring for why it's a
-brand-new package rather than a modification of the old, still-untouched
-``intent_handler_directory/routine_automation/routine_compiler.py``, which
-stays on the classic pipeline's old wire shape). ``get_device_detail`` --
-the detail-fetch tool that closes the gap below.
+logic via the DSL, compiled by ``unified.routine_compiler`` (targets
+NuCore's ``Trigger``/``NewTrigger`` schema). ``get_device_detail`` -- the
+detail-fetch tool that closes the gap below.
 
 v1 gap this closes: the DSL needs real property/command/parameter ids and
 uom/precision (see tool_create_or_update_routine.json's description) --

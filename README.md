@@ -13,77 +13,27 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-## Running the Intent Runtime
+## Running the Unified Runtime
 
-The primary entry point is the intent handler runtime. It routes user queries to the correct intent handler and executes them against a NuCore backend.
+The entry point is the unified runtime: one system prompt, one native
+tool-calling agentic loop, no router, no per-intent directory dispatch. It
+executes user queries directly against a NuCore backend.
 
-### Handler Execution Contract
-
-Intent handlers now use a runtime-managed execution flow:
-
-1. Runtime builds messages via `handler.build_messages(...)`.
-2. Runtime calls the LLM via `handler.call_llm(...)`.
-3. Runtime extracts tool calls from the raw response.
-4. Runtime calls `handler.handle(...)` for post-processing.
-
-Current `handle` signature:
-
-```python
-async def handle(
-  self,
-  query,
-  *,
-  route_result=None,
-  framework_context=None,
-  raw_response=None,
-  tool_calls=None,
-):
-  ...
-```
-
-This keeps handlers focused on tool execution and output shaping, while runtime
-owns prompt/message/LLM orchestration.
-
-### Custom Prompt for agent_response Handling
-
-When runtime performs the tool-result follow-up pass (converting
-`agent_response` into user-facing output), a handler can provide a dedicated
-prompt template instead of reusing its main `prompt.md` content.
-
-Override this hook in your `BaseIntentHandler` subclass:
-
-```python
-async def get_tool_result_prompt(self) -> str | None:
-  return """
-<<nucore_definitions>>
-<<nucore_common_rules>>
-
----
-# DEVICE STRUCTURE
-<<runtime_device_structure>>
-"""
-```
-
-Return `None` to keep the default flow (no dedicated tool-result system prompt
-from the handler).
-
-Create a runtime profile JSON first (see `src/intent_handler/runtime_assets/nucore_runtime.example.json`).
+Create a runtime profile JSON first (see `src/unified/runtime_config.example.json`).
 
 ### Minimal (no backend)
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --intent-dir src/intent_handler_directory \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --query "Turn on the patio lights"
 ```
 
 ### With NuCore Backend (eisy)
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --intent-dir src/intent_handler_directory \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
@@ -96,23 +46,12 @@ python -m intent_handler.run_intent_runtime \
 Omit `--query` to enter an interactive prompt loop:
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --intent-dir src/intent_handler_directory \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
   --backend-api-password yourpassword
-```
-
-### Streaming Output
-
-Streaming is always enabled from runtime profiles and no CLI switch is required.
-
-```shell
-python -m intent_handler.run_intent_runtime \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
-  --query "What devices are in the master bedroom?"
 ```
 
 ### Secrets File
@@ -146,41 +85,41 @@ Format rules:
 Usage:
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --secrets_file /path/to/secrets.json \
   --query "Turn on the patio lights"
 ```
 
 ### Logging
 
-The runtime now supports centralized, flexible logging for both development and production use.
+The runtime supports centralized, flexible logging for both development and production use.
 
 #### Runtime Logging Flags
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --log-level DEBUG \
-  --log-file logs/intent-runtime.log
+  --log-file logs/unified-runtime.log
 ```
 
 Use JSON logs for ingestion by external tools:
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --log-json \
-  --log-file logs/intent-runtime.json.log
+  --log-file logs/unified-runtime.json.log
 ```
 
 Disable console logs (for quiet batch or service environments):
 
 ```shell
-python -m intent_handler.run_intent_runtime \
-  --runtime-config src/intent_handler/runtime_assets/nucore_runtime.example.json \
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
   --no-log-console \
-  --log-file logs/intent-runtime.log
+  --log-file logs/unified-runtime.log
 ```
 
 #### Logging Environment Variables
@@ -204,7 +143,6 @@ logger.info("runtime started")
 
 | Flag | Description |
 |---|---|
-| `--intent-dir` | Path to intent handler directory (default: `src/intent_handler_directory`) |
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
 | `--secrets_file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
@@ -267,7 +205,7 @@ build.cuda/bin/llama-server \
 ### Connect the Runtime to llama.cpp
 
 ```shell
-python -m intent_handler.run_intent_runtime \
+python -m unified.run_unified_runtime \
   --runtime-config /path/to/nucore_runtime.json \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
@@ -298,7 +236,5 @@ Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 
 ## Further Documentation
 
-- Intent handler architecture: `src/intent_handler/README.md`
-- Adding new intents: `src/intent_handler_directory/README.md`
-- Directory monitor API (subscribe/start/stop/poll): `src/intent_handler/README.md#directory-monitoring`
+- Unified runtime architecture and tool reference: `src/unified/README.md`
 

@@ -1,19 +1,17 @@
-"""``compile_trigger_source`` -- entry point for the v2 routine DSL compiler,
-targeting the richer externally-supplied ``Trigger``/``NewTrigger`` schema
-(9 condition types, 18 action types -- see the family modules under
-``conditions/``/``actions/`` for the per-type grammar).
+"""``compile_trigger_source`` -- entry point for the routine DSL compiler,
+targeting NuCore's ``Trigger``/``NewTrigger`` schema (9 condition types, 18
+action types -- see the family modules under ``conditions/``/``actions/``
+for the per-type grammar).
 
-Architecture ported from ``intent_handler_directory/routine_automation/
-routine_compiler.py`` (the v1 compiler, left untouched -- see this package's
-``__init__.py``): a pure ``ast``-based walker, never ``exec``/``eval``, that
-only gives meaning to the handful of node shapes documented in
+A pure ``ast``-based walker, never ``exec``/``eval``, that only gives
+meaning to the handful of node shapes documented in
 ``tool_create_or_update_routine.json``'s tool description. Anything else
 raises :class:`~.errors.TriggerCompileError` with a message specific enough
 to drive an LLM repair turn.
 
-Key structural difference from v1: the new schema's ``if`` list is FLAT,
-with each condition carrying its own ``andOr`` -- not a nested boolean tree.
-Python's own operator precedence already resolves a mixed ``and``/``or``
+The schema's ``if`` list is FLAT, with each condition carrying its own
+``andOr`` -- not a nested boolean tree. Python's own operator precedence
+already resolves a mixed ``and``/``or``
 expression into nested ``ast.BoolOp`` nodes with different operators at each
 level (`a and b or c` and `(a and b) or c` produce the *identical* tree --
 parenthesization doesn't survive into the ast, only the grouping it implies

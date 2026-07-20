@@ -1,6 +1,6 @@
 {
   "name": "send_command",
-  "description": "Send a command to a device to control its behavior (turn on/off, set a value, change mode, run query, etc.). Supply value/unit only for commands that take one -- most commands (on/off/query/etc.) take none.",
+  "description": "Send a command to a device to control its behavior (turn on/off, set a value, change mode, run query, etc.). Supply value/unit only for commands that take one -- most commands (on/off/query/etc.) take none. For a command that takes more than one parameter (e.g. a notification command with a sound plus a text body), use `values` instead, with one entry per parameter in the same order they're listed for this command in DEVICE DATABASE.",
   "input_schema": {
     "type": "object",
     "required": ["device_id", "command"],
@@ -15,7 +15,7 @@
       },
       "value": {
         "type": ["number", "string", "object", "null"],
-        "description": "The value to set, parsed from what the customer said: a plain number (for a (name, (min, max)) item), the exact enum label text (for a (name, [labels]) item), or an object like {\"on\": 8, \"off\": 3} (for a (name, {'on':.., 'off':..}) item) -- see DEVICE DATABASE for which shape this command's value takes. Never a raw protocol id/key, never pre-converted. Omit for commands that take no value.",
+        "description": "The value to set, parsed from what the customer said: a plain number (for a (name, (min, max)) item), the exact enum label text (for a (name, [labels]) item), free-form text (for a parameter with no listed options/range), or an object like {\"on\": 8, \"off\": 3} (for a (name, {'on':.., 'off':..}) item) -- see DEVICE DATABASE for which shape this command's value takes. Never a raw protocol id/key, never pre-converted. Omit for commands that take no value, or that take more than one value (use `values` instead).",
         "properties": {
           "on": {"type": "number"},
           "off": {"type": "number"}
@@ -24,6 +24,23 @@
       "unit": {
         "type": ["string", "null"],
         "description": "The unit the customer stated for `value`, if any (e.g. 'celsius', 'minutes'). Omit if the customer didn't state one, or `value` is an enum label."
+      },
+      "values": {
+        "type": ["array", "null"],
+        "description": "For a command that takes more than one parameter -- one entry per parameter, in the exact order DEVICE DATABASE lists them for this command. Use this instead of `value`/`unit`. Omit or use `null` as an entry's value to skip a parameter that's genuinely optional.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": ["number", "string", "object", "null"],
+              "description": "Same rules as the top-level `value` field, resolved against this parameter's own options/range in DEVICE DATABASE."
+            },
+            "unit": {
+              "type": ["string", "null"],
+              "description": "Same rules as the top-level `unit` field, for this parameter."
+            }
+          }
+        }
       }
     }
   }

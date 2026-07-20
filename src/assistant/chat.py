@@ -3,8 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-from intent_handler.run_intent_runtime import main as run_intent_runtime_main
-from intent_handler.run_intent_runtime import _build_parser, _run_once
+from unified.run_unified_runtime import main as run_unified_runtime_main
+from unified.run_unified_runtime import _build_parser, _run_once
 from utils import get_logger
 logger = get_logger(__name__)
 import json
@@ -60,7 +60,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.append(websocket)
     global eisy_args
-    eisy_ai = run_intent_runtime_main(args=eisy_args, websocket=websocket)
+    eisy_ai = run_unified_runtime_main(args=eisy_args, websocket=websocket)
     message_queue: asyncio.Queue = asyncio.Queue()
     processor_task = asyncio.create_task(_process_message_queue(eisy_ai, message_queue))
     

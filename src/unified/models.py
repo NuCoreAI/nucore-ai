@@ -2,127 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, ClassVar
 
 from .adapters import ToolCall
-from intent_handler.stream_handler import StreamHandler
-
-
-# ---------------------------------------------------------------------------
-# Intent definition
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class IntentDefinition:
-    """Immutable descriptor for a single intent handler loaded from disk.
-
-    Instances are created by :class:`~loader.IntentHandlerRegistry` during
-    :meth:`~loader.IntentHandlerRegistry.refresh` and are never mutated
-    afterwards.  All path fields are absolute.
-
-    Attributes:
-        name:                  Canonical intent name (must match directory name
-                               and ``config["intent"]``).
-        directory:             Absolute path to the intent's sub-directory.
-        config_path:           Absolute path to ``config.json``.
-        prompt_content:        Fully-expanded prompt template text (common
-                               module placeholders already substituted).
-        handler_path:          Absolute path to the handler ``.py`` file.
-        stream_handler_path:   Absolute path to the optional stream handler
-                               ``.py`` file, or ``None``.
-        description:           Human-readable description from ``config.json``.
-        handler_class:         Explicit class name to load from ``handler_path``,
-                               or ``None`` to auto-discover the sole subclass.
-        stream_handler_class:  Pre-instantiated :class:`~stream_handler.StreamHandler`
-                               instance, or ``None`` when no stream handler is
-                               configured.
-        routing_examples:      Example queries used to guide the router.
-        router_hints:          Additional free-text hints for the router.
-        llm_config:            Per-intent LLM override config (merged on top of
-                               the runtime default at call time).
-        config:                Full raw ``config.json`` dict for arbitrary
-                               field access.
-    """
-
-    name: str
-    directory: Path
-    config_path: Path
-    prompt_content: str
-    handler_path: Path
-    stream_handler_path: Path
-    description: str
-    handler_class: str | None = None
-    stream_handler_class: StreamHandler | None = None
-    routing_examples: list[str] = field(default_factory=list)
-    router_hints: list[str] = field(default_factory=list)
-    llm_config: dict[str, Any] = field(default_factory=dict)
-    config: dict[str, Any] = field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# Routing
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class RoutePlanStep:
-    """One router-planned intent execution step.
-
-    Attributes:
-        intent:        Intent name to execute for this step.
-        user_query:    Step-specific query text to send to that intent.
-        route_context: Optional context for downstream prompt placeholders.
-        notes:         Optional planner notes for observability/debugging.
-    """
-
-    intent: str
-    user_query: str
-    route_context: dict[str, Any] | None = None
-    notes: str | None = None
-
-@dataclass(frozen=True)
-class RouteResult:
-    """Immutable result returned by :class:`~router.IntentRouter`.
-
-    Attributes:
-        intent:          Name of the selected intent handler.
-        confidence:      Optional confidence score in ``[0, 1]`` reported by
-                         the routing LLM.
-        notes:           Optional reasoning or explanation from the router.
-        route_context:   Optional dict of additional context or metadata produced
-                         by the router for downstream intent handlers.
-        resolved_query:  Optionally rewritten/clarified version of the original
-                         user query produced during routing.
-        route_plan:      Optional ordered list of planned intent steps for
-                 multi-intent requests.
-        raw_response:    Full raw response dict from the routing LLM for
-                         debugging or downstream inspection.
-        abandons_pending: Only meaningful when ``intent`` is ``None`` (Natural
-                         Language Mode). ``True`` means the router explicitly
-                         judged the current message as unrelated to any
-                         pending clarification, so it's safe to discard that
-                         state. Defaults to ``False`` -- i.e. an ambiguous or
-                         unparseable router turn does NOT, by itself, count as
-                         abandonment; see :meth:`ConversationHistory.note_pending_still_unresolved`.
-        is_clarifying_question: Only meaningful when ``intent`` is ``None``.
-                         ``True`` means the router's own Natural Language Mode
-                         answer is itself a question awaiting the user's
-                         reply. Defaults to ``False`` -- a complete/final
-                         answer (e.g. a static inventory answer like "you have
-                         12 devices") should NOT be tracked as a pending
-                         clarification, or every subsequent unrelated query
-                         would get compared against it first.
-    """
-
-    intent: str
-    confidence: float | None = None
-    notes: str | None = None
-    route_context: dict[str, Any] | None = None
-    resolved_query: str | None = None
-    route_plan: list[RoutePlanStep] | None = None
-    raw_response: dict[str, Any] = field(default_factory=dict)
-    abandons_pending: bool = False
-    is_clarifying_question: bool = False
+from .stream_handler import StreamHandler
 
 
 # ---------------------------------------------------------------------------
@@ -131,21 +14,13 @@ class RouteResult:
 
 @dataclass(frozen=False)
 class IntentHandlerResult:
-    """Mutable result accumulator produced by a single intent handler execution.
-
-    A handler populates this object during its run; the runtime then reads it
-    back to deliver the response to the caller.
+    """Mutable result accumulator produced by a single runtime turn.
 
     Attributes:
-        intent:         Name of the intent that produced this result.
+        intent:         Name of the intent/runtime that produced this result.
         output:         Primary LLM output dict (keys: ``text``, ``content``,
                         ``tool_calls``, ``tool_results``, etc.) or any value
-                        set by the handler.
-        effective_query: Optionally rewritten/clarified version of the original
-                         user query produced during handling (e.g. by a
-                         clarification subroutine).
-        route_result:   :class:`RouteResult` that selected this intent, if
-                        routing was performed.
+                        set by the caller.
         tool_result:    Accumulated list of tool execution results appended via
                         :meth:`add_tool_result`.
         stream_handler: Optional :class:`~stream_handler.StreamHandler` instance
@@ -154,8 +29,6 @@ class IntentHandlerResult:
 
     intent: str
     output: Any
-    effective_query: str | None = None
-    route_result: RouteResult | None = None
     tool_result: list[Any] | None = None
     stream_handler: StreamHandler | None = None
     execution_metadata: dict[str, Any] | None = None
@@ -178,18 +51,6 @@ class IntentHandlerResult:
         if self.tool_result is None:
             self.tool_result = []
         self.tool_result.append(tool_result)
-
-    def set_route_result(self, route_result: RouteResult | None = None) -> None:
-        """Attach the :class:`RouteResult` that selected this intent."""
-        self.route_result = route_result
-
-    def set_effective_query(self, effective_query: str | None = None) -> None:
-        """Attach the effective query that was used for this intent."""
-        self.effective_query = effective_query
-
-    def get_effective_query(self) -> str | None:
-        """Return the effective query that was used for this intent."""
-        return self.effective_query
 
     def get_text_output(self) -> str | None:
         """Extract the best available plain-text output string.
@@ -315,25 +176,21 @@ class ConversationHistory:
                           nothing is pending.
         pending_question: The clarifying text the pending intent asked (or a
                           description of the failure), used to give the
-                          router context on the next turn.
+                          caller context on the next turn.
         pending_failed:   ``True`` when ``pending_intent`` is pending because
                           its last attempt errored, rather than because it
-                          asked a clarifying question. The router should not
-                          blindly reuse conclusions (e.g. device selections)
-                          from a failed attempt.
-        pending_turns:    Number of consecutive turns the router has answered
-                          in Natural Language Mode (i.e. routed to no intent)
-                          without explicitly resolving or abandoning the
-                          pending clarification. See
-                          :meth:`note_pending_still_unresolved`.
+                          asked a clarifying question.
+        pending_turns:    Number of consecutive turns answered without
+                          explicitly resolving or abandoning the pending
+                          clarification. See :meth:`note_pending_still_unresolved`.
     """
 
     PENDING_TTL_TURNS: ClassVar[int] = 3
-    # Sentinel for ``pending_intent`` when the CLARIFYING QUESTION itself came
-    # from the router's own Natural Language Mode answer rather than from a
-    # specific intent handler -- there is no real intent name to route back
-    # to, but the pending-clarification machinery still needs to track that
-    # something is awaiting a reply.
+    # Sentinel for ``pending_intent`` when the clarifying question itself came
+    # from a generic (non-intent-specific) answer rather than from a specific
+    # intent handler -- there is no real intent name to attribute it to, but
+    # the pending-clarification machinery still needs to track that something
+    # is awaiting a reply.
     ROUTER_PENDING: ClassVar[str] = "__router__"
 
     turns: list[ConversationTurn] = field(default_factory=list)
@@ -375,13 +232,12 @@ class ConversationHistory:
 
     def note_pending_still_unresolved(self) -> None:
         """Record that a turn passed without resolving or abandoning the
-        pending clarification (the router answered in Natural Language Mode
-        but did not flag ``abandons_pending``).
+        pending clarification.
 
-        A single such turn is *not* treated as abandonment -- a soft router
-        hint can be missed on one bare/ambiguous reply (e.g. "1") without
-        that permanently discarding otherwise-recoverable context. But this
-        can't be trusted to self-correct forever either, so after
+        A single such turn is *not* treated as abandonment -- a soft hint can
+        be missed on one bare/ambiguous reply (e.g. "1") without that
+        permanently discarding otherwise-recoverable context. But this can't
+        be trusted to self-correct forever either, so after
         :attr:`PENDING_TTL_TURNS` consecutive misses the pending state is
         force-cleared so a stuck session can't wedge indefinitely.
         """

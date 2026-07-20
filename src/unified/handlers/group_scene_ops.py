@@ -1,23 +1,17 @@
 """``group_scene_op``/``get_group_detail``/``multi_device_scene`` -- operate
 on explicit group/member ids, no name resolution needed.
 
-Fresh dispatch calling directly into ``NuCoreInterface``/domain objects
+Dispatch calling directly into ``NuCoreInterface``/domain objects
 (``group_scene_add_member``/``remove_member``/``update_link``,
-``Group.explain_json``, ``add_node``) with their real keyword argument
-names -- does not import or invoke ``intent_handler_directory/group_scene_ops``
-(whose existing call sites have their own, unrelated kwarg-mismatch bugs,
-and whose ``_execute_multi_device_scene`` is a ``BaseIntentHandler`` method,
-not reusable backend code -- ``multi_device_scene`` below is a fresh
-reimplementation of the same composition of backend calls).
+``Group.explain_json``, ``add_node``) with their real keyword argument names.
 
-Scope note: ``group_scene_op`` does not reproduce the old handler's
-client-side controller/responder role prechecks (``group_scene_get_node_roles``/
-``group_scene_get_link_types``) for its single-step operations -- that's
-real, non-trivial interpretation logic without a clear enough spec to
-safely re-derive from scratch for the general case. ``multi_device_scene``
-*does* run the ``availableAsController``/``availableAsResponder`` role
-precheck per member, since that composition's shape is well-specified
-(unlike the general step-sequencing case).
+Scope note: ``group_scene_op`` does not run client-side controller/responder
+role prechecks (``group_scene_get_node_roles``/``group_scene_get_link_types``)
+for its single-step operations -- that's real, non-trivial interpretation
+logic without a clear enough spec to safely derive for the general case.
+``multi_device_scene`` *does* run the ``availableAsController``/
+``availableAsResponder`` role precheck per member, since that composition's
+shape is well-specified (unlike the general step-sequencing case).
 """
 
 from __future__ import annotations
@@ -34,9 +28,8 @@ def _result_ok(result: dict[str, Any] | None) -> bool:
 
 def _check_role_precheck(nucore_interface: NuCoreInterface, link_address: str, is_controller: bool) -> str | None:
     """Return an error string if *link_address* can't serve the requested
-    role, else ``None``. Same precheck the classic handler ran per member
-    add via ``group_scene_get_node_roles`` -- reimplemented here directly
-    against the backend, not imported from intent_handler_directory."""
+    role, else ``None`` -- checked per member add via
+    ``group_scene_get_node_roles``."""
     payload = nucore_interface.group_scene_get_node_roles(node_address=link_address)
     if payload is None:
         return f"failed to fetch node roles for '{link_address}'"

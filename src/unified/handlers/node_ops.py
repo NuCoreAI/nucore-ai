@@ -1,7 +1,6 @@
 """``node_op`` -- operates on explicit node ids, no name resolution needed.
 
-Fresh dispatch calling directly into ``NuCoreInterface.add_node``/``node_ops``
--- does not import or invoke ``intent_handler_directory/node_ops``.
+Dispatch calling directly into ``NuCoreInterface.add_node``/``node_ops``.
 """
 
 from __future__ import annotations

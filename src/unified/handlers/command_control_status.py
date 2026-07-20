@@ -1,8 +1,7 @@
 """``get_property``/``send_command`` -- the only two of the five baseline
 capability areas that need the Phase 1 name/value resolution backend work.
 
-Fresh dispatch calling directly into ``NuCoreInterface``/``IoXWrapper`` --
-does not import or invoke ``intent_handler_directory/command_control_status``.
+Dispatch calling directly into ``NuCoreInterface``/``IoXWrapper``.
 """
 
 from __future__ import annotations
@@ -56,51 +55,76 @@ async def send_command(nucore_interface: NuCoreInterface, args: dict[str, Any]) 
 
     parameters: list[dict[str, Any]] = []
     if command.parameters:
-        if len(command.parameters) > 1:
+        values = args.get("values")
+        if values is None:
+            # Backward-compatible single-value shape -- also covers the common
+            # one-parameter case without requiring the model to use `values`.
+            values = [{"value": args.get("value"), "unit": args.get("unit")}]
+        if len(values) < len(command.parameters):
+            # Pad missing trailing entries with no value -- resolved below as
+            # "omitted", which is only valid if that parameter is optional.
+            values = list(values) + [{"value": None}] * (len(command.parameters) - len(values))
+        elif len(values) > len(command.parameters):
             return {
                 "error": (
-                    f"'{command_name}' takes multiple parameters, which this tool doesn't support yet; "
-                    "please clarify or try a simpler command"
+                    f"'{command_name}' takes {len(command.parameters)} parameter(s), "
+                    f"got {len(values)}; please clarify"
                 )
             }
-        param = command.parameters[0]
-        value = args.get("value")
-        if value is None:
-            if not param.optional:
-                return {"error": f"'{command_name}' requires a value; please clarify"}
-            # Genuinely optional in the source profile data (CommandParameter.optional,
-            # populated from profile.py) -- send with no parameters rather than
-            # forcing the model to invent a value the device doesn't require.
-        elif param.editor is not None and param.editor.id in NUMERIC_ENUM_EDITOR_IDS:
-            # Disguised-numeric editor (e.g. keypad backlight, ramp rate) --
-            # value/uom/precision aren't meaningful here, only the resolved
-            # raw index (see nucore.numeric_enum for why this needs its own
-            # path instead of resolve_value's enum-label/precision model).
-            try:
-                index = resolve_numeric_enum(param.editor, value, unit=args.get("unit"))
-            except ValueError as exc:
-                return {"error": str(exc)}
-            parameters.append(
-                {
-                    "id": param.id if param.id else "n/a",
-                    "value": index,
-                    "uom": int(param.editor.ranges[0].uom.id) if param.editor.ranges[0].uom else 0,
-                    "precision": 0,
-                }
-            )
-        else:
-            try:
-                resolved = resolve_value(param.editor, value=value, unit=args.get("unit"))
-            except ValueResolutionError as exc:
-                return {"error": str(exc)}
-            parameters.append(
-                {
-                    "id": param.id if param.id else "n/a",
-                    "value": resolved.value,
-                    "uom": resolved.uom,
-                    "precision": resolved.precision,
-                }
-            )
+
+        for param, entry in zip(command.parameters, values):
+            value = entry.get("value") if isinstance(entry, dict) else entry
+            unit = entry.get("unit") if isinstance(entry, dict) else None
+            param_label = param.name or param.id or "value"
+
+            if value is None:
+                if not param.optional:
+                    return {"error": f"'{command_name}' requires a value for '{param_label}'; please clarify"}
+                # Genuinely optional in the source profile data (CommandParameter.optional,
+                # populated from profile.py) -- omit rather than forcing the model to
+                # invent a value the device doesn't require.
+                continue
+            elif param.editor is not None and param.editor.id in NUMERIC_ENUM_EDITOR_IDS:
+                # Disguised-numeric editor (e.g. keypad backlight, ramp rate) --
+                # value/uom/precision aren't meaningful here, only the resolved
+                # raw index (see nucore.numeric_enum for why this needs its own
+                # path instead of resolve_value's enum-label/precision model).
+                try:
+                    index = resolve_numeric_enum(param.editor, value, unit=unit)
+                except ValueError as exc:
+                    return {"error": str(exc)}
+                parameters.append(
+                    {
+                        "id": param.id if param.id else "n/a",
+                        "value": index,
+                        "uom": int(param.editor.ranges[0].uom.id) if param.editor.ranges[0].uom else 0,
+                        "precision": 0,
+                    }
+                )
+            elif param.editor is None or not param.editor.ranges:
+                # Free-text parameter (e.g. a notification message body) -- no
+                # enum/numeric editor to validate against, pass the value through raw.
+                parameters.append(
+                    {
+                        "id": param.id if param.id else "n/a",
+                        "value": value,
+                        "uom": 0,
+                        "precision": 0,
+                    }
+                )
+            else:
+                try:
+                    resolved = resolve_value(param.editor, value=value, unit=unit)
+                except ValueResolutionError as exc:
+                    return {"error": str(exc)}
+                parameters.append(
+                    {
+                        "id": param.id if param.id else "n/a",
+                        "value": resolved.value,
+                        "uom": resolved.uom,
+                        "precision": resolved.precision,
+                    }
+                )
 
     # device_id (not node.address) -- send_commands does its own decode_id
     # step, expecting the id exactly as the caller/model supplied it.

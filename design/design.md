@@ -1,4 +1,9 @@
 
+> **Superseded.** The router -> intent-handler architecture described in `# BACKGROUND`/`# ROUTER`
+> below, and `src/intent_handler_directory/`/the classic parts of `src/intent_handler/` it refers
+> to, have been retired. The "UNIFIED PROMPT + TOOLS" proposal further down is no longer a parallel,
+> additive path -- it's the only runtime (`src/unified/`). Kept here for historical context only.
+
 # PURPOSE
 This document describe design decisions for a nucore llm integration
 

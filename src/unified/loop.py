@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable
 
-from intent_handler.adapters import LLMAdapter, ToolCall, ToolSpec
+from .adapters import LLMAdapter, ToolCall, ToolSpec
 from utils import get_logger
 from utils.logger import _write_debug_prompt
 

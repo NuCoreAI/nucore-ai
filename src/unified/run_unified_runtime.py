@@ -8,9 +8,12 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from intent_handler import IntentHandlerResult, IntentRuntime, StreamHandler, build_default_dispatch_adapter, _load_runtime_config
-from nucore import NuCoreInterface, PromptFormatTypes
+from unified.models import IntentHandlerResult
 from unified.runtime import UnifiedRuntime
+from unified.runtime_config import _load_runtime_config
+from unified.dispatch_builder import build_default_dispatch_adapter
+from unified.stream_handler import StreamHandler
+from nucore import NuCoreInterface, PromptFormatTypes
 from utils import configure_logging, get_logger
 
 
@@ -36,9 +39,9 @@ class EisyUIContext:
 
     def process_message(self, message_data: str)->str:
         """
-            Process an incoming message from the Eisy UI. 
-            If it's a context message, store the context and return None. 
-            If it's a user message, prepend the context (if any) and return the 
+            Process an incoming message from the Eisy UI.
+            If it's a context message, store the context and return None.
+            If it's a user message, prepend the context (if any) and return the
             combined message.
             Always keep the last context since the UI sends a context with every user
             interaction with the UI, so the context is always up-to-date for the latest user message.
@@ -62,53 +65,19 @@ class EisyUIContext:
         except Exception as e:
             # it's a regular string
             return message_data.strip() if message_data else None
-        
+
     def get_context(self)->dict:
         """Get the current context stored in the UI context object."""
         return self.context
-    
+
     def get_message(self)->str:
         """Get the last user message stored in the UI context object."""
         return self.message
 
 
-def _default_intent_dir() -> Path:
-    """Resolve the default intent handler directory for both repo and installed runs."""
-    repo_path = Path(__file__).resolve().parents[1] / "intent_handler_directory"
-    if repo_path.exists():
-        return repo_path
-
-    try:
-        import intent_handler_directory
-
-        package_path = Path(intent_handler_directory.__file__).resolve().parent
-        if package_path.exists():
-            return package_path
-    except Exception:
-        pass
-
-    return repo_path
-
-
 def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the CLI argument parser for the intent runtime."""
-    parser = argparse.ArgumentParser(description="Run standalone intent runtime")
-    parser.add_argument(
-        "--intent-dir",
-        type=str,
-        default=None,
-        help="Path to intent handler directory",
-    )
-    parser.add_argument(
-        "--unified",
-        action="store_true",
-        help=(
-            "Use the new unified single-prompt + native-tool-calling path "
-            "(design/design.md) instead of router/intent-handler dispatch. "
-            "A new, parallel path -- default behavior when this flag is "
-            "omitted is unchanged."
-        ),
-    )
+    """Build and return the CLI argument parser for the unified runtime."""
+    parser = argparse.ArgumentParser(description="Run standalone unified runtime")
     parser.add_argument(
         "--runtime-config",
         type=str,
@@ -230,16 +199,16 @@ def _load_backend_api(
     json_output: bool = False,
 ) -> Any:
     """Dynamically load and instantiate a backend API class.
-    
+
     Returns None if any required parameter is None.
-    
+
     Args:
         classpath: Fully qualified class path (e.g., 'iox.IoXWrapper')
         base_url: Backend API base URL
         username: Backend API username
         password: Backend API password
         json_output: Whether to enable JSON output for backend API
-    
+
     Returns:
         Instantiated backend API object or None if parameters incomplete.
     """
@@ -306,7 +275,7 @@ def _load_backend_api_cached(
 
 eisy_ui_context = EisyUIContext()
 async def _run_once(
-    runtime: IntentRuntime,
+    runtime: UnifiedRuntime,
     query: str,
     session_id: str | None = None,
 ) -> None:
@@ -324,7 +293,7 @@ async def _run_once(
     and returns without reprinting.
 
     Args:
-        runtime:    The active :class:`~IntentRuntime` instance.
+        runtime:    The active :class:`~UnifiedRuntime` instance.
         query:      The user query string to process.
         session_id: Optional session identifier for conversation tracking.
     """
@@ -350,13 +319,13 @@ async def _run_once(
                 continue
         print(text_output)
 
-        # History is now recorded inside IntentRuntime itself (handle_query),
+        # History is now recorded inside UnifiedRuntime itself (handle_query),
         # so every caller gets consistent multi-turn memory without having to
         # replicate this bookkeeping.
 
     return
 
-async def _run_loop(runtime: IntentRuntime) -> None:
+async def _run_loop(runtime: UnifiedRuntime) -> None:
     """Run an interactive REPL that repeatedly prompts for queries.
 
     Reads lines from stdin and dispatches each to :func:`_run_once`.  Exits
@@ -367,9 +336,9 @@ async def _run_loop(runtime: IntentRuntime) -> None:
     chunk counters) does not leak between turns.
 
     Args:
-        runtime: The active :class:`~IntentRuntime` instance.
+        runtime: The active :class:`~UnifiedRuntime` instance.
     """
-    print("Standalone Intent Runtime")
+    print("Standalone Unified Runtime")
     print("Type 'quit' to exit")
     while True:
         try:
@@ -395,7 +364,7 @@ async def _run_loop(runtime: IntentRuntime) -> None:
         except asyncio.CancelledError:
             logger.info("\nCancelled. Exiting.")
             break
-    
+
 
 # Module-level reference to the backend API instance; populated in main() so
 # that it can be inspected from a debugger or extended tests without re-running
@@ -409,10 +378,10 @@ def main(args:Any=None, websocket=None) -> None:
     Startup sequence:
     1. Parse CLI arguments.
     2. Configure the shared logger (level, file, JSON, console).
-    3. Resolve paths for the intent handler directory and runtime profile.
+    3. Resolve the runtime profile path.
     4. Load the runtime profile and build the LLM dispatch adapter.
     5. Instantiate the backend API (``nucore_interface``).
-    6. Construct :class:`~IntentRuntime` and either run a single query
+    6. Construct :class:`~UnifiedRuntime` and either run a single query
        (``--query``) or enter the interactive REPL.
     7. Shut down the runtime on exit regardless of how it terminates.
     """
@@ -428,16 +397,6 @@ def main(args:Any=None, websocket=None) -> None:
     )
     logger.debug("Logging initialized", extra={"log_config": log_config})
 
-    # Resolve paths — prefer explicit CLI args, fall back to auto-detected defaults.
-    # The unified path doesn't use an intent handler directory at all (it has
-    # no per-intent prompt.md/tool_files, no router), so it's only resolved
-    # and validated for the classic path.
-    intent_dir = None
-    if not args.unified:
-        intent_dir = Path(args.intent_dir).expanduser().resolve() if args.intent_dir else _default_intent_dir()
-        if not intent_dir.exists() or not intent_dir.is_dir():
-            raise FileNotFoundError(f"Intent handler directory not found: {intent_dir}")
-
     runtime_config_path = Path(args.runtime_config).expanduser().resolve() if args.runtime_config else None
     secrets_env = _load_secrets_file(args.secrets_file) if args.secrets_file else None
 
@@ -446,13 +405,10 @@ def main(args:Any=None, websocket=None) -> None:
     if not runtime_config_path.exists() or not runtime_config_path.is_file():
         raise FileNotFoundError(f"Runtime profile file not found: {runtime_config_path}")
 
-    # This first load is only used to build the LLM dispatch adapter's
-    # provider clients (below) and, for --unified, as UnifiedRuntime's own
-    # config -- neither should have a live stream handler wired in (the
-    # unified path doesn't support streaming yet). The classic path's real
-    # stream handler is wired separately: IntentRuntime does its own second
-    # `_load_runtime_config` call internally, with the real StreamHandler()
-    # instance passed to its constructor below.
+    # This load is used both to build the LLM dispatch adapter's provider
+    # clients (below) and as UnifiedRuntime's own config -- it should not
+    # have a live stream handler wired in (the unified path doesn't support
+    # streaming yet).
     runtime_config = _load_runtime_config(
         path=str(runtime_config_path),
         stream_handler=None,
@@ -488,24 +444,12 @@ def main(args:Any=None, websocket=None) -> None:
     if nucore_interface is None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
 
-    if args.unified:
-        runtime = UnifiedRuntime(
-            nucore_interface=nucore_interface,
-            llm_client=llm_adapter,
-            runtime_config=runtime_config,
-        )
-        logger.info("Unified runtime initialized")
-    else:
-        runtime = IntentRuntime(
-            intent_handler_directory=intent_dir,
-            llm_client=llm_adapter,
-            nucore_interface=nucore_interface,
-            runtime_config_path=runtime_config_path,
-            path_to_data_directory=resolved_data_directory,
-            stream_handler=StreamHandler(),  # Default stream handler instance; can be customized as needed
-            websocket=websocket,
-        )
-        logger.info("Intent runtime initialized", extra={"intent_dir": str(intent_dir)})
+    runtime = UnifiedRuntime(
+        nucore_interface=nucore_interface,
+        llm_client=llm_adapter,
+        runtime_config=runtime_config,
+    )
+    logger.info("Unified runtime initialized")
 
     if websocket:
         logger.info("WebSocket connection detected; streaming responses will be sent to the client.")
