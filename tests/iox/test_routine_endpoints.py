@@ -128,6 +128,25 @@ async def test_get_routine_hits_new_singular_id_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_get_all_routines_summary_hits_api_programs():
+    """Runtime state (enabled/running/last-run-time/etc.) lives on a
+    different endpoint than the if/then/else trigger content -- confirmed:
+    /api/programs, not /api/ai/programs (the old, pre-migration path)."""
+    wrapper = _bare_wrapper()
+    calls = []
+
+    def fake_get(path):
+        calls.append(path)
+        return FakeResp(data=[{"id": 1, "enabled": True}])
+
+    wrapper.get = fake_get
+    result = await wrapper.get_all_routines_summary()
+
+    assert calls == ["/api/programs"]
+    assert result == [{"id": 1, "enabled": True}]
+
+
+@pytest.mark.asyncio
 async def test_routine_ops_delete_moves_with_the_crud_migration():
     """The one routine_ops operation that actually lives on the trigger-
     content endpoint, unlike every other operation (confirmed unchanged,
@@ -223,6 +242,92 @@ async def test_load_routines_parses_new_unwrapped_shape():
 
     bad = next(r for r in wrapper.condensed_routines if r["id"] == 43)
     assert bad["invalid"] is True and bad["invalid_reason"] == "bad xml"
+
+
+@pytest.mark.asyncio
+async def test_load_routines_merges_runtime_summary_by_id():
+    """/api/programs' runtime state (enabled/running/last-run-time/etc.)
+    gets merged onto the matching /api/triggers-sourced condensed entry."""
+    wrapper = _bare_wrapper_for_load_routines()
+    wrapper.get_device_name = lambda node_id: node_id
+
+    async def fake_get_all_routines():
+        return [{"id": 42, "name": "Bedtime", "parent": 0, "if": [], "then": [], "else": []}]
+
+    async def fake_get_all_routines_summary():
+        return [
+            {
+                "id": 42, "folder": False, "status": True, "enabled": True,
+                "running": False, "runAtStartup": False,
+                "lastRunTime": "2026-07-19T05:00:00", "lastFinishTime": "2026-07-19T05:00:01",
+                "nextScheduledRunTime": "2026-07-20T05:00:00",
+            },
+        ]
+
+    wrapper.get_all_routines = fake_get_all_routines
+    wrapper.get_all_routines_summary = fake_get_all_routines_summary
+    await wrapper._load_routines()
+
+    assert len(wrapper.condensed_routines) == 1
+    routine = wrapper.condensed_routines[0]
+    assert routine["folder"] is False
+    assert routine["status"] is True
+    assert routine["enabled"] is True
+    assert routine["running"] is False
+    assert routine["runAtStartup"] is False
+    assert routine["lastRunTime"] == "2026-07-19T05:00:00"
+    assert routine["lastFinishTime"] == "2026-07-19T05:00:01"
+    assert routine["nextScheduledRunTime"] == "2026-07-20T05:00:00"
+
+
+@pytest.mark.asyncio
+async def test_load_routines_includes_folder_only_summary_entries():
+    """A folder carries its own gating condition but has no if/then/else
+    trigger content, so it never appears in /api/triggers -- it must still
+    show up in the condensed routines list, sourced entirely from
+    /api/programs, so the model knows it exists and can see its state."""
+    wrapper = _bare_wrapper_for_load_routines()
+    wrapper.get_device_name = lambda node_id: node_id
+
+    async def fake_get_all_routines():
+        return []
+
+    async def fake_get_all_routines_summary():
+        return [{"id": 7, "name": "Vacation Mode", "folder": True, "enabled": True, "status": False}]
+
+    wrapper.get_all_routines = fake_get_all_routines
+    wrapper.get_all_routines_summary = fake_get_all_routines_summary
+    await wrapper._load_routines()
+
+    assert len(wrapper.condensed_routines) == 1
+    folder = wrapper.condensed_routines[0]
+    assert folder["id"] == 7 and folder["name"] == "Vacation Mode"
+    assert folder["comment"] == "" and folder["device_names"] == []
+    assert folder["folder"] is True
+    assert folder["status"] is False
+
+
+@pytest.mark.asyncio
+async def test_load_routines_tolerates_summary_fetch_failure():
+    """A failed runtime-summary fetch must not prevent the trigger-sourced
+    condensed routines from being populated -- it's a best-effort merge."""
+    wrapper = _bare_wrapper_for_load_routines()
+    wrapper.get_device_name = lambda node_id: node_id
+
+    async def fake_get_all_routines():
+        return [{"id": 42, "name": "Bedtime", "parent": 0, "if": [], "then": [], "else": []}]
+
+    async def fake_get_all_routines_summary():
+        raise RuntimeError("hub unreachable")
+
+    wrapper.get_all_routines = fake_get_all_routines
+    wrapper.get_all_routines_summary = fake_get_all_routines_summary
+    await wrapper._load_routines()
+
+    assert len(wrapper.condensed_routines) == 1
+    assert wrapper.condensed_routines[0]["name"] == "Bedtime"
+    assert "folder" not in wrapper.condensed_routines[0]
+    assert wrapper.routines_changed is False
 
     assert wrapper.routines_changed is False
 

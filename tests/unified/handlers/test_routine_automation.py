@@ -14,8 +14,14 @@ from unified.dispatch import execute_tool
 
 
 class FakeResp:
-    def __init__(self, status_code):
+    def __init__(self, status_code, body=None):
         self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no body")
+        return self._body
 
 
 class FakeBackend(NuCoreInterface):
@@ -26,6 +32,8 @@ class FakeBackend(NuCoreInterface):
         self.folders = {}
         self.create_status = 200
         self.update_status = 200
+        self.create_error_body = None
+        self.update_error_body = None
         self.created_trigger = None
         self.updated_trigger = None
         self.refresh_calls = 0
@@ -33,11 +41,11 @@ class FakeBackend(NuCoreInterface):
 
     async def create_automation_routine(self, trigger):
         self.created_trigger = trigger
-        return FakeResp(self.create_status)
+        return FakeResp(self.create_status, self.create_error_body)
 
     async def update_routine(self, program):
         self.updated_trigger = program
-        return FakeResp(self.update_status)
+        return FakeResp(self.update_status, self.update_error_body)
 
     async def get_routine(self, routine_id):
         if self.routine_detail is None:
@@ -169,6 +177,25 @@ async def test_update_routine_backend_rejection_is_not_reported_as_saved():
 
 
 @pytest.mark.asyncio
+async def test_update_routine_rejection_surfaces_hub_error_message():
+    """The hub's rejection body carries an AI-friendly explanation
+    (errorCode/errorMessage) beyond the bare status code -- surface it so a
+    repair turn can act on the actual reason, not just \"HTTP 400\"."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    backend.update_status = 400
+    backend.update_error_body = {"successful": False, "data": None, "errorCode": "BadRequestError", "errorMessage": "Invalid program"}
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE},
+        nucore_interface=backend,
+    )
+    assert "error" in result
+    assert "HTTP 400" in result["error"]
+    assert "BadRequestError" in result["error"] and "Invalid program" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_update_routine_replaces_full_content_not_a_patch():
     """The compiler has no partial-update mode -- whatever `code` is
     supplied becomes the routine's ENTIRE if/then/else. A caller that
@@ -197,6 +224,19 @@ async def test_backend_rejection_is_not_reported_as_saved():
         "create_or_update_routine", {"name": "Evening Routine", "code": CODE}, nucore_interface=backend
     )
     assert "error" in result and "HTTP 400" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_routine_rejection_surfaces_hub_error_message():
+    backend = FakeBackend()
+    backend.create_status = 400
+    backend.create_error_body = {"successful": False, "data": None, "errorCode": "BadRequestError", "errorMessage": "Invalid program"}
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "code": CODE}, nucore_interface=backend
+    )
+    assert "error" in result
+    assert "HTTP 400" in result["error"]
+    assert "BadRequestError" in result["error"] and "Invalid program" in result["error"]
 
 
 @pytest.mark.asyncio
