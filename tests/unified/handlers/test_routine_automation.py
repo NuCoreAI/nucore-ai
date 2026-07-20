@@ -1,0 +1,230 @@
+"""End-to-end: create_or_update_routine dispatched through execute_tool,
+compiling via the new unified.routine_compiler package and calling into a
+fake NuCoreInterface backend -- confirms the whole chain (DSL -> Trigger
+dict -> backend call -> id resolution) works together, not just the
+compiler in isolation.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from nucore.nucore_interface import NuCoreInterface
+from unified.dispatch import execute_tool
+
+
+class FakeResp:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+
+class FakeBackend(NuCoreInterface):
+    def __init__(self):
+        super().__init__(json_output=True, formatter_type="minimal")
+        self.nodes = {}
+        self.groups = {}
+        self.folders = {}
+        self.create_status = 200
+        self.update_status = 200
+        self.created_trigger = None
+        self.updated_trigger = None
+        self.refresh_calls = 0
+        self.routine_detail = None
+
+    async def create_automation_routine(self, trigger):
+        self.created_trigger = trigger
+        return FakeResp(self.create_status)
+
+    async def update_routine(self, program):
+        self.updated_trigger = program
+        return FakeResp(self.update_status)
+
+    async def get_routine(self, routine_id):
+        if self.routine_detail is None:
+            return FakeResp(404)
+        return self.routine_detail
+
+    async def _refresh_routines_database(self):
+        self.refresh_calls += 1
+        self.condensed_routines.append({"id": 99, "name": "Evening Routine", "comment": ""})
+        self.routines_changed = False
+
+    async def _load(self, **kwargs): raise NotImplementedError
+    async def _load_routines(self): raise NotImplementedError
+    async def send_commands(self, commands): raise NotImplementedError
+    async def get_properties(self, device_id): raise NotImplementedError
+    def get_device_name(self, device_id): raise NotImplementedError
+    def get_device_id(self, device_str): raise NotImplementedError
+    async def get_all_routines_summary(self): raise NotImplementedError
+    async def get_routine_summary(self, routine_id): raise NotImplementedError
+    async def get_all_routines(self): raise NotImplementedError
+    async def add_node(self, node_name, type): raise NotImplementedError
+    async def node_ops(self, node_id, operation, **kwargs): raise NotImplementedError
+    async def routine_ops(self, routine_id, operation): raise NotImplementedError
+    def group_scene_add_member(self, *a, **kw): raise NotImplementedError
+    def group_scene_remove_member(self, *a, **kw): raise NotImplementedError
+    def group_scene_update_link(self, *a, **kw): raise NotImplementedError
+    def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
+    def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
+    async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+
+
+CODE = 'if device("25 80 3C 1").status("ST", uom=17, precision=1) > 72:\n    device("BAR1").command("DON")'
+
+
+@pytest.mark.asyncio
+async def test_create_routine_compiles_and_resolves_id_by_name():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "code": CODE}, nucore_interface=backend
+    )
+
+    assert result == {"name": "Evening Routine", "id": 99, "status": "saved"}
+    assert backend.created_trigger["name"] == "Evening Routine"
+    assert "parent" not in backend.created_trigger and "enabled" not in backend.created_trigger
+    assert backend.created_trigger["if"][0]["type"] == "status"
+    assert backend.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bad_dsl_surfaces_compile_error_cleanly():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Bad", "code": 'if device("A").status("ST") > 5:\n    pass'},
+        nucore_interface=backend,
+    )
+    assert "error" in result and "uom and precision" in result["error"]
+
+
+EXISTING_ROUTINE = {
+    "id": 29,
+    "name": "Evening Routine",
+    "parent": 5,
+    "if": [{"type": "control", "andOr": "and", "id": "DON", "node": "OLD", "op": "IS"}],
+    "then": [{"type": "cmd", "id": "DOF", "node": "OLD", "p": []}],
+    "else": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_update_routine_calls_update_not_create_and_carries_the_given_id():
+    """An update (id given) must go through update_routine, never
+    create_automation_routine, and must never trigger the
+    create-path's refresh-then-search-by-name id lookup -- the id is
+    already known."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert backend.created_trigger is None
+    assert backend.updated_trigger["id"] == 29
+    assert backend.updated_trigger["name"] == "Evening Routine"
+    assert backend.refresh_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_update_routine_carries_the_existing_parent():
+    """Confirmed: an update must carry the routine's existing `parent`
+    (fetched fresh from the backend, not left to the model to remember) --
+    the DSL has no way to express it, and it's not something the customer's
+    request would ever mention."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE  # parent: 5
+    await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "id": 29, "code": CODE}, nucore_interface=backend
+    )
+    assert backend.updated_trigger["parent"] == 5
+
+
+@pytest.mark.asyncio
+async def test_update_routine_fails_cleanly_when_existing_routine_cant_be_fetched():
+    """If the parent-fetch fails, the update must not proceed with a
+    missing/wrong parent -- fail loudly instead."""
+    backend = FakeBackend()
+    backend.routine_detail = None  # get_routine will return a 404 FakeResp
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "id": 29, "code": CODE}, nucore_interface=backend
+    )
+    assert "error" in result and "before update" in result["error"]
+    assert backend.updated_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_update_routine_backend_rejection_is_not_reported_as_saved():
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    backend.update_status = 400
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE},
+        nucore_interface=backend,
+    )
+    assert "error" in result and "HTTP 400" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_routine_replaces_full_content_not_a_patch():
+    """The compiler has no partial-update mode -- whatever `code` is
+    supplied becomes the routine's ENTIRE if/then/else. A caller that
+    fetched only a fragment of the current logic (or none at all) would
+    silently drop the rest -- this test documents that the handler itself
+    enforces no safety net here; the tool description's guidance to call
+    get_routine_detail first is the only thing that prevents data loss."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    minimal_code = 'device("BAR1").command("DON")'
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": minimal_code},
+        nucore_interface=backend,
+    )
+    assert result["status"] == "saved"
+    assert backend.updated_trigger["if"] == []
+    assert backend.updated_trigger["then"] == [{"type": "cmd", "id": "DON", "node": "BAR1", "p": []}]
+
+
+@pytest.mark.asyncio
+async def test_backend_rejection_is_not_reported_as_saved():
+    backend = FakeBackend()
+    backend.create_status = 400
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "code": CODE}, nucore_interface=backend
+    )
+    assert "error" in result and "HTTP 400" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_routine_detail_returns_full_trigger():
+    backend = FakeBackend()
+    backend.routine_detail = {
+        "id": 29,
+        "name": "Movie Test",
+        "parent": 0,
+        "comment": "test",
+        "if": [{"type": "status", "andOr": "and", "id": "ST", "node": "A", "op": "GT", "val": {"value": 1, "prec": 0, "uom": 25}}],
+        "then": [{"type": "cmd", "id": "DON", "node": "BackyardSteps", "p": []}],
+        "else": [],
+    }
+    result = await execute_tool("get_routine_detail", {"id": 29}, nucore_interface=backend)
+    assert result["id"] == 29 and result["name"] == "Movie Test"
+    assert result["if"][0]["type"] == "status"
+
+
+@pytest.mark.asyncio
+async def test_get_routine_detail_missing_routine():
+    backend = FakeBackend()
+    result = await execute_tool("get_routine_detail", {"id": 999}, nucore_interface=backend)
+    assert "error" in result and "HTTP 404" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_routine_detail_requires_id():
+    backend = FakeBackend()
+    result = await execute_tool("get_routine_detail", {}, nucore_interface=backend)
+    assert "error" in result
