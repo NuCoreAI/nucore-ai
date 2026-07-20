@@ -281,8 +281,10 @@ class NuCoreInterface(ABC):
     @abstractmethod
     async def get_all_routines_summary(self):
         """
-        Get all the runtime information for routines from the IoX device.
-        :return: JSON response containing all routines or None if failure.
+        Get the runtime-state summary (enabled/running/last-run-time/etc.) for
+        every routine and folder from the IoX device -- not the if/then/else
+        logic itself (see get_all_routines() for that).
+        :return: JSON response containing all routine/folder summaries or None if failure.
         """
         raise NotImplementedError("Subclasses must implement the get_all_routines_summary method.")
 

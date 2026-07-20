@@ -791,22 +791,30 @@ class IoXWrapper(NuCoreInterface):
 
         return response
 
-    
     async def get_all_routines_summary(self):
-        """Fetch lightweight summary records for all routines from the hub.
+        """Fetch lightweight runtime-state summaries for all routines/folders.
 
-        Returns the ``data`` array from ``/api/ai/programs``.  Each entry
-        contains runtime state (enabled, last-run, etc.) but not the full
-        trigger/action logic.
+        Returns the ``data`` array from ``/api/programs``. Each entry carries
+        live runtime state -- ``folder`` (program vs. folder; a folder can
+        carry its own gating condition), ``status`` (its if-condition's
+        current evaluation), ``lastRunTime``/``lastFinishTime``,
+        ``enabled``, ``runAtStartup``, ``running``, and
+        ``nextScheduledRunTime`` -- but not the if/then/else trigger/action
+        logic itself (see :meth:`get_all_routines`/:meth:`get_routine` for
+        that). ``_load_routines`` merges this onto the condensed routines
+        list by id.
 
         Returns:
-            List of routine summary dicts, or the raw response / ``None`` on
-            failure.
+            List of runtime summary dicts, or ``None`` on failure.
         """
-        response = self.get("/api/ai/programs")
-        if response == None or response.status_code != 200:
-            return response if response else None
-        return response.json()['data']
+        response = self.get("/api/programs")
+        if response is None or response.status_code != 200:
+            return None
+        try:
+            return response.json()['data']
+        except Exception as ex:
+            logger.error(f"Error retrieving routines summary: {ex}")
+            return None
 
     async def get_routine_summary(self, program_id: int):
         """Fetch the runtime summary for a single routine.
@@ -1556,6 +1564,21 @@ class IoXWrapper(NuCoreInterface):
         device_rag_formatter = MinimalRagFormatter(json_output=self.json_output, condense=condense_profiles)
         return self._formatter_format_nodes(device_rag_formatter)
     
+    # Runtime-state fields /api/programs carries that /api/triggers does not
+    # -- see get_all_routines_summary(). Copied verbatim (no renaming/
+    # reshaping) onto each condensed routine when present.
+    _RUNTIME_SUMMARY_FIELDS = (
+        "folder", "status", "lastRunTime", "lastFinishTime",
+        "enabled", "runAtStartup", "running", "nextScheduledRunTime",
+    )
+
+    def _merge_routine_runtime_summary(self, condensed_routine: dict, summary: dict | None) -> None:
+        if not summary:
+            return
+        for field in self._RUNTIME_SUMMARY_FIELDS:
+            if field in summary:
+                condensed_routine[field] = summary[field]
+
     async def _load_routines(self) -> None:
         """Fetch all routines from the hub and populate the in-memory stores.
 
@@ -1565,8 +1588,19 @@ class IoXWrapper(NuCoreInterface):
           (including trigger/action logic).  Used by the
           ``routine_status_ops`` handler for direct access.
         * ``self.condensed_routines`` — list of lightweight dicts with
-          ``id``, ``name``, ``comment``, and ``device_names``.  Used by the
-          ``routine_filter`` handler as the LLM prompt payload.
+          ``id``, ``name``, ``comment``, ``device_names``, and the runtime
+          fields listed in ``_RUNTIME_SUMMARY_FIELDS`` (when known).  Used by
+          the ``routine_filter`` handler as the LLM prompt payload.
+
+        Runtime state comes from ``get_all_routines_summary()``
+        (``/api/programs``), merged onto each entry by id -- fetched
+        best-effort: a failure there still leaves the trigger-sourced fields
+        populated, it just means the runtime fields are missing. Folders
+        (and anything else that ``/api/programs`` knows about but
+        ``/api/triggers`` doesn't -- folders carry a gating condition but no
+        if/then/else trigger content) still get a condensed entry, with
+        ``device_names``/``comment`` empty since there's no trigger content
+        to derive them from.
 
         Silently ignores exceptions so a partial failure does not block
         startup.
@@ -1574,16 +1608,25 @@ class IoXWrapper(NuCoreInterface):
         try:
             all_routines = await self.get_all_routines()
 
+            try:
+                summaries = await self.get_all_routines_summary() or []
+            except Exception as ex:
+                logger.error(f"Error retrieving routines runtime summary: {ex}")
+                summaries = []
+            summary_by_id = {str(s["id"]): s for s in summaries if s.get("id") is not None}
+
             # New schema: each list item IS the Trigger/InvalidTrigger dict
             # directly -- no more {"routine": {...}, "invalid"?, "error"?}
             # wrapper (that was the old shape's convention; the new
             # Trigger/InvalidTrigger types carry id/name/if/then/else and,
             # for InvalidTrigger, invalid/error/xml all at their own top
             # level, per the schema).
+            seen_ids: set[str] = set()
             for routine in all_routines:
                 routine_id = routine.get("id", "")
                 if not routine_id:
                     continue
+                seen_ids.add(str(routine_id))
                 condensed_routine = {
                     "id": routine_id,
                     "name": routine.get("name"),
@@ -1594,7 +1637,20 @@ class IoXWrapper(NuCoreInterface):
                 if routine.get("invalid"):
                     condensed_routine["invalid"] = True
                     condensed_routine["invalid_reason"] = routine.get("error", "")
+                self._merge_routine_runtime_summary(condensed_routine, summary_by_id.get(str(routine_id)))
                 self.all_routines[routine_id] = routine
+                self.condensed_routines.append(condensed_routine)
+
+            for sid, summary in summary_by_id.items():
+                if sid in seen_ids:
+                    continue
+                condensed_routine = {
+                    "id": summary.get("id"),
+                    "name": summary.get("name"),
+                    "comment": "",
+                    "device_names": [],
+                }
+                self._merge_routine_runtime_summary(condensed_routine, summary)
                 self.condensed_routines.append(condensed_routine)
 
             self.routines_changed = False
