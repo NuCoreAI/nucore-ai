@@ -68,12 +68,37 @@ def _op_ok(result: Any) -> bool:
     return status_code is not None and 200 <= status_code < 300
 
 
+def _extract_hub_error_message(result: Any) -> str | None:
+    """Pull the hub's own AI-friendly explanation out of a rejected
+    create/update response body, e.g.
+    ``{"successful": false, "errorCode": "BadRequestError", "errorMessage": "Invalid program"}``
+    -- surfaced to the model so a repair turn can act on *why* the hub
+    rejected the compiled trigger, not just its bare HTTP status code."""
+    json_method = getattr(result, "json", None)
+    if not callable(json_method):
+        return None
+    try:
+        body = json_method()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    message = body.get("errorMessage")
+    code = body.get("errorCode")
+    if message and code:
+        return f"{code}: {message}"
+    return message or code
+
+
 def _op_error(result: Any) -> str:
     if result is None or result is False:
         return "no response from backend"
     if isinstance(result, str):
         return result
     status_code = getattr(result, "status_code", None)
+    hub_message = _extract_hub_error_message(result)
+    if hub_message:
+        return f"HTTP {status_code}: {hub_message}" if status_code is not None else hub_message
     return f"HTTP {status_code}" if status_code is not None else str(result)
 
 
