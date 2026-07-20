@@ -22,6 +22,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "multi_device_scene": group_scene_ops.multi_device_scene,
     "routine_status_op": routine_status_ops.routine_status_op,
     "create_or_update_routine": routine_automation.create_or_update_routine,
+    "get_device_detail": routine_automation.get_device_detail,
+    "get_routine_detail": routine_automation.get_routine_detail,
 }
 
 

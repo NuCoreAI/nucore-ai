@@ -735,185 +735,60 @@ class IoXWrapper(NuCoreInterface):
             responses.append(self.get(url))
         return responses
     
-    async def create_automation_routine(self, routine: dict):
-        """Translate an LLM-generated routine definition and submit it to IoX.
+    async def create_automation_routine(self, trigger: dict):
+        """Submit a new ``Trigger`` (see the new trigger/action schema) to IoX.
 
-        The LLM produces device names and symbolic UOM/value pairs.  This
-        method:
-
-        1. Resolves device names → raw IoX node addresses (Base-64 decoded).
-        2. Scales numeric values by ``10 ** precision`` where required by the
-           IoX API (precision scaling does *not* apply to UOM 25 / INDEX).
-        3. Builds a normalised ``{name, parent, enabled, if, then, else}``
-           dict and passes it to :meth:`_create_routine`.
+        Unlike the old shape this replaces, the caller (the ``routine_compiler``
+        package) is responsible for producing an already-fully-resolved
+        ``NewTrigger`` dict -- real device/group/routine ids (the unified
+        path's device ids are already real IoX addresses, never display
+        names, so no ``get_device_id`` name-resolution step is needed here
+        the way the old shape required) and already uom/precision-scaled
+        values (the compiler has real uom/precision in hand via
+        ``get_device_detail``, the same way ``resolve_value``/``send_command``
+        already do deterministic scaling elsewhere in this codebase). This
+        method's job shrinks to wire submission only -- no per-condition/
+        per-action translation, since there's no longer a bespoke
+        intermediate shape to translate *from*.
 
         Args:
-            routine: Dict with keys ``name``, ``parent``, ``enabled``,
-                     ``if`` (list of condition dicts), ``then`` (list of action
-                     dicts), and ``else`` (list of else-action dicts).
+            trigger: A ``NewTrigger``-shaped dict (no ``id``; ``parent``
+                     optional).
 
         Returns:
             :class:`requests.Response` from :meth:`_create_routine`, or
-            ``None`` when processing fails.
+            ``None`` on failure.
 
         Raises:
-            :class:`~nucore.nucore_error.NuCoreError`: When the routine dict
-                is empty or ``None``.
+            :class:`~nucore.nucore_error.NuCoreError`: When *trigger* is
+                empty or ``None``.
         """
-        if not routine:
-            raise NuCoreError ("No valid routine provided.")
-        try: 
-            out_routine={
-                "name": f"{routine['name']}",
-                "parent": routine['parent'],
-                "enabled": routine['enabled'] ,
-                "if": [],
-                "then": [],
-                "else": []
-            }
-            ifs = routine.get("if", None)
-            if ifs is not None and len (ifs) > 0:
-                for if_ in ifs:
-                    if not isinstance(if_, dict):
-                        continue
+        if not trigger:
+            raise NuCoreError("No valid trigger provided.")
+        return self._create_routine(trigger)
 
-                    # Keep logic operators and schedule blocks as-is.
-                    if "logic" in if_ or "weekly" in if_ or "at" in if_ or "from" in if_ or "to" in if_ or "for" in if_:
-                        out_routine['if'].append(if_)
-                        continue
-
-                    # COS: property-state comparison condition.
-                    if "comp" in if_:
-                        condition = if_
-                        required = {"device", "status", "comp", "value", "uom", "precision"}
-                        if not required.issubset(condition.keys()):
-                            logger.error(f"Invalid COS condition (missing required fields): {condition}")
-                            continue
-
-                        device_id = self.get_device_id(condition.get("device"))
-                        if device_id is None:
-                            logger.error(f"Device not found for COS condition: {condition}")
-                            continue
-                        condition["device"] = ProfileRagFormatter.decode_id(device_id)
-
-                        uom_id = condition.get("uom")
-                        precision = condition.get("precision")
-                        value = condition.get("value")
-                        if uom_id is not None and not is_enumeration_uom(uom_id) and precision is not None and value is not None:
-                            condition["value"] = int(value * (10 ** int(precision)))
-
-                        out_routine['if'].append(condition)
-                        continue
-
-                    # COC: physical control event condition.
-                    if "eq" in if_:
-                        condition = if_
-                        required = {"device", "eq", "control"}
-                        if not required.issubset(condition.keys()):
-                            logger.error(f"Invalid COC condition (missing required fields): {condition}")
-                            continue
-
-                        device_id = self.get_device_id(condition.get("device"))
-                        if device_id is None:
-                            logger.error(f"Device not found for COC condition: {condition}")
-                            continue
-                        condition["device"] = ProfileRagFormatter.decode_id(device_id)
-
-                        parameters = condition.get("parameters")
-                        if isinstance(parameters, list):
-                            for param in parameters:
-                                uom_id = param.get("uom")
-                                precision = param.get("precision")
-                                value = param.get("value")
-                                if precision is not None and uom_id is not None and not is_enumeration_uom(uom_id) and value is not None:
-                                    param["value"] = value * (10 ** int(precision))
-
-                        out_routine['if'].append(condition)
-                        continue
-
-                    logger.error(f"Unsupported IF condition shape, dropping: {if_}")
-            
-            thens = routine.get("then", None)
-            if thens is not None and len (thens) > 0:
-                for then in thens:
-                    device_id = then.get("device", None)
-                    if device_id is not None:
-                        device_id = self.get_device_id(device_id)
-                        if device_id is None: 
-                            continue
-                        # device ids are in base64 encoded, decode it
-                        device_id = ProfileRagFormatter.decode_id(device_id)
-                        then["device"] = device_id
-                    parameters = then.get("parameters", None)
-                    if parameters is not None:
-                        for param in parameters:
-                            uom_id = param.get("uom", None)
-                            precision = param.get("precision", None)
-                            value = param.get("value", None)
-                            if precision is not None:
-                                prec = int(precision)
-                                if uom_id is not None and not is_enumeration_uom(uom_id): 
-                                    value = value * (10 ** prec)
-                                    param["value"] = value 
-                    out_routine['then'].append(then)
-            elses = routine.get("else", None)
-            if elses is not None and len (elses) > 0:
-                for else_ in elses:
-                    device_id = else_.get("device", None)
-                    if device_id is not None:
-                        device_id = self.get_device_id(device_id)
-                        if device_id is None:
-                            #remove this else from elses
-                            logger.error(f"Device not found for else condition: {else_}")
-                            continue
-                        # device ids are in base64 encoded, decode it
-                        device_id = ProfileRagFormatter.decode_id(device_id)
-                        else_["device"] = device_id
-                    parameters = else_.get("parameters", None)
-                    if parameters is not None:
-                        for param in parameters:
-                            uom_id = param.get("uom", None)
-                            precision = param.get("precision", None)
-                            value = param.get("value", None)
-                            if precision is not None:
-                                prec = int(precision)
-                                if uom_id is not None and not is_enumeration_uom(uom_id): 
-                                    value = value * (10 ** prec)
-                                    param["value"] = value
-                    out_routine['else'].append(else_)
-
-        except Exception as e:
-            logger.error(f"Failed to process routine: {str(e)}")
-            return None
-
-        logger.info("****Routine after processing:") 
-        logger.info(json.dumps(out_routine, indent=4))
-        response=self._create_routine(out_routine)
-        return response
-
-    def _create_routine(self, program: dict):
-        """Submit a processed routine definition to the IoX hub via PUT.
+    def _create_routine(self, trigger: dict):
+        """Submit a ``NewTrigger``-shaped dict to the IoX hub via PUT.
 
         Args:
-            program: Normalised routine dict with ``name``, ``parent``,
-                     ``enabled``, ``if``, ``then``, and ``else`` keys.
+            trigger: ``NewTrigger``-shaped dict (see ``create_automation_routine``).
 
         Returns:
-            :class:`requests.Response`, or ``False`` when ``program`` is
-            empty.
+            :class:`requests.Response`, or ``None`` on failure.
         """
-        response=None
+        response = None
         try:
-            program_content = {
-                'routine': program
-            }
+            # Confirmed: unlike the old /api/ai/trigger endpoint, the new
+            # /api/trigger endpoint takes the NewTrigger/UpdatedTrigger dict
+            # directly as the request body -- no {"routine": ...} wrapper.
+            body = trigger
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+            response = self.put(f'/api/trigger', body=json.dumps(body), headers=headers)
         except Exception as ex:
-            logger.error(f"Error creating routine: {ex}")
-        
+            logger.error(f"Error creating trigger: {ex}")
+
         return response
 
     
@@ -977,14 +852,15 @@ class IoXWrapper(NuCoreInterface):
     async def get_all_routines(self):
         """Fetch complete trigger/action definitions for all routines.
 
-        Returns the ``data`` array from ``/api/ai/triggers`` which includes
-        the full ``if``/``then``/``else`` logic for every routine.
+        Returns the ``data`` array from ``/api/triggers`` -- a list of
+        ``Trigger``/``InvalidTrigger``-shaped dicts, one per routine, with the
+        full ``if``/``then``/``else`` logic for every routine.
 
         Returns:
             List of full routine dicts, or the raw response / ``None`` on
             failure.
         """
-        response = self.get("/api/ai/triggers")
+        response = self.get("/api/triggers")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -992,18 +868,23 @@ class IoXWrapper(NuCoreInterface):
         except Exception as ex:
             logger.error(f"Error retrieving all routines: {ex}")
             return None
-    
+
     async def get_routine(self, program_id: str):
         """Fetch the complete trigger/action definition for a single routine.
 
         Args:
             program_id: Routine ID (integer or string form accepted by the
-                        ``/api/ai/trigger/<id>`` endpoint).
+                        ``/api/triggers/<id>`` endpoint).
 
         Returns:
-            ``data`` value from the API response, or ``None`` on failure.
+            ``data`` value from the API response (a ``Trigger``/
+            ``InvalidTrigger``-shaped dict), or ``None`` on failure.
         """
-        response = await self.get(f"/api/ai/trigger/{program_id}")
+        # NOTE: self.get is synchronous (line ~143) -- the `await` here was
+        # a pre-existing bug (present before this endpoint migration) that
+        # would have made this method crash unconditionally; fixed in
+        # passing since this exact line was already being touched.
+        response = self.get(f"/api/triggers/{program_id}")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -1013,10 +894,12 @@ class IoXWrapper(NuCoreInterface):
             return None
 
     async def update_routine(self, program: dict):
-        """Update an existing routine on the hub via POST.
+        """Update an existing routine (``UpdatedTrigger``-shaped -- has a
+        real ``id``, real resolved ids/values, same as ``create_automation_routine``)
+        on the hub via POST.
 
         Args:
-            program: Updated routine dict (same schema as :meth:`_create_routine`).
+            program: ``UpdatedTrigger``-shaped dict.
 
         Returns:
             :class:`requests.Response`, or ``False`` when ``program`` is empty.
@@ -1025,17 +908,16 @@ class IoXWrapper(NuCoreInterface):
             return False
         response=None
         try:
-            program_content = {
-                'routine': program
-            }
+            # Same confirmed no-wrapper contract as _create_routine.
+            program_content = program
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.post(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+            response = self.post(f'/api/trigger', body=json.dumps(program_content), headers=headers)
         except Exception as ex:
             logger.error(f"Error updating routine: {ex}")
-        
-        return response 
+
+        return response
 
     async def delete_routine(self, program_id: str):
         """Delete a routine by its ID.
@@ -1050,11 +932,13 @@ class IoXWrapper(NuCoreInterface):
         if not program_id:
             return None
         try:
-            response = await self.delete(f'/api/ai/trigger/{program_id}')
+            # self.delete is synchronous -- same pre-existing await-on-sync
+            # bug as get_routine, fixed in passing.
+            response = self.delete(f'/api/trigger/{program_id}')
         except Exception as ex:
             logger.error(f"Error deleting routine: {ex}")
-        
-        return response 
+
+        return response
     
     async def add_node(self, node_name:str, type:Literal["folder", "group"]):
         """
@@ -1220,16 +1104,20 @@ class IoXWrapper(NuCoreInterface):
         response = None
         try:
             if operation == "delete":
-                response = self.delete(f'/api/ai/trigger/{routine_id}')
+                # The one routine_ops operation that lives on the trigger-
+                # content endpoint rather than /rest/programs -- moves with
+                # the rest of the CRUD migration, unlike every other
+                # operation below (confirmed unchanged).
+                response = self.delete(f'/api/trigger/{routine_id}')
             else:
                 if isinstance(routine_id, str):
                     try:
                         routine_id = int(routine_id)
                         #convert it to 4 digit hex string without 0x prefix since that's what the API expects
-                        routine_id = format(routine_id, '04x')
                     except ValueError:
                         #already in hex
                         pass
+                routine_id = format(routine_id, '04x')
                 response = self.get(f'/rest/programs/{routine_id}/{operation}')
         except Exception as ex:
             logger.error(f"Error performing routine operation: {ex}")
@@ -1686,25 +1574,26 @@ class IoXWrapper(NuCoreInterface):
         try:
             all_routines = await self.get_all_routines()
 
-            # now go thorugh the list and create both the full and condensed versions of the routines database 
-            # codensed version is used for filtering using device names, while the full version is sent to intent handlers for full processing
-            for r in all_routines:
-                routine = r.get("routine", {})
+            # New schema: each list item IS the Trigger/InvalidTrigger dict
+            # directly -- no more {"routine": {...}, "invalid"?, "error"?}
+            # wrapper (that was the old shape's convention; the new
+            # Trigger/InvalidTrigger types carry id/name/if/then/else and,
+            # for InvalidTrigger, invalid/error/xml all at their own top
+            # level, per the schema).
+            for routine in all_routines:
                 routine_id = routine.get("id", "")
                 if not routine_id:
                     continue
                 condensed_routine = {
-                    "id": routine_id, 
+                    "id": routine_id,
                     "name": routine.get("name"),
                     "comment": routine.get("comment"),
-                    "device_names": self._get_device_name_list_from_routine(routine) 
+                    "device_names": self._get_device_name_list_from_routine(routine)
                 }
 
-                if "invalid" in r:
-                    routine["invalid"]=r.get("invalid", False)
-                    routine["invalid_reason"]=r.get("error", "")
-                    condensed_routine["invalid"]=r.get("invalid", False)
-                    condensed_routine["invalid_reason"]=r.get("error", "")
+                if routine.get("invalid"):
+                    condensed_routine["invalid"] = True
+                    condensed_routine["invalid_reason"] = routine.get("error", "")
                 self.all_routines[routine_id] = routine
                 self.condensed_routines.append(condensed_routine)
 
@@ -1715,9 +1604,21 @@ class IoXWrapper(NuCoreInterface):
     def _get_device_name_list_from_routine(self, routine: dict) -> list[str]:
         """Extract the human-readable device names referenced by a routine.
 
-        Scans the ``if``, ``then``, and ``else`` sections of the routine for
-        ``"device"`` fields, resolves each raw address to its display name via
-        :meth:`get_device_name`, and returns the deduplicated list.
+        Scans the ``if``, ``then``, and ``else`` sections for a device/node
+        reference and resolves each to its display name via
+        :meth:`get_device_name`, deduplicated.
+
+        Only conditions/actions carrying a device reference at their own top
+        level are scanned -- ``status``/``control`` conditions and ``cmd``
+        actions, via the new schema's ``"node"`` field (a real rename from
+        the old shape's ``"device"`` key, not cosmetic -- the new schema is
+        the authoritative wire shape). ``paren`` conditions are recursed into
+        since they nest their own ``conditions`` list. Every other construct
+        type (``var``, ``x10``, ``triggerref``, ``inet``, ``comment``,
+        ``sys``, ``notify``, the program-control actions, ``lp``, ``device``)
+        legitimately has no top-level device reference and is silently
+        skipped -- this was never meant to be exhaustive, just a best-effort
+        "what devices does this routine mention" summary for prompt display.
 
         Args:
             routine: Full routine dict with optional ``if``/``then``/``else``
@@ -1729,28 +1630,29 @@ class IoXWrapper(NuCoreInterface):
         if routine is None:
             return []
 
-        #first check the if section:        
-        if_section: list[dict] = routine.get("if", [])
-        then_section: list[dict] = routine.get("then", [])
-        else_section: list[dict] = routine.get("else", [])
-        device_id_list = set() 
-        for condition in if_section:
-            if "device" in condition:
-                device = condition.get("device", None)
-                if device:                    
-                    device_id_list.add(device)
-        
-        for action in then_section:
-            if "device" in action:
-                device = action.get("device", None)
-                if device:
-                    device_id_list.add(device)
-   
-        for action in else_section:
-            if "device" in action:
-                device = action.get("device", None)
-                if device:
-                    device_id_list.add(device)
+        def _collect_condition_nodes(conditions, into: set) -> None:
+            for condition in conditions or []:
+                if not isinstance(condition, dict):
+                    continue
+                if condition.get("type") == "paren":
+                    _collect_condition_nodes(condition.get("conditions"), into)
+                    continue
+                node = condition.get("node")
+                if node:
+                    into.add(node)
+
+        def _collect_action_nodes(actions, into: set) -> None:
+            for action in actions or []:
+                if not isinstance(action, dict):
+                    continue
+                node = action.get("node")
+                if node:
+                    into.add(node)
+
+        device_id_list: set = set()
+        _collect_condition_nodes(routine.get("if", []), device_id_list)
+        _collect_action_nodes(routine.get("then", []), device_id_list)
+        _collect_action_nodes(routine.get("else", []), device_id_list)
 
         device_names: list[str] = []
         for device_id in device_id_list:

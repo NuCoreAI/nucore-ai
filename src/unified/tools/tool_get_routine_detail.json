@@ -1,0 +1,16 @@
+{
+  "name": "get_routine_detail",
+  "description": "Fetch one routine's FULL if/then/else automation logic -- real device/routine/variable ids, uom values, and the same GE/GT/IS/ISNOT/LE/LT-style op tokens and status/control/schedule/cmd/etc field shapes documented in create_or_update_routine's description (use that grammar to interpret this tool's result and explain it in plain language). Any value whose uom is an index/enum type (25/146/148) is annotated with a real `label` string alongside the raw `value` (resolved from the actual device/command/property, not guessed) -- always prefer and relay `label` over the raw number when explaining a routine to the customer; if a value has no `label`, it's a plain number, not an unresolved enum. ROUTINES DATABASE only lists a routine's name/comment/referenced devices, never its actual logic -- call this tool for any 'what does this routine do', 'show me the full logic', or 'explain this routine' question, and before editing an existing routine's logic with create_or_update_routine.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "integer",
+        "description": "Real routine id, exactly as shown in ROUTINES DATABASE."
+      }
+    }
+  }
+}
