@@ -7,7 +7,14 @@ from typing import Any, Awaitable, Callable
 from nucore import NuCoreInterface
 from utils import get_logger
 
-from .handlers import command_control_status, group_scene_ops, node_ops, routine_automation, routine_status_ops
+from .handlers import (
+    command_control_status,
+    group_scene_ops,
+    node_ops,
+    routine_automation,
+    routine_status_ops,
+    variable_ops,
+)
 
 logger = get_logger(__name__)
 
@@ -24,6 +31,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "create_or_update_routine": routine_automation.create_or_update_routine,
     "get_device_detail": routine_automation.get_device_detail,
     "get_routine_detail": routine_automation.get_routine_detail,
+    "variable_op": variable_ops.variable_op,
+    "list_variables": variable_ops.list_variables,
 }
 
 

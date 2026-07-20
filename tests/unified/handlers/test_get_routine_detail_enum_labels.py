@@ -84,6 +84,8 @@ class FakeBackend(NuCoreInterface):
     async def add_node(self, node_name, type): raise NotImplementedError
     async def node_ops(self, node_id, operation, **kwargs): raise NotImplementedError
     async def routine_ops(self, routine_id, operation): raise NotImplementedError
+    async def _load_variables(self): pass
+    async def variable_ops(self, var_type, var_id, operation, **kwargs): raise NotImplementedError
     def group_scene_add_member(self, *a, **kw): raise NotImplementedError
     def group_scene_remove_member(self, *a, **kw): raise NotImplementedError
     def group_scene_update_link(self, *a, **kw): raise NotImplementedError

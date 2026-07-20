@@ -1,0 +1,57 @@
+"""Confirms build_system_prompt substitutes both database placeholders (no
+stray <<...>> left over). Variables deliberately have no standing prompt
+section (see list_variables tool) -- only their per-routine cross-reference
+(variable_names, sourced from condensed_routines) shows up here.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from nucore.nucore_interface import NuCoreInterface
+from unified.prompt_builder import build_system_prompt
+
+
+class FakeBackend(NuCoreInterface):
+    def __init__(self):
+        super().__init__(json_output=True, formatter_type="minimal")
+        self.condensed_routines = [
+            {"id": 1, "name": "Bedtime", "comment": "", "device_names": [], "variable_names": ["Irrigation_Mode"]}
+        ]
+
+    async def _refresh_routines_database(self):
+        return False
+
+    async def _load(self, **kwargs): raise NotImplementedError
+    async def _load_routines(self): raise NotImplementedError
+    async def _load_variables(self): raise NotImplementedError
+    async def send_commands(self, commands): raise NotImplementedError
+    async def create_automation_routine(self, trigger): raise NotImplementedError
+    async def update_routine(self, program): raise NotImplementedError
+    async def get_routine(self, routine_id): raise NotImplementedError
+    async def get_properties(self, device_id): raise NotImplementedError
+    def get_device_name(self, device_id): raise NotImplementedError
+    def get_device_id(self, device_str): raise NotImplementedError
+    async def get_all_routines_summary(self): raise NotImplementedError
+    async def get_routine_summary(self, routine_id): raise NotImplementedError
+    async def get_all_routines(self): raise NotImplementedError
+    async def add_node(self, node_name, type): raise NotImplementedError
+    async def node_ops(self, node_id, operation, **kwargs): raise NotImplementedError
+    async def routine_ops(self, routine_id, operation): raise NotImplementedError
+    async def variable_ops(self, var_type, var_id, operation, **kwargs): raise NotImplementedError
+    def group_scene_add_member(self, *a, **kw): raise NotImplementedError
+    def group_scene_remove_member(self, *a, **kw): raise NotImplementedError
+    def group_scene_update_link(self, *a, **kw): raise NotImplementedError
+    def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
+    def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
+    async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_substitutes_every_placeholder():
+    prompt = await build_system_prompt(FakeBackend())
+
+    assert "<<" not in prompt and ">>" not in prompt
+    assert "# VARIABLES DATABASE" not in prompt
+    assert "Bedtime" in prompt
+    assert "Irrigation_Mode" in prompt  # via ROUTINES DATABASE's variable_names cross-reference

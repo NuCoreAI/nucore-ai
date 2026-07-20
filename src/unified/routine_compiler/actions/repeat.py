@@ -13,13 +13,16 @@ Grammar:
     repeat(count=<n>)
     repeat(count=<n>, random=True)
     every(duration(hour=<H>, minute=<M>, second=<S>))
-    while_repeat(id=<var_id>, type=1, op=">", value=<n>)
+    while_repeat(id=<var_id>, type=1, op=">", value=<n>, precision=<p>)
+
+Confirmed: variable values are precision-scaled integers on the wire, same
+as device command params -- precision= is required (from list_variables) so
+value= can be scaled correctly; the model never does that arithmetic
+itself.
 
 ``while_repeat`` compares a NuCore variable to a plain literal only (not
 another variable) -- the schema's ``WhileConditionVar`` var-vs-var case is a
-rare enough sub-case to skip for this scaffolding-only pass (see
-``conditions/var_condition.py``'s docstring for the broader "no variable
-discovery tool yet" context).
+rare enough sub-case to skip.
 """
 
 from __future__ import annotations
@@ -76,7 +79,7 @@ def compile_repeat_every(expr: ast.Call) -> dict[str, Any]:
 
 def compile_while_repeat(expr: ast.Call) -> dict[str, Any]:
     _, kwargs = call_args(expr)
-    required = {"id", "type", "op", "value"}
+    required = {"id", "type", "op", "value", "precision"}
     missing = required - set(kwargs)
     if missing:
         raise TriggerCompileError(f"while_repeat(...) is missing required argument(s): {', '.join(sorted(missing))}")
@@ -93,10 +96,11 @@ def compile_while_repeat(expr: ast.Call) -> dict[str, Any]:
     value = literal(kwargs["value"])
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TriggerCompileError("while_repeat(...)'s value= must be a number.")
+    precision = literal(kwargs["precision"])
+    if isinstance(precision, bool) or not isinstance(precision, int) or precision < 0:
+        raise TriggerCompileError("while_repeat(...)'s precision= must be a non-negative integer.")
 
-    val: dict[str, Any] = {"value": value}
-    if "precision" in kwargs:
-        val["prec"] = literal(kwargs["precision"])
+    val: dict[str, Any] = {"value": int(round(value * (10 ** precision))), "prec": precision}
 
     return {
         "type": "repeat",

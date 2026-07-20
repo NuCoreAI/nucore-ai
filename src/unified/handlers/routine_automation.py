@@ -43,6 +43,20 @@ query asked to explain a routine and the model reported raw index numbers
 as if they were meaningful values). Same "backend does deterministic
 lookup, never rely on model discipline for an exact fact" pattern as
 ``resolve_value``/``numeric_enum.py`` elsewhere in this codebase.
+
+Same annotation pass also attaches a variable's real ``name`` next to any
+``var`` condition/action (and nested ``var=``/``while`` references) via
+``NuCoreInterface.get_variable`` -- a routine's compiled logic only ever
+carries a variable's raw id/type, never its name.
+
+It also attaches a plain-English ``op_label`` to every ``var`` ACTION (never
+to a ``var`` CONDITION -- their op vocabularies don't overlap, see
+``_VAR_ACTION_OP_LABELS``): a real query asked to explain a routine and the
+model narrated a `then`-block ``var`` action's ``op: "EQ"`` (an assignment)
+as "check if X equals 1" -- the English word "equals" reads as a comparison
+even though this op token can only ever mean "set equal to". Same
+deterministic-translation fix as the enum label above, applied to a token
+ambiguity instead of a raw index.
 """
 
 from __future__ import annotations
@@ -175,6 +189,49 @@ def _annotate_val(val: Any, editor: Any) -> None:
         val["label"] = label
 
 
+# Real, observed model mistake: a `var` node in `then`/`else` (an
+# assignment -- see var_action.py's _VAR_OP_MAP) got narrated in English as
+# "check if X equals 1", the wording for a `var` CONDITION (a comparison,
+# only ever found in `if`). The two node shapes share a "type": "var" tag
+# and overlapping-looking `op` values, but the actual op vocabularies never
+# overlap (conditions: GT/GE/LT/LE/IS/ISNOT; actions: EQ/ADD=/SUB=/.../INIT)
+# -- so the model has everything it needs to tell them apart, it just wasn't
+# taught to. Same "backend resolves the exact fact" fix as the enum-label
+# annotation above: attach a plain-English `op_label` so there's no token to
+# misread as English in the first place.
+_VAR_ACTION_OP_LABELS: dict[str, str] = {
+    "EQ": "set equal to",
+    "ADD=": "increase by",
+    "SUB=": "decrease by",
+    "MUL=": "multiply by",
+    "DIV=": "divide by",
+    "REM=": "set to the remainder (modulo) of itself and",
+    "AND=": "bitwise-AND with",
+    "OR=": "bitwise-OR with",
+    "XOR=": "bitwise-XOR with",
+    "RDM=": "set to a random value up to",
+    "INIT": "reset to its stored init value",
+}
+
+
+def _annotate_var_ref(nucore_interface: NuCoreInterface, ref: Any, type_key: str) -> None:
+    """Attach the real variable name next to a var reference dict --
+    same "backend resolves the exact fact" pattern as the enum-label
+    annotation above, one level simpler (no editor/ranges lookup, just an
+    id -> name dict via ``get_variable``). A top-level var condition/action
+    keys its type ``"varType"``; a nested reference (``var=`` on a
+    condition/set_var, or ``while``'s var) keys it plain ``"type"`` --
+    hence the caller-supplied *type_key*."""
+    if not isinstance(ref, dict):
+        return
+    var_type, var_id = ref.get(type_key), ref.get("id")
+    if var_type is None or var_id is None:
+        return
+    variable = nucore_interface.get_variable(var_type, var_id)
+    if variable and variable.get("name"):
+        ref["name"] = variable["name"]
+
+
 def _annotate_condition(nucore_interface: NuCoreInterface, condition: Any) -> None:
     if not isinstance(condition, dict):
         return
@@ -183,8 +240,12 @@ def _annotate_condition(nucore_interface: NuCoreInterface, condition: Any) -> No
         for nested in condition.get("conditions") or []:
             _annotate_condition(nucore_interface, nested)
         return
+    if ctype == "var":
+        _annotate_var_ref(nucore_interface, condition, "varType")
+        _annotate_var_ref(nucore_interface, condition.get("var"), "type")
+        return
     if ctype != "status":
-        return  # control/var/x10/inet/triggerref/schedule/comment carry no enum-uom val to translate
+        return  # control/x10/inet/triggerref/schedule/comment carry no enum-uom val or variable ref to translate
     node = nucore_interface.get_node(condition.get("node"))
     node_def = getattr(node, "node_def", None)
     if node_def is None:
@@ -194,7 +255,22 @@ def _annotate_condition(nucore_interface: NuCoreInterface, condition: Any) -> No
 
 
 def _annotate_action(nucore_interface: NuCoreInterface, action: Any) -> None:
-    if not isinstance(action, dict) or action.get("type") != "cmd":
+    if not isinstance(action, dict):
+        return
+    atype = action.get("type")
+    if atype == "var":
+        _annotate_var_ref(nucore_interface, action, "varType")
+        _annotate_var_ref(nucore_interface, action.get("var"), "type")
+        op_label = _VAR_ACTION_OP_LABELS.get(action.get("op"))
+        if op_label:
+            action["op_label"] = op_label
+        return
+    if atype == "repeat":
+        while_block = action.get("while")
+        if isinstance(while_block, dict):
+            _annotate_var_ref(nucore_interface, while_block.get("var"), "varType")
+        return
+    if atype != "cmd":
         return  # only `cmd` actions carry param values with a uom to translate
     node = nucore_interface.get_node(action.get("node"))
     node_def = getattr(node, "node_def", None)

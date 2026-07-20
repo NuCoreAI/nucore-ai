@@ -10,4 +10,5 @@ from .routine_summary_rag_formatter import RoutineSummaryRagFormatter
 
 
 __all__ = ["ProfileRagFormatter", "MinimalRagFormatter",
-           "RAGFormatter", "RAGData", "RAGDataItem", "DedupeDevices", "DedupeProfiles", "DedupeRoutines", "RoutineSummaryRagFormatter"]
+           "RAGFormatter", "RAGData", "RAGDataItem", "DedupeDevices", "DedupeProfiles", "DedupeRoutines",
+           "RoutineSummaryRagFormatter"]

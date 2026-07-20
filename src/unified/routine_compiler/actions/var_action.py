@@ -1,20 +1,30 @@
 """``var`` action -- assign a NuCore variable from a literal, another
 variable, a live device-property snapshot, or a system value (current
-time/date/sunrise-sunset/etc). Scaffolding only -- see
-``conditions/var_condition.py``'s docstring for why (no variable-discovery
-tool ships this iteration).
+time/date/sunrise-sunset/etc). See ``conditions/var_condition.py``'s
+docstring for the backing ``IoXWrapper``/``list_variables`` support.
 
-Grammar (exactly one of value=/var=/device=+property=+uom=/sysval= per call):
-    set_var(id=<n>, type=1, op="=", value=<literal>)
-    set_var(id=<n>, type=1, op="+=", var=var_ref(id=<m>, type=1))
+Grammar (exactly one of value=/var=/device=+property=+uom=/sysval= per call
+-- except op="init", which takes none of them, see below):
+    set_var(id=<n>, type=1, op="=", value=<literal>, precision=<p>)
+    set_var(id=<n>, type=1, op="+=", var=var_ref(id=<m>, type=1, precision=<q>))
     set_var(id=<n>, type=1, op="=", device="<DEVICE_ID>", property="<prop_id>", uom=<uom_id>)
     set_var(id=<n>, type=1, op="=", sysval="CurrentHour")
+    set_var(id=<n>, type=1, op="init")
 
 op= is one of: =, +=, -=, *=, /=, %=, &=, |=, ^=, "random", "init".
 sysval= is one of: SecondsSinceStartOfDay, MinutesSinceStartOfDay,
 CurrentDayOfYear, CurrentDayOfMonth, CurrentDayOfWeek, CurrentYear,
 CurrentMonth, CurrentHour, CurrentMinute, CurrentSecond, SunriseToday,
 SunsetToday, SunriseTomorrow, SunsetTomorrow, UnixDateTime.
+
+Confirmed: `op="init"` restores the variable's value from its stored init
+value -- it's a self-contained statement, not a value assignment, so it
+takes no value=/var=/device=/sysval= source at all (and none is allowed).
+
+Confirmed: variable values are precision-scaled integers on the wire, same
+as device command params -- value=<literal> requires precision= (from
+list_variables) so the compiler can scale it correctly; the model never
+does that arithmetic itself.
 """
 
 from __future__ import annotations
@@ -75,6 +85,15 @@ def compile_set_var(expr: ast.Call) -> dict[str, Any]:
     out: dict[str, Any] = {"type": "var", "varType": str(var_type), "id": var_id, "op": _VAR_OP_MAP[op_str]}
 
     modes_present = [k for k in ("value", "var", "device", "sysval") if k in kwargs]
+
+    if op_str == "init":
+        if modes_present:
+            raise TriggerCompileError(
+                "set_var(..., op=\"init\") restores the variable from its stored init value and takes no "
+                "source -- remove value=/var=/device=/sysval= for this op."
+            )
+        return out
+
     if len(modes_present) != 1:
         raise TriggerCompileError(
             "set_var(...) requires exactly one of: value= (a literal), var=var_ref(...) (another variable), "
@@ -83,19 +102,28 @@ def compile_set_var(expr: ast.Call) -> dict[str, Any]:
     mode = modes_present[0]
 
     if mode == "value":
+        if "precision" not in kwargs:
+            raise TriggerCompileError(
+                "set_var(..., value=...) requires precision= (the variable's own precision, from "
+                "list_variables) so the literal can be scaled correctly."
+            )
         value = literal(kwargs["value"])
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TriggerCompileError("set_var(...)'s value= must be a number.")
-        val: dict[str, Any] = {"value": value}
-        if "precision" in kwargs:
-            val["prec"] = literal(kwargs["precision"])
-        out["val"] = val
+        precision = literal(kwargs["precision"])
+        if isinstance(precision, bool) or not isinstance(precision, int) or precision < 0:
+            raise TriggerCompileError("set_var(...)'s precision= must be a non-negative integer.")
+        out["val"] = {"value": int(round(value * (10 ** precision))), "prec": precision}
 
     elif mode == "var":
-        ref_id, ref_type = parse_var_ref(kwargs["var"])
+        if "precision" in kwargs:
+            raise TriggerCompileError("set_var(..., var=...) doesn't take precision= -- the referenced variable's own value is used as-is.")
+        ref_id, ref_type, _ref_precision = parse_var_ref(kwargs["var"])
         out["var"] = {"id": ref_id, "type": ref_type}
 
     elif mode == "device":
+        if "precision" in kwargs:
+            raise TriggerCompileError("set_var(..., device=...) doesn't take precision= -- pass the device property's own uom= instead.")
         if "property" not in kwargs or "uom" not in kwargs:
             raise TriggerCompileError("set_var(...)'s device= requires property= and uom= too.")
         out["status"] = {
@@ -105,6 +133,8 @@ def compile_set_var(expr: ast.Call) -> dict[str, Any]:
         }
 
     else:  # sysval
+        if "precision" in kwargs:
+            raise TriggerCompileError("set_var(..., sysval=...) doesn't take precision=.")
         sysval_name = literal(kwargs["sysval"])
         if sysval_name not in _SYSVAL_MAP:
             raise TriggerCompileError(f"set_var(...)'s sysval= must be one of: {', '.join(_SYSVAL_MAP)}")

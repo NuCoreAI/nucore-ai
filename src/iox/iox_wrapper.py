@@ -1129,11 +1129,53 @@ class IoXWrapper(NuCoreInterface):
                 response = self.get(f'/rest/programs/{routine_id}/{operation}')
         except Exception as ex:
             logger.error(f"Error performing routine operation: {ex}")
-        
+
+        return response
+
+    async def variable_ops(
+        self,
+        var_type: int,
+        var_id: str | None,
+        operation: Literal["create", "update", "delete"],
+        **kwargs,
+    ):
+        """Create, update, or delete a NuCore variable.
+
+        Args:
+            var_type: 1 (integer variable) or 2 (state variable).
+            var_id: Required for "update"/"delete", ignored for "create".
+            operation: "create", "update", or "delete".
+            kwargs: For "create"/"update": name, prec, value, init (all optional).
+
+        Returns:
+            :class:`requests.Response`, or ``None`` when the operation is
+            unrecognised or a required id is missing.
+        """
+        if operation not in ("create", "update", "delete"):
+            logger.error(f"Invalid variable operation: {operation}")
+            return None
+        if operation != "create" and not var_id:
+            logger.error("var_id is required for update/delete variable operations")
+            return None
+
+        response = None
+        headers = {"Content-Type": "application/json"}
+        try:
+            if operation == "create":
+                body = {k: kwargs[k] for k in ("name", "prec") if k in kwargs}
+                response = self.put(f'/api/variables/{var_type}', body=json.dumps(body), headers=headers)
+            elif operation == "update":
+                body = {k: kwargs[k] for k in ("value", "init", "prec", "name") if k in kwargs}
+                response = self.post(f'/api/variables/{var_type}/{var_id}', body=json.dumps(body), headers=headers)
+            else:  # delete
+                response = self.delete(f'/api/variables/{var_type}/{var_id}')
+        except Exception as ex:
+            logger.error(f"Error performing variable operation: {ex}")
+
         return response
 
     # ------------------------------------------------------------------
-    # Timezone management 
+    # Timezone management
     # ------------------------------------------------------------------
     async def get_timespecs(self) -> dict[str, str]:
         """
@@ -1579,6 +1621,45 @@ class IoXWrapper(NuCoreInterface):
             if field in summary:
                 condensed_routine[field] = summary[field]
 
+    async def _load_variables(self) -> None:
+        """Fetch all integer (type 1) and state (type 2) variables from the
+        hub and populate ``self.variables``/``self.condensed_variables``.
+
+        ``self.variables`` is keyed ``"<type>:<id>"`` (see
+        ``NuCoreInterface.get_variable``) so the two id spaces never
+        collide. Rebuilt from scratch each call (unlike ``_load_routines``,
+        which appends -- there's no existing accumulate-across-refreshes
+        behavior to preserve here since this store is brand new).
+
+        Called from ``_refresh_routines_database`` before ``_load_routines``
+        so routines' ``variable_names`` cross-reference has fresh data to
+        resolve against. Silently ignores exceptions so a partial failure
+        does not block startup -- same convention as ``_load_routines``.
+        """
+        try:
+            variables: dict[str, Any] = {}
+            condensed: list = []
+            for var_type in (1, 2):
+                response = self.get(f'/api/variables/{var_type}')
+                if response is None or response.status_code != 200:
+                    continue
+                try:
+                    records = response.json().get('data') or []
+                except Exception as ex:
+                    logger.error(f"Error parsing variables (type {var_type}): {ex}")
+                    continue
+                for record in records:
+                    var_id = record.get("id")
+                    if var_id is None:
+                        continue
+                    entry = {**record, "type": var_type}
+                    variables[f"{var_type}:{var_id}"] = entry
+                    condensed.append(entry)
+            self.variables = variables
+            self.condensed_variables = condensed
+        except Exception as ex:
+            logger.error(f"Error loading variables: {ex}")
+
     async def _load_routines(self) -> None:
         """Fetch all routines from the hub and populate the in-memory stores.
 
@@ -1631,7 +1712,8 @@ class IoXWrapper(NuCoreInterface):
                     "id": routine_id,
                     "name": routine.get("name"),
                     "comment": routine.get("comment"),
-                    "device_names": self._get_device_name_list_from_routine(routine)
+                    "device_names": self._get_device_name_list_from_routine(routine),
+                    "variable_names": self._get_variable_name_list_from_routine(routine),
                 }
 
                 if routine.get("invalid"):
@@ -1649,6 +1731,7 @@ class IoXWrapper(NuCoreInterface):
                     "name": summary.get("name"),
                     "comment": "",
                     "device_names": [],
+                    "variable_names": [],
                 }
                 self._merge_routine_runtime_summary(condensed_routine, summary)
                 self.condensed_routines.append(condensed_routine)
@@ -1721,4 +1804,72 @@ class IoXWrapper(NuCoreInterface):
 
         return list(device_names)
 
-    
+    def _get_variable_name_list_from_routine(self, routine: dict) -> list[str]:
+        """Extract the human-readable variable names referenced by a
+        routine -- mirrors :meth:`_get_device_name_list_from_routine`.
+
+        A variable can appear as: a ``var`` condition/action's own top-level
+        ``id``/``varType``; a nested ``var`` reference (comparing/assigning
+        against another variable -- keyed ``id``/``type``, not ``varType``,
+        per the compiler's own output shape); or nested inside a ``repeat``
+        action's ``while`` sub-object. ``paren`` conditions are recursed
+        into. Resolved via ``self.variables`` (populated by
+        ``_load_variables``, which always runs first -- see
+        ``NuCoreInterface._refresh_routines_database``).
+
+        Returns:
+            List of variable display name strings (may be empty).
+        """
+        if routine is None:
+            return []
+
+        refs: set[str] = set()
+
+        def _add_ref(var_type, var_id) -> None:
+            if var_type is not None and var_id is not None:
+                refs.add(f"{var_type}:{var_id}")
+
+        def _collect_condition_vars(conditions) -> None:
+            for condition in conditions or []:
+                if not isinstance(condition, dict):
+                    continue
+                ctype = condition.get("type")
+                if ctype == "paren":
+                    _collect_condition_vars(condition.get("conditions"))
+                    continue
+                if ctype != "var":
+                    continue
+                _add_ref(condition.get("varType"), condition.get("id"))
+                nested = condition.get("var")
+                if isinstance(nested, dict):
+                    _add_ref(nested.get("type"), nested.get("id"))
+
+        def _collect_action_vars(actions) -> None:
+            for action in actions or []:
+                if not isinstance(action, dict):
+                    continue
+                atype = action.get("type")
+                if atype == "var":
+                    _add_ref(action.get("varType"), action.get("id"))
+                    nested = action.get("var")
+                    if isinstance(nested, dict):
+                        _add_ref(nested.get("type"), nested.get("id"))
+                elif atype == "repeat":
+                    while_block = action.get("while")
+                    nested = while_block.get("var") if isinstance(while_block, dict) else None
+                    if isinstance(nested, dict):
+                        _add_ref(nested.get("varType"), nested.get("id"))
+
+        _collect_condition_vars(routine.get("if", []))
+        _collect_action_vars(routine.get("then", []))
+        _collect_action_vars(routine.get("else", []))
+
+        variable_names: list[str] = []
+        for ref in refs:
+            variable = self.variables.get(ref)
+            if variable and variable.get("name"):
+                variable_names.append(variable["name"])
+
+        return variable_names
+
+

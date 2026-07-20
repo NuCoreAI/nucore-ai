@@ -51,6 +51,11 @@ class NuCoreInterface(ABC):
         self.profile = Profile(timestamp="", families=[])
         self.all_routines: dict[str, Any] = {}
         self.condensed_routines: list = []
+        # Variables (integer/state counters routines can reference), keyed
+        # "<type>:<id>" (type 1=integer, 2=state) to keep the two id spaces
+        # from colliding -- see _load_variables/variable_ops.
+        self.variables: dict[str, Any] = {}
+        self.condensed_variables: list = []
         self.json_output = json_output
         self._subscribe_thread: threading.Thread | None = None
         self._subscribe_lock = threading.Lock()
@@ -195,15 +200,21 @@ class NuCoreInterface(ABC):
     
     async def _refresh_routines_database(self):
         """
-            Refresh routines database if necessary.
+            Refresh routines (and variables) database if necessary.
             :return True if routines were refreshed, False otherwise.
             return is mandatory because we want to make sure the caller knows whether the routines were refreshed or not so that it can decide whether to refresh the prompt or not.
         """
         await self._refresh_device_structure() # make sure we have the latest device structure before refreshing routines
         if not self.routines_changed:
             return False # already refreshed no need to check again
-        if await self._load_routines(): # load routines from the device
-            self.routines_changed = False
+        # Variables load first -- routines cross-reference which variables
+        # they use (variable_names on each condensed routine), which needs
+        # self.variables already populated. Both are gated by the same
+        # routines_changed flag: variables and routines always refresh
+        # together, no separate dirty flag needed.
+        await self._load_variables()
+        await self._load_routines() # load routines from the device
+        self.routines_changed = False
         return True
 
     @abstractmethod
@@ -213,6 +224,19 @@ class NuCoreInterface(ABC):
         :return: True if routines were successfully loaded, False otherwise.
         """
         raise NotImplementedError("Subclasses must implement the _load_routines method.")
+
+    @abstractmethod
+    async def _load_variables(self):
+        """
+        Load all variables (integer and state) from the device and populate
+        self.variables/self.condensed_variables.
+        """
+        raise NotImplementedError("Subclasses must implement the _load_variables method.")
+
+    def get_variable(self, var_type: int | str, var_id: int | str) -> dict | None:
+        """Resolve a (type, id) pair to its variable record (see
+        self.variables' "<type>:<id>" keying) -- parallel to get_node."""
+        return self.variables.get(f"{var_type}:{var_id}")
 
     @abstractmethod
     async def send_commands(self, commands:list):
@@ -346,6 +370,18 @@ class NuCoreInterface(ABC):
         :return: response from the API or None if failure 
         """
         raise NotImplementedError("Subclasses must implement the routine_ops method.")
+
+    @abstractmethod
+    async def variable_ops(self, var_type: int, var_id: str | None, operation: Literal["create", "update", "delete"], **kwargs):
+        """
+        Create, update, or delete a NuCore variable.
+        :param var_type: 1 (integer variable) or 2 (state variable).
+        :param var_id: The variable's id -- required for "update"/"delete", ignored for "create".
+        :param operation: "create", "update", or "delete".
+        :param kwargs: For "create"/"update": name, prec, value, init (all optional).
+        :return: response from the API or None if failure
+        """
+        raise NotImplementedError("Subclasses must implement the variable_ops method.")
 
     # ------------------------------------------------------------------
     # Group/scene API orchestration

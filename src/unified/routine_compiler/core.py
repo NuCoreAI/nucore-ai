@@ -233,24 +233,38 @@ def parse_x10_unit(node: ast.expr, label: str) -> int:
     return unit
 
 
-def parse_var_ref(expr: ast.expr) -> tuple[int, str]:
-    """Parse a ``var_ref(id=.., type=..)`` call -- shared by the ``var``
-    condition, the ``var`` action's 4 variants, and ``repeat``'s ``while``.
-    Returns ``(var_id, var_type_str)`` where ``var_type_str`` is ``"1"``
-    (integer variable) or ``"2"`` (state variable), matching the schema's
-    ``VarType`` string-enum encoding (not the plain int the DSL accepts)."""
+def parse_var_ref(expr: ast.expr) -> tuple[int, str, int]:
+    """Parse a ``var_ref(id=.., type=.., precision=..)`` call -- shared by
+    the ``var`` condition, the ``var`` action's ``var=`` mode, and
+    ``repeat``'s ``while``. ``precision=`` is required on every call, even
+    when a given use won't end up needing it (e.g. comparing to another
+    variable) -- same reasoning as ``param()`` always requiring ``uom=``/
+    ``precision=``: one consistent, explicit signature, sourced from
+    list_variables, so the compiler never has to guess or consult live
+    state.
+
+    Returns ``(var_id, var_type_str, precision)`` where ``var_type_str`` is
+    ``"1"`` (integer variable) or ``"2"`` (state variable), matching the
+    schema's ``VarType`` string-enum encoding (not the plain int the DSL
+    accepts)."""
     if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "var_ref"):
-        raise TriggerCompileError("expected var_ref(id=.., type=..)")
+        raise TriggerCompileError("expected var_ref(id=.., type=.., precision=..)")
     _, kwargs = call_args(expr)
-    if "id" not in kwargs or "type" not in kwargs:
-        raise TriggerCompileError("var_ref(...) requires id= and type= (1=integer variable, 2=state variable).")
+    if "id" not in kwargs or "type" not in kwargs or "precision" not in kwargs:
+        raise TriggerCompileError(
+            "var_ref(...) requires id=, type= (1=integer variable, 2=state variable), and precision= "
+            "(that variable's own precision, from list_variables)."
+        )
     var_id = literal(kwargs["id"])
     if isinstance(var_id, bool) or not isinstance(var_id, int):
         raise TriggerCompileError("var_ref(...)'s id= must be an integer.")
     var_type = literal(kwargs["type"])
     if var_type not in (1, 2):
         raise TriggerCompileError("var_ref(...)'s type= must be 1 (integer variable) or 2 (state variable).")
-    return var_id, str(var_type)
+    precision = literal(kwargs["precision"])
+    if isinstance(precision, bool) or not isinstance(precision, int) or precision < 0:
+        raise TriggerCompileError("var_ref(...)'s precision= must be a non-negative integer.")
+    return var_id, str(var_type), precision
 
 
 # ---------------------------------------------------------------------------
