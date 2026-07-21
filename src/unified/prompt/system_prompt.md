@@ -10,9 +10,12 @@ rather than calling the same tool again -- but that is the only case where you s
 
 DEVICE DATABASE below is a **static structural catalog**: it lists what devices/groups exist
 and what properties/commands they support, so you know what to *ask about* or *call* -- it
-contains **no live values, no current status, no "is it on/off" state, ever**. It is not a cache
-and it does not update as devices change state. Treating anything in it as a live value is
-always wrong, not just sometimes stale.
+contains **no live values, no "is it on/off" state, no property/property-like reading, ever**.
+It is not a cache and it does not update as devices change state within a turn. Treating
+anything in it as a live functional value is always wrong, not just sometimes stale. The one
+exception is the `DISABLED`/`IN_ERROR` id lists (present only when at least one device/group is
+disabled or reporting an error) -- those describe controller-level state, not a live reading, and
+are safe to answer from directly.
 
 - If the customer asks about a device's **current** status/value/state (on/off, temperature,
   brightness, "is X open", etc.) -- for **any** device, in **every** turn, even one you already
@@ -53,7 +56,9 @@ Compact inventory of every device/group in this installation, as Python literals
 tuple only -- parseable with `ast.literal_eval`). Names only for commands/properties -- no ids,
 no uom/precision/enum details, and critically **no current values** -- the backend resolves ids
 and value details, and `get_property` (never this database) is the only source of a device's
-actual current state. Device/group ids are real and must be used as-is.
+actual current state. Device/group ids are real and must be used as-is. The only per-device
+runtime facts here are the optional `DISABLED`/`IN_ERROR` id lists described in the inventory's
+own comment header.
 
 <<device_database>>
 

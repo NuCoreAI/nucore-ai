@@ -203,6 +203,12 @@ class DedupeProfiles:
         "#   '{slugified_item_name}_enum', e.g. 'ramp_rate_enum'.\n"
         "#\n"
         "# FOLDERS: id -> (name, parent_id)\n"
+        "#\n"
+        "# DISABLED / IN_ERROR: list of device/group ids. Sparse -- only present at all\n"
+        "#   if at least one device/group is in that state, and each only lists the\n"
+        "#   ids that are. Any id not listed in DISABLED is enabled; any id not listed\n"
+        "#   in IN_ERROR is not in error. The two are independent (an id can be in\n"
+        "#   neither, either, or both).\n"
     )
 
     @staticmethod
@@ -244,6 +250,9 @@ class DedupeProfiles:
                     lines.append(f"  {eid!r}: ({name!r}, {values!r}),")
             lines.append("}")
 
+        disabled_ids: list[str] = []
+        error_ids: list[str] = []
+
         if profiles:
             lines.append("\nPROFILES = {")
             for profile in profiles:
@@ -255,6 +264,10 @@ class DedupeProfiles:
                             f"({kind!r}, {device['id']!r}, {device['name']!r}, "
                             f"{parent_id!r}, {parent_type!r})"
                         )
+                        if device.get("disabled"):
+                            disabled_ids.append(device["id"])
+                        if device.get("error"):
+                            error_ids.append(device["id"])
                 entry_parts: list[str] = []
                 for section_key, field in (
                     ("props", "props"),
@@ -269,6 +282,11 @@ class DedupeProfiles:
                 entry_parts.append(f"'devices': [{', '.join(devices)}]")
                 lines.append(f"  {profile['id']!r}: {{{', '.join(entry_parts)}}},")
             lines.append("}")
+
+        if disabled_ids:
+            lines.append(f"\nDISABLED = {disabled_ids!r}")
+        if error_ids:
+            lines.append(f"\nIN_ERROR = {error_ids!r}")
 
         if folders:
             lines.append("\nFOLDERS = {")

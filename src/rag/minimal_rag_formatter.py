@@ -239,10 +239,18 @@ class MinimalRagFormatter(RAGFormatter):
         folders = []
         for node in profile.nodes:
             if node.address:
+                entry = {"id": node.address, "name": node.name, "parent": self._get_parent(node)}
+                # Sparse -- only set when abnormal, so the common case (enabled,
+                # no error) costs nothing. DedupeProfiles.render_python collects
+                # these into top-level DISABLED/IN_ERROR tables.
+                if node.enabled is False:
+                    entry["disabled"] = True
+                if node.node_is_in_err():
+                    entry["error"] = True
                 if isinstance(node, Group):
-                    groups.append({ "id": node.address, "name": node.name, "parent": self._get_parent(node)})
+                    groups.append(entry)
                 else:
-                    devices.append({ "id": node.address, "name": node.name, "parent": self._get_parent(node)})
+                    devices.append(entry)
         if len(devices) > 0:
             out["devices"] = devices
         if len(groups) > 0:
