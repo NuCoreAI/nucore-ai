@@ -31,6 +31,7 @@ class StreamHandler(ABC):
             websocket: Optional WebSocket connection for streaming output.
         """
         self.stream_state = {"chunks": 0} if stream_state is None else stream_state
+        self.websocket = None
 
     def set_websocket(self, websocket) -> None:
         """Set the WebSocket connection for streaming output."""   

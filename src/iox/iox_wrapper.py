@@ -1319,28 +1319,29 @@ class IoXWrapper(NuCoreInterface):
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
 
     # ------------------------------------------------------------------
-    # Diagnostics
+    # Diagnostics -- all actual registry/state/dispatch logic lives on
+    # IoXDiagnostics (self.diagnostics); these just satisfy NuCoreInterface.
     # ------------------------------------------------------------------
 
     def get_diagnostics_map(self) -> list[dict[str, str]]:
         """
         Get the list of diagnostic functions this backend supports.
-        :return: list of {"function": <name>, "description": <text>} dicts.
+        :return: list of {"function", "description", "long_running"} dicts.
         """
-        # TODO: not implemented yet -- self.diagnostics (IoXDiagnostics) has
-        # the underlying SOAP operations, this just needs to enumerate them.
-        raise NotImplementedError("get_diagnostics_map is not implemented yet.")
+        return self.diagnostics.get_diagnostics_map()
 
-    async def run_diagnostics(self, function: str, **kwargs):
+    async def run_diagnostics(self, function: str, **kwargs) -> Any:
         """
-        Run a diagnostic function by name.
-        :param function: One of the "function" values from get_diagnostics_map().
-        :param kwargs: Optional parameters the diagnostic function accepts.
-        :return: response from the diagnostic function, or None if failure.
+        Run a diagnostic function by name -- see IoXDiagnostics.run_diagnostics.
         """
-        # TODO: not implemented yet -- dispatch to the matching self.diagnostics
-        # (IoXDiagnostics) method once get_diagnostics_map's shape is settled.
-        raise NotImplementedError("run_diagnostics is not implemented yet.")
+        return await self.diagnostics.run_diagnostics(function, **kwargs)
+
+    def get_running_diagnostic(self) -> dict[str, Any] | None:
+        """
+        Return info about the diagnostic currently in flight, if any -- see
+        IoXDiagnostics.get_running_diagnostic.
+        """
+        return self.diagnostics.get_running_diagnostic()
 
     # ------------------------------------------------------------------
     # WebSocket event subscription

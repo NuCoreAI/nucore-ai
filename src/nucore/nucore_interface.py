@@ -513,6 +513,18 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the run_diagnostics method.")
 
+    @abstractmethod
+    def get_running_diagnostic(self) -> dict[str, Any] | None:
+        """
+        Return info about the diagnostic currently in flight, if any -- used
+        to gate every other tool call while one is running (see
+        unified.dispatch.execute_tool): a single global lock, not scoped to
+        any one session, so no per-session tracking is needed to enforce it.
+        :return: {"diagnostics": <name>, "status": "running", "elapsed_s": <int>}
+                 or None if nothing is running (including a stale/timed-out one).
+        """
+        raise NotImplementedError("Subclasses must implement the get_running_diagnostic method.")
+
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None):
         """
         Subscribe to device events using the nucore API.

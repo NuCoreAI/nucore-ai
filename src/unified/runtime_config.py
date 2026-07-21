@@ -50,8 +50,17 @@ def _coerce_runtime_profile(
     payload: dict[str, Any],
     *,
     stream_handler: StreamHandler | None,
+    force_stream: bool | None = None,
 ) -> dict[str, Any]:
-    """Normalize one ``nucore_runtime`` profile into dispatch-ready shape."""
+    """Normalize one ``nucore_runtime`` profile into dispatch-ready shape.
+
+    Whether this profile actually streams is decided by its own ``stream``
+    key in ``runtime_config.example.json`` -- e.g. the ``unified`` profile
+    opts in, others don't -- unless ``force_stream`` (a CLI-level
+    ``--stream``/``--no-stream`` override) is set, in which case it wins for
+    every profile uniformly. Either way, streaming only actually happens when
+    a real ``stream_handler`` was also supplied by the caller.
+    """
     provider = _normalize_provider_name(payload.get("provider"))
     if not provider:
         raise ValueError(f"nucore_runtime.{profile_name} must define a non-empty 'provider'")
@@ -69,7 +78,8 @@ def _coerce_runtime_profile(
             payload.get("supports_system_role", capabilities.get("supports_system_role", True))
         ),
     }
-    if stream_handler is not None:
+    wants_stream = bool(payload.get("stream", False)) if force_stream is None else force_stream
+    if wants_stream and stream_handler is not None:
         result["stream"] = True
         result["stream_handler"] = stream_handler.handle_stream_chunk
     else:
@@ -80,12 +90,15 @@ def _coerce_runtime_profile(
 def _load_runtime_config(
     path: str,
     stream_handler: StreamHandler,
+    *,
+    force_stream: bool | None = None,
 ) -> dict[str, Any]:
     """Load and normalize CLI-provided runtime profiles.
 
     Expected file format:
 
     {
+      "max_iterations": 8,
       "nucore_runtime": {
         "default": {...},
         "router": {...},
@@ -114,7 +127,9 @@ def _load_runtime_config(
     if not isinstance(raw_default, dict):
         raise ValueError("nucore_runtime.default must be an object")
 
-    default_profile = _coerce_runtime_profile("default", raw_default, stream_handler=stream_handler)
+    default_profile = _coerce_runtime_profile(
+        "default", raw_default, stream_handler=stream_handler, force_stream=force_stream
+    )
 
     supported_llms: dict[str, dict[str, Any]] = {"default": default_profile}
     normalized_profiles: dict[str, dict[str, Any]] = {"default": default_profile}
@@ -123,7 +138,9 @@ def _load_runtime_config(
     if raw_router is not None:
         if not isinstance(raw_router, dict):
             raise ValueError("nucore_runtime.router must be an object when provided")
-        router_profile = _coerce_runtime_profile("router", raw_router, stream_handler=stream_handler)
+        router_profile = _coerce_runtime_profile(
+            "router", raw_router, stream_handler=stream_handler, force_stream=force_stream
+        )
         supported_llms["router"] = router_profile
         normalized_profiles["router"] = router_profile
 
@@ -136,21 +153,23 @@ def _load_runtime_config(
             profile_name,
             profile_payload,
             stream_handler=stream_handler,
+            force_stream=force_stream,
         )
         supported_llms[profile_name] = normalized_profile
         normalized_profiles[profile_name] = normalized_profile
 
     default_max_turns = int(default_profile.get("max_turns", 20))
-    configured_data_directory = payload.get("path_to_data_directory")
-    if configured_data_directory is not None and not isinstance(configured_data_directory, str):
-        raise ValueError("path_to_data_directory must be a string when provided")
+
+    configured_max_iterations = payload.get("max_iterations")
+    if configured_max_iterations is not None and not isinstance(configured_max_iterations, int):
+        raise ValueError("max_iterations must be an integer when provided")
 
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
+        "max_iterations": int(configured_max_iterations) if configured_max_iterations is not None else 8,
         "default_llm": "default",
         "router_llm": "router" if "router" in supported_llms else "default",
         "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
-        "path_to_data_directory": configured_data_directory,
     }

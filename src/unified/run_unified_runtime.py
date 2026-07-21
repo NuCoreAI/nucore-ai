@@ -85,12 +85,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Required path to runtime profile JSON containing top-level 'nucore_runtime'",
     )
     parser.add_argument(
-        "--path_to_data_directory",
-        type=str,
-        default=None,
-        help="Optional writable data directory. Overrides runtime config path_to_data_directory when provided.",
-    )
-    parser.add_argument(
         "--secrets-file",
         type=str,
         default=None,
@@ -163,6 +157,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-log-console",
         action="store_true",
         help="Disable console log output",
+    )
+    parser.add_argument(
+        "--stream",
+        dest="stream",
+        action="store_true",
+        default=None,
+        help=(
+            "Force-enable LLM token streaming for every nucore_runtime profile, "
+            "overriding each profile's own 'stream' setting in runtime config."
+        ),
+    )
+    parser.add_argument(
+        "--no-stream",
+        dest="stream",
+        action="store_false",
+        help="Force-disable LLM token streaming for every profile, overriding runtime config.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Override the agentic loop's max tool-call iterations per query (defaults to runtime config's 'max_iterations', or 8).",
     )
     return parser
 
@@ -279,18 +295,25 @@ async def _run_once(
     query: str,
     session_id: str | None = None,
 ) -> None:
-    """Execute a single query through the runtime and print the result.
+    """Execute a single query through the runtime and deliver the result.
 
     ``handle_query`` now returns complete, already-synthesized results --
     when a tool call runs, the runtime produces the final human-readable text
     itself (in the same rich context the tool call was made in) rather than
     handing raw tool results back to the caller to translate. So this
-    function only ever needs to print ``get_text_output()``; there is no
+    function only ever needs to deliver ``get_text_output()``; there is no
     separate translation step for it to orchestrate.
 
-    When a stream handler was active during the call, the response tokens
-    were already printed live; this function just emits a trailing newline
-    and returns without reprinting.
+    Delivery depends on ``runtime.stream_handler``:
+      - ``None``: no handler attached, print ``text_output`` to stdout directly.
+      - attached, but nothing streamed live this turn (the profile that
+        produced the answer had ``stream`` off, or made a tool call on its
+        final round): send the complete ``text_output`` as one chunk.
+      - attached and chunks already streamed live this turn: the terminating
+        round of ``AgenticLoop`` only ever returns plain text with no tool
+        call, so any live chunk means the LLM adapter already streamed that
+        exact final answer as it generated -- resending the complete text
+        here would duplicate it, so just signal end-of-stream instead.
 
     Args:
         runtime:    The active :class:`~UnifiedRuntime` instance.
@@ -311,13 +334,14 @@ async def _run_once(
         if result is None:
             continue
         text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
-        if result.get_stream_handler() is not None:
-            streamed_chunks = result.get_stream_handler().get_stream_chunk_count()
-            if streamed_chunks > 0:
-                # Response was already printed live by the stream handler; just add newline.
-                await result.get_stream_handler().send_chunk("", True)
-                continue
-        print(text_output)
+        if runtime.stream_handler is not None:
+            if runtime.stream_handler.get_stream_chunk_count() > 0:
+                # Already streamed live during generation -- just close the stream.
+                await runtime.stream_handler.send_chunk("", True)
+            else:
+                await runtime.stream_handler.send_chunk(text_output, True)
+        else:
+            print(text_output)
 
         # History is now recorded inside UnifiedRuntime itself (handle_query),
         # so every caller gets consistent multi-turn memory without having to
@@ -405,22 +429,21 @@ def main(args:Any=None, websocket=None) -> None:
     if not runtime_config_path.exists() or not runtime_config_path.is_file():
         raise FileNotFoundError(f"Runtime profile file not found: {runtime_config_path}")
 
+    # One StreamHandler instance covers both roles: per-request LLM token
+    # streaming (wired into runtime_config below, gated per-profile by each
+    # profile's own 'stream' key unless --stream/--no-stream forces it) and
+    # final-response delivery in _run_once (websocket when one is attached,
+    # stdout print otherwise -- send_chunk handles both).
+    stream_handler = StreamHandler()
+    stream_handler.set_websocket(websocket)
+
     # This load is used both to build the LLM dispatch adapter's provider
-    # clients (below) and as UnifiedRuntime's own config -- it should not
-    # have a live stream handler wired in (the unified path doesn't support
-    # streaming yet).
+    # clients (below) and as UnifiedRuntime's own config.
     runtime_config = _load_runtime_config(
         path=str(runtime_config_path),
-        stream_handler=None,
+        stream_handler=stream_handler,
+        force_stream=args.stream,
     )
-
-    resolved_data_directory: Path | None = None
-    if args.path_to_data_directory:
-        resolved_data_directory = Path(args.path_to_data_directory).expanduser().resolve()
-    else:
-        configured_data_directory = runtime_config.get("path_to_data_directory")
-        if isinstance(configured_data_directory, str) and configured_data_directory.strip():
-            resolved_data_directory = Path(configured_data_directory).expanduser().resolve()
 
     # Build the LLM dispatch adapter from the resolved config.
     llm_adapter = build_default_dispatch_adapter(runtime_config, env=secrets_env)
@@ -444,15 +467,21 @@ def main(args:Any=None, websocket=None) -> None:
     if nucore_interface is None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
 
+    resolved_max_iterations = (
+        args.max_iterations if args.max_iterations is not None else int(runtime_config.get("max_iterations", 8))
+    )
+
     runtime = UnifiedRuntime(
         nucore_interface=nucore_interface,
         llm_client=llm_adapter,
         runtime_config=runtime_config,
+        max_iterations=resolved_max_iterations,
     )
+    runtime.stream_handler = stream_handler
     logger.info("Unified runtime initialized")
 
     if websocket:
-        logger.info("WebSocket connection detected; streaming responses will be sent to the client.")
+        logger.info("WebSocket connection detected; responses will be sent to the client.")
         return runtime
 
     if args.query:

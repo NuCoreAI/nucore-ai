@@ -9,6 +9,7 @@ from utils import get_logger
 
 from .handlers import (
     command_control_status,
+    diagnostics,
     group_scene_ops,
     node_ops,
     plugin_management,
@@ -18,6 +19,12 @@ from .handlers import (
 )
 
 logger = get_logger(__name__)
+
+# Tools still allowed through while a diagnostic is running -- everything
+# else is refused (see execute_tool). Not session-scoped: the lock lives on
+# nucore_interface itself (one shared backend), so this blocks every
+# session uniformly rather than needing per-session tracking.
+_DIAGNOSTICS_EXEMPT_TOOLS = frozenset({"run_diagnostics", "list_diagnostics"})
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
 
@@ -36,6 +43,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_variables": variable_ops.list_variables,
     "list_store_plugins": plugin_management.list_store_plugins,
     "list_purchased_plugins": plugin_management.list_purchased_plugins,
+    "list_diagnostics": diagnostics.list_diagnostics,
+    "run_diagnostics": diagnostics.run_diagnostics,
 }
 
 
@@ -46,6 +55,19 @@ async def execute_tool(name: str, args: dict[str, Any], *, nucore_interface: NuC
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
         return {"error": f"unknown tool '{name}'"}
+
+    if name not in _DIAGNOSTICS_EXEMPT_TOOLS:
+        running = nucore_interface.get_running_diagnostic()
+        if running is not None:
+            return {
+                "error": (
+                    f"a diagnostic ('{running['diagnostics']}') is currently running "
+                    f"(started {running['elapsed_s']}s ago) -- no other actions can be performed until it "
+                    "finishes, times out, or is stopped. Ask the customer whether to stop it, then call "
+                    "run_diagnostics with the stop function's exact name from list_diagnostics, or wait."
+                )
+            }
+
     try:
         return await handler(nucore_interface, args)
     except Exception as exc:

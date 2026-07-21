@@ -16,6 +16,7 @@ from nucore import NuCoreInterface
 from .dispatch import execute_tool
 from .loop import AgenticLoop
 from .prompt_builder import build_system_prompt
+from .stream_handler import StreamHandler
 
 _TOOLS_DIR = Path(__file__).parent / "tools"
 
@@ -35,9 +36,16 @@ class UnifiedRuntime:
         self.session_store = SessionStore()
         self.tool_specs = LLMAdapter.tools_spec_from_files(sorted(_TOOLS_DIR.glob("tool_*.json")))
         self.max_iterations = max_iterations
-        # v1 does not support streaming -- present so run_unified_runtime.py's
+        # Chunk-count bookkeeping from the classic (retired) runtime -- unused
+        # here, present only so run_unified_runtime.py's
         # `if runtime.stream_state is not None:` guard is a no-op.
         self.stream_state = None
+        # Set by run_unified_runtime.main() to the same StreamHandler passed
+        # into runtime_config's per-profile LLM token streaming -- _run_once
+        # uses it to deliver the final response text (over a WebSocket when
+        # one is attached, stdout print otherwise). Only None if a caller
+        # builds UnifiedRuntime directly without going through main().
+        self.stream_handler: StreamHandler | None = None
 
     def _resolve_llm_config(self) -> dict[str, Any]:
         """Pick the LLM profile for the unified path: an optional dedicated
@@ -56,8 +64,11 @@ class UnifiedRuntime:
         return await execute_tool(name, args, nucore_interface=self.nucore_interface)
 
     def reset_stream_handler(self) -> None:
-        """No-op -- v1 does not stream. Present so ``run_unified_runtime.py``'s
-        ``_run_loop`` can call it unconditionally."""
+        """Reset the attached stream handler's chunk counter before a new
+        query, so a stale count from a previous turn doesn't linger. No-op
+        when no handler is attached."""
+        if self.stream_handler is not None:
+            self.stream_handler.reset_stream_state()
 
     def shutdown(self) -> None:
         """Best-effort cleanup."""

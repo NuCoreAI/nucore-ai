@@ -1,0 +1,8 @@
+{
+  "name": "list_diagnostics",
+  "description": "List every diagnostic this installation supports -- each entry's exact `name` (pass as run_diagnostics' `function` argument), a description, and whether it's long_running. Call this before run_diagnostics -- never invent a name.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}
