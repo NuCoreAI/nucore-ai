@@ -1246,6 +1246,23 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error performing get active plugins operation: {ex}")
             return None
 
+    async def get_purchased_plugins(self) -> dict[str, str]:
+        """
+        Get the licenses this installation has purchased for plugins.
+        :return: Dictionary of purchased plugin licenses or None if failure
+
+        API:
+        /api/plugins/licenses
+        """
+        try:
+            response = self.get(f'/api/plugins/licenses')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error performing get purchased plugins operation: {ex}")
+            return None
+
     async def get_installed_plugins(self) -> dict[str, str]:
         """
         Get a list of installed plugins on the device. 

@@ -11,6 +11,7 @@ from .handlers import (
     command_control_status,
     group_scene_ops,
     node_ops,
+    plugin_management,
     routine_automation,
     routine_status_ops,
     variable_ops,
@@ -33,6 +34,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_routine_detail": routine_automation.get_routine_detail,
     "variable_op": variable_ops.variable_op,
     "list_variables": variable_ops.list_variables,
+    "list_store_plugins": plugin_management.list_store_plugins,
+    "list_purchased_plugins": plugin_management.list_purchased_plugins,
 }
 
 

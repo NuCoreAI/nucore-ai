@@ -441,13 +441,26 @@ class NuCoreInterface(ABC):
     
     async def get_active_plugins(self) -> dict[str, str]:
         """
-        Get a list of active plugins that can be installed on the device. 
+        Get a list of active plugins that can be installed on the device.
         :return: Dictionary of active plugins or None if failure
 
         API:
         /api/plugins/store/list/active
         """
         raise NotImplementedError("Subclasses must implement the get_active_plugins method.")
+
+    async def get_purchased_plugins(self) -> dict[str, str]:
+        """
+        Get the licenses this installation has purchased for plugins (may
+        include more than one license row per nsid, e.g. Free + Standard
+        editions). Licenses only carry ``nsid`` -- pair with
+        ``get_active_plugins()`` to resolve a human-readable name.
+        :return: Dictionary of purchased plugin licenses or None if failure
+
+        API:
+        /api/plugins/licenses
+        """
+        raise NotImplementedError("Subclasses must implement the get_purchased_plugins method.")
 
     async def get_installed_plugins(self) -> dict[str, str]:
         """

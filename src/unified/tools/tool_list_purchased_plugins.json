@@ -1,0 +1,8 @@
+{
+  "name": "list_purchased_plugins",
+  "description": "List the plugin licenses this installation has purchased (name, edition, active status, expiry). A single plugin can have more than one license row (e.g. a Free and a Standard edition). This does not mean the plugin is installed -- see list_installed_plugins for that.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}
