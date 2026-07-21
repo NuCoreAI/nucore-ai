@@ -555,7 +555,7 @@ class NuCoreInterface(ABC):
         control = message['control']
         action = message.get('action', '')
         if control == "_3": #node updated event
-            if action and action in [ 'NX', 'PI', 'WD' ]:
+            if action and action in [ 'NX', 'PI', 'WD', 'NE', 'CE', 'EN' ]:
                 #we may want to use 'WD' (device write pending) later for diagnostics 
                 return
             self.device_structure_changed = True # just to be on the safe side
