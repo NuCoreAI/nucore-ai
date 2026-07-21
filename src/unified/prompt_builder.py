@@ -21,6 +21,7 @@ async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
 
     system_prompt = (_PROMPT_DIR / "system_prompt.md").read_text(encoding="utf-8").strip()
     definitions = (_PROMPT_DIR / "definitions.md").read_text(encoding="utf-8").strip()
+    ui_navigation_rules = (_PROMPT_DIR / "ui_navigation_rules.md").read_text(encoding="utf-8").strip()
 
     device_database = (
         nucore_interface.summary_rags.docs_to_string() if nucore_interface.summary_rags else ""
@@ -28,6 +29,7 @@ async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
     routines_database = f"```python\n{DedupeRoutines.render_python(nucore_interface.condensed_routines)}\n```"
 
     prompt = system_prompt.replace("<<definitions>>", definitions)
+    prompt = prompt.replace("<<ui_navigation_rules>>", ui_navigation_rules)
     prompt = prompt.replace("<<device_database>>", device_database)
     prompt = prompt.replace("<<routines_database>>", routines_database)
     return prompt

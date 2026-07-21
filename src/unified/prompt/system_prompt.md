@@ -47,6 +47,10 @@ are safe to answer from directly.
   instead of sending it. This check applies regardless of why you were about to skip the call
   (confidence in the prior state, an unambiguous-seeming pronoun, anything else).
 
+---
+<<ui_navigation_rules>>
+
+---
 <<definitions>>
 
 ---
