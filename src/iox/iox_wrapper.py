@@ -4,7 +4,6 @@ import sys
 import os
 import base64
 import xml.etree.ElementTree as ET
-from xml.sax.saxutils import escape as xml_escape
 from urllib.parse import quote
 
 import requests
@@ -21,6 +20,7 @@ from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 from typing import Literal, Any
 from utils import get_logger
+from .iox_diagnostics import IoXDiagnostics
 
 logger = get_logger(__name__)
 
@@ -92,6 +92,7 @@ class IoXWrapper(NuCoreInterface):
             raise ValueError("Either poly or base_url, username, and password must be provided")
         
         self.unauthorized = False
+        self.diagnostics = IoXDiagnostics(self)
 
     def __info__(self, info) -> None:
         """Polyglot ISY-info subscription callback.
@@ -254,111 +255,6 @@ class IoXWrapper(NuCoreInterface):
         if headers:
             soap_headers.update(headers)
         return self.post(path, body, soap_headers)
-
-    # DeviceSpecific SOAP action -- device-specific (e.g. Insteon) operations
-    # that don't fit a generic ISY service. Envelope shape is the real wire
-    # format this hub's /services endpoint expects -- do not "fix" it.
-    _DEVICE_SPECIFIC_SOAP_ACTION = "DeviceSpecific"
-
-    def _device_specific_envelope(self, inner: str) -> str:
-        """Wrap *inner* (the already-built ``<command>``/``<node>``/... element
-        block) in the DeviceSpecific SOAP envelope."""
-        return (
-            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
-            "<s:Body>"
-            f'<u:{self._DEVICE_SPECIFIC_SOAP_ACTION} xmlns:u="urn:udi-com:service:X_Insteon_Lighting_Service:1">'
-            f"{inner}"
-            f"</u:{self._DEVICE_SPECIFIC_SOAP_ACTION}>"
-            "</s:Body>"
-            "</s:Envelope>"
-        )
-
-    async def _submit_device_specific(self, inner_body: str) -> str | None:
-        """POST *inner_body* wrapped in the DeviceSpecific SOAP envelope;
-        equivalent to the Java client's ``submitSOAPRequest`` (minus HMAC
-        signing -- not carried over per instruction). Returns the raw
-        response body text, or ``None`` on a connection error or non-200
-        response (mirrors the Java method returning ``null`` when
-        ``resp == null`` or ``!resp.opStat``)."""
-        envelope = self._device_specific_envelope(inner_body)
-        response = self.soap_post("/services", envelope, soap_action=self._DEVICE_SPECIFIC_SOAP_ACTION)
-        if response is None or response.status_code != 200:
-            return None
-        return response.text
-
-    async def send_device_specific(
-        self,
-        command: str = None,
-        node: str = None,
-        param1: str = None,
-        param2: str = None,
-        param3: str = None,
-        specs: str = None,
-    ) -> str | None:
-        """Device-specific (e.g. Insteon) operation that isn't a generic ISY
-        service -- three free-form parameter slots (``p1``/``p2``/``p3``).
-
-        Port of the Java SDK's ``sendDeviceSpecific(command, node, param1,
-        param2, param3, specs)`` overload, via :meth:`soap_post`.
-
-        Args:
-            command: The command to perform.
-            node:    The affected node's address.
-            param1:  Optional parameter 1 (``<p1>``).
-            param2:  Optional parameter 2 (``<p2>``).
-            param3:  Optional parameter 3 (``<p3>``).
-            specs:   Optional raw XML document to embed in ``<CDATA>``,
-                     unescaped exactly as the caller supplies it -- this is
-                     meant to carry an XML document, not plain text.
-
-        Returns:
-            The raw response body text, or ``None`` on failure.
-        """
-        inner = (
-            f"<command>{xml_escape(command or '')}</command>"
-            f"<node>{xml_escape(node or '')}</node>"
-            f"<p1>{xml_escape(param1 or '')}</p1>"
-            f"<p2>{xml_escape(param2 or '')}</p2>"
-            f"<p3>{xml_escape(param3 or '')}</p3>"
-            "<flag>0</flag>"
-            f"<CDATA>{specs or ''}</CDATA>"
-        )
-        return await self._submit_device_specific(inner)
-
-    async def send_device_specific_with_option(
-        self,
-        command: str = None,
-        node: str = None,
-        option: str = None,
-        flag: int = 0,
-        specs: str = None,
-    ) -> str | None:
-        """Device-specific (e.g. Insteon) operation taking a single ``option``
-        plus a flag character, instead of three ``p1``/``p2``/``p3`` slots.
-
-        Port of the Java SDK's ``sendDeviceSpecific(command, node, option,
-        flag, specs)`` overload, via :meth:`soap_post`.
-
-        Args:
-            command: The command to perform.
-            node:    The affected node's address.
-            option:  Optional parameter (``<option>``).
-            flag:    Optional hex value (0-255) to send in the ``<flag>`` element; if empty, ``0`` is sent.
-            specs:   Optional raw XML document to embed in ``<CDATA>``,
-                     unescaped exactly as the caller supplies it.
-
-        Returns:
-            The raw response body text, or ``None`` on failure.
-        """
-        flag_value = int(flag) if flag else 0
-        inner = (
-            f"<command>{xml_escape(command or '')}</command>"
-            f"<node>{xml_escape(node or '')}</node>"
-            f"<option>{xml_escape(option or '')}</option>"
-            f"<flag>{flag_value}</flag>"
-            f"<CDATA>{specs or ''}</CDATA>"
-        )
-        return await self._submit_device_specific(inner)
 
     # ------------------------------------------------------------------
     # IoX REST helpers
@@ -1421,7 +1317,31 @@ class IoXWrapper(NuCoreInterface):
         :return: response from the API or None if failure 
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
-    
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def get_diagnostics_map(self) -> list[dict[str, str]]:
+        """
+        Get the list of diagnostic functions this backend supports.
+        :return: list of {"function": <name>, "description": <text>} dicts.
+        """
+        # TODO: not implemented yet -- self.diagnostics (IoXDiagnostics) has
+        # the underlying SOAP operations, this just needs to enumerate them.
+        raise NotImplementedError("get_diagnostics_map is not implemented yet.")
+
+    async def run_diagnostics(self, function: str, **kwargs):
+        """
+        Run a diagnostic function by name.
+        :param function: One of the "function" values from get_diagnostics_map().
+        :param kwargs: Optional parameters the diagnostic function accepts.
+        :return: response from the diagnostic function, or None if failure.
+        """
+        # TODO: not implemented yet -- dispatch to the matching self.diagnostics
+        # (IoXDiagnostics) method once get_diagnostics_map's shape is settled.
+        raise NotImplementedError("run_diagnostics is not implemented yet.")
+
     # ------------------------------------------------------------------
     # WebSocket event subscription
     # ------------------------------------------------------------------

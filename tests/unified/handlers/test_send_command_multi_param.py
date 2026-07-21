@@ -96,6 +96,8 @@ class FakeBackend(NuCoreInterface):
     def group_scene_update_link(self, *a, **kw): raise NotImplementedError
     def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
     def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
+    def get_diagnostics_map(self): raise NotImplementedError
+    async def run_diagnostics(self, function, **kwargs): raise NotImplementedError
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
 
 

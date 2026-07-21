@@ -490,7 +490,30 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
 
-    def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None): 
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def get_diagnostics_map(self) -> list[dict[str, str]]:
+        """
+        Get the list of diagnostic functions this backend supports.
+        :return: list of {"function": <name>, "description": <text>} dicts --
+                 ``function`` is the identifier to pass to run_diagnostics().
+        """
+        raise NotImplementedError("Subclasses must implement the get_diagnostics_map method.")
+
+    @abstractmethod
+    async def run_diagnostics(self, function: str, **kwargs):
+        """
+        Run a diagnostic function by name.
+        :param function: One of the "function" values from get_diagnostics_map().
+        :param kwargs: Optional parameters the diagnostic function accepts.
+        :return: response from the diagnostic function, or None if failure.
+        """
+        raise NotImplementedError("Subclasses must implement the run_diagnostics method.")
+
+    def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None):
         """
         Subscribe to device events using the nucore API.
         
