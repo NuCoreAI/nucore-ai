@@ -119,6 +119,7 @@
                 
                 // Send message to server
                 ws.send(JSON.stringify({
+                    type: 'message',
                     message: message
                 }));
                 
