@@ -1,6 +1,7 @@
-"""End-to-end: list_store_plugins/list_purchased_plugins dispatched through
-execute_tool -- confirms the store/licenses response shapes are parsed
-correctly and the licenses->store nsid join resolves names.
+"""End-to-end: list_store_plugins/list_purchased_plugins/list_installed_plugins
+dispatched through execute_tool -- confirms the store/licenses/installed
+response shapes are parsed correctly and the licenses->store nsid join
+resolves names.
 """
 
 from __future__ import annotations
@@ -46,17 +47,29 @@ LICENSES_RESPONSE = {
 }
 
 
+INSTALLED_RESPONSE = {
+    "successful": True,
+    "data": [
+        {"profileNum": 3, "name": "YouTube", "isLocal": False},
+    ],
+}
+
+
 class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
         self.store_response = STORE_RESPONSE
         self.licenses_response = LICENSES_RESPONSE
+        self.installed_response = INSTALLED_RESPONSE
 
     async def get_active_plugins(self):
         return self.store_response
 
     async def get_purchased_plugins(self):
         return self.licenses_response
+
+    async def get_installed_plugins(self):
+        return self.installed_response
 
     async def _load(self, **kwargs): raise NotImplementedError
     async def _load_routines(self): raise NotImplementedError
@@ -157,3 +170,22 @@ async def test_list_purchased_plugins_still_works_if_store_fetch_fails():
     result = await execute_tool("list_purchased_plugins", {}, nucore_interface=backend)
     assert result["licenses"][1]["nsid"] == "0bec5267-b1c0-44e3-aa60-e1f84d1c5291"
     assert result["licenses"][1]["name"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_installed_plugins_maps_profile_num_to_plugin_id():
+    backend = FakeBackend()
+    result = await execute_tool("list_installed_plugins", {}, nucore_interface=backend)
+    assert result == {
+        "plugins": [
+            {"plugin_id": 3, "name": "YouTube", "is_local": False},
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_installed_plugins_error_on_failed_fetch():
+    backend = FakeBackend()
+    backend.installed_response = None
+    result = await execute_tool("list_installed_plugins", {}, nucore_interface=backend)
+    assert "error" in result

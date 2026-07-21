@@ -1,0 +1,8 @@
+{
+  "name": "list_installed_plugins",
+  "description": "List the plugins actually installed on this device -- name, plugin_id, and whether it's a local (isLocal) plugin. Call this when the customer asks what plugins/node servers are installed, or before plugin_ops/configure_plugin to resolve a plugin's plugin_id. Distinct from list_store_plugins (what's available in the store) and list_purchased_plugins (what's licensed but not necessarily installed).",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

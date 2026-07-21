@@ -1,11 +1,11 @@
-"""``list_store_plugins``/``list_purchased_plugins`` -- NuCore's own vetted
-third-party plugin marketplace (distinct from device/routine/variable data,
-and from AI-side tool extensions, which are a separate topic). Plugins here
-show up in the device structure as regular nodes once installed (already
-handled by the existing device tools) -- these two tools cover the
-marketplace/licensing questions that aren't otherwise answerable: what's
-available in the store, and what's actually been purchased for this
-installation.
+"""``list_store_plugins``/``list_purchased_plugins``/``list_installed_plugins``
+-- NuCore's own vetted third-party plugin marketplace (distinct from
+device/routine/variable data, and from AI-side tool extensions, which are a
+separate topic). Plugins here show up in the device structure as regular
+nodes once installed (already handled by the existing device tools) -- these
+tools cover the marketplace/licensing/installation questions that aren't
+otherwise answerable: what's available in the store, what's actually been
+purchased, and what's actually installed on this device.
 
 Deliberately on-demand (like ``list_variables``), not a standing prompt
 database -- store/license state changes rarely and isn't needed on most
@@ -47,6 +47,27 @@ async def list_store_plugins(nucore_interface: NuCoreInterface, args: dict[str, 
                 "description": p.get("desc"),
                 "type": p.get("type"),
                 "updated_at": p.get("updatedAt"),
+            }
+            for p in plugins
+        ]
+    }
+
+
+async def list_installed_plugins(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    response = await nucore_interface.get_installed_plugins()
+    plugins = _data(response)
+    if plugins is None:
+        return {"error": "failed to fetch installed plugins"}
+
+    return {
+        "plugins": [
+            {
+                # profileNum is this plugin's id for subsequent plugin_ops()/
+                # configure_plugin() calls -- surfaced as plugin_id to match
+                # those tools' input parameter name.
+                "plugin_id": p.get("profileNum"),
+                "name": p.get("name"),
+                "is_local": p.get("isLocal"),
             }
             for p in plugins
         ]

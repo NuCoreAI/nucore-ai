@@ -12,6 +12,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 from xml.sax.saxutils import escape as xml_escape
+import xml.etree.ElementTree as ET
 
 from utils import get_logger
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from .iox_wrapper import IoXWrapper
 
 logger = get_logger(__name__)
+
 
 class IoXSOAPAction:
     """SOAP action names for IoX SOAP requests.
@@ -356,18 +358,29 @@ class IoXDiagnostics:
             response["candidates"] = candidates
         return response
 
-    def _device_specific_envelope(self, inner: str) -> str:
+    def _get_soap_envelope(self, soap_action: str, inner: str) -> str:
         """Wrap *inner* (the already-built ``<command>``/``<node>``/... element
         block) in the DeviceSpecific SOAP envelope."""
         return (
             '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
             "<s:Body>"
-            f'<u:{IoXSOAPAction.SOAP_TYPE_DEVICE_SPECIFIC} xmlns:u="urn:udi-com:service:X_Insteon_Lighting_Service:1">'
-            f"{inner}"
-            f"</u:{IoXSOAPAction.SOAP_TYPE_DEVICE_SPECIFIC}>"
+            f'<u:{soap_action} xmlns:u="urn:udi-com:service:X_Insteon_Lighting_Service:1">'
+            f"{inner if inner else ''}"
+            f"</u:{soap_action}>"
             "</s:Body>"
             "</s:Envelope>"
         )
+    
+    async def _submit_soap_request(self, soap_action: str, inner_body: str) -> str | None:
+        """POST *inner_body* wrapped in the SOAP envelope for *soap_action*;
+        returns the raw response body text, or ``None`` on a connection error
+        or non-200 response (mirrors the Java method returning ``null`` when
+        ``resp == null`` or ``!resp.opStat``)."""
+        envelope = self._get_soap_envelope(soap_action, inner_body)
+        response = self._iox_wrapper.soap_post("/services", envelope, soap_action=soap_action)
+        if response is None or response.status_code != 200:
+            return None
+        return response.text
 
     async def _submit_device_specific(self, inner_body: str) -> str | None:
         """POST *inner_body* wrapped in the DeviceSpecific SOAP envelope;
@@ -376,15 +389,9 @@ class IoXDiagnostics:
         response body text, or ``None`` on a connection error or non-200
         response (mirrors the Java method returning ``null`` when
         ``resp == null`` or ``!resp.opStat``)."""
-        envelope = self._device_specific_envelope(inner_body)
-        response = self._iox_wrapper.soap_post(
-            "/services", envelope, soap_action=IoXSOAPAction.SOAP_TYPE_DEVICE_SPECIFIC
-        )
-        if response is None or response.status_code != 200:
-            return None
-        return response.text
-
-
+        response = await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_DEVICE_SPECIFIC, inner_body)
+        return response
+        
     async def _send_device_specific(
         self,
         command: str = None,
@@ -463,6 +470,13 @@ class IoXDiagnostics:
         return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
 
     async def no_device_feedback(self, candidates=None, **kwargs) -> str | None:
+        system_options= await self._get_system_options()
+        plm_info = await self._get_plm_info()
+
+        if plm_info is None:
+            return {"diagnostics": "No Device Feedback", "status": "error", "result": "Failed to get PLM info"}
+
+
         return  {"diagnostics": "No Device Feedback", "status": "completed"}
 
     async def no_device_communication(self, candidates=None, **kwargs) -> str | None:
@@ -476,46 +490,105 @@ class IoXDiagnostics:
 
     async def random_all_on(self, candidates=None, **kwargs) -> str | None:
         return  {"diagnostics": "Random All On", "status": "completed"}
-    
-    # DEVICE SPECIFIC SOAP ACTIONS
-    async def get_plm_info(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
-    async def get_all_plm_links(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
-    async def get_dev_links_table(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, None, None, 0x01, None)
-    async def get_isy_links_table(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, None, None, 0x01, None)
-
-    # add node
-    async def add_node(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_ADD_NODE, None, None, 0x01, None)
-
-    # discover nodes
-    async def discover_nodes(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_DISCOVER_NODES, None, None, 0x01, None)
-
-    # cancel nodes discovery
-    async def cancel_nodes_discovery(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_CANCEL_NODES_DISCOVERY, None, None, 0x01, None)
-
-    # get system option
-    async def get_system_options(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None, None, 0x01, None)
 
     # get system configuration
-    async def get_system_configuration(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_CONFIGURATION, None, None, 0x01, None)
+    async def _get_system_config(self) -> dict [str, str] | None:
+        result = await self._iox_wrapper.get("/desc")
+        if result is None:
+            return None
+        # parse the result into a dict
+        try:
+            config = {}
+            root = ET.fromstring(result)
+            system_opts = root.find('.//device')
+            if system_opts is not None:
+                for child in system_opts:
+                    tag = child.tag
+                    if tage == "serviceList":
+                        continue
+                    value = child.text
+                    
+                    # Convert to appropriate types
+                    if value in ('true', 'false'):
+                        config[tag] = value == 'true'
+                    elif value and value.isdigit():
+                        config[tag] = int(value)
+                    else:
+                        config[tag] = value
+
+            return config
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse system options XML: {e}")
+            return None
+    
+    # get system option
+    async def _get_system_options(self) -> dict[str, str] | None:
+        result = await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
+        if result is None:
+            return None
+        # parse the result into a dict
+        try:
+            options = {}
+            root = ET.fromstring(result)
+            system_opts = root.find('.//SystemOptions')
+            if system_opts is not None:
+                for child in system_opts:
+                    tag = child.tag
+                    value = child.text
+                    
+                    # Convert to appropriate types
+                    if value in ('true', 'false'):
+                        options[tag] = value == 'true'
+                    elif value and value.isdigit():
+                        options[tag] = int(value)
+                    else:
+                        options[tag] = value
+
+            return options
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse system options XML: {e}")
+            return None
+
+    async def _get_about(self) -> dict[str, str] | None:
+        # convert the options dict to xml
+        options = await self._iox_wrapper.get("/api/system/about")
+        if options is None:
+            return None
+        return options.json()
+    
+    # DEVICE SPECIFIC SOAP ACTIONS
+    async def _get_plm_info(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
+    async def _get_all_plm_links(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
+    async def _get_dev_links_table(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, None, None, 0x01, None)
+    async def _get_isy_links_table(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, None, None, 0x01, None)
+
+    # add node
+    async def _add_node(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_ADD_NODE, None, None, 0x01, None)
+
+    # discover nodes
+    async def _discover_nodes(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_DISCOVER_NODES, None, None, 0x01, None)
+
+    # cancel nodes discovery
+    async def _cancel_nodes_discovery(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_CANCEL_NODES_DISCOVERY, None, None, 0x01, None)
+
+
 
     # get nodes config
-    async def get_nodes_config(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_NODES_CONFIG, None, None, 0x01, None)
+    async def _get_nodes_config(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_NODES_CONFIG, None, None, 0x01, None)
 
     # get isy config
-    async def get_isy_config(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_ISY_CONFIG, None, None, 0x01, None)
+    async def _get_isy_config(self) -> str | None:
+        return await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_ISY_CONFIG, None)
 
     # get startup time
-    async def get_startup_time(self) -> str | None:
-        return await self.nucore_interface.send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_STARTUP_TIME, None, None, 0x01, None)
+    async def _get_startup_time(self) -> str | None:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_STARTUP_TIME, None, None, 0x01, None)
 

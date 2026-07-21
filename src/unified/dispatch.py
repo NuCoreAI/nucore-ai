@@ -43,6 +43,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_variables": variable_ops.list_variables,
     "list_store_plugins": plugin_management.list_store_plugins,
     "list_purchased_plugins": plugin_management.list_purchased_plugins,
+    "list_installed_plugins": plugin_management.list_installed_plugins,
     "list_diagnostics": diagnostics.list_diagnostics,
     "run_diagnostics": diagnostics.run_diagnostics,
 }

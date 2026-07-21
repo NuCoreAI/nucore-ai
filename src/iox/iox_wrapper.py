@@ -1292,22 +1292,57 @@ class IoXWrapper(NuCoreInterface):
 
     async def get_installed_plugins(self) -> dict[str, str]:
         """
-        Get a list of installed plugins on the device. 
+        Get a list of plugins installed on this device.
         :return: Dictionary of installed plugins or None if failure
+
+        API:
+        /api/plugins
+
+        Response shape:
+        {"successful": true, "data": [{"profileNum": 3, "name": "YouTube", "isLocal": false}, ...]}
+
+        ``profileNum`` is this plugin's id -- used as ``plugin_id`` for
+        subsequent plugin_ops()/configure_plugin() calls.
         """
-        raise NotImplementedError("Subclasses must implement the get_installed_plugins method.")
+        try:
+            response = self.get(f'/api/plugins')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error performing get installed plugins operation: {ex}")
+            return None
     
-    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstsall", "status", "start", "stop"]):
+    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart"]):
         """
         Perform an operation on a plugin.
-        :param plugin_id: The ID of the plugin to operate on.
-        :param operation: The operation to perform (e.g., "start", "stop", "uninstall").
-        :return: response from the API or None if failure 
+        :param plugin_id: The ID of the plugin to operate on -- profileNum
+                           from get_installed_plugins() for start/stop/restart
+                           (and, once implemented, install/uninstall/status);
+                           nsid for details.
+        :param operation: The operation to perform.
+        :return: response from the API or None if failure
 
-        Details API: 
+        Details API:
         /api/plugins/store/entry/:nsid
+
+        Start/Stop/Restart API:
+        /api/plugins/<profileNum>/start
+        /api/plugins/<profileNum>/stop
+        /api/plugins/<profileNum>/restart
         """
-        raise NotImplementedError("Subclasses must implement the plugin_ops method.")
+        if operation in ("start", "stop", "restart"):
+            try:
+                headers = {"Content-Type": "application/json"}
+                response = self.post(f'/api/plugins/{plugin_id}/{operation}', body="{}", headers=headers)
+                if response == None or response.status_code != 200:
+                    return response if response else None
+                return response.json()
+            except Exception as ex:
+                logger.error(f"Error performing plugin {operation} operation: {ex}")
+                return None
+
+        raise NotImplementedError(f"plugin_ops operation '{operation}' is not yet implemented.")
     
     async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
         """
