@@ -240,16 +240,23 @@ class ProfileRagFormatter(RAGFormatter):
         return f"({name!r}, {pid!r}, {editor_id!r}, {editor_dict!r})"
 
     def _py_repr_property(self, prop: NodeProperty) -> str:
+        # No id -- same reasoning as _py_repr_command: the DSL's .status(...)
+        # and set_var(..., property=...) take this display name directly,
+        # resolved server-side rather than carried/positioned by the model.
         editor_id, editor_dict = self._editor_ref_and_dict(prop.editor)
         if editor_id is None:
-            return f"({prop.name!r}, {self.encode_id(prop.id)!r})"
-        return f"({prop.name!r}, {self.encode_id(prop.id)!r}, {editor_id!r}, {editor_dict!r})"
+            return f"{prop.name!r}"
+        return f"({prop.name!r}, {editor_id!r}, {editor_dict!r})"
 
     def _py_repr_command(self, command) -> str:
+        # No id -- create_or_update_routine's DSL takes this display name
+        # directly in .command(...)/.was_controlled(...)/adjust_scene(...);
+        # the real id is resolved server-side (routine_automation.py), not
+        # something the model needs to carry or get right positionally.
         if command.parameters:
             params = ", ".join(self._py_repr_param(p) for p in command.parameters)
-            return f"({command.name!r}, {command.id!r}, [{params}])"
-        return f"({command.name!r}, {command.id!r})"
+            return f"({command.name!r}, [{params}])"
+        return f"{command.name!r}"
 
     @staticmethod
     def _flatten_link_dict(d: dict) -> tuple:

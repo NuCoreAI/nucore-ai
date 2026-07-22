@@ -152,6 +152,134 @@ def _find_property_editor(node_def: Any, property_id: Any):
     return prop.editor if prop else None
 
 
+def _resolve_property_id(node_def: Any, given: Any) -> str | None:
+    """Return the real property id for *given* -- itself if it's already a
+    valid id, else the id of the property whose display name matches it
+    (the DSL now takes get_device_detail's display name, e.g. "Status", not
+    the raw id, e.g. "ST" -- see _py_repr_property). None if neither
+    matches."""
+    if given in node_def.properties:
+        return given
+    for prop_id, prop in node_def.properties.items():
+        if prop.name == given:
+            return prop_id
+    return None
+
+
+def _resolve_command_id(node_def: Any, given: Any, direction: str) -> str | None:
+    """Return the real command id for *given* -- itself if it's already a
+    valid id, else the id of the command whose display name matches it
+    (same reasoning as _resolve_property_id, for .command(...)/
+    .was_controlled(...)/adjust_scene(command=...) -- see
+    _py_repr_command). *direction* is "accepts" (commands sent TO the
+    device -- .command(...), adjust_scene's responder) or "sends"
+    (commands the device itself sent -- .was_controlled(...))."""
+    commands = node_def.cmds.accepts if direction == "accepts" else node_def.cmds.sends
+    for cmd in commands:
+        if cmd.id == given:
+            return given
+    for cmd in commands:
+        if cmd.name == given:
+            return cmd.id
+    return None
+
+
+def _node_def_for(nucore_interface: NuCoreInterface, device_id: Any) -> Any:
+    node = nucore_interface.get_node(device_id)
+    return getattr(node, "node_def", None)
+
+
+def _resolve_condition(nucore_interface: NuCoreInterface, condition: Any, errors: list[str]) -> None:
+    """Mirror of _annotate_condition's tree-walk, but resolving a name/id
+    given by the model into the real id the hub requires, in place --
+    appending a message to *errors* (rather than raising) when a given
+    property/command name/id doesn't match anything, so create_or_update_routine
+    can report every problem at once instead of failing on the first."""
+    if not isinstance(condition, dict):
+        return
+    ctype = condition.get("type")
+    if ctype == "paren":
+        for nested in condition.get("conditions") or []:
+            _resolve_condition(nucore_interface, nested, errors)
+        return
+    if ctype not in ("status", "control"):
+        return  # var/x10/inet/triggerref/schedule carry no device property/command to resolve
+
+    device_id = condition.get("node")
+    node_def = _node_def_for(nucore_interface, device_id)
+    if node_def is None:
+        errors.append(f"'{device_id}' has no device profile to resolve a {ctype} condition against.")
+        return
+
+    given = condition.get("id")
+    if ctype == "status":
+        resolved = _resolve_property_id(node_def, given)
+        if resolved is None:
+            errors.append(f"'{given}' is not a known property name/id for device '{device_id}'; call get_device_detail again.")
+            return
+        condition["id"] = resolved
+    else:  # control -- was_controlled checks what the device itself sent
+        resolved = _resolve_command_id(node_def, given, "sends")
+        if resolved is None:
+            errors.append(f"'{given}' is not a known command name/id sent by device '{device_id}'; call get_device_detail again.")
+            return
+        condition["id"] = resolved
+
+
+def _resolve_action(nucore_interface: NuCoreInterface, action: Any, errors: list[str]) -> None:
+    """Action-side counterpart to _resolve_condition -- see its docstring."""
+    if not isinstance(action, dict):
+        return
+    atype = action.get("type")
+
+    if atype == "cmd":
+        device_id = action.get("node")
+        node_def = _node_def_for(nucore_interface, device_id)
+        if node_def is None:
+            errors.append(f"'{device_id}' has no device profile to resolve a command against.")
+            return
+        given = action.get("id")
+        resolved = _resolve_command_id(node_def, given, "accepts")
+        if resolved is None:
+            errors.append(f"'{given}' is not a known command name/id accepted by device '{device_id}'; call get_device_detail again.")
+            return
+        action["id"] = resolved
+        return
+
+    if atype == "var":
+        status = action.get("status")
+        if isinstance(status, dict):
+            device_id = status.get("node")
+            node_def = _node_def_for(nucore_interface, device_id)
+            if node_def is None:
+                errors.append(f"'{device_id}' has no device profile to resolve a property against.")
+                return
+            given = status.get("id")
+            resolved = _resolve_property_id(node_def, given)
+            if resolved is None:
+                errors.append(f"'{given}' is not a known property name/id for device '{device_id}'; call get_device_detail again.")
+                return
+            status["id"] = resolved
+        return
+
+    if atype == "lp":
+        rsp = action.get("rsp")
+        cmd = rsp.get("cmd") if isinstance(rsp, dict) else None
+        if isinstance(cmd, dict):
+            device_id = rsp.get("node")
+            node_def = _node_def_for(nucore_interface, device_id)
+            if node_def is None:
+                errors.append(f"'{device_id}' has no device profile to resolve adjust_scene's command against.")
+                return
+            given = cmd.get("cmdId")
+            resolved = _resolve_command_id(node_def, given, "accepts")
+            if resolved is None:
+                errors.append(f"'{given}' is not a known command name/id accepted by device '{device_id}'; call get_device_detail again.")
+                return
+            cmd["cmdId"] = resolved
+        return
+
+
 def _find_command_param_editor(node_def: Any, command_id: Any, param_id: Any, direction: str):
     commands = node_def.cmds.accepts if direction == "accepts" else node_def.cmds.sends
     for cmd in commands:
@@ -331,6 +459,20 @@ async def create_or_update_routine(nucore_interface: NuCoreInterface, args: dict
         )
     except TriggerCompileError as exc:
         return {"error": str(exc)}
+
+    # The compiler is deliberately stateless (no device profile access) --
+    # it compiles whatever property/command name or id the model wrote
+    # as-is. Resolve those names to the hub's real ids here, where
+    # nucore_interface is available, same "backend does the exact lookup,
+    # never rely on model discipline for a fact" pattern as
+    # resolve_numeric_enum (command_control_status.py).
+    resolution_errors: list[str] = []
+    for condition in compiled.get("if") or []:
+        _resolve_condition(nucore_interface, condition, resolution_errors)
+    for action in (compiled.get("then") or []) + (compiled.get("else") or []):
+        _resolve_action(nucore_interface, action, resolution_errors)
+    if resolution_errors:
+        return {"error": "; ".join(resolution_errors)}
 
     try:
         if routine_id:

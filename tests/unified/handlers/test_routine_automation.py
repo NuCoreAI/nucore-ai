@@ -9,8 +9,30 @@ from __future__ import annotations
 
 import pytest
 
+from nucore.cmd import Command
+from nucore.node import Node
+from nucore.nodedef import NodeCommands, NodeDef, NodeProperty
 from nucore.nucore_interface import NuCoreInterface
 from unified.dispatch import execute_tool
+
+
+def _build_node(address: str, *, properties=None, accepts=None, sends=None) -> Node:
+    """Minimal Node/NodeDef fixture -- enough for
+    routine_automation._resolve_condition/_resolve_action to find a real
+    property/command id (or confirm a given one is already real)."""
+    node_def = NodeDef(
+        id=f"{address}_profile",
+        properties={p: NodeProperty(id=p, editor=None, name=p) for p in (properties or [])},
+        cmds=NodeCommands(
+            accepts=[Command(id=c, name=c) for c in (accepts or [])],
+            sends=[Command(id=c, name=c) for c in (sends or [])],
+        ),
+    )
+    node = object.__new__(Node)
+    node.address = address
+    node.name = address
+    node.node_def = node_def
+    return node
 
 
 class FakeResp:
@@ -27,7 +49,11 @@ class FakeResp:
 class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
-        self.nodes = {}
+        self.nodes = {
+            "25 80 3C 1": _build_node("25 80 3C 1", properties=["ST"]),
+            "BAR1": _build_node("BAR1", accepts=["DON"]),
+            "OLD": _build_node("OLD", accepts=["DOF"], sends=["DON"]),
+        }
         self.groups = {}
         self.folders = {}
         self.create_status = 200
@@ -97,6 +123,111 @@ async def test_create_routine_compiles_and_resolves_id_by_name():
     assert "parent" not in backend.created_trigger and "enabled" not in backend.created_trigger
     assert backend.created_trigger["if"][0]["type"] == "status"
     assert backend.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_command_and_property_display_names_resolve_to_real_ids():
+    """The DSL now takes get_device_detail's display name for .status(...)/
+    .command(...)/.was_controlled(...), not the raw id -- confirms the
+    handler resolves "Status"/"On"/"Off" to the real "ST"/"DON"/"DOF"
+    before saving, the actual fix for the bug where routines were created
+    with names ("On"/"Off") sitting in the id field."""
+    backend = FakeBackend()
+    backend.nodes["53 65 12 1"] = _build_node(
+        "53 65 12 1", properties=[], accepts=["DON"], sends=["DOF"]
+    )
+    backend.nodes["53 65 12 1"].node_def.cmds.accepts[0].name = "On"
+    backend.nodes["53 65 12 1"].node_def.cmds.sends[0].name = "Off"
+    backend.nodes["25 80 3C 1"].node_def.properties["ST"].name = "Status"
+
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Name Resolution Test", "code": (
+            'if device("25 80 3C 1").status("Status", uom=17, precision=1) > 72:\n'
+            '    device("53 65 12 1").command("On")\n'
+            'else:\n'
+            '    device("53 65 12 1").command("On")'
+        )},
+        nucore_interface=backend,
+    )
+
+    assert result["status"] == "saved"
+    assert backend.created_trigger["if"][0]["id"] == "ST"
+    assert backend.created_trigger["then"][0]["id"] == "DON"
+    assert backend.created_trigger["else"][0]["id"] == "DON"
+
+
+@pytest.mark.asyncio
+async def test_was_controlled_name_resolves_against_sends_not_accepts():
+    backend = FakeBackend()
+    backend.nodes["MOTION1"] = _build_node("MOTION1", accepts=["QUERY"], sends=["DON"])
+    backend.nodes["MOTION1"].node_def.cmds.sends[0].name = "On"
+
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Motion Test", "code": 'if device("MOTION1").was_controlled(command="On", eq="is"):\n    pass'},
+        nucore_interface=backend,
+    )
+
+    assert result["status"] == "saved"
+    assert backend.created_trigger["if"][0]["id"] == "DON"
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_name_returns_a_clear_error_not_a_silent_save():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Bad Command", "code": 'device("BAR1").command("Nonexistent Command")'},
+        nucore_interface=backend,
+    )
+    assert "error" in result
+    assert "Nonexistent Command" in result["error"]
+    assert backend.created_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_property_name_returns_a_clear_error_not_a_silent_save():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine",
+        {
+            "name": "Bad Property",
+            "code": 'if device("25 80 3C 1").status("Not A Real Property", uom=17, precision=1) > 72:\n    pass',
+        },
+        nucore_interface=backend,
+    )
+    assert "error" in result
+    assert "Not A Real Property" in result["error"]
+    assert backend.created_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_device_id_returns_a_clear_error():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Bad Device", "code": 'device("NOT_A_REAL_DEVICE").command("On")'},
+        nucore_interface=backend,
+    )
+    assert "error" in result
+    assert "NOT_A_REAL_DEVICE" in result["error"]
+    assert backend.created_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_adjust_scene_command_name_resolves_against_responder_accepts():
+    backend = FakeBackend()
+    backend.nodes["RESPONDER1"] = _build_node("RESPONDER1", accepts=["DON"])
+    backend.nodes["RESPONDER1"].node_def.cmds.accepts[0].name = "On"
+
+    code = 'adjust_scene(group="G1", controller="CTL1", node="RESPONDER1", type="cmd", command="On")'
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Scene Adjust Test", "code": code}, nucore_interface=backend
+    )
+
+    assert result["status"] == "saved"
+    assert backend.created_trigger["then"][0]["rsp"]["cmd"]["cmdId"] == "DON"
 
 
 @pytest.mark.asyncio
