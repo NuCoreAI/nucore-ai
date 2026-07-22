@@ -6,15 +6,16 @@ legacy, protocol-specific diagnostic commands built on top of
 surface every backend needs.
 """
 
+
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import TYPE_CHECKING, Any
 from xml.sax.saxutils import escape as xml_escape
 import xml.etree.ElementTree as ET
-
 from utils import get_logger
+import time
+
 
 if TYPE_CHECKING:
     # Deferred: IoXWrapper imports IoXDiagnostics (see IoXWrapper.__init__),
@@ -137,6 +138,12 @@ _IOX_DIAGNOSTICS_PLAN_REGISTRY: dict[str, Any] = {
     }, 
 }
 
+class Subsystems:
+    INSTEON = "_0"
+    GENERIC_ZWAVE = "_21"
+    ZWAVE = "_25"
+    ZIGBEE = "_27"
+    MATTER = "_28"
 
 class IoXDiagnostics:
     """Wrapper around an :class:`IoXWrapper` instance providing
@@ -155,6 +162,40 @@ class IoXDiagnostics:
         # Tracks the one in-flight diagnostic (see run_diagnostics) --
         # {"function", "started_at", "status", "result"} or None.
         self._diagnostics_state: dict[str, Any] | None = None
+        self._subsystem_state: dict[str, Any] | None = {
+            Subsystems.INSTEON: {
+                "name": "Insteon",
+                "enabled": False, 
+                "connected": False,
+                "updated": False,
+                "plm_info": None,
+            },
+            Subsystems.GENERIC_ZWAVE: {
+                "name": "Generic Z-Wave",
+                "enabled": False,
+                "updated": False,
+                "connected": False
+            },
+            Subsystems.ZWAVE: {
+                "name": "Z-Wave",
+                "enabled": False,
+                "updated": False,
+                "connected": False
+            },
+            Subsystems.ZIGBEE: {
+                "name": "Zigbee",
+                "enabled": False,
+                "updated": False,
+                "connected": False
+            },
+            Subsystems.MATTER: {
+                "name": "Matter",
+                "enabled": False,
+                "updated": False,
+                "connected": False
+            }
+        }
+
 
     def get_diagnostics_map(self) -> list[dict[str, str]]:
         """
@@ -370,6 +411,55 @@ class IoXDiagnostics:
             "</s:Body>"
             "</s:Envelope>"
         )
+
+    @staticmethod
+    def _strip_xml_namespace(tag: str) -> str:
+        """Return *tag* without the optional ``{namespace}`` prefix."""
+        return tag.split("}", 1)[-1] if "}" in tag else tag
+
+    @staticmethod
+    def _coerce_xml_text(value: str | None) -> Any:
+        """Convert XML text into simple Python scalar types when possible."""
+        text = (value or "").strip()
+        if text == "":
+            return ""
+
+        lower = text.lower()
+        if lower == "true":
+            return True
+        if lower == "false":
+            return False
+        if text.isdigit():
+            return int(text)
+        return text
+
+    def _element_to_dict_excluding(
+        self,
+        element: ET.Element,
+        exclude: set[str] | list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
+        """Build a dict from *element* children while skipping excluded tags."""
+        excluded = set(exclude or [])
+        result: dict[str, Any] = {}
+
+        for child in element:
+            tag = self._strip_xml_namespace(child.tag)
+            if tag in excluded:
+                continue
+
+            if list(child):
+                value: Any = self._element_to_dict_excluding(child, exclude=excluded)
+            else:
+                value = self._coerce_xml_text(child.text)
+
+            if tag in result:
+                if not isinstance(result[tag], list):
+                    result[tag] = [result[tag]]
+                result[tag].append(value)
+            else:
+                result[tag] = value
+
+        return result
     
     async def _submit_soap_request(self, soap_action: str, inner_body: str) -> str | None:
         """POST *inner_body* wrapped in the SOAP envelope for *soap_action*;
@@ -470,14 +560,9 @@ class IoXDiagnostics:
         return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
 
     async def no_device_feedback(self, candidates=None, **kwargs) -> str | None:
-        system_options= await self._get_system_options()
-        plm_info = await self._get_plm_info()
+        full_config = await self._get_full_system_config()
 
-        if plm_info is None:
-            return {"diagnostics": "No Device Feedback", "status": "error", "result": "Failed to get PLM info"}
-
-
-        return  {"diagnostics": "No Device Feedback", "status": "completed"}
+        return  {"diagnostics": "No Device Feedback", "status": "completed", "results": full_config}
 
     async def no_device_communication(self, candidates=None, **kwargs) -> str | None:
         return  {"diagnostics": "No Device Communication", "status": "completed"}
@@ -492,73 +577,130 @@ class IoXDiagnostics:
         return  {"diagnostics": "Random All On", "status": "completed"}
 
     # get system configuration
-    async def _get_system_config(self) -> dict [str, str] | None:
-        result = await self._iox_wrapper.get("/desc")
-        if result is None:
-            return None
-        # parse the result into a dict
-        try:
-            config = {}
-            root = ET.fromstring(result)
-            system_opts = root.find('.//device')
-            if system_opts is not None:
-                for child in system_opts:
-                    tag = child.tag
-                    if tage == "serviceList":
-                        continue
-                    value = child.text
-                    
-                    # Convert to appropriate types
-                    if value in ('true', 'false'):
-                        config[tag] = value == 'true'
-                    elif value and value.isdigit():
-                        config[tag] = int(value)
-                    else:
-                        config[tag] = value
-
-            return config
-        except ET.ParseError as e:
-            logger.error(f"Failed to parse system options XML: {e}")
-            return None
-    
-    # get system option
-    async def _get_system_options(self) -> dict[str, str] | None:
-        result = await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
-        if result is None:
-            return None
-        # parse the result into a dict
-        try:
-            options = {}
-            root = ET.fromstring(result)
-            system_opts = root.find('.//SystemOptions')
-            if system_opts is not None:
-                for child in system_opts:
-                    tag = child.tag
-                    value = child.text
-                    
-                    # Convert to appropriate types
-                    if value in ('true', 'false'):
-                        options[tag] = value == 'true'
-                    elif value and value.isdigit():
-                        options[tag] = int(value)
-                    else:
-                        options[tag] = value
-
-            return options
-        except ET.ParseError as e:
-            logger.error(f"Failed to parse system options XML: {e}")
-            return None
-
-    async def _get_about(self) -> dict[str, str] | None:
-        # convert the options dict to xml
-        options = await self._iox_wrapper.get("/api/system/about")
+    async def _get_full_system_config(self) -> dict [str, str] | None:
+        full_config = {}
+        # gets a combined list of:
+        # system options, system config, about, and availabe upgrades
+        # First get system options and update info in subsystem state
+        options = await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
         if options is None:
-            return None
-        return options.json()
-    
-    # DEVICE SPECIFIC SOAP ACTIONS
-    async def _get_plm_info(self) -> str | None:
-        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
+            logger.error(f"Failed to get system options: {options.status_code if options else 'No response'}")
+        else: 
+            # parse the result into a dict
+            try:
+                options_config = {}
+                root = ET.fromstring(options)
+                system_opts = root.find('.//SystemOptions')
+                if system_opts is not None:
+                    options_config = self._element_to_dict_excluding(system_opts)
+
+                self._subsystem_state[Subsystems.INSTEON]["enabled"] = options_config.get("INSTEONSupport", False)
+                self._subsystem_state[Subsystems.GENERIC_ZWAVE]["enabled"] = options_config.get("ZWaveSupport", False)
+                self._subsystem_state[Subsystems.ZWAVE]["enabled"] = options_config.get("ZMatterZWave", False)
+                self._subsystem_state[Subsystems.ZIGBEE]["enabled"] = options_config.get("ZigbeeSupport", False)
+                self._subsystem_state[Subsystems.MATTER]["enabled"] = options_config.get("MatterSupport", False)
+
+            except ET.ParseError as e:
+                logger.error(f"Failed to parse system options XML: {e}")
+
+        # second get PLM Infomation and update subsystem state
+        plm_info = await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
+        if plm_info is None: 
+            logger.error(f"Failed to get PLM info: {plm_info.status_code if plm_info else 'No response'}")
+        else:
+            plm_info_parts = plm_info.split(" / ")
+            if len(plm_info_parts) > 1:
+                self._subsystem_state[Subsystems.INSTEON]["info"] = plm_info_parts[0]
+                self._subsystem_state[Subsystems.INSTEON]["connected"] = plm_info_parts[1] == "Connected"
+            else:
+                self._subsystem_state[Subsystems.INSTEON]["info"] = plm_info
+                self._subsystem_state[Subsystems.INSTEON]["connected"] = False
+
+
+        # add subsystem_config
+        full_config["subsystem_state"] = self._subsystem_state
+
+        # now get the system description from /desc and parse it into a dict 
+        desc = self._iox_wrapper.get("/desc")
+        if desc is None or desc.status_code != 200:
+            logger.error(f"Failed to get system description: {desc.status_code if desc else 'No response'}")
+        else:
+            # parse the result into a dict
+            try:
+                
+                ns = {"upnp": "urn:schemas-upnp-org:device-1-0"}
+                root = ET.fromstring(desc.text)
+                system_opts = root.find("upnp:device", ns)
+                if system_opts is not None:
+                    full_config.update(self._element_to_dict_excluding(system_opts, exclude={"serviceList"}))
+            except ET.ParseError as e:
+                logger.error(f"Failed to parse system options XML: {e}")
+            
+        # now get web configuration
+        web_config = self._iox_wrapper.get("/WEB/sysconfig.txt")
+        if web_config is None or web_config.status_code != 200: 
+            logger.error(f"Failed to get web configuration: {web_config.status_code if web_config else 'No response'}")
+        else:
+            web_config_lines = web_config.text.splitlines()
+            upc_line = next((line for line in web_config_lines if "UPC:" in line), None)
+
+            usb_lines = []
+            in_usb_section = False
+
+            for line in web_config_lines:
+                if line.strip().startswith("*** USB Devices ***"):
+                    in_usb_section = True
+                    continue
+
+                if in_usb_section and "Upgrade Status" in line:
+                    break
+
+                if in_usb_section:
+                    usb_lines.append(line)
+
+            full_config["upc"] = upc_line.strip() if upc_line else None
+            full_config["usb_devices"] = usb_lines if usb_lines else None
+
+        # now get system about
+        options = self._iox_wrapper.get("/api/system/about")
+        if options is None or options.status_code != 200:
+            logger.error(f"Failed to get system about: {options.status_code if options else 'No response'}")
+        else:
+            try:
+                full_config.update(options.json())
+            except Exception as e:
+                logger.error(f"Failed to parse system about JSON: {e}")
+
+        # now get available upgrades
+        upgrades  = self._iox_wrapper.get("/api/system/packages")
+        if upgrades is None or upgrades.status_code != 200:
+            logger.error(f"Failed to get available upgrades: {upgrades.status_code if upgrades else 'No response'}")
+        else:
+            try:
+                payload = upgrades.json()
+                packages: Any = {}
+
+                # API shape can be either {"data": {"packages": ...}} or {"packages": ...}
+                if isinstance(payload, dict):
+                    data = payload.get("data")
+                    if isinstance(data, dict) and "packages" in data:
+                        packages = data.get("packages", {})
+                    elif "packages" in payload:
+                        packages = payload.get("packages", {})
+                    else:
+                        logger.warning("Available upgrades response did not contain a 'packages' field")
+                else:
+                    logger.warning("Available upgrades response JSON is not an object")
+
+                full_config["packages"] = packages if packages is not None else {}
+            except Exception as e:
+                logger.error(f"Failed to parse available upgrades JSON: {e}")
+
+        import json
+        logger.info(f"Full system configuration retrieved: {json.dumps(full_config, indent=2)}")
+        return full_config
+
+
     async def _get_all_plm_links(self) -> str | None:
         return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
     async def _get_dev_links_table(self) -> str | None:
@@ -591,4 +733,43 @@ class IoXDiagnostics:
     # get startup time
     async def _get_startup_time(self) -> str | None:
         return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_STARTUP_TIME, None, None, 0x01, None)
+
+
+    def on_device_event(self, node, control, action, eventInfo):
+        if action == None or control == None:
+            logger.error(f"Missing action or control: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+            return
+        
+        #control is the subsystem that generated the event, e.g. "Insteon", "Zigbee", "Z-Wave", etc.
+        #action is of the form of a.b ... where a is the subsystem property and b is the status for that property
+        if not control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
+            logger.error(f"Unknown control/1: {control} for node={node if node else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+            return
+
+        # split the action into the subsystem property and the status
+        action_parts = action.split(".")
+        if len(action_parts) != 2:
+            logger.error(f"Invalid action format: {action} for node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+            return
+        subsystem_property, status = action_parts
+
+        if subsystem_property != "1":  #only interested in status
+            return
+
+        if not status in ["1", "2", "3"]:
+            logger.error(f"Unknown status: {status} for node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+            return
+
+
+        if status == "1":
+            self._subsystem_state[control]["enabled"] =  True
+        elif status == "2":
+            self._subsystem_state[control]["connected"] =  True
+        elif status == "3":
+            self._subsystem_state[control]["updated"] =  True
+
+
+
+
+
 

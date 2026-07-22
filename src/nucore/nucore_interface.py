@@ -600,23 +600,12 @@ class NuCoreInterface(ABC):
         What we are looking for are events that change device structure such as device added/removed, property added/removed, etc.
         :param event: The event data received.
         """
-        if message is None or 'node' not in message or 'control' not in message:
-            logger.debug(f"Received invalid message format {message}")
-            return
-        
-        control = message['control']
-        action = message.get('action', '')
-        if control == "_3": #node updated event
-            if action and action in [ 'NX', 'PI', 'WD', 'NE', 'CE', 'EN' ]:
-                #we may want to use 'WD' (device write pending) later for diagnostics 
-                return
-            self.device_structure_changed = True # just to be on the safe side
-        elif control == "_1": #programs updated event
-            self.routines_changed = True # just to be on the safe side
+        raise NotImplementedError("Subclasses must implement the subscribe_events method.")
 
     async def _on_connect_callback(self):
         """
         Callback function to handle connection established event.
+        Subclasses may override this method
         """
         self.is_subscribed = True
         self.device_structure_changed = True # just to be on the safe side
@@ -625,5 +614,6 @@ class NuCoreInterface(ABC):
     async def _on_disconnect_callback(self):
         """
         Callback function to handle disconnection event.
+        Subclasses may override this method
         """
         self.is_subscribed = False

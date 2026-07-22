@@ -1976,4 +1976,32 @@ class IoXWrapper(NuCoreInterface):
 
         return variable_names
 
-
+    async def _on_device_event(self, message:dict):
+        """
+        We'll override the superclass to give more information to the diagnostics module.
+        Callback function to handle device events.
+        What we are looking for are events that change device structure such as device added/removed, property added/removed, etc.
+        :param event: The event data received.
+        """
+        if message is None or 'node' not in message or 'control' not in message:
+            logger.debug(f"Received invalid message format {message}")
+            return
+        control = message['control']
+        action = message.get('action', '')
+        if action:
+            action=action.get('value', None)
+        node = message.get('node', None)
+        eventInfo = message.get('eventInfo', None)
+        if control == "_3": #node updated event
+            if action and action in [ 'NX', 'PI', 'WD', 'EN', 'WH' ]:
+                if action == 'WH':
+                    node = self.nodes.get(node, None) # just to be on the safe side
+                    if node:
+                        node.pending_write = True
+                    #we may want to use 'WD' (device write pending) later for diagnostics 
+                    return
+            self.device_structure_changed = True # just to be on the safe side
+        elif control == "_1": #programs updated event
+            self.routines_changed = True # just to be on the safe side
+        elif control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
+            self.diagnostics.on_device_event(node, control, action, eventInfo)
