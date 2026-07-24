@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+import uuid
 from unified.run_unified_runtime import main as run_unified_runtime_main
 from unified.run_unified_runtime import _build_parser, _run_once
 from utils import get_logger
@@ -44,14 +45,14 @@ async def get():
     with open(INDEX_HTML) as f:
         return HTMLResponse(f.read())
 
-async def _process_message_queue(eisy_ai, message_queue: asyncio.Queue):
+async def _process_message_queue(eisy_ai, message_queue: asyncio.Queue, session_id: str):
     while True:
         user_message = await message_queue.get()
         if user_message is None:
             message_queue.task_done()
             break
         try:
-            await _run_once(eisy_ai, user_message)
+            await _run_once(eisy_ai, user_message, session_id=session_id)
         finally:
             message_queue.task_done()
 
@@ -60,9 +61,14 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.append(websocket)
     global eisy_args
+    # Unique per connection -- the diagnostics ownership check (see
+    # unified.dispatch.execute_tool) relies on this to tell one customer's
+    # session apart from another's; every connection sharing "default" would
+    # make that check a no-op.
+    session_id = str(uuid.uuid4())
     eisy_ai = run_unified_runtime_main(args=eisy_args, websocket=websocket)
     message_queue: asyncio.Queue = asyncio.Queue()
-    processor_task = asyncio.create_task(_process_message_queue(eisy_ai, message_queue))
+    processor_task = asyncio.create_task(_process_message_queue(eisy_ai, message_queue, session_id))
     
     try:
         while True:
