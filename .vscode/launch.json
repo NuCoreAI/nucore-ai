@@ -60,6 +60,27 @@
             "justMyCode": false
         },
         {
+            "name": "Diag-Claude-LakeEncino-Info",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/unified/run_unified_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-username=",
+               "--backend-api-password=",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/unified/runtime_config.example.json",
+               "--secrets-file=secrets/keys.json",
+               "--log-level=INFO",
+               "--diagnostic-step=get_all_plm_links",
+               "--diagnostic-params={\"device_id\": \"28 87 5C 1\"}",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
             "name": "Claude-LakeEncino-Info",
             "type": "debugpy",
             "request": "launch",
