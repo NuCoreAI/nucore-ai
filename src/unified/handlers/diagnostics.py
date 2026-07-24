@@ -14,7 +14,10 @@ early).
 
 The single-in-flight concurrency lock and session state all live in
 ``NuCoreInterface.start_diagnostics``/``run_diagnostic_step`` (backend-owned
-state) -- this module is a thin pass-through.
+state) -- this module is a thin pass-through. ``session_id`` (identifying
+which conversation is calling) is threaded through from ``execute_tool``, not
+read from ``args`` -- it's context the dispatch layer supplies, not something
+the model provides.
 """
 
 from __future__ import annotations
@@ -24,18 +27,22 @@ from typing import Any
 from nucore import NuCoreInterface
 
 
-async def start_diagnostics(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+async def start_diagnostics(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
     kwargs: dict[str, Any] = {}
     if args.get("candidate_devices"):
         kwargs["candidate_devices"] = args["candidate_devices"]
     if args.get("candidate_routines"):
         kwargs["candidate_routines"] = args["candidate_routines"]
-    return await nucore_interface.start_diagnostics(**kwargs)
+    return await nucore_interface.start_diagnostics(session_id=session_id, **kwargs)
 
 
-async def run_diagnostic_step(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+async def run_diagnostic_step(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
     step = args.get("step")
     if not step:
         return {"error": "step is required -- see start_diagnostics' available_tools"}
     params = args.get("params") or {}
-    return await nucore_interface.run_diagnostic_step(step, **params)
+    return await nucore_interface.run_diagnostic_step(step, session_id=session_id, **params)

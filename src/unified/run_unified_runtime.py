@@ -180,6 +180,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the agentic loop's max tool-call iterations per query (defaults to runtime config's 'max_iterations', or 8).",
     )
+    parser.add_argument(
+        "--diagnostic-step",
+        type=str,
+        default=None,
+        help=(
+            "Bypass the LLM/agentic loop entirely and call this diagnostic step "
+            "directly against the backend (e.g. 'start' to open a session, "
+            "'check_device_links', 'get_full_system_config', 'conclude', 'stop'). "
+            "Prints the raw result and exits. Pairs with --diagnostic-params. "
+            "For manual testing against a live hub only."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-params",
+        type=str,
+        default=None,
+        help="JSON object of keyword params for --diagnostic-step, e.g. '{\"device_id\": \"12 34 56 1\"}'.",
+    )
     return parser
 
 
@@ -349,6 +367,26 @@ async def _run_once(
 
     return
 
+async def _run_diagnostic_step_direct(
+    nucore_interface: NuCoreInterface, step: str, params_json: str | None
+) -> None:
+    """Call a single diagnostic step directly against the backend, bypassing
+    the LLM/AgenticLoop/dispatch layer entirely -- for manual testing against
+    a live hub without spending on LLM calls or needing conversational
+    back-and-forth to reach a specific step.
+
+    ``step == "start"`` opens a session (``start_diagnostics``); any other
+    value is passed straight to ``run_diagnostic_step`` (e.g. 'conclude',
+    'stop', or a real step name from the catalog).
+    """
+    params = json.loads(params_json) if params_json else {}
+    if step == "start":
+        result = await nucore_interface.start_diagnostics()
+    else:
+        result = await nucore_interface.run_diagnostic_step(step, **params)
+    print(json.dumps(result, indent=2, default=str))
+
+
 async def _run_loop(runtime: UnifiedRuntime) -> None:
     """Run an interactive REPL that repeatedly prompts for queries.
 
@@ -466,6 +504,14 @@ def main(args:Any=None, websocket=None) -> None:
 
     if nucore_interface is None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
+
+    if args.diagnostic_step:
+        # Direct-to-backend testing mode: no LLM, no AgenticLoop, no
+        # UnifiedRuntime -- just the real hub connection built above.
+        asyncio.run(nucore_interface._refresh_device_structure())
+        asyncio.run(_run_diagnostic_step_direct(nucore_interface, "start", None))
+        asyncio.run(_run_diagnostic_step_direct(nucore_interface, args.diagnostic_step, args.diagnostic_params))
+        return
 
     resolved_max_iterations = (
         args.max_iterations if args.max_iterations is not None else int(runtime_config.get("max_iterations", 8))

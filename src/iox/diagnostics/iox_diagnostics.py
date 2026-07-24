@@ -227,6 +227,7 @@ class IoXDiagnostics:
     async def start_diagnostics(
         self,
         *,
+        session_id: str | None = None,
         candidate_devices: list[dict[str, Any]] | None = None,
         candidate_routines: list[dict[str, Any]] | None = None,
     ) -> Any:
@@ -238,12 +239,20 @@ class IoXDiagnostics:
         order makes sense, and ends the session with the "conclude" step (or
         "stop" to abandon early without a diagnosis).
 
-        Only one session may be open at a time -- calling this again while
-        one is already in progress just re-shows the instruction/steps rather
-        than starting a new one. A session left open longer than
-        _DIAGNOSTICS_TIMEOUT_S is treated as abandoned and cleared
-        automatically, allowing a fresh one to start.
+        Only one session may be open at a time, and it's owned by whichever
+        *session_id* started it -- calling this again with the SAME
+        session_id while it's in progress just re-shows the instruction/steps
+        rather than starting a new one; calling it with a DIFFERENT session_id
+        is refused, since a diagnostic is a real hub-level operation another
+        conversation shouldn't be able to interrupt or restart. A session left
+        open longer than _DIAGNOSTICS_TIMEOUT_S is treated as abandoned and
+        cleared automatically, allowing a fresh one (from any session) to start.
 
+        :param session_id: Identifies which conversation is starting/driving
+                       this session -- unified.dispatch.execute_tool's
+                       diagnostics-lock gate is the primary place this is
+                       enforced; checked again here for defense-in-depth
+                       against any caller that bypasses that gate.
         :param candidate_devices: Optional devices/groups/scenes the caller
                        identified as relevant (e.g. a fuzzy "master bathroom"
                        reference) -- recorded on the session and echoed back
@@ -251,11 +260,21 @@ class IoXDiagnostics:
         :param candidate_routines: Same idea as candidate_devices, but for
                        routines/folders.
         :return: {"status": "in_progress", "instruction", "available_tools", "candidates"?}
+                 or {"error": ...} if a different session already owns the
+                 active one.
         """
         state = self._diagnostics_state
         if state is not None:
             elapsed = time.monotonic() - state["started_at"]
             if elapsed < self._DIAGNOSTICS_TIMEOUT_S:
+                if state.get("session_id") != session_id:
+                    return {
+                        "error": (
+                            f"a diagnostic session is already in progress "
+                            f"(started {int(elapsed)}s ago, times out after {self._DIAGNOSTICS_TIMEOUT_S}s) "
+                            "for a different conversation -- wait for it to finish or time out"
+                        )
+                    }
                 candidates = state.get("candidates")
                 response = {
                     "status": "in_progress",
@@ -274,6 +293,7 @@ class IoXDiagnostics:
             "started_at": time.monotonic(),
             "status": "in_progress",
             "candidates": candidates,
+            "session_id": session_id,
         }
         response = {
             "status": "in_progress",
@@ -293,7 +313,7 @@ class IoXDiagnostics:
         calls) off the real event loop."""
         return asyncio.run(function(**params))
 
-    async def run_diagnostic_step(self, step: str, **params) -> Any:
+    async def run_diagnostic_step(self, step: str, *, session_id: str | None = None, **params) -> Any:
         """
         Run one step of the diagnostic session currently in progress (see
         start_diagnostics) -- the model picks which step to call and with
@@ -302,6 +322,10 @@ class IoXDiagnostics:
 
         :param step: One of the step names declared in prompts/diagnose.md
                      (also returned as start_diagnostics' "available_tools").
+        :param session_id: Must match the session that started the current
+                       session (see start_diagnostics) -- checked here for
+                       defense-in-depth on top of
+                       unified.dispatch.execute_tool's own gate.
         :param params: Forwarded verbatim to the step's underlying function.
         :return: {"step", "result"} on success, or {"error": ...}. The
                  dedicated "conclude"/"stop" steps instead end the session,
@@ -317,6 +341,9 @@ class IoXDiagnostics:
             logger.warning(f"diagnostic session exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing")
             self._diagnostics_state = None
             return {"status": "timed_out"}
+
+        if state.get("session_id") != session_id:
+            return {"error": "this diagnostic session belongs to a different conversation"}
 
         if step not in self._diagnostic_steps:
             return {"error": f"'{step}' is not a known diagnostic step; see start_diagnostics' available_tools"}
@@ -350,9 +377,11 @@ class IoXDiagnostics:
         Return info about the diagnostic session currently in flight, if
         any -- used by unified.dispatch.execute_tool to block every other
         tool call for the whole multi-step session, not just its initial
-        call. A stale (past-timeout) session is reported as None --
-        start_diagnostics/run_diagnostic_step clear it on the next real call,
-        this getter just doesn't advertise it as active in the meantime.
+        call, and to check whether a given tool call's session_id matches
+        the one that owns it (the "session_id" key here). A stale
+        (past-timeout) session is reported as None -- start_diagnostics/
+        run_diagnostic_step clear it on the next real call, this getter just
+        doesn't advertise it as active in the meantime.
         """
         state = self._diagnostics_state
         if state is None:
@@ -360,7 +389,7 @@ class IoXDiagnostics:
         elapsed = time.monotonic() - state["started_at"]
         if elapsed >= self._DIAGNOSTICS_TIMEOUT_S:
             return None
-        response = {"status": "in_progress", "elapsed_s": int(elapsed)}
+        response = {"status": "in_progress", "elapsed_s": int(elapsed), "session_id": state.get("session_id")}
         candidates = state.get("candidates")
         if candidates:
             response["candidates"] = candidates
@@ -651,8 +680,7 @@ class IoXDiagnostics:
         return full_config
 
 
-    async def _get_all_plm_links(self) -> str | None:
-        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
+
     async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
         # NOTE: assumes `node` here accepts the same device address used
         # elsewhere in this system (e.g. get_property's device_id) --
@@ -661,8 +689,20 @@ class IoXDiagnostics:
         return await self._send_device_specific_with_option(
             IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, None
         )
-    async def _get_isy_links_table(self) -> str | None:
-        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, None, None, 0x01, None)
+
+    async def _get_isy_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        # NOTE: assumes `node` here accepts the same device address used
+        # elsewhere in this system (e.g. get_property's device_id) --
+        # unconfirmed against real hub behavior; flag/verify before relying
+        # on this for a real customer-facing diagnosis.
+        # Use this method to get the ISY links table for a specific device. 
+        # The ISY links table what isy/iox thinks the device link should like like. 
+        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, device_id, None, 0x01, None)
+
+    async def _get_all_plm_links(self, device_id: str = None, **kwargs) -> str | None:
+        # Use this method to get all PLM links. This is a device specific command that returns the PLM links table.
+        # we ignore device_id
+        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
 
     async def _check_subsystem_status(self, protocol: str = None, **kwargs) -> Any:
         """Per-protocol status check for the "check_subsystem_status" step --
@@ -733,6 +773,15 @@ class IoXDiagnostics:
         elif status == "3":
             self._subsystem_state[control]["updated"] =  True
 
+
+    def update_links_table(self, node, control, action, eventInfo):
+        logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+        if action == "1":
+            logger.info("PLM Link Record")
+        elif action == "2":
+            logger.info("Device Link Record")
+        elif action == "3":
+            logger.info("ISY Link Record")
 
 
 

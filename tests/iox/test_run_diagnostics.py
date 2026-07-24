@@ -152,6 +152,90 @@ async def test_stale_session_past_timeout_is_cleared_and_a_fresh_one_starts():
 
 
 # ----------------------------------------------------------------------
+# Session ownership -- a diagnostic is real hub-level state, so only the
+# session_id that started it may re-show/drive it; any other session_id
+# (including the unset/None default some legacy callers still use) is
+# refused rather than silently treated as the same conversation.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_diagnostics_records_the_starting_session_id():
+    diag = _bare_diagnostics()
+
+    await diag.start_diagnostics(session_id="session-A")
+
+    assert diag._diagnostics_state["session_id"] == "session-A"
+
+
+@pytest.mark.asyncio
+async def test_owning_session_can_re_show_its_own_session():
+    diag = _bare_diagnostics()
+    diag._diagnostics_state = _in_progress_session(session_id="session-A")
+
+    result = await diag.start_diagnostics(session_id="session-A")
+
+    assert result["status"] == "in_progress"
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_different_session_cannot_start_or_re_show_someone_elses_session():
+    diag = _bare_diagnostics()
+    diag._diagnostics_state = _in_progress_session(session_id="session-A")
+
+    result = await diag.start_diagnostics(session_id="session-B")
+
+    assert "error" in result
+    # the original session is untouched -- not restarted, not handed to B
+    assert diag._diagnostics_state["session_id"] == "session-A"
+
+
+@pytest.mark.asyncio
+async def test_run_diagnostic_step_refuses_a_different_session():
+    diag = _bare_diagnostics()
+    diag._diagnostics_state = _in_progress_session(session_id="session-A")
+
+    result = await diag.run_diagnostic_step("get_full_system_config", session_id="session-B")
+
+    assert "error" in result
+    assert diag._diagnostics_state is not None  # untouched
+
+
+@pytest.mark.asyncio
+async def test_run_diagnostic_step_allows_the_owning_session():
+    diag = _bare_diagnostics()
+    diag._diagnostics_state = _in_progress_session(session_id="session-A")
+
+    async def fake_get_full_system_config():
+        return {"ok": True}
+
+    diag._get_full_system_config = fake_get_full_system_config
+
+    result = await diag.run_diagnostic_step("get_full_system_config", session_id="session-A")
+
+    assert result == {"step": "get_full_system_config", "result": {"ok": True}}
+
+
+def test_get_running_diagnostic_reports_the_owning_session_id():
+    diag = _bare_diagnostics()
+    diag._diagnostics_state = _in_progress_session(started_at=time.monotonic() - 3, session_id="session-A")
+
+    info = diag.get_running_diagnostic()
+
+    assert info["session_id"] == "session-A"
+
+
+def test_get_running_diagnostic_session_id_is_none_when_never_set():
+    diag = _bare_diagnostics()
+    diag._diagnostics_state = _in_progress_session(started_at=time.monotonic() - 3)
+
+    info = diag.get_running_diagnostic()
+
+    assert info["session_id"] is None
+
+
+# ----------------------------------------------------------------------
 # run_diagnostic_step -- only usable while a session is in_progress;
 # dispatches to the shared step registry; "conclude"/"stop" end the session
 # directly instead of calling a backend function.

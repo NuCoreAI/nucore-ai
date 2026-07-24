@@ -512,7 +512,7 @@ class NuCoreInterface(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def start_diagnostics(self, **kwargs):
+    async def start_diagnostics(self, *, session_id: str | None = None, **kwargs):
         """
         Open (or re-show) the one diagnostic session -- there's a single
         diagnostics flow, not a menu of named plans. The response carries an
@@ -521,25 +521,36 @@ class NuCoreInterface(ABC):
         instruction and by what the customer actually described, instead of
         the backend pre-mapping every complaint to a canned plan.
 
-        Only one session may be open at a time -- calling this again while
-        one is already in progress just re-shows the instruction/steps rather
-        than starting a new one.
+        Only one session may be open at a time, system-wide, and it's owned
+        by whichever session_id started it -- calling this again with the
+        SAME session_id while it's in progress just re-shows the
+        instruction/steps; a DIFFERENT session_id is refused (a real
+        hub-level diagnostic shouldn't be interruptible/restartable by an
+        unrelated conversation).
 
+        :param session_id: Identifies which conversation is starting/driving
+                       this session. unified.dispatch.execute_tool enforces
+                       the actual ownership gate (blocking every other tool
+                       for every OTHER session while one is active); backends
+                       should still track and check it themselves too.
         :param kwargs: Optional candidate_devices/candidate_routines -- fuzzy
                        devices/scenes/routines the caller identified as
                        relevant, echoed back in every response for the
                        session.
         :return: {"status": "in_progress", "instruction", "available_tools", "candidates"?}
+                 or {"error": ...} if a different session already owns the active one.
         """
         raise NotImplementedError("Subclasses must implement the start_diagnostics method.")
 
     @abstractmethod
-    async def run_diagnostic_step(self, step: str, **params):
+    async def run_diagnostic_step(self, step: str, *, session_id: str | None = None, **params):
         """
         Run one step of the diagnostic session currently in progress (see
         start_diagnostics) -- the model picks which step to call, guided by
         the standing instruction.
         :param step: One of the step names from start_diagnostics' "available_tools".
+        :param session_id: Must match the session that started the current
+                       session -- see start_diagnostics.
         :param params: Forwarded to the step's underlying function.
         :return: {"step", "result"} on success, or {"error": ...}. The
                  dedicated "conclude"/"stop" steps end the session instead,
@@ -553,11 +564,12 @@ class NuCoreInterface(ABC):
         """
         Return info about the diagnostic session currently in flight, if
         any -- used to gate every other tool call while one is running (see
-        unified.dispatch.execute_tool): a single global lock, not scoped to
-        any one session, so no per-session tracking is needed to enforce it.
-        Counts as "in flight" for its whole multi-step duration, not just its
-        initial call.
-        :return: {"status": "in_progress", "elapsed_s": <int>}
+        unified.dispatch.execute_tool): one diagnostic system-wide, but
+        scoped by session_id so only the owning conversation's calls to
+        start_diagnostics/run_diagnostic_step get through -- every other
+        session's calls, of any tool, are refused. Counts as "in flight" for
+        its whole multi-step duration, not just its initial call.
+        :return: {"status": "in_progress", "elapsed_s": <int>, "session_id": <str|None>}
                  or None if nothing is running (including a stale/timed-out one).
         """
         raise NotImplementedError("Subclasses must implement the get_running_diagnostic method.")

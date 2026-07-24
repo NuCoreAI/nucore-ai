@@ -60,8 +60,8 @@ class UnifiedRuntime:
             key = next(iter(supported.keys()))
         return dict(supported.get(key, {}))
 
-    async def _dispatch(self, name: str, args: dict[str, Any]) -> Any:
-        return await execute_tool(name, args, nucore_interface=self.nucore_interface)
+    async def _dispatch(self, name: str, args: dict[str, Any], *, session_id: str | None = None) -> Any:
+        return await execute_tool(name, args, nucore_interface=self.nucore_interface, session_id=session_id)
 
     def reset_stream_handler(self) -> None:
         """Reset the attached stream handler's chunk counter before a new
@@ -100,10 +100,17 @@ class UnifiedRuntime:
         if framework_context:
             user_message = f"<context>{framework_context}</context>\n\n{query}"
 
+        async def dispatch(name: str, args: dict[str, Any]) -> Any:
+            # AgenticLoop's dispatch contract is a plain 2-arg callable --
+            # this closure binds this request's session_id without widening
+            # that contract, so the diagnostics ownership check (see
+            # execute_tool) knows which conversation a tool call came from.
+            return await self._dispatch(name, args, session_id=session_id)
+
         loop = AgenticLoop(
             llm_client=self.llm_client,
             tool_specs=self.tool_specs,
-            dispatch=self._dispatch,
+            dispatch=dispatch,
             max_iterations=self.max_iterations,
         )
         final_text, _ = await loop.run(

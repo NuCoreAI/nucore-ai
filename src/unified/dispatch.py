@@ -21,9 +21,10 @@ from .handlers import (
 logger = get_logger(__name__)
 
 # Tools still allowed through while a diagnostic is running -- everything
-# else is refused (see execute_tool). Not session-scoped: the lock lives on
-# nucore_interface itself (one shared backend), so this blocks every
-# session uniformly rather than needing per-session tracking.
+# else is refused (see execute_tool), for every session. Even these two are
+# only let through for the session_id that started the active diagnostic --
+# a real hub-level operation another conversation shouldn't be able to touch,
+# restart, or interrupt.
 _DIAGNOSTICS_EXEMPT_TOOLS = frozenset({"start_diagnostics", "run_diagnostic_step"})
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
@@ -49,17 +50,24 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
 }
 
 
-async def execute_tool(name: str, args: dict[str, Any], *, nucore_interface: NuCoreInterface) -> Any:
+async def execute_tool(
+    name: str, args: dict[str, Any], *, nucore_interface: NuCoreInterface, session_id: str | None = None
+) -> Any:
     """Look up and run *name*'s handler, returning a JSON-serializable
     result or ``{"error": ...}`` -- never raises, so one bad tool call can't
-    take down the agentic loop."""
+    take down the agentic loop.
+
+    *session_id* identifies which conversation this call came from -- used
+    only for the diagnostics ownership check below; every other handler
+    ignores it."""
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
         return {"error": f"unknown tool '{name}'"}
 
-    if name not in _DIAGNOSTICS_EXEMPT_TOOLS:
-        running = nucore_interface.get_running_diagnostic()
-        if running is not None:
+    running = nucore_interface.get_running_diagnostic()
+    if running is not None:
+        owner = running.get("session_id")
+        if name not in _DIAGNOSTICS_EXEMPT_TOOLS or session_id != owner:
             return {
                 "error": (
                     f"a diagnostic session is currently in progress "
@@ -70,6 +78,8 @@ async def execute_tool(name: str, args: dict[str, Any], *, nucore_interface: NuC
             }
 
     try:
+        if name in _DIAGNOSTICS_EXEMPT_TOOLS:
+            return await handler(nucore_interface, args, session_id=session_id)
         return await handler(nucore_interface, args)
     except Exception as exc:
         logger.error(f"tool '{name}' raised: {exc}")

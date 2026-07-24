@@ -1,6 +1,9 @@
 """End-to-end: start_diagnostics/run_diagnostic_step dispatched through
 execute_tool -- confirms the thin pass-through to
-NuCoreInterface.start_diagnostics()/run_diagnostic_step().
+NuCoreInterface.start_diagnostics()/run_diagnostic_step(), plus the
+session-ownership gate (only the session_id that owns the active diagnostic
+may call the two diagnostics tools; every other session is refused, same as
+every other tool).
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from unified.dispatch import execute_tool
 class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
-        self.start_calls: list[tuple] = []
+        self.start_calls: list[dict] = []
         self.start_result = {"status": "in_progress", "instruction": "...", "available_tools": []}
         self.step_calls: list[tuple] = []
         self.step_result = {"step": "get_full_system_config", "result": "ok"}
@@ -61,7 +64,7 @@ async def test_start_diagnostics_returns_backend_result():
     backend = FakeBackend()
     result = await execute_tool("start_diagnostics", {}, nucore_interface=backend)
     assert result == backend.start_result
-    assert backend.start_calls == [{}]
+    assert backend.start_calls == [{"session_id": None}]
 
 
 @pytest.mark.asyncio
@@ -76,38 +79,71 @@ async def test_start_diagnostics_passes_candidate_devices_and_routines_through()
         nucore_interface=backend,
     )
 
-    assert backend.start_calls == [{"candidate_devices": candidate_devices, "candidate_routines": candidate_routines}]
+    assert backend.start_calls == [
+        {"session_id": None, "candidate_devices": candidate_devices, "candidate_routines": candidate_routines}
+    ]
 
 
 @pytest.mark.asyncio
 async def test_start_diagnostics_omits_candidate_kwargs_when_absent():
     backend = FakeBackend()
     await execute_tool("start_diagnostics", {}, nucore_interface=backend)
-    assert backend.start_calls == [{}]
+    assert backend.start_calls == [{"session_id": None}]
+
+
+@pytest.mark.asyncio
+async def test_start_diagnostics_forwards_the_callers_session_id():
+    backend = FakeBackend()
+    await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="session-A")
+    assert backend.start_calls == [{"session_id": "session-A"}]
 
 
 @pytest.mark.asyncio
 async def test_other_tools_are_blocked_while_a_diagnostic_is_running():
     backend = FakeBackend()
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12}
+    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12, "session_id": "session-A"}
 
-    result = await execute_tool("get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend)
+    result = await execute_tool(
+        "get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend, session_id="session-A"
+    )
 
+    # Even the OWNING session can't use a non-diagnostics tool while its own
+    # diagnostic is in progress -- only start_diagnostics/run_diagnostic_step
+    # are ever exempt, and only for that session.
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_start_diagnostics_and_run_diagnostic_step_stay_exempt_from_the_lock():
+async def test_start_diagnostics_and_run_diagnostic_step_stay_exempt_for_the_owning_session():
     backend = FakeBackend()
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12}
+    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12, "session_id": "session-A"}
 
-    start_result = await execute_tool("start_diagnostics", {}, nucore_interface=backend)
-    step_result = await execute_tool("run_diagnostic_step", {"step": "conclude"}, nucore_interface=backend)
+    start_result = await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="session-A")
+    step_result = await execute_tool(
+        "run_diagnostic_step", {"step": "conclude"}, nucore_interface=backend, session_id="session-A"
+    )
 
     assert start_result == backend.start_result
-    assert backend.start_calls == [{}]
+    assert backend.start_calls == [{"session_id": "session-A"}]
     assert step_result == backend.step_result
-    assert backend.step_calls == [("conclude", {})]
+    assert backend.step_calls == [("conclude", {"session_id": "session-A"})]
+
+
+@pytest.mark.asyncio
+async def test_a_different_session_is_refused_even_for_the_diagnostics_tools():
+    backend = FakeBackend()
+    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12, "session_id": "session-A"}
+
+    start_result = await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="session-B")
+    step_result = await execute_tool(
+        "run_diagnostic_step", {"step": "conclude"}, nucore_interface=backend, session_id="session-B"
+    )
+
+    assert "error" in start_result
+    assert "error" in step_result
+    # never reached the backend -- refused at the gate
+    assert backend.start_calls == []
+    assert backend.step_calls == []
 
 
 @pytest.mark.asyncio
@@ -119,7 +155,7 @@ async def test_run_diagnostic_step_passes_step_and_params_through():
     )
 
     assert result == backend.step_result
-    assert backend.step_calls == [("check_device_links", {"device_id": "n001"})]
+    assert backend.step_calls == [("check_device_links", {"device_id": "n001", "session_id": None})]
 
 
 @pytest.mark.asyncio
@@ -128,7 +164,7 @@ async def test_run_diagnostic_step_defaults_params_to_empty_dict():
 
     await execute_tool("run_diagnostic_step", {"step": "get_full_system_config"}, nucore_interface=backend)
 
-    assert backend.step_calls == [("get_full_system_config", {})]
+    assert backend.step_calls == [("get_full_system_config", {"session_id": None})]
 
 
 @pytest.mark.asyncio

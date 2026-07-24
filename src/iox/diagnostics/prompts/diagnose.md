@@ -13,7 +13,15 @@ Call whichever of the steps below are actually relevant, in whatever order makes
 {
   "check_device_links": {
     "function": "_get_dev_links_table",
-    "description": "Get the link table for a specific device. Params: device_id (the device's address)."
+    "description": "Get the `device` link table for a specific device. Params: device_id (the device's address)."
+  },
+  "check_iox_links_for_device": {
+    "function": "_get_isy_links_table",
+    "description": "Get the `nucore` link table for a specific device. Params: device_id (the device's address)."
+  },
+  "get_all_plm_links": {
+    "function": "_get_all_plm_links",
+    "description": "Get all the links in the PLM"
   },
   "check_subsystem_status": {
     "function": "_check_subsystem_status",
