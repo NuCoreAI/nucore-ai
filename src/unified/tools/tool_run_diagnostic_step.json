@@ -1,0 +1,19 @@
+{
+  "name": "run_diagnostic_step",
+  "description": "Run one step of the diagnostic session currently in progress (opened via start_diagnostics -- see its response for the `instruction` and the list of steps under `available_tools`). Only usable while a session is in_progress; errors otherwise. Call as many steps as needed, in whatever order the instruction and the conversation with the customer call for -- there's no fixed sequence. When you have enough information to summarize the diagnosis, call the `conclude` step instead of continuing to call other steps -- this ends the session normally, so other tools become available again. If the customer wants to stop before you've reached a diagnosis, call `stop` instead.",
+  "input_schema": {
+    "type": "object",
+    "required": ["step"],
+    "properties": {
+      "step": {
+        "type": "string",
+        "description": "The exact step name from start_diagnostics' `available_tools` (e.g. \"check_device_links\", \"check_subsystem_status\", \"get_full_system_config\", \"conclude\", \"stop\") -- never invented."
+      },
+      "params": {
+        "type": "object",
+        "description": "Parameters the step needs, e.g. {\"device_id\": \"...\"} for check_device_links, {\"protocol\": \"Zigbee\"} for check_subsystem_status, or {\"summary\": \"...\"} for conclude (a short plain-language summary of the diagnosis, for the record). Omit or leave empty for steps that need nothing, like get_full_system_config or stop.",
+        "additionalProperties": true
+      }
+    }
+  }
+}

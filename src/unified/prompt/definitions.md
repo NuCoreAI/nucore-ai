@@ -50,6 +50,13 @@ real property/command/parameter ids and uom/precision, not display names — cal
 `get_device_detail` for every device it will reference before authoring code (see that tool's own
 description for the full grammar, which `get_routine_detail`'s result also follows).
 
+**Diagnosing problems** — When the customer describes a device or system problem you can't
+resolve with the normal device/routine/plugin tools (e.g. "my lights aren't responding", "IoX
+keeps rebooting"), call `start_diagnostics` to open a diagnostic session and get the instruction
+for how to investigate it, plus the steps you can call via `run_diagnostic_step`. Only one session
+can be open at a time, and it blocks every other tool until it concludes, times out, or is
+stopped — tell the customer that before starting one.
+
 # GLOBAL ID RULES
 
 - **Device/group ids** are always the exact `id` shown for that device/group in DEVICE DATABASE

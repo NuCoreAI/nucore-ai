@@ -512,32 +512,52 @@ class NuCoreInterface(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def get_diagnostics_map(self) -> list[dict[str, str]]:
+    async def start_diagnostics(self, **kwargs):
         """
-        Get the list of diagnostic functions this backend supports.
-        :return: list of {"function": <name>, "description": <text>} dicts --
-                 ``function`` is the identifier to pass to run_diagnostics().
+        Open (or re-show) the one diagnostic session -- there's a single
+        diagnostics flow, not a menu of named plans. The response carries an
+        "instruction" (loaded from a prompt) plus the shared catalog of steps
+        the model can call via run_diagnostic_step, guided by that
+        instruction and by what the customer actually described, instead of
+        the backend pre-mapping every complaint to a canned plan.
+
+        Only one session may be open at a time -- calling this again while
+        one is already in progress just re-shows the instruction/steps rather
+        than starting a new one.
+
+        :param kwargs: Optional candidate_devices/candidate_routines -- fuzzy
+                       devices/scenes/routines the caller identified as
+                       relevant, echoed back in every response for the
+                       session.
+        :return: {"status": "in_progress", "instruction", "available_tools", "candidates"?}
         """
-        raise NotImplementedError("Subclasses must implement the get_diagnostics_map method.")
+        raise NotImplementedError("Subclasses must implement the start_diagnostics method.")
 
     @abstractmethod
-    async def run_diagnostics(self, function: str, **kwargs):
+    async def run_diagnostic_step(self, step: str, **params):
         """
-        Run a diagnostic function by name.
-        :param function: One of the "function" values from get_diagnostics_map().
-        :param kwargs: Optional parameters the diagnostic function accepts.
-        :return: response from the diagnostic function, or None if failure.
+        Run one step of the diagnostic session currently in progress (see
+        start_diagnostics) -- the model picks which step to call, guided by
+        the standing instruction.
+        :param step: One of the step names from start_diagnostics' "available_tools".
+        :param params: Forwarded to the step's underlying function.
+        :return: {"step", "result"} on success, or {"error": ...}. The
+                 dedicated "conclude"/"stop" steps end the session instead,
+                 returning {"status": "completed", "summary"?} or
+                 {"status": "stopped", "result"}.
         """
-        raise NotImplementedError("Subclasses must implement the run_diagnostics method.")
+        raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
 
     @abstractmethod
     def get_running_diagnostic(self) -> dict[str, Any] | None:
         """
-        Return info about the diagnostic currently in flight, if any -- used
-        to gate every other tool call while one is running (see
+        Return info about the diagnostic session currently in flight, if
+        any -- used to gate every other tool call while one is running (see
         unified.dispatch.execute_tool): a single global lock, not scoped to
         any one session, so no per-session tracking is needed to enforce it.
-        :return: {"diagnostics": <name>, "status": "running", "elapsed_s": <int>}
+        Counts as "in flight" for its whole multi-step duration, not just its
+        initial call.
+        :return: {"status": "in_progress", "elapsed_s": <int>}
                  or None if nothing is running (including a stale/timed-out one).
         """
         raise NotImplementedError("Subclasses must implement the get_running_diagnostic method.")

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from iox.iox_diagnostics import IoXDiagnostics
+from iox.diagnostics.iox_diagnostics import IoXDiagnostics
 from iox.iox_wrapper import IoXWrapper
 
 

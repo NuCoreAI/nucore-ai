@@ -20,7 +20,7 @@ from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 from typing import Literal, Any
 from utils import get_logger
-from .iox_diagnostics import IoXDiagnostics
+from .diagnostics.iox_diagnostics import IoXDiagnostics
 
 logger = get_logger(__name__)
 
@@ -1358,18 +1358,26 @@ class IoXWrapper(NuCoreInterface):
     # IoXDiagnostics (self.diagnostics); these just satisfy NuCoreInterface.
     # ------------------------------------------------------------------
 
-    def get_diagnostics_map(self) -> list[dict[str, str]]:
+    async def start_diagnostics(self, **kwargs) -> Any:
         """
-        Get the list of diagnostic functions this backend supports.
-        :return: list of {"function", "description", "long_running"} dicts.
+        Open (or re-show) the diagnostic session -- see
+        IoXDiagnostics.start_diagnostics.
         """
-        return self.diagnostics.get_diagnostics_map()
+        return await self.diagnostics.start_diagnostics(**kwargs)
 
-    async def run_diagnostics(self, function: str, **kwargs) -> Any:
+    async def run_diagnostic_step(self, step: str, **params) -> Any:
         """
-        Run a diagnostic function by name -- see IoXDiagnostics.run_diagnostics.
+        Run one step of the in-progress diagnostic session -- see
+        IoXDiagnostics.run_diagnostic_step.
         """
-        return await self.diagnostics.run_diagnostics(function, **kwargs)
+        return await self.diagnostics.run_diagnostic_step(step, **params)
+
+    def get_running_diagnostic(self) -> dict[str, Any] | None:
+        """
+        Return info about the diagnostic currently in flight, if any -- see
+        IoXDiagnostics.get_running_diagnostic.
+        """
+        return self.diagnostics.get_running_diagnostic()
 
     def get_running_diagnostic(self) -> dict[str, Any] | None:
         """

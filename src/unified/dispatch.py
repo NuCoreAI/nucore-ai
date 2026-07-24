@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 # else is refused (see execute_tool). Not session-scoped: the lock lives on
 # nucore_interface itself (one shared backend), so this blocks every
 # session uniformly rather than needing per-session tracking.
-_DIAGNOSTICS_EXEMPT_TOOLS = frozenset({"run_diagnostics", "list_diagnostics"})
+_DIAGNOSTICS_EXEMPT_TOOLS = frozenset({"start_diagnostics", "run_diagnostic_step"})
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
 
@@ -44,8 +44,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_store_plugins": plugin_management.list_store_plugins,
     "list_purchased_plugins": plugin_management.list_purchased_plugins,
     "list_installed_plugins": plugin_management.list_installed_plugins,
-    "list_diagnostics": diagnostics.list_diagnostics,
-    "run_diagnostics": diagnostics.run_diagnostics,
+    "start_diagnostics": diagnostics.start_diagnostics,
+    "run_diagnostic_step": diagnostics.run_diagnostic_step,
 }
 
 
@@ -62,10 +62,10 @@ async def execute_tool(name: str, args: dict[str, Any], *, nucore_interface: NuC
         if running is not None:
             return {
                 "error": (
-                    f"a diagnostic ('{running['diagnostics']}') is currently running "
+                    f"a diagnostic session is currently in progress "
                     f"(started {running['elapsed_s']}s ago) -- no other actions can be performed until it "
-                    "finishes, times out, or is stopped. Ask the customer whether to stop it, then call "
-                    "run_diagnostics with the stop function's exact name from list_diagnostics, or wait."
+                    "concludes, times out, or is stopped. Ask the customer whether to stop it, then call "
+                    "run_diagnostic_step with step='stop', or wait."
                 )
             }
 

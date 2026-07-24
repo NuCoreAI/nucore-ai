@@ -1,6 +1,6 @@
-"""End-to-end: list_diagnostics/run_diagnostics dispatched through
+"""End-to-end: start_diagnostics/run_diagnostic_step dispatched through
 execute_tool -- confirms the thin pass-through to
-NuCoreInterface.get_diagnostics_map()/run_diagnostics().
+NuCoreInterface.start_diagnostics()/run_diagnostic_step().
 """
 
 from __future__ import annotations
@@ -14,17 +14,19 @@ from unified.dispatch import execute_tool
 class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
-        self.map_result = [{"function": "G_PLM_INFO", "description": "...", "long_running": False}]
-        self.run_calls: list[tuple] = []
-        self.run_result = {"function": "G_PLM_INFO", "status": "completed", "result": "ok"}
+        self.start_calls: list[tuple] = []
+        self.start_result = {"status": "in_progress", "instruction": "...", "available_tools": []}
+        self.step_calls: list[tuple] = []
+        self.step_result = {"step": "get_full_system_config", "result": "ok"}
         self.running_diagnostic = None
 
-    def get_diagnostics_map(self):
-        return self.map_result
+    async def start_diagnostics(self, **kwargs):
+        self.start_calls.append(kwargs)
+        return self.start_result
 
-    async def run_diagnostics(self, function, **kwargs):
-        self.run_calls.append((function, kwargs))
-        return self.run_result
+    async def run_diagnostic_step(self, step, **params):
+        self.step_calls.append((step, params))
+        return self.step_result
 
     def get_running_diagnostic(self):
         return self.running_diagnostic
@@ -55,74 +57,88 @@ class FakeBackend(NuCoreInterface):
 
 
 @pytest.mark.asyncio
-async def test_list_diagnostics_returns_backend_map():
+async def test_start_diagnostics_returns_backend_result():
     backend = FakeBackend()
-    result = await execute_tool("list_diagnostics", {}, nucore_interface=backend)
-    assert result == {"diagnostics": backend.map_result}
+    result = await execute_tool("start_diagnostics", {}, nucore_interface=backend)
+    assert result == backend.start_result
+    assert backend.start_calls == [{}]
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostics_passes_function_through():
-    backend = FakeBackend()
-    result = await execute_tool("run_diagnostics", {"function": "G_PLM_INFO"}, nucore_interface=backend)
-    assert result == backend.run_result
-    assert backend.run_calls == [("G_PLM_INFO", {})]
-
-
-@pytest.mark.asyncio
-async def test_run_diagnostics_passes_candidate_devices_and_routines_through():
+async def test_start_diagnostics_passes_candidate_devices_and_routines_through():
     backend = FakeBackend()
     candidate_devices = [{"device_id": "n001", "score": 0.9}]
     candidate_routines = [{"routine_id": "r001", "score": 0.8}]
 
     await execute_tool(
-        "run_diagnostics",
-        {"function": "G_PLM_INFO", "candidate_devices": candidate_devices, "candidate_routines": candidate_routines},
+        "start_diagnostics",
+        {"candidate_devices": candidate_devices, "candidate_routines": candidate_routines},
         nucore_interface=backend,
     )
 
-    assert backend.run_calls == [
-        ("G_PLM_INFO", {"candidate_devices": candidate_devices, "candidate_routines": candidate_routines})
-    ]
+    assert backend.start_calls == [{"candidate_devices": candidate_devices, "candidate_routines": candidate_routines}]
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostics_omits_candidate_kwargs_when_absent():
+async def test_start_diagnostics_omits_candidate_kwargs_when_absent():
     backend = FakeBackend()
-    await execute_tool("run_diagnostics", {"function": "G_PLM_INFO"}, nucore_interface=backend)
-    assert backend.run_calls == [("G_PLM_INFO", {})]
-
-
-@pytest.mark.asyncio
-async def test_run_diagnostics_requires_function():
-    backend = FakeBackend()
-    result = await execute_tool("run_diagnostics", {}, nucore_interface=backend)
-    assert "error" in result
-    assert backend.run_calls == []
+    await execute_tool("start_diagnostics", {}, nucore_interface=backend)
+    assert backend.start_calls == [{}]
 
 
 @pytest.mark.asyncio
 async def test_other_tools_are_blocked_while_a_diagnostic_is_running():
     backend = FakeBackend()
-    backend.running_diagnostic = {"diagnostics": "G_ALL_PLM_LINKS", "status": "running", "elapsed_s": 12}
+    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12}
 
     result = await execute_tool("get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend)
 
     assert "error" in result
-    assert "G_ALL_PLM_LINKS" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostics_and_list_diagnostics_stay_exempt_from_the_lock():
+async def test_start_diagnostics_and_run_diagnostic_step_stay_exempt_from_the_lock():
     backend = FakeBackend()
-    backend.running_diagnostic = {"diagnostics": "G_ALL_PLM_LINKS", "status": "running", "elapsed_s": 12}
+    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12}
 
-    list_result = await execute_tool("list_diagnostics", {}, nucore_interface=backend)
-    run_result = await execute_tool("run_diagnostics", {"function": "STOP"}, nucore_interface=backend)
+    start_result = await execute_tool("start_diagnostics", {}, nucore_interface=backend)
+    step_result = await execute_tool("run_diagnostic_step", {"step": "conclude"}, nucore_interface=backend)
 
-    assert list_result == {"diagnostics": backend.map_result}
-    assert run_result == backend.run_result
-    assert backend.run_calls == [("STOP", {})]
+    assert start_result == backend.start_result
+    assert backend.start_calls == [{}]
+    assert step_result == backend.step_result
+    assert backend.step_calls == [("conclude", {})]
+
+
+@pytest.mark.asyncio
+async def test_run_diagnostic_step_passes_step_and_params_through():
+    backend = FakeBackend()
+
+    result = await execute_tool(
+        "run_diagnostic_step", {"step": "check_device_links", "params": {"device_id": "n001"}}, nucore_interface=backend
+    )
+
+    assert result == backend.step_result
+    assert backend.step_calls == [("check_device_links", {"device_id": "n001"})]
+
+
+@pytest.mark.asyncio
+async def test_run_diagnostic_step_defaults_params_to_empty_dict():
+    backend = FakeBackend()
+
+    await execute_tool("run_diagnostic_step", {"step": "get_full_system_config"}, nucore_interface=backend)
+
+    assert backend.step_calls == [("get_full_system_config", {})]
+
+
+@pytest.mark.asyncio
+async def test_run_diagnostic_step_requires_step():
+    backend = FakeBackend()
+
+    result = await execute_tool("run_diagnostic_step", {}, nucore_interface=backend)
+
+    assert "error" in result
+    assert backend.step_calls == []
 
 
 @pytest.mark.asyncio

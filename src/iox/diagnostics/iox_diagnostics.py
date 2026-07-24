@@ -10,6 +10,9 @@ surface every backend needs.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from xml.sax.saxutils import escape as xml_escape
 import xml.etree.ElementTree as ET
@@ -22,7 +25,7 @@ if TYPE_CHECKING:
     # so a runtime import here would be circular. Only needed for the type
     # hint below -- `from __future__ import annotations` already defers
     # evaluation of the annotation itself.
-    from .iox_wrapper import IoXWrapper
+    from ..iox_wrapper import IoXWrapper
 
 logger = get_logger(__name__)
 
@@ -88,55 +91,23 @@ class IoXSOAPAction:
     SOAP_TYPE_SET_BATTERY_DEVICE_WRITE_MODE = "SetBatteryDeviceWriteMode"
     SOAP_TYPE_SET_BATCH_MODE = "SetBatchMode"
 
-STOP_LONG_RUNNING_DIAGNOSTIC = "Stop Long Running Diagnostic"
-
-_IOX_DIAGNOSTICS_PLAN_REGISTRY: dict[str, Any] = {
-    # Diagnostics plans are functions that combine more than one low level diagnostics operations into a single plan.
-    # For example, why am I not getting any status feedback from my devices
-    # The key is what is presented to the user, the value is a dict with the following keys:
-    # - "function": the function name to call in IoXDiagnostics
-    # - "description": a string describing the plan
-    # - "clarification": an optional string with a clarification question to ask the user
-    # - "long_running": a boolean indicating if the plan is long running
-
-    "No Device Feedback": {
-        "function": "no_device_feedback",
-        "description": "Check why your device(s) are not providing status feedback to IoX", 
-        "long_running": True,
-    },
-    "No Device Communication": {
-        "function": "no_device_communication",
-        "description": "Check why your device(s) are not communicating with IoX",
-        "clarification": [
-            "Are you experiencing this issue with a single device or multiple devices?",
-            "What type of device(s) are you having issues with (e.g. Zigbee, Z-Wave, Matter, INSTEON, etc.)?"
-            ],
-        "long_running": True,
-    },
-    "No Remote Connectivity": {
-        "function": "no_remote_connectivity",
-        "description": "Check why your IoX is not reachable remotely",
-        "long_running": False
-    },
-    "Random Reboots": {
-        "function": "random_reboots",
-        "description": "Check why your IoX is randomly rebooting",
-        "long_running": True,
-    },
-    "Random All On": {
-        "function": "random_all_on",
-        "description": "Check why all your IoX devices are turning on randomly",
-        "clarification": [
-            "Give me as least two devices that exhibited this behavior, and approximate time of the event"
-        ],
-        "long_running": False,
-    },
-    STOP_LONG_RUNNING_DIAGNOSTIC: {
-        "function": "stop_long_running_diagnostic",
-        "description": "Stop any long running diagnostic that is currently running",
-        "long_running": False,
-    }, 
-}
+# One diagnostics flow, not a menu of named plans: start_diagnostics opens a
+# session and hands the model an instruction plus a catalog of steps it can
+# call via run_diagnostic_step, guided by that instruction and by what the
+# customer actually described -- the same way Bash is one general tool
+# steered by prompt convention, not a different tool per task -- instead of
+# the backend pre-mapping every complaint to a canned plan name.
+#
+# The step catalog (name -> {"function", "description"}) lives entirely in
+# prompts/diagnose.md as a fenced ```json block -- NOT duplicated as a second,
+# hand-maintained registry here. IoXDiagnostics.__init__ parses that block and
+# validates every declared "function" resolves to a real callable method,
+# failing loudly at construction time if the prompt and the code have drifted
+# apart (malformed JSON, or a function name that no longer exists) -- the
+# prompt file is the single source of truth; this class only validates and
+# dispatches against it.
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+_JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
 class Subsystems:
     INSTEON = "_0"
@@ -148,20 +119,24 @@ class Subsystems:
 class IoXDiagnostics:
     """Wrapper around an :class:`IoXWrapper` instance providing
     ``DeviceSpecific`` SOAP diagnostic operations, plus the diagnostics
-    registry/dispatch logic backing ``NuCoreInterface``'s
-    ``get_diagnostics_map``/``run_diagnostics``/``get_running_diagnostic``
+    session/dispatch logic backing ``NuCoreInterface``'s
+    ``start_diagnostics``/``run_diagnostic_step``/``get_running_diagnostic``
     (``IoXWrapper`` just delegates to this class for those).
     """
 
-    # How long a long-running diagnostic can stay "running" before a stale
-    # lock is cleared automatically and a new call is allowed through.
+    # How long a diagnostic session can stay open (without conclude/stop)
+    # before a stale lock is cleared automatically and a new one is allowed.
     _DIAGNOSTICS_TIMEOUT_S = 300  # 5 minutes
 
     def __init__(self, iox_wrapper: IoXWrapper) -> None:
         self._iox_wrapper = iox_wrapper
-        # Tracks the one in-flight diagnostic (see run_diagnostics) --
-        # {"function", "started_at", "status", "result"} or None.
+        # Tracks the one in-flight diagnostic session (see start_diagnostics)
+        # -- {"started_at", "status", "candidates"} or None.
         self._diagnostics_state: dict[str, Any] | None = None
+        # Parses and validates prompts/diagnose.md once -- fails loudly here,
+        # at construction, rather than serving a broken diagnostics feature
+        # if the prompt and this class's methods have drifted apart.
+        self._diagnostic_instruction, self._diagnostic_steps = self._load_diagnostic_config()
         self._subsystem_state: dict[str, Any] | None = {
             Subsystems.INSTEON: {
                 "name": "Insteon",
@@ -197,43 +172,6 @@ class IoXDiagnostics:
         }
 
 
-    def get_diagnostics_map(self) -> list[dict[str, str]]:
-        """
-        Get the list of diagnostic functions this backend supports.
-        :return: list of {"name", "description",  "long_running"} dicts.
-        """
-        return [
-            {"name": name, "description": meta["description"], "long_running": meta["long_running"]}
-            for name, meta in _IOX_DIAGNOSTICS_PLAN_REGISTRY.items()
-        ]
-
-    def _run_diagnostic_plan(self, function, candidates, **kwargs) -> Any:
-        """Runs one DeviceSpecific SOAP call synchronously. This class's
-        methods are ``async def`` in name only -- soap_post is a blocking
-        ``requests`` call underneath, nothing is actually awaited -- so this
-        is safe to invoke via asyncio.to_thread from _run_long_diagnostic to
-        keep a multi-minute diagnostic off the event loop."""
-        return asyncio.run(
-            function(candidates=candidates, **kwargs)
-        )
-
-    async def _run_long_diagnostic(self, name: str, function, candidates, **kwargs) -> None:
-        """Runs *name* in a worker thread and records the outcome on
-        self._diagnostics_state once it finishes -- scheduled as a
-        fire-and-forget task by run_diagnostics so starting a long-running
-        diagnostic doesn't block the tool call (or the event loop) for its
-        full duration."""
-        try:
-            result = await asyncio.to_thread(self._run_diagnostic_plan, function, candidates, **kwargs)
-            if self._diagnostics_state is not None and self._diagnostics_state["name"] == name:
-                self._diagnostics_state["status"] = "completed"
-                self._diagnostics_state["result"] = result
-        except Exception as ex:
-            logger.error(f"long-running diagnostic '{name}' failed: {ex}")
-            if self._diagnostics_state is not None and self._diagnostics_state["name"] == name:
-                self._diagnostics_state["status"] = "error"
-                self._diagnostics_state["result"] = str(ex)
-
     @staticmethod
     def _candidates_payload(
         candidate_devices: list[dict[str, Any]] | None,
@@ -247,153 +185,182 @@ class IoXDiagnostics:
             return None
         return {"devices": candidate_devices or [], "routines": candidate_routines or []}
 
-    async def run_diagnostics(
+    def _load_diagnostic_config(self) -> tuple[str, dict[str, dict[str, Any]]]:
+        """Read prompts/diagnose.md and parse/validate it -- see
+        _parse_diagnostic_config."""
+        text = (_PROMPTS_DIR / "diagnose.md").read_text(encoding="utf-8").strip()
+        return self._parse_diagnostic_config(text)
+
+    def _parse_diagnostic_config(self, text: str) -> tuple[str, dict[str, dict[str, Any]]]:
+        """Parse *text* (diagnose.md's content) and return
+        ``(full_text, step_registry)`` -- the full text (prose + the fenced
+        ```json block) is shown to the model verbatim as the "instruction";
+        the ```json block is additionally parsed out and validated here so
+        the file stays the single source of truth for both the model-facing
+        description of each step and the name -> backend-function it
+        dispatches to.
+
+        Raises ``RuntimeError`` if the ```json block is missing/malformed, or
+        if any declared "function" doesn't resolve to a real callable method
+        on this class -- either means the prompt and the code have drifted
+        apart, and that should fail loudly rather than silently misbehave.
+        """
+        match = _JSON_BLOCK_RE.search(text)
+        if not match:
+            raise RuntimeError("diagnose.md is missing its ```json steps block")
+
+        try:
+            steps = json.loads(match.group(1))
+        except json.JSONDecodeError as ex:
+            raise RuntimeError(f"diagnose.md's ```json steps block is malformed: {ex}") from ex
+
+        for name, meta in steps.items():
+            function_name = meta.get("function")
+            if function_name is not None and not callable(getattr(self, function_name, None)):
+                raise RuntimeError(
+                    f"diagnose.md declares step '{name}' -> function '{function_name}', "
+                    "but IoXDiagnostics has no such method"
+                )
+
+        return text, steps
+
+    async def start_diagnostics(
         self,
-        name: str,
         *,
         candidate_devices: list[dict[str, Any]] | None = None,
         candidate_routines: list[dict[str, Any]] | None = None,
-        **kwargs,
     ) -> Any:
         """
-        Run a diagnostic function by name -- see get_diagnostics_map() for
-        the available functions.
+        Open (or re-show) the one diagnostic session -- there's a single
+        diagnostics flow, not a menu of named plans. The model reads the
+        returned instruction, calls whichever steps (see run_diagnostic_step)
+        are relevant to whatever the customer actually described, in whatever
+        order makes sense, and ends the session with the "conclude" step (or
+        "stop" to abandon early without a diagnosis).
 
-        Only one diagnostic may be in flight at a time. Calling this while a
-        long-running one is active returns an error instead of starting a
-        second one (rather than silently queueing or clobbering it) -- the
-        caller should relay that to the customer and ask whether to stop the
-        running one, which is exactly what the "STOP" function does; it is
-        always allowed through even while another diagnostic is active. A
-        long-running diagnostic that's been "running" longer than
-        _DIAGNOSTICS_TIMEOUT_S is treated as dead and its lock cleared
-        automatically.
+        Only one session may be open at a time -- calling this again while
+        one is already in progress just re-shows the instruction/steps rather
+        than starting a new one. A session left open longer than
+        _DIAGNOSTICS_TIMEOUT_S is treated as abandoned and cleared
+        automatically, allowing a fresh one to start.
 
-        :param name: One of the "name" values from get_diagnostics_map().
         :param candidate_devices: Optional devices/groups/scenes the caller
-                       identified as relevant to this diagnostic (e.g. a fuzzy
-                       "master bathroom" reference). Every registered
-                       diagnostic is still a fixed, argument-less trigger --
-                       this doesn't change which SOAP call runs -- it's
-                       recorded on the run and echoed back in every response
-                       for that run so it's clear what the diagnostic
-                       concerns, for functions that may target a specific
-                       device later.
+                       identified as relevant (e.g. a fuzzy "master bathroom"
+                       reference) -- recorded on the session and echoed back
+                       in every response for it.
         :param candidate_routines: Same idea as candidate_devices, but for
                        routines/folders.
-        :param kwargs: Unused today. Present for interface compatibility with
-                       functions that may need them later.
-        :return: response from the diagnostic function, or None if failure.
+        :return: {"status": "in_progress", "instruction", "available_tools", "candidates"?}
         """
-        if name not in _IOX_DIAGNOSTICS_PLAN_REGISTRY:
-            return {"error": f"'{name}' is not a known diagnostic function; call get_diagnostics_map() first"}
-
-        diag_plan = _IOX_DIAGNOSTICS_PLAN_REGISTRY[name]
-        if not diag_plan["function"]:
-            return {"error": f"Diagnostic plan for '{name}' is not properly configured"}
-
-        function=diag_plan["function"]
-        # does this function exist in our class?
-        function=getattr(self, function, None)
-
-        if (function is None) or (not callable(function)):
-            return {"error": f"Diagnostic function for '{name}' is not implemented! "}
-
-        if name == STOP_LONG_RUNNING_DIAGNOSTIC:
-            result = await self.stop_long_running_diagnostic()
-            self._diagnostics_state = None
-            return {"diagnostics": name, "status": "stopped", "result": result}
-
         state = self._diagnostics_state
-
-        # Polling the one this session is already tracking (same function) --
-        # never re-starts it, whatever its status. Candidates passed on a
-        # poll call are ignored; only what the run actually started with
-        # (state["candidates"]) is echoed back.
-        if state is not None and state["name"] == name:
-            candidates = state.get("candidates")
-            if state["status"] == "running":
-                elapsed = time.monotonic() - state["started_at"]
-                if elapsed >= self._DIAGNOSTICS_TIMEOUT_S:
-                    logger.warning(f"diagnostic '{name}' exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing")
-                    self._diagnostics_state = None
-                    return {"diagnostics": state["name"], "status": "timed_out"}
-                response = {"diagnostics": state["name"], "status": "running", "elapsed_s": int(elapsed)}
+        if state is not None:
+            elapsed = time.monotonic() - state["started_at"]
+            if elapsed < self._DIAGNOSTICS_TIMEOUT_S:
+                candidates = state.get("candidates")
+                response = {
+                    "status": "in_progress",
+                    "instruction": self._diagnostic_instruction,
+                    "available_tools": list(self._diagnostic_steps.keys()),
+                    "elapsed_s": int(elapsed),
+                }
                 if candidates:
                     response["candidates"] = candidates
                 return response
-            # Completed or errored -- hand back the result once, then clear
-            # so a later call starts a genuinely fresh run instead of
-            # re-serving a stale cached result forever.
-            self._diagnostics_state = None
-            response = {"diagnostics": state["name"], "status": state["status"], "result": state["result"]}
-            if candidates:
-                response["candidates"] = candidates
-            return response
-
-        # A *different* diagnostic is active -- true conflict.
-        if state is not None:
-            if state["status"] == "running":
-                elapsed = time.monotonic() - state["started_at"]
-                if elapsed < self._DIAGNOSTICS_TIMEOUT_S:
-                    return {
-                        "error": (
-                            f"'{state['name']}' is already running "
-                            f"(started {int(elapsed)}s ago, times out after {self._DIAGNOSTICS_TIMEOUT_S}s); "
-                            f"ask the customer whether to stop it -- call run_diagnostics with function="
-                            f"'{STOP_LONG_RUNNING_DIAGNOSTIC}' to stop it -- or wait for it to finish"
-                        )
-                    }
-                logger.warning(f"diagnostic '{state['name']}' exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing stale lock")
+            logger.warning(f"diagnostic session exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing stale lock")
             self._diagnostics_state = None
 
         candidates = self._candidates_payload(candidate_devices, candidate_routines)
-
-        if not diag_plan["long_running"]:
-            # now call the function
-            result = await function(candidates=candidates, **kwargs)
-            response = {"diagnostics": name, "status": "completed", "result": result}
-            if candidates:
-                response["candidates"] = candidates
-            return response
-
         self._diagnostics_state = {
-            "name": name,
-            "function": function,
             "started_at": time.monotonic(),
-            "status": "running",
-            "result": None,
+            "status": "in_progress",
             "candidates": candidates,
         }
-        asyncio.create_task(self._run_long_diagnostic(name, function, candidates, **kwargs))
         response = {
-            "diagnostics": name,
-            "status": "started",
-            "note": (
-                f"this can take up to {self._DIAGNOSTICS_TIMEOUT_S}s; call run_diagnostics again with this "
-                f"same diagnostic plan to check on it, or with function="
-                f"'{STOP_LONG_RUNNING_DIAGNOSTIC}' to stop it"
-            ),
+            "status": "in_progress",
+            "instruction": self._diagnostic_instruction,
+            "available_tools": list(self._diagnostic_steps.keys()),
         }
         if candidates:
             response["candidates"] = candidates
         return response
 
+    def _run_diagnostic_step_sync(self, function, params: dict[str, Any]) -> Any:
+        """Runs one step's backend call synchronously. This class's methods
+        are ``async def`` in name only -- the SOAP/HTTP calls underneath are
+        blocking ``requests`` calls, nothing is actually awaited -- so this is
+        safe to invoke via asyncio.to_thread in run_diagnostic_step to keep a
+        slow step (e.g. get_full_system_config's several sequential HTTP
+        calls) off the real event loop."""
+        return asyncio.run(function(**params))
+
+    async def run_diagnostic_step(self, step: str, **params) -> Any:
+        """
+        Run one step of the diagnostic session currently in progress (see
+        start_diagnostics) -- the model picks which step to call and with
+        what params, guided by the standing instruction, instead of the
+        backend pre-scripting a fixed sequence.
+
+        :param step: One of the step names declared in prompts/diagnose.md
+                     (also returned as start_diagnostics' "available_tools").
+        :param params: Forwarded verbatim to the step's underlying function.
+        :return: {"step", "result"} on success, or {"error": ...}. The
+                 dedicated "conclude"/"stop" steps instead end the session,
+                 returning {"status": "completed", "summary"?} or
+                 {"status": "stopped", "result"}.
+        """
+        state = self._diagnostics_state
+        if state is None or state["status"] != "in_progress":
+            return {"error": "no diagnostic session is in progress -- call start_diagnostics first"}
+
+        elapsed = time.monotonic() - state["started_at"]
+        if elapsed >= self._DIAGNOSTICS_TIMEOUT_S:
+            logger.warning(f"diagnostic session exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing")
+            self._diagnostics_state = None
+            return {"status": "timed_out"}
+
+        if step not in self._diagnostic_steps:
+            return {"error": f"'{step}' is not a known diagnostic step; see start_diagnostics' available_tools"}
+
+        if step == "conclude":
+            self._diagnostics_state = None
+            return {"status": "completed", "summary": params.get("summary")}
+
+        if step == "stop":
+            self._diagnostics_state = None
+            result = await asyncio.to_thread(self._run_diagnostic_step_sync, self.stop_long_running_diagnostic, {})
+            return {"status": "stopped", "result": result}
+
+        function_name = self._diagnostic_steps[step].get("function")
+        function = getattr(self, function_name, None) if function_name else None
+        if function is None or not callable(function):
+            return {"error": f"diagnostic step '{step}' is not yet implemented"}
+
+        try:
+            result = await asyncio.to_thread(self._run_diagnostic_step_sync, function, params)
+        except NotImplementedError as ex:
+            return {"error": str(ex)}
+        except Exception as ex:
+            logger.error(f"diagnostic step '{step}' failed: {ex}")
+            return {"error": f"diagnostic step '{step}' failed: {ex}"}
+
+        return {"step": step, "result": result}
+
     def get_running_diagnostic(self) -> dict[str, Any] | None:
         """
-        Return info about the diagnostic currently in flight, if any -- used
-        by unified.dispatch.execute_tool to block every other tool call
-        while one is running. A stale (past-timeout) "running" state is
-        reported as None -- run_diagnostics clears it on the next real call,
+        Return info about the diagnostic session currently in flight, if
+        any -- used by unified.dispatch.execute_tool to block every other
+        tool call for the whole multi-step session, not just its initial
+        call. A stale (past-timeout) session is reported as None --
+        start_diagnostics/run_diagnostic_step clear it on the next real call,
         this getter just doesn't advertise it as active in the meantime.
         """
         state = self._diagnostics_state
-        if state is None or state["status"] != "running":
+        if state is None:
             return None
         elapsed = time.monotonic() - state["started_at"]
         if elapsed >= self._DIAGNOSTICS_TIMEOUT_S:
             return None
-        response = {"diagnostics": state["name"], "status": "running", "elapsed_s": int(elapsed)}
+        response = {"status": "in_progress", "elapsed_s": int(elapsed)}
         candidates = state.get("candidates")
         if candidates:
             response["candidates"] = candidates
@@ -559,23 +526,6 @@ class IoXDiagnostics:
     async def stop_long_running_diagnostic(self) -> str | None:
         return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
 
-    async def no_device_feedback(self, candidates=None, **kwargs) -> str | None:
-        full_config = await self._get_full_system_config()
-
-        return  {"diagnostics": "No Device Feedback", "status": "completed", "results": full_config}
-
-    async def no_device_communication(self, candidates=None, **kwargs) -> str | None:
-        return  {"diagnostics": "No Device Communication", "status": "completed"}
-
-    async def no_remote_connectivity(self, candidates=None, **kwargs) -> str | None:
-        return  {"diagnostics": "No Remote Connectivity", "status": "completed"}
-
-    async def random_reboots(self, candidates=None, **kwargs) -> str | None:
-        return  {"diagnostics": "Random Reboots", "status": "completed"}
-
-    async def random_all_on(self, candidates=None, **kwargs) -> str | None:
-        return  {"diagnostics": "Random All On", "status": "completed"}
-
     # get system configuration
     async def _get_full_system_config(self) -> dict [str, str] | None:
         full_config = {}
@@ -703,10 +653,25 @@ class IoXDiagnostics:
 
     async def _get_all_plm_links(self) -> str | None:
         return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
-    async def _get_dev_links_table(self) -> str | None:
-        return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, None, None, 0x01, None)
+    async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        # NOTE: assumes `node` here accepts the same device address used
+        # elsewhere in this system (e.g. get_property's device_id) --
+        # unconfirmed against real hub behavior; flag/verify before relying
+        # on this for a real customer-facing diagnosis.
+        return await self._send_device_specific_with_option(
+            IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, None
+        )
     async def _get_isy_links_table(self) -> str | None:
         return await self._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, None, None, 0x01, None)
+
+    async def _check_subsystem_status(self, protocol: str = None, **kwargs) -> Any:
+        """Per-protocol status check for the "check_subsystem_status" step --
+        NOT YET IMPLEMENTED. _get_full_system_config only aggregates whole-
+        system state today; there's no per-protocol query yet. Needs the real
+        per-protocol data/endpoint before this can do anything meaningful."""
+        raise NotImplementedError(
+            "check_subsystem_status is not yet implemented -- per-protocol status data isn't wired up yet"
+        )
 
     # add node
     async def _add_node(self) -> str | None:
