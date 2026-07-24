@@ -27,6 +27,41 @@ logger = get_logger(__name__)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+def xml_elem_to_obj(elem):
+    if elem is None:
+        return None
+
+    children = list(elem)
+    text = (elem.text or "").strip()
+
+    # Leaf node
+    if not children:
+        if elem.attrib:
+            out = {"@attrs": dict(elem.attrib)}
+            if text:
+                out["#text"] = text
+            return out if out else None
+        return text if text else None
+
+    # Node with children
+    out = {}
+    if elem.attrib:
+        out["@attrs"] = dict(elem.attrib)
+    if text:
+        out["#text"] = text
+
+    for child in children:
+        value = xml_elem_to_obj(child)
+        tag = child.tag
+
+        if tag in out:
+            if not isinstance(out[tag], list):
+                out[tag] = [out[tag]]
+            out[tag].append(value)
+        else:
+            out[tag] = value
+
+    return out
 
 class IoXWrapper(NuCoreInterface):
     """Direct HTTP/WebSocket wrapper for the Universal Devices IoX (ISY) controller.
@@ -1379,13 +1414,6 @@ class IoXWrapper(NuCoreInterface):
         """
         return self.diagnostics.get_running_diagnostic()
 
-    def get_running_diagnostic(self) -> dict[str, Any] | None:
-        """
-        Return info about the diagnostic currently in flight, if any -- see
-        IoXDiagnostics.get_running_diagnostic.
-        """
-        return self.diagnostics.get_running_diagnostic()
-
     # ------------------------------------------------------------------
     # WebSocket event subscription
     # ------------------------------------------------------------------
@@ -1483,7 +1511,8 @@ class IoXWrapper(NuCoreInterface):
                                     'node': node.text if node is not None else None,
                                     'fmtAct': fmtAct.text if fmtAct is not None else None,
                                     'fmtName': fmtName.text if fmtName is not None else None,
-                                    'eventInfo': eventInfo.text if eventInfo is not None else None
+                                    # parsed structure (works for text OR nested tags)
+                                    'eventInfo': xml_elem_to_obj(eventInfo),
                                 }
                                 await on_message_callback(event_data)
                             except Exception as ex:
@@ -2013,3 +2042,5 @@ class IoXWrapper(NuCoreInterface):
             self.routines_changed = True # just to be on the safe side
         elif control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
             self.diagnostics.on_device_event(node, control, action, eventInfo)
+        elif control == "_2": # variable write pending
+            self.diagnostics.update_links_table(node, control, action, eventInfo)
