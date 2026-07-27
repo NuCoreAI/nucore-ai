@@ -11,25 +11,25 @@ Call whichever of the steps below are actually relevant, in whatever order makes
 
 ```json
 {
-  "check_device_links": {
-    "function": "_get_dev_links_table",
-    "description": "Get the `device` link table for a specific device. Params: device_id (the device's address)."
-  },
-  "check_iox_links_for_device": {
-    "function": "_get_isy_links_table",
-    "description": "Get the `nucore` link table for a specific device. Params: device_id (the device's address)."
-  },
-  "get_all_plm_links": {
-    "function": "_get_all_plm_links",
-    "description": "Get all the links in the PLM"
-  },
-  "check_subsystem_status": {
-    "function": "_check_subsystem_status",
-    "description": "Check enabled/connected status for one protocol subsystem. Params: protocol (e.g. \"Zigbee\", \"Z-Wave\", \"INSTEON\", \"Matter\"). Not yet implemented -- expect an error."
-  },
-  "get_full_system_config": {
+  "get full system config": {
     "function": "_get_full_system_config",
     "description": "Get the full system configuration: subsystem states, PLM info, versions, available upgrades. No params."
+  },
+  "get device family":{
+    "function": "_get_device_family",
+    "description": "Returns insteon, z-wave, zigbee, matter, plugin, or unknown. You need this information before can do any diagnostics"
+  },
+  "check device links": {
+    "function": "_get_dev_links_table",
+    "description": "INSTEON ONLY. Get the `device` link table for a specific device. Params: device_id (the device's address)."
+  },
+  "check iox links for device": {
+    "function": "_get_isy_links_table",
+    "description": "INSTEON ONLY. Get the `nucore` link table for a specific device. Params: device_id (the device's address)."
+  },
+  "get all plm links": {
+    "function": "_get_all_plm_links",
+    "description": "INSTEON ONLY. Get all the links in the PLM"
   },
   "conclude": {
     "function": null,

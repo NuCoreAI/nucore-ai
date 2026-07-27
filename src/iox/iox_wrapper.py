@@ -20,7 +20,9 @@ from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 from typing import Literal, Any
 from utils import get_logger
+from xml.sax.saxutils import escape as xml_escape
 from .diagnostics.iox_diagnostics import IoXDiagnostics
+from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER
 
 logger = get_logger(__name__)
 
@@ -290,6 +292,114 @@ class IoXWrapper(NuCoreInterface):
         if headers:
             soap_headers.update(headers)
         return self.post(path, body, soap_headers)
+
+    def _get_soap_envelope(self, soap_action: str, inner: str) -> str:
+        """Wrap *inner* (the already-built ``<command>``/``<node>``/... element
+        block) in the DeviceSpecific SOAP envelope."""
+        return (
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            "<s:Body>"
+            f'<u:{soap_action} xmlns:u="urn:udi-com:service:X_Insteon_Lighting_Service:1">'
+            f"{inner if inner else ''}"
+            f"</u:{soap_action}>"
+            "</s:Body>"
+            "</s:Envelope>"
+        )
+
+    async def _submit_soap_request(self, soap_action: str, inner_body: str) -> str | None:
+        """POST *inner_body* wrapped in the SOAP envelope for *soap_action*;
+        returns the raw response body text, or ``None`` on a connection error
+        or non-200 response (mirrors the Java method returning ``null`` when
+        ``resp == null`` or ``!resp.opStat``)."""
+        envelope = self._get_soap_envelope(soap_action, inner_body)
+        response = self.soap_post("/services", envelope, soap_action=soap_action)
+        if response is None or response.status_code != 200:
+            return None
+        return response.text
+
+    async def _submit_device_specific(self, inner_body: str) -> str | None:
+        """POST *inner_body* wrapped in the DeviceSpecific SOAP envelope;
+        equivalent to the Java client's ``submitSOAPRequest`` (minus HMAC
+        signing -- not carried over per instruction). Returns the raw
+        response body text, or ``None`` on a connection error or non-200
+        response (mirrors the Java method returning ``null`` when
+        ``resp == null`` or ``!resp.opStat``)."""
+        response = await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_DEVICE_SPECIFIC, inner_body)
+        return response
+        
+    async def _send_device_specific(
+        self,
+        command: str = None,
+        node: str = None,
+        param1: str = None,
+        param2: str = None,
+        param3: str = None,
+        specs: str = None,
+    ) -> str | None:
+        """Device-specific (e.g. Insteon) operation that isn't a generic ISY
+        service -- three free-form parameter slots (``p1``/``p2``/``p3``).
+
+        Port of the Java SDK's ``sendDeviceSpecific(command, node, param1,
+        param2, param3, specs)`` overload, via ``IoXWrapper.soap_post``.
+
+        Args:
+            command: The command to perform.
+            node:    The affected node's address.
+            param1:  Optional parameter 1 (``<p1>``).
+            param2:  Optional parameter 2 (``<p2>``).
+            param3:  Optional parameter 3 (``<p3>``).
+            specs:   Optional raw XML document to embed in ``<CDATA>``,
+                     unescaped exactly as the caller supplies it -- this is
+                     meant to carry an XML document, not plain text.
+
+        Returns:
+            The raw response body text, or ``None`` on failure.
+        """
+        inner = (
+            f"<command>{xml_escape(command or '')}</command>"
+            f"<node>{xml_escape(node or '')}</node>"
+            f"<p1>{xml_escape(param1 or '')}</p1>"
+            f"<p2>{xml_escape(param2 or '')}</p2>"
+            f"<p3>{xml_escape(param3 or '')}</p3>"
+            "<flag>0</flag>"
+            f"<CDATA>{specs or ''}</CDATA>"
+        )
+        return await self._submit_device_specific(inner)
+
+    async def _send_device_specific_with_option(
+        self,
+        command: str = None,
+        node: str = None,
+        option: str = None,
+        flag: int = 0,
+        specs: str = None,
+    ) -> str | None:
+        """Device-specific (e.g. Insteon) operation taking a single ``option``
+        plus a flag character, instead of three ``p1``/``p2``/``p3`` slots.
+
+        Port of the Java SDK's ``sendDeviceSpecific(command, node, option,
+        flag, specs)`` overload, via ``IoXWrapper.soap_post``.
+
+        Args:
+            command: The command to perform.
+            node:    The affected node's address.
+            option:  Optional parameter (``<option>``).
+            flag:    Optional hex value (0-255) to send in the ``<flag>`` element; if empty, ``0`` is sent.
+            specs:   Optional raw XML document to embed in ``<CDATA>``,
+                     unescaped exactly as the caller supplies it.
+
+        Returns:
+            The raw response body text, or ``None`` on failure.
+        """
+        flag_value = int(flag) if flag else 0
+        inner = (
+            f"<command>{xml_escape(command or '')}</command>"
+            f"<node>{xml_escape(node or '')}</node>"
+            f"<option>{xml_escape(option or '')}</option>"
+            f"<flag>{flag_value}</flag>"
+            f"<CDATA>{specs or ''}</CDATA>"
+        )
+        return await self._submit_device_specific(inner)
 
     # ------------------------------------------------------------------
     # IoX REST helpers
@@ -582,6 +692,17 @@ class IoXWrapper(NuCoreInterface):
             logger.error(out)
             return False, out
         return True, None
+    
+    def _get_node(self, node_id: str):
+        """
+        Determine the family of a given node ID.
+        if not found, return None and log an error.
+        if found, return family and the node
+        """
+        if not node_id:
+            logger.error("Node ID is empty.")
+            return None
+        return self.nodes.get(node_id, None)  # Return None if node_id not found
     
     def _get_node_type(self, node_id: str):
         """
@@ -2041,6 +2162,71 @@ class IoXWrapper(NuCoreInterface):
         elif control == "_1": #programs updated event
             self.routines_changed = True # just to be on the safe side
         elif control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
-            self.diagnostics.on_device_event(node, control, action, eventInfo)
+            await self.diagnostics.on_device_event(node, control, action, eventInfo)
         elif control == "_2": # variable write pending
-            self.diagnostics.update_links_table(node, control, action, eventInfo)
+            await self.diagnostics.update_links_table(node, control, action, eventInfo)
+
+    def _get_node_family(self, device_id) -> str | None:
+        node = self._get_node(device_id)
+        if node is None:
+            return None
+        if not hasattr(node, "family"):
+            logger.error(f"Node object for device_id {device_id} does not have 'family' attribute")
+            return None
+
+        family = node.family
+        if family is None:
+            logger.error(f"Node object for device_id {device_id} has 'family' attribute set to None")
+            return None
+
+        family_code = str(family).strip()
+        try:
+            if family_code not in DEVICE_FAMILIES:
+                logger.error(f"Node object for device_id {device_id} has unrecognized 'family' value: {family}")
+                return None
+            return family_code, DEVICE_FAMILIES[family_code]
+        except KeyError:
+            logger.error(f"Node object for device_id {device_id} has unrecognized 'family' value: {family}")
+            return None
+
+    def _is_insteon_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_INSTEON
+
+    def _is_legacy_z_wave_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_LEGACY_Z_WAVE
+
+    def _is_zway_z_wave_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_Z_WAVE
+
+    def _is_z_wave_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family in [DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_Z_WAVE]
+
+    def _is_zigbee_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_ZIGBEE 
+
+    def _is_matter_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_MATTER 
+
+    def _is_plug_in_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_PLUGIN

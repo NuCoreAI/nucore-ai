@@ -68,3 +68,50 @@
 #
 # the PLM has a responder/slave link entry
 # the other device/group acts as controller/master for that relationship.
+
+
+from typing import TYPE_CHECKING
+from ..iox_definitions import IoXSOAPAction, DEVICE_FAMILIES
+
+
+from ..iox_wrapper import IoXWrapper
+from utils import get_logger
+logger = get_logger(__name__)
+
+class INSTEONDiagnostics:
+    """Class for Insteon diagnostics and link management."""
+
+    def __init__(self, iox_wrapper: IoXWrapper) -> None:
+        self._iox_wrapper = iox_wrapper
+
+    async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        # NOTE: assumes `node` here accepts the same device address used
+        # elsewhere in this system (e.g. get_property's device_id) --
+        # unconfirmed against real hub behavior; flag/verify before relying
+        # on this for a real customer-facing diagnosis.
+        return await self._iox_wrapper._send_device_specific_with_option(
+            IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, None
+        )
+
+    async def _get_isy_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        # NOTE: assumes `node` here accepts the same device address used
+        # elsewhere in this system (e.g. get_property's device_id) --
+        # unconfirmed against real hub behavior; flag/verify before relying
+        # on this for a real customer-facing diagnosis.
+        # Use this method to get the ISY links table for a specific device. 
+        # The ISY links table what isy/iox thinks the device link should like like. 
+        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, device_id, None, 0x01, None)
+
+    async def _get_all_plm_links(self, device_id: str = None, **kwargs) -> str | None:
+        # Use this method to get all PLM links. This is a device specific command that returns the PLM links table.
+        # we ignore device_id
+        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
+
+    async def update_links_table(self, node, control, action, eventInfo):
+        logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+        if action == "1":
+            logger.info("PLM Link Record")
+        elif action == "2":
+            logger.info("Device Link Record")
+        elif action == "3":
+            logger.info("ISY Link Record")

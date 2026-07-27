@@ -74,7 +74,7 @@
                "--runtime-config=src/unified/runtime_config.example.json",
                "--secrets-file=secrets/keys.json",
                "--log-level=INFO",
-               "--diagnostic-step=get_all_plm_links",
+               "--diagnostic-step=get full system config",
                "--diagnostic-params={\"device_id\": \"28 87 5C 1\"}",
                "--json-output=true"
             ],
