@@ -13,7 +13,7 @@ import asyncio
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 import xml.etree.ElementTree as ET
 import time
 from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name
@@ -326,8 +326,6 @@ class IoXDiagnostics:
             response["candidates"] = candidates
         return response
 
-    async def stop_long_running_diagnostic(self) -> str | None:
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
 
     # get system configuration
     async def _get_full_system_config(self, device_id: str = None) -> dict[str, str] | None:
@@ -497,17 +495,14 @@ class IoXDiagnostics:
 
         # second get PLM Infomation and update subsystem state
         if self._subsystem_state[Subsystems.INSTEON.value]["enabled"]:
-            plm_info = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
-            if plm_info is None: 
-                logger.error(f"Failed to get PLM info: {plm_info.status_code if plm_info else 'No response'}")
+            if self._init_insteon_diag(None):
+                connected, plm_info = await self._insteon_diag._get_plm_info()
+
+            if connected is None: 
+                logger.error(plm_info)
             else:
-                plm_info_parts = plm_info.split(" / ")
-                if len(plm_info_parts) > 1:
-                    self._subsystem_state[Subsystems.INSTEON.value]["PLM info"] = plm_info_parts[0]
-                    self._subsystem_state[Subsystems.INSTEON.value]["connected"] = plm_info_parts[1] == "Connected"
-                else:
-                    self._subsystem_state[Subsystems.INSTEON.value]["PLM info"] = plm_info
-                    self._subsystem_state[Subsystems.INSTEON.value]["connected"] = False
+                self._subsystem_state[Subsystems.INSTEON.value]["PLM info"] = plm_info
+                self._subsystem_state[Subsystems.INSTEON.value]["connected"] = connected
 
         subsystems = {}
         for subsystem in self._subsystem_state.values():
@@ -588,6 +583,31 @@ class IoXDiagnostics:
             self._subsystem_state[control]["connected"] =  True
 
 
+    def _get_core_services_status(self) -> dict[str, Any]:
+        """
+        Get the status of core services  (isy, udx, ...)
+        :return: Dictionary with the status of each core service
+        """
+        # /rest/udx.sys.ops/services.ops/services_status
+        raise NotImplementedError("Core services status retrieval is not implemented yet.")
+
+    def _get_plugin_services_status(self) -> dict[str, Any]:
+        """
+        Get the status of core services  (isy, udx, ...)
+        :return: Dictionary with the status of each core service
+        """
+        # /rest/udx.sys.ops/services.ops/plugin_services_status
+        raise NotImplementedError("Plugin services status retrieval is not implemented yet.")
+
+    def _services_ops(self, op: Literal["start", "stop", "restart"]) -> dict[str, Any]: 
+        """
+        An operation on a core or plugin service (start, stop, restart)
+        :param op: The operation to perform (start, stop, restart)
+        Get the status of core services  (isy, udx, ...)
+        :return: Dictionary with the status of each core service or failure
+        """
+        # /rest/udx.sys.ops/services.ops/$op
+        raise NotImplementedError("Core services status retrieval is not implemented yet.")
 
     # ---------------------------------------------------
     # INSTEON DIAGNOSTICS
@@ -609,9 +629,9 @@ class IoXDiagnostics:
             return await self._insteon_diag._get_dev_links_table(device_id, **kwargs)
         return None
 
-    async def _get_isy_links_table(self, device_id: str = None, **kwargs) -> str | None:
+    async def _get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
         if self._init_insteon_diag(device_id):
-            return await self._insteon_diag._get_isy_links_table(device_id, **kwargs)
+            return await self._insteon_diag._get_iox_links_table(device_id, **kwargs)
         return None
 
     async def _get_all_plm_links(self, device_id: str = None, **kwargs) -> str | None:
@@ -622,3 +642,7 @@ class IoXDiagnostics:
     async def update_links_table(self, node, control, action, eventInfo):
         if self._insteon_diag is not None:
             await self._insteon_diag.update_links_table(node, control, action, eventInfo)
+
+    async def stop_long_running_diagnostic(self) -> str | None:
+        if self._insteon_diag is not None:
+            return await self._insteon_diag.stop_insteon_diagnostics()

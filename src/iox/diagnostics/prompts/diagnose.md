@@ -15,6 +15,20 @@ Call whichever of the steps below are actually relevant, in whatever order makes
     "function": "_get_full_system_config",
     "description": "Get the full system configuration: subsystem states, PLM info, versions, available upgrades. No params."
   },
+  "get core services status":
+  {
+    "function": "_get_core_services_status",
+    "description": "Returns the status (running/stopped/failed) of NuCore core services: isy, udx, eisyui, mosquitto.ud, etc."
+  },
+  "get plugin services status":
+  {
+    "function": "_get_plugin_services_status",
+    "description": "Returns the status (running/stopped/failed) of NuCore plugin services: there's one service for each plugin"
+  },
+  "start stop restart service": {
+    "function": "_services_ops",
+    "description": "start/stop/restart a known services. param=op [ start | stop | restart ] "
+  },
   "get device family":{
     "function": "_get_device_family",
     "description": "Returns insteon, z-wave, zigbee, matter, plugin, or unknown. You need this information before can do any diagnostics"
@@ -24,7 +38,7 @@ Call whichever of the steps below are actually relevant, in whatever order makes
     "description": "INSTEON ONLY. Get the `device` link table for a specific device. Params: device_id (the device's address)."
   },
   "check iox links for device": {
-    "function": "_get_isy_links_table",
+    "function": "_get_iox_links_table",
     "description": "INSTEON ONLY. Get the `nucore` link table for a specific device. Params: device_id (the device's address)."
   },
   "get all plm links": {

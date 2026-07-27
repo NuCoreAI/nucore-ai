@@ -70,48 +70,273 @@
 # the other device/group acts as controller/master for that relationship.
 
 
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Literal
 from ..iox_definitions import IoXSOAPAction, DEVICE_FAMILIES
 
 
 from ..iox_wrapper import IoXWrapper
 from utils import get_logger
 logger = get_logger(__name__)
+already_running_message = "Diagnostics already running. Please wait for the current operation to finish."
+no_device_id_message = "Device ID is required for getting device links table."
+
+# Raw flag byte -> decoded role. Doing this in code (not leaving it for the
+# model to map from a legend) since it's the one part of a link record we
+# have a precise, confirmed mapping for.
+_FLAG_ROLES = {
+    "A2": "responder",
+    "E2": "controller",
+    "22": "deleted",
+    "00": "end_of_table",
+}
+
+
+def _decode_role(flag_hex: str) -> str:
+    return _FLAG_ROLES.get(flag_hex, f"unrecognized_flag({flag_hex})")
+
+
+def _format_data_fields(role: str, data_int: int) -> str:
+    """Label the 3 data bytes by what they mean for *role* -- inline, per
+    record, instead of a legend the model would otherwise have to hold onto
+    and re-apply for every row. No confirmed formula exists in this codebase
+    for converting these to real units (on-level %, ramp-rate seconds), so
+    values are left as raw hex2.
+
+    ``deleted``/``unrecognized_flag`` rows get generic byte1/2/3 labels since
+    their original semantic role (controller- or responder-shaped) can't be
+    confirmed from the flag alone.
+    """
+    b1 = (data_int >> 16) & 0xFF
+    b2 = (data_int >> 8) & 0xFF
+    b3 = data_int & 0xFF
+    if role == "controller":
+        return f"button_group={b1:02X};reserved={b2:02X};group={b3:02X}"
+    if role == "responder":
+        return f"on_level={b1:02X};ramp_rate={b2:02X};group_or_data={b3:02X}"
+    return f"byte1={b1:02X};byte2={b2:02X};byte3={b3:02X}"
+
+
+LINKS_TABLE_NOTE = (
+    "# `data` is a semicolon-separated set of labeled hex2 byte values -- the label already tells you what\n"
+    "# each byte means for that row's role; no further legend lookup needed.\n"
+)
+# Fenced so the table's start/end is unambiguous -- everything between the
+# fences is the CSV to parse, everything outside it is prose.
+LINKS_TABLE_FENCE_OPEN = "```csv\n"
+LINKS_TABLE_FENCE_CLOSE = "```\n"
+LINKS_TABLE_HEADER = "idx,role,group,device,data\n"
+
 
 class INSTEONDiagnostics:
     """Class for Insteon diagnostics and link management."""
 
     def __init__(self, iox_wrapper: IoXWrapper) -> None:
         self._iox_wrapper = iox_wrapper
+        self._is_running = False
+        self._file_path = None
+        self._plm_address = None
+        self._plm_connected = False
 
     async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
         # NOTE: assumes `node` here accepts the same device address used
         # elsewhere in this system (e.g. get_property's device_id) --
         # unconfirmed against real hub behavior; flag/verify before relying
         # on this for a real customer-facing diagnosis.
-        return await self._iox_wrapper._send_device_specific_with_option(
-            IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, None
-        )
+        if device_id is None:
+            logger.warning(no_device_id_message)
+            return no_device_id_message
+        if self._is_running:
+            logger.warning(already_running_message)
+            return already_running_message
+        self._plm_connected, plm_info = await self._get_plm_info()
+        self._plm_address = self._get_plm_address(plm_info)
 
-    async def _get_isy_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        self._is_running = True
+        self._file_path = self._get_file_path("device", device_id)
+        if self._plm_connected:
+            await self._write_to_file(self._file_path, f"Device Links Table for {device_id} using PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
+        else:
+            self._is_running = False
+            return "PLM not connected. Cannot retrieve device links table."
+        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, None)
+        await self._add_ending_to_file()
+        self._is_running = False
+        return rc
+
+    async def _get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
         # NOTE: assumes `node` here accepts the same device address used
         # elsewhere in this system (e.g. get_property's device_id) --
         # unconfirmed against real hub behavior; flag/verify before relying
         # on this for a real customer-facing diagnosis.
-        # Use this method to get the ISY links table for a specific device. 
-        # The ISY links table what isy/iox thinks the device link should like like. 
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, device_id, None, 0x01, None)
+        # Use this method to get the ISY/IoX links table for a specific device. 
+        # The ISY links table shows what isy/iox thinks the device link should look like.
+        if device_id is None:
+            logger.warning(no_device_id_message)
+            return no_device_id_message
+        if self._is_running:
+            logger.warning(already_running_message)
+            return already_running_message
+        self._plm_connected, plm_info = await self._get_plm_info()
+        self._plm_address = self._get_plm_address(plm_info)
+        self._is_running = True
+        self._file_path = self._get_file_path("iox", device_id)
+        if self._plm_connected:
+            await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} using PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
+        else:
+            await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} (PLM not connected)\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
+        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, device_id, None, 0x01, None)
+        await self._add_ending_to_file()
+        self._is_running = False
+        return rc
 
     async def _get_all_plm_links(self, device_id: str = None, **kwargs) -> str | None:
         # Use this method to get all PLM links. This is a device specific command that returns the PLM links table.
         # we ignore device_id
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
+        if self._is_running:
+            logger.warning(already_running_message)
+            return already_running_message
+        self._plm_connected, plm_info = await self._get_plm_info()
+        self._plm_address = self._get_plm_address(plm_info)
+
+        self._is_running = True
+        self._file_path = self._get_file_path("plm", None)
+        if self._plm_connected:
+            await self._write_to_file(self._file_path, f"PLM Links Table for PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
+        else:
+            self._is_running = False
+            return "PLM not connected. Cannot retrieve PLM links table."
+
+        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
+        await self._add_ending_to_file()
+        self._is_running = False
+        return rc
+
+    async def stop_insteon_diagnostics(self) -> str | None:
+        if self._is_running:
+            logger.warning("Stopping Insteon diagnostics...")
+            await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
+            await self._add_ending_to_file()
+            self._is_running = False
+
+    async def _add_ending_to_file(self):
+        if self._file_path:
+            time.sleep(1)  # Ensure any pending writes are completed
+            await self._write_to_file(self._file_path, LINKS_TABLE_FENCE_CLOSE, mode="a")
+            self._file_path = None
+
+    async def format_links_event(self, eventInfo: dict) -> str:
+        """
+        Format the links event information into one CSV row matching
+        LINKS_TABLE_HEADER's shape: idx,role,group,device,data
+
+        The raw flag byte is decoded into ``role`` here (see _decode_role),
+        and ``data``'s bytes are labeled per-role (see _format_data_fields) --
+        so the model never has to cross-reference a legend for either. For
+        the end_of_table sentinel, group/device/data are blanked since
+        they're not meaningful data.
+
+        :param eventInfo: Dictionary containing the event information.
+        :return: One CSV row (no trailing newline) representing the record.
+        """
+        if not eventInfo:
+            return "No event information provided."
+
+        index = eventInfo.get('ix', 'Unknown')
+
+        raw_flag = eventInfo.get('fl', None)
+        try:
+            flag_hex = f"{int(raw_flag):02X}"
+        except Exception as e:
+            logger.error(f"Error formatting flag: {e}")
+            flag_hex = "Unknown"
+        role = _decode_role(flag_hex)
+
+        if role == "end_of_table":
+            return f"{index},{role},,,"
+
+        group = eventInfo.get('gr', 'Unknown')
+
+        device_id = eventInfo.get('id', 'Unknown')
+        try:
+            device_id = f"{int(device_id):06X}"  # hex6, no separators
+            if self._plm_connected and self._plm_address:
+                plm_id=f"{int(self._plm_address, 16):06X}"  # hex6, no separators
+                if device_id == plm_id:
+                    device_id = f"{device_id} (PLM)"
+        except Exception as e:
+            logger.error(f"Error formatting device_id: {e}")
+            device_id = "Unknown"
+
+        data = eventInfo.get('data', 'Unknown')
+        try:
+            data_fields = _format_data_fields(role, int(data))
+        except Exception as e:
+            logger.error(f"Error formatting data: {e}")
+            data_fields = "Unknown"
+
+        return f"{index},{role},{group},{device_id},{data_fields}"
+
+    def _get_plm_address(self, plm_info: str) -> str:
+        # Extract the PLM address from the PLM info string
+        if plm_info and self._plm_connected:
+            parts = plm_info.split(" ")
+            if len(parts) > 1:
+                return parts[0].strip().replace(".", "")  # Replace spaces with underscores for file naming
+        return "Unknown"
+
+    # retrieve PLM info
+    # returns:
+    # Connected / Disconnected (Boolean), PLM Address and Version information
+    async def _get_plm_info(self) -> tuple[bool | None, str]:
+        if self._is_running:
+            logger.warning(already_running_message)
+            return None, already_running_message
+
+        plm_info = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
+        if plm_info is None: 
+            logger.error(f"Failed to get PLM info: {plm_info.status_code if plm_info else 'No response'}")
+            return None, plm_info.status_code if plm_info else 'No response'
+        
+        plm_info_parts = plm_info.split(" / ")
+        if len(plm_info_parts) > 1:
+            return plm_info_parts[1].strip() == "Connected", plm_info_parts[0] 
+
+        return False, plm_info  # Default to disconnected if format is unexpected
+
+    async def _write_to_file(self, file_path: str, content: str, mode: Literal["w", "a"] = "a") -> None:
+        try:
+            with open(file_path, mode) as f:
+                f.write(content)
+        except Exception as e:
+            logger.error(f"Failed to write links table to {file_path}: {e}") 
+
+    def _get_file_path(self, type: Literal["iox", "device", "plm"], device_id: str) -> None:
+        if type not in ["iox", "device", "plm"]:
+            logger.warning(f"Invalid type '{type}' for file name. Must be 'iox', 'device', or 'plm'.")
+            return None
+        if device_id is None and type != "plm":
+            logger.warning("Device ID is required for getting device or iox links table.")
+            return None
+        device_id= device_id.replace(" ", "_") if device_id else "all" 
+        return f"/tmp/{type}_links_table_{device_id}.txt"
+
 
     async def update_links_table(self, node, control, action, eventInfo):
         logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
+        if not eventInfo:
+            logger.warning("No eventInfo provided for update_links_table.")
+            return
+
+        formatted_event = await self.format_links_event(eventInfo)
+        logger.info(f"Formatted event info: {formatted_event}")
+
+        file_path = None
         if action == "1":
-            logger.info("PLM Link Record")
+            file_path = self._get_file_path("plm", None)
         elif action == "2":
-            logger.info("Device Link Record")
+            file_path = self._get_file_path("device", node)
         elif action == "3":
-            logger.info("ISY Link Record")
+            file_path = self._get_file_path("iox", node)
+        if file_path:
+            await self._write_to_file(file_path, formatted_event + "\n", mode="a")
