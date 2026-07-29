@@ -50,6 +50,13 @@ logger = get_logger(__name__)
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
+# The only two steps with no backend function -- ended/aborted by the
+# dispatch logic in run_diagnostic_step itself (by literal name, before any
+# function lookup happens), not by calling a method. Every other step name
+# IS its backend method name minus the leading underscore, always -- no
+# per-step override, so there's exactly one place a step's name is decided.
+_TERMINAL_STEPS = frozenset({"conclude", "stop"})
+
 
 
 class IoXDiagnostics:
@@ -132,9 +139,10 @@ class IoXDiagnostics:
         dispatches to.
 
         Raises ``RuntimeError`` if the ```json block is missing/malformed, or
-        if any declared "function" doesn't resolve to a real callable method
-        on this class -- either means the prompt and the code have drifted
-        apart, and that should fail loudly rather than silently misbehave.
+        if any non-terminal step name doesn't resolve to a real callable
+        ``_<step_name>`` method on this class -- either means the prompt and
+        the code have drifted apart, and that should fail loudly rather than
+        silently misbehave.
         """
         match = _JSON_BLOCK_RE.search(text)
         if not match:
@@ -145,12 +153,13 @@ class IoXDiagnostics:
         except json.JSONDecodeError as ex:
             raise RuntimeError(f"diagnose.md's ```json steps block is malformed: {ex}") from ex
 
-        for name, meta in steps.items():
-            function_name = meta.get("function")
-            if function_name is not None and not callable(getattr(self, function_name, None)):
+        for name in steps:
+            if name in _TERMINAL_STEPS:
+                continue
+            function_name = f"_{name}"
+            if not callable(getattr(self, function_name, None)):
                 raise RuntimeError(
-                    f"diagnose.md declares step '{name}' -> function '{function_name}', "
-                    "but IoXDiagnostics has no such method"
+                    f"diagnose.md declares step '{name}', but IoXDiagnostics has no method '{function_name}'"
                 )
 
         return text, steps
@@ -288,8 +297,7 @@ class IoXDiagnostics:
             result = await asyncio.to_thread(self._run_diagnostic_step_sync, self.stop_long_running_diagnostic, {})
             return {"status": "stopped", "result": result}
 
-        function_name = self._diagnostic_steps[step].get("function")
-        function = getattr(self, function_name, None) if function_name else None
+        function = getattr(self, f"_{step}", None)
         if function is None or not callable(function):
             return {"error": f"diagnostic step '{step}' is not yet implemented"}
 
@@ -328,7 +336,7 @@ class IoXDiagnostics:
 
 
     # get system configuration
-    async def _get_full_system_config(self, device_id: str = None) -> dict[str, str] | None:
+    async def _get_full_system_config(self, **kwargs) -> dict[str, str] | None:
         full_config = {}
         usb_lines = []
         re0_lines = []
@@ -517,7 +525,7 @@ class IoXDiagnostics:
         return full_config
 
     async def _get_device_family(self, device_id: str = None, **kwargs) -> str | None:
-        family_id, family_name = await self._iox_wrapper._get_node_family(device_id)
+        family_id, family_name = self._iox_wrapper._get_node_family(device_id)
         if not family_id:
             return "Unknown family"
         return family_name
@@ -634,9 +642,9 @@ class IoXDiagnostics:
             return await self._insteon_diag._get_iox_links_table(device_id, **kwargs)
         return None
 
-    async def _get_all_plm_links(self, device_id: str = None, **kwargs) -> str | None:
+    async def _get_all_plm_links(self, **kwargs) -> str | None:
         if self._init_insteon_diag(None):
-            return await self._insteon_diag._get_all_plm_links(device_id, **kwargs)
+            return await self._insteon_diag._get_all_plm_links(**kwargs)
         return None
 
     async def update_links_table(self, node, control, action, eventInfo):
