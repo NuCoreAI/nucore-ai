@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
 from nucore.nodedef import Property
 from nucore.node import Node
+from nucore.group import Group
 from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM, is_enumeration_uom
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
@@ -2230,3 +2231,11 @@ class IoXWrapper(NuCoreInterface):
         if not family:
             return False
         return family == DEVICE_FAMILY_PLUGIN
+
+    def _get_group_by_device_group_id(self, device_group_id) -> Group | None:
+        if not self.groups:
+            return None
+        for group in self.groups.values():
+            if group.device_group == device_group_id:
+                return group
+        return None
