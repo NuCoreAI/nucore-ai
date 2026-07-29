@@ -52,20 +52,25 @@ def test_parse_diagnostic_config_errors_on_malformed_json():
 
 
 def test_parse_diagnostic_config_errors_when_function_does_not_exist():
+    # Step name -> backend method is convention-derived (f"_{name}"), no
+    # per-step override -- a step with no matching "_<name>" method fails.
     diag = object.__new__(IoXDiagnostics)
-    text = 'prose\n```json\n{"some_step": {"function": "_totally_made_up_method", "description": "x"}}\n```\n'
+    text = 'prose\n```json\n{"totally_made_up_step": {"description": "x"}}\n```\n'
 
-    with pytest.raises(RuntimeError, match="_totally_made_up_method"):
+    with pytest.raises(RuntimeError, match="_totally_made_up_step"):
         diag._parse_diagnostic_config(text)
 
 
-def test_parse_diagnostic_config_allows_a_null_function_for_terminal_steps():
+def test_parse_diagnostic_config_allows_terminal_steps_with_no_backend_function():
+    # "conclude"/"stop" are the only two steps with no backend method at all
+    # -- exempted from the "_<name> must exist" check by literal name, not by
+    # a "function": null marker (there's no such key anymore).
     diag = object.__new__(IoXDiagnostics)
-    text = 'prose\n```json\n{"conclude": {"function": null, "description": "x"}}\n```\n'
+    text = 'prose\n```json\n{"conclude": {"description": "x"}, "stop": {"description": "y"}}\n```\n'
 
     _, steps = diag._parse_diagnostic_config(text)
 
-    assert steps == {"conclude": {"function": None, "description": "x"}}
+    assert steps == {"conclude": {"description": "x"}, "stop": {"description": "y"}}
 
 
 @pytest.mark.asyncio
