@@ -70,6 +70,7 @@
 # the other device/group acts as controller/master for that relationship.
 
 
+from statistics import mode
 import time
 from typing import TYPE_CHECKING, Literal
 from ..iox_definitions import IoXSOAPAction, DEVICE_FAMILIES
@@ -159,9 +160,13 @@ class INSTEONDiagnostics:
         else:
             self._is_running = False
             return "PLM not connected. Cannot retrieve device links table."
-        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, None)
+        #make it into a thread so it can be stopped if needed
+        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, "0 100")
         await self._add_ending_to_file()
+        if rc:
+            rc = await self._read_from_file(self._file_path)
         self._is_running = False
+        self._file_path = None
         return rc
 
     async def _get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
@@ -187,12 +192,14 @@ class INSTEONDiagnostics:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} (PLM not connected)\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
         rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, device_id, None, 0x01, None)
         await self._add_ending_to_file()
+        if rc:
+            rc = await self._read_from_file(self._file_path)
         self._is_running = False
+        self._file_path = None
         return rc
 
-    async def _get_all_plm_links(self, device_id: str = None, **kwargs) -> str | None:
-        # Use this method to get all PLM links. This is a device specific command that returns the PLM links table.
-        # we ignore device_id
+    async def _get_all_plm_links(self, **kwargs) -> str | None:
+        # Get all PLM links -- system-wide, not scoped to any one device.
         if self._is_running:
             logger.warning(already_running_message)
             return already_running_message
@@ -209,23 +216,27 @@ class INSTEONDiagnostics:
 
         rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
         await self._add_ending_to_file()
+        if rc:
+            rc = await self._read_from_file(self._file_path)
         self._is_running = False
+        self._file_path = None
         return rc
 
-    async def stop_insteon_diagnostics(self) -> str | None:
+    async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:
             logger.warning("Stopping Insteon diagnostics...")
             await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
-            await self._add_ending_to_file()
-            self._is_running = False
+            if cleanup:
+                await self._add_ending_to_file()
+                self._is_running = False
+                self._file_path = None
 
     async def _add_ending_to_file(self):
         if self._file_path:
             time.sleep(1)  # Ensure any pending writes are completed
             await self._write_to_file(self._file_path, LINKS_TABLE_FENCE_CLOSE, mode="a")
-            self._file_path = None
 
-    async def format_links_event(self, eventInfo: dict) -> str:
+    async def format_links_event(self, eventInfo: dict, type: Literal["iox", "device", "plm"]) -> str:
         """
         Format the links event information into one CSV row matching
         LINKS_TABLE_HEADER's shape: idx,role,group,device,data
@@ -253,20 +264,9 @@ class INSTEONDiagnostics:
         role = _decode_role(flag_hex)
 
         if role == "end_of_table":
+            # stop device specific 
+            await self.stop_insteon_diagnostics(False)
             return f"{index},{role},,,"
-
-        group = eventInfo.get('gr', 'Unknown')
-
-        device_id = eventInfo.get('id', 'Unknown')
-        try:
-            device_id = f"{int(device_id):06X}"  # hex6, no separators
-            if self._plm_connected and self._plm_address:
-                plm_id=f"{int(self._plm_address, 16):06X}"  # hex6, no separators
-                if device_id == plm_id:
-                    device_id = f"{device_id} (PLM)"
-        except Exception as e:
-            logger.error(f"Error formatting device_id: {e}")
-            device_id = "Unknown"
 
         data = eventInfo.get('data', 'Unknown')
         try:
@@ -275,6 +275,48 @@ class INSTEONDiagnostics:
             logger.error(f"Error formatting data: {e}")
             data_fields = "Unknown"
 
+        group = eventInfo.get('gr', 'Unknown')
+        button_group = group
+        device_id = eventInfo.get('id', 'Unknown')
+        is_plm = False
+        try:
+            device_id = f"{int(device_id):06X}"  # hex6, no separators
+            # convert it to xx yy zz string without preceding 0s, e.g. 7.D5.27
+            if role == "controller":
+                button_group = (int(data) >> 16) & 0xF
+            device_address = f"{int(device_id[0:2],16):X} {int(device_id[2:4],16):X} {int(device_id[4:6],16):X} {button_group}"
+            device_name = self._iox_wrapper.get_device_name(device_address)
+            if self._plm_connected and self._plm_address:
+                plm_id=f"{int(self._plm_address, 16):06X}"  # hex6, no separators
+                if device_id == plm_id:
+                    device_id = f"{device_id} (PLM)"
+                    is_plm = True
+                elif device_name:
+                    device_id = f"{device_address} ({device_name})"
+        except Exception as e:
+            logger.error(f"Error formatting device_id: {e}")
+            device_id = "Unknown"
+
+        group_name = None
+        if group:
+            try:
+                if role == "controller":
+                    group_node = self._iox_wrapper._get_group_by_device_group_id(group)
+                    if group_node:
+                        group_name = group_node.name
+                elif role == "responder":
+                    if is_plm and type == "plm":
+                        group_name = f"button/node #{group} (PLM)"
+                    else:
+                        group_node = self._iox_wrapper._get_group_by_device_group_id(group)
+                        if group_node:
+                            group_name = group_node.name
+            except Exception as e:
+                logger.error(f"Error getting group name: {e}")
+
+
+        if group_name:
+            group = f"{group} ({group_name})"
         return f"{index},{role},{group},{device_id},{data_fields}"
 
     def _get_plm_address(self, plm_info: str) -> str:
@@ -311,6 +353,14 @@ class INSTEONDiagnostics:
         except Exception as e:
             logger.error(f"Failed to write links table to {file_path}: {e}") 
 
+    async def _read_from_file(self, file_path: str) -> str:
+        try:
+            with open(file_path, "r") as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Failed to read links table from {file_path}: {e}")
+            return ""
+
     def _get_file_path(self, type: Literal["iox", "device", "plm"], device_id: str) -> None:
         if type not in ["iox", "device", "plm"]:
             logger.warning(f"Invalid type '{type}' for file name. Must be 'iox', 'device', or 'plm'.")
@@ -323,20 +373,22 @@ class INSTEONDiagnostics:
 
 
     async def update_links_table(self, node, control, action, eventInfo):
-        logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
         if not eventInfo:
             logger.warning("No eventInfo provided for update_links_table.")
             return
 
-        formatted_event = await self.format_links_event(eventInfo)
-        logger.info(f"Formatted event info: {formatted_event}")
-
         file_path = None
+        type = None
         if action == "1":
             file_path = self._get_file_path("plm", None)
+            type = "plm"
         elif action == "2":
             file_path = self._get_file_path("device", node)
+            type = "device"
         elif action == "3":
             file_path = self._get_file_path("iox", node)
-        if file_path:
+            type = "iox"
+        if file_path and type:
+            formatted_event = await self.format_links_event(eventInfo, type)
             await self._write_to_file(file_path, formatted_event + "\n", mode="a")
+            logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, formatted_event={formatted_event if formatted_event else 'Unknown'}") 
