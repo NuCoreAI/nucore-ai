@@ -73,16 +73,73 @@ From the original ask, brainstormed additions, and the three requested this roun
 | Safety and security | Motion/door/window-sensor scenes, alerting, camera-integration awareness. | No | Likely (e.g. Camect) |
 | Serenity | Calming music/video with complementary lighting, on demand or scheduled. | No | Likely (e.g. YouTube for media) |
 
+## AI-capable plugin contract (`get_tool(s)` / `get_prompt()` / `handle_llm_result()`)
+
+Any plugin that wants to be usable by an LLM session -- a third-party marketplace plugin (Camect,
+a hebcal-style calendar source, YouTube) or Plan itself (see "Should Plan types be plugins?" below)
+-- implements the same three standard commands, modeled the same way a device already exposes
+accepts/sends commands:
+
+- **`get_tool(s)`** -- returns the tool.json-shaped schema(s) for whatever this plugin can do
+  (name, params, description). A plugin can expose more than one capability; each capability's
+  name is uniquified with the plugin's installation id (e.g. `{plugin_installation_id}_
+  get_holidays`), which is what makes name collisions across multiple installed instances of the
+  same plugin type immaterial -- no central naming registry needed.
+- **`get_prompt()`** -- returns the full natural-language usage guidance for this plugin's
+  capabilities, lazily loaded only once the plugin becomes relevant to the conversation (never
+  preloaded for every installed plugin on every turn -- same rationale as `get_device_detail`'s
+  lazy full-fidelity fetch, applied to plugins instead of devices).
+- **`handle_llm_result(tool_result)`** -- the actual execution hook. Whatever the LLM produced
+  when "calling" one of this plugin's declared tools (name + arguments) is forwarded here
+  verbatim; the plugin's own implementation does the real work and returns whatever should go back
+  to the LLM as that turn's tool result.
+
+**No changes to the model-facing tool surface or to `AgenticLoop`/`loop.py` are needed.** This
+reuses exactly the pattern Diagnostics already established with `run_diagnostic_step`: one fixed
+dispatcher tool, a text-only catalog of what's callable (here, assembled from installed plugins'
+`get_tool(s)`/`get_prompt()` output instead of a static prompt file), and application-level routing
+(the equivalent of `_parse_diagnostic_config`/`getattr(self, f"_{step}")`) rather than a
+dynamically-changing tool list. The dispatcher's only job is a naming-convention check: if a call's
+tool name matches an installed plugin's id prefix, strip it and forward the whole `{name, args}`
+payload to that plugin device's `handle_llm_result` command via the same generic device-command
+path (`send_command`) every other device command already uses -- zero plugin-specific code in
+core, for any plugin.
+
+## Should Plan types be plugins?
+
+**Decision: yes for the mechanism, no for the trust model.**
+
+Plan types already share no more domain reasoning with each other than arbitrary third-party
+plugins do (that's exactly why "separate file per plan type" was decided above), so reusing the
+`get_tool(s)`/`get_prompt()`/`handle_llm_result` contract for plan types avoids building two
+parallel lazy-loading/dispatch systems -- one for `plan_<type>.md` files, one for plugins. Under
+this contract, a plan type's `get_prompt()` returns what would otherwise have been its
+`plan_<type>.md` content; its `get_tool(s)` declares its `propose_*`/gather/commit steps; its
+`handle_llm_result` executes them.
+
+But a plan type's `handle_llm_result` needs privileged write access to core NuCore APIs --
+`add_node`, `multi_device_scene`, `create_or_update_routine` -- that an arbitrary third-party
+marketplace plugin (a buggy or compromised "YouTube" plugin, say) must never get just by
+implementing the same three commands. So plan types are a **first-party, privileged tier** using
+the identical discovery/loading contract, while ordinary third-party plugins stay sandboxed to
+whatever narrow API surface they themselves declare and call back through. Concretely: plan
+types' `handle_llm_result` implementations live in trusted core code with direct access to the
+write APIs mapped below, whereas a third-party plugin's `handle_llm_result` runs in its own
+process/sandbox and can only reach whatever its own backend chooses to expose.
+
 ## Architecture
 
 ### Where the backend lives
 
-**Recommendation** (not yet a locked decision): put Plan's backend in `src/unified/planning/`,
-not `src/iox/`. Diagnostics lives under `src/iox/` because it's fundamentally about hub/protocol
-state (link tables, PLM connectivity). Plan's core operations -- folders, scenes, automations,
-variables -- are already `NuCoreInterface`-level and protocol-agnostic (see mapping below); the
-one protocol-specific piece is device pairing, which can get its own small per-protocol dispatch
-module underneath, the same way `insteon_diag.py` sits under `iox_diagnostics.py` today.
+Plan's backend lives in `src/unified/planning/`, not `src/iox/`. Diagnostics lives under `src/iox/`
+because it's fundamentally about hub/protocol state (link tables, PLM connectivity). Plan's core
+operations -- folders, scenes, automations, variables -- are already `NuCoreInterface`-level and
+protocol-agnostic (see mapping below); the one protocol-specific piece is device pairing, which
+gets its own small per-protocol dispatch module underneath, the same way `insteon_diag.py` sits
+under `iox_diagnostics.py` today. `src/unified/planning/` hosts both the shared staging/commit
+engine (`propose_*`/`review_plan`/`apply_plan`) and each plan type's privileged `get_tool(s)`/
+`get_prompt()`/`handle_llm_result()` implementation from the plugin contract above; third-party
+plugins implement the same three-command contract entirely on their own, outside this codebase.
 
 ### Common step catalog (implemented once, shared by every plan type)
 
@@ -200,6 +257,13 @@ Only New installation, New construction, Room addition, and Move need this. Grou
 
 ## Open risks / tradeoffs
 
+- **The plugin contract itself doesn't exist in code yet.** `get_tool(s)`/`get_prompt()`/
+  `handle_llm_result()` and the naming-convention dispatcher (prefix-match on tool name, forward to
+  `send_command(plugin_device_id, ...)`) are a prerequisite piece of infrastructure, not something
+  any single plan type can build incidentally. Every plugin-dependent plan type (Serenity,
+  Security, Animal protection, and Holidays if backed by a calendar plugin) -- and Plan itself, if
+  plan types are implemented as the privileged plugin tier described above -- depends on this
+  landing first.
 - **`apply_plan` partial-failure UX** is undecided: default to itemized per-op status (matches
   `_compare_links_files`' precedent of precise, structured reporting over a vague pass/fail), but
   this needs real testing against how verbose customers actually want that readback to be.
