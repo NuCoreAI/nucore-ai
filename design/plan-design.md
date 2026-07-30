@@ -55,8 +55,7 @@ From the original ask, brainstormed additions, and the three requested this roun
 
 | Plan type | One-line description | Needs `pair_device`? | Needs plugin/feature check? |
 |---|---|---|---|
-| New installation | Customer describes devices, locations, desired scenes/automations from scratch; Plan adds devices, creates folders/scenes/automations. | Yes | Maybe (e.g. voice/media plugins) |
-| New construction / empty shell | Like new installation, but zero prior NuCore config exists at all. | Yes | Maybe |
+| New installation | Customer describes devices, locations, desired scenes/automations from scratch (whether an existing house with no prior NuCore config, or a newly-built one); Plan adds devices, creates folders/scenes/automations. | Yes | Maybe (e.g. voice/media plugins) |
 | Room addition / expansion | Onboard new devices into an *already-configured* house without disturbing existing scenes/automations. | Yes | Maybe |
 | Vacation | Creates a "lived-in" look while the customer is away (randomized lighting, staggered schedules). | No | No |
 | Holidays | Finds localized holiday dates and creates routines for them. | No | Maybe (calendar/date lookup) |
@@ -238,7 +237,7 @@ or recommend-purchase -- rather than assuming it can just make the capability ap
 
 ### Device pairing (explicitly stubbed, per this round's decision)
 
-Only New installation, New construction, Room addition, and Move need this. Grounded in survey:
+Only New installation, Room addition, and Move need this. Grounded in survey:
 
 - `IoXSOAPAction` (`src/iox/iox_definitions.py`) already defines `SOAP_TYPE_ADD_NODE` (line 30),
   `SOAP_TYPE_DISCOVER_NODES` (line 31), `SOAP_TYPE_CANCEL_NODES_DISCOVERY` (line 42), and
