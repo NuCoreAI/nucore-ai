@@ -70,7 +70,9 @@
 # the other device/group acts as controller/master for that relationship.
 
 
-from statistics import mode
+from collections import Counter
+import os
+import re
 import time
 from typing import TYPE_CHECKING, Literal
 from ..iox_definitions import IoXSOAPAction, DEVICE_FAMILIES
@@ -127,6 +129,67 @@ LINKS_TABLE_NOTE = (
 LINKS_TABLE_FENCE_OPEN = "```csv\n"
 LINKS_TABLE_FENCE_CLOSE = "```\n"
 LINKS_TABLE_HEADER = "idx,role,group,device,data\n"
+_CSV_BLOCK_RE = re.compile(r"```csv\s*\n(.*?)```", re.DOTALL)
+
+# The only roles _decode_role can ever produce -- anything else means the
+# flag byte didn't match a known pattern (see _decode_role's fallback).
+_KNOWN_ROLES = frozenset(_FLAG_ROLES.values())
+# Not real, comparable links -- excluded from the device-vs-iox comparison
+# entirely (see _compare_links_files) and from the PLM sanity check's record
+# count (see _quick_plm_sanity_check).
+_ROLES_EXCLUDED_FROM_COMPARISON = frozenset({"deleted", "end_of_table"})
+
+# See _quick_plm_sanity_check.
+_PLM_SANITY_CHECK_TOLERANCE_PCT = 15
+
+# See _get_all_plm_links's cache check -- a full PLM link scan is a slow,
+# real hardware operation, so a recent result is reused by default rather
+# than re-scanning on every call.
+_PLM_LINKS_CACHE_MAX_AGE_S = 3600  # 1 hour
+# A real PLM links dump for any system with more than a handful of devices
+# is comfortably larger than this -- guards against treating a truncated or
+# otherwise corrupted partial write as a valid, usable cache.
+_PLM_LINKS_CACHE_MIN_SIZE_BYTES = 5000
+
+
+def _is_cache_fresh(
+    file_path: str,
+    max_age_s: int = _PLM_LINKS_CACHE_MAX_AGE_S,
+    min_size_bytes: int = _PLM_LINKS_CACHE_MIN_SIZE_BYTES,
+) -> bool:
+    """True if *file_path* exists, was last written less than *max_age_s*
+    seconds ago, AND is at least *min_size_bytes* -- both conditions must
+    hold for a cached file to be considered valid to serve."""
+    try:
+        stat = os.stat(file_path)
+    except OSError:
+        return False
+    return (time.time() - stat.st_mtime) < max_age_s and stat.st_size >= min_size_bytes
+
+
+def _parse_links_csv(text: str) -> list[dict[str, str]]:
+    """Extract a links-table file's fenced ```csv block as a list of
+    ``{"idx", "role", "group", "device", "data"}`` dicts -- the title line,
+    note comments, fences, and the idx/role/group/device/data header row are
+    all stripped. Duplicate rows (if any) are preserved, in file order --
+    deduplication is the caller's job, since whether duplicates matter
+    depends on what's being asked (see _compare_links_files)."""
+    match = _CSV_BLOCK_RE.search(text)
+    if not match:
+        raise ValueError("no fenced ```csv block found in links file")
+
+    lines = [line for line in match.group(1).splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    rows = []
+    for line in lines[1:]:  # lines[0] is the "idx,role,group,device,data" header
+        parts = line.split(",")
+        if len(parts) != 5:
+            continue  # malformed row -- skip rather than crash the whole comparison
+        idx, role, group, device, data = parts
+        rows.append({"idx": idx, "role": role, "group": group, "device": device, "data": data})
+    return rows
 
 
 class INSTEONDiagnostics:
@@ -138,6 +201,7 @@ class INSTEONDiagnostics:
         self._file_path = None
         self._plm_address = None
         self._plm_connected = False
+        self._refresh_plm_links = False
 
     async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
         # NOTE: assumes `node` here accepts the same device address used
@@ -161,7 +225,7 @@ class INSTEONDiagnostics:
             self._is_running = False
             return "PLM not connected. Cannot retrieve device links table."
         #make it into a thread so it can be stopped if needed
-        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, "0 100")
+        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, "0 -1")
         await self._add_ending_to_file()
         if rc:
             rc = await self._read_from_file(self._file_path)
@@ -198,29 +262,232 @@ class INSTEONDiagnostics:
         self._file_path = None
         return rc
 
-    async def _get_all_plm_links(self, **kwargs) -> str | None:
-        # Get all PLM links -- system-wide, not scoped to any one device.
+    async def _get_all_plm_links(self, refresh_plm_links: bool = False, **kwargs) -> str | None:
+        # Get all PLM links -- system-wide, not scoped to any one device. A
+        # full PLM scan is slow, real hardware I/O and the PLM's own link
+        # database rarely changes minute-to-minute, so a recent-enough
+        # result is served from disk instead of re-scanning every call --
+        # unless refresh_plm_links is set (the model sets this when the
+        # customer explicitly asks for a fresh scan).
         if self._is_running:
             logger.warning(already_running_message)
             return already_running_message
+
+        # PLM connectivity is a single cheap SOAP call -- always check it
+        # live, even on a cache hit, so callers reporting self._plm_connected
+        # (e.g. quick_plm_sanity_check) never see stale connectivity from
+        # before the cache was populated. Only the expensive full link-table
+        # scan below is what gets cached.
         self._plm_connected, plm_info = await self._get_plm_info()
         self._plm_address = self._get_plm_address(plm_info)
+        if not self._plm_connected:
+            return "PLM not connected. Cannot retrieve PLM links table."
+
+        cache_path = self._get_file_path("plm", None)
+        force_refresh = refresh_plm_links or self._refresh_plm_links
+        if not force_refresh and _is_cache_fresh(cache_path):
+            return await self._read_from_file(cache_path)
 
         self._is_running = True
-        self._file_path = self._get_file_path("plm", None)
-        if self._plm_connected:
-            await self._write_to_file(self._file_path, f"PLM Links Table for PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
-        else:
-            self._is_running = False
-            return "PLM not connected. Cannot retrieve PLM links table."
+        self._file_path = cache_path
+        await self._write_to_file(self._file_path, f"PLM Links Table for PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
 
         rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
         await self._add_ending_to_file()
+        self._refresh_plm_links = False  # satisfied -- next call can use cache again
         if rc:
             rc = await self._read_from_file(self._file_path)
         self._is_running = False
         self._file_path = None
         return rc
+
+    def _compare_links_files(self, device_file_path: str, iox_file_path: str) -> str:
+        """Compare a device's live link table (get_dev_links_table's output
+        file) against NuCore's own replica of it (get_iox_links_table's
+        output file), and return a plain-text report of whether they agree.
+
+        - ``deleted``/``end_of_table`` records are excluded from the
+          comparison entirely -- they aren't real, comparable links.
+        - Records whose flag byte didn't decode to a known role (role ==
+          "unrecognized_flag(XX)") are always flagged as data-integrity
+          anomalies, wherever they appear, independent of whether the two
+          files otherwise agree.
+        - A link's identity for comparison is (role, group, device) -- if
+          that identity exists on both sides but with different ``data``,
+          it's reported as reprogrammed with different parameters, not as
+          missing.
+        - Duplicate rows (identical role/group/device/data appearing more
+          than once) within a single file are reported separately, since
+          that's its own data-integrity concern independent of whether the
+          two files agree with each other -- naively diffing line-by-line
+          without deduplicating first would otherwise report every
+          duplicated row as a spurious mismatch.
+        """
+        with open(device_file_path, "r") as f:
+            device_rows = _parse_links_csv(f.read())
+        with open(iox_file_path, "r") as f:
+            iox_rows = _parse_links_csv(f.read())
+
+        report: list[str] = []
+
+        def _anomalies(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+            return [r for r in rows if r["role"] not in _KNOWN_ROLES]
+
+        device_anomalies = _anomalies(device_rows)
+        iox_anomalies = _anomalies(iox_rows)
+        if device_anomalies or iox_anomalies:
+            report.append(
+                "ANOMALIES (unrecognized flag byte -- data integrity issue, independent of the comparison below):"
+            )
+            for label, anomalies in (("device", device_anomalies), ("iox", iox_anomalies)):
+                for r in anomalies:
+                    report.append(
+                        f"  {label} file, idx {r['idx']}: role={r['role']}, group={r['group']}, "
+                        f"device={r['device']}, data={r['data']}"
+                    )
+
+        def _comparable(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+            return [r for r in rows if r["role"] not in _ROLES_EXCLUDED_FROM_COMPARISON]
+
+        device_comparable = _comparable(device_rows)
+        iox_comparable = _comparable(iox_rows)
+
+        def _duplicates(rows: list[dict[str, str]]) -> list[tuple[str, str, str, str]]:
+            counts = Counter((r["role"], r["group"], r["device"], r["data"]) for r in rows)
+            return [key for key, count in counts.items() if count > 1]
+
+        for label, rows in (("device", device_comparable), ("iox", iox_comparable)):
+            dupes = _duplicates(rows)
+            if dupes:
+                report.append(f"DUPLICATE ROWS in {label} file ({len(dupes)} distinct record(s) repeated):")
+                for role, group, dev_id, data in dupes:
+                    report.append(f"  role={role}, group={group}, device={dev_id}, data={data}")
+
+        def _key_to_data(rows: list[dict[str, str]]) -> dict[tuple[str, str, str], set[str]]:
+            mapping: dict[tuple[str, str, str], set[str]] = {}
+            for r in rows:
+                key = (r["role"], r["group"], r["device"])
+                mapping.setdefault(key, set()).add(r["data"])
+            return mapping
+
+        device_map = _key_to_data(device_comparable)
+        iox_map = _key_to_data(iox_comparable)
+
+        only_in_device = sorted(set(device_map) - set(iox_map))
+        only_in_iox = sorted(set(iox_map) - set(device_map))
+        data_mismatches = sorted(key for key in set(device_map) & set(iox_map) if device_map[key] != iox_map[key])
+
+        if not only_in_device and not only_in_iox and not data_mismatches:
+            report.append("MATCH: device and iox link tables agree (deleted/end_of_table records excluded).")
+        else:
+            report.append("MISMATCH: device and iox link tables disagree -- device was likely reprogrammed outside NuCore.")
+            if only_in_device:
+                report.append(f"  Present on the device but NOT in NuCore's records ({len(only_in_device)}):")
+                for role, group, dev_id in only_in_device:
+                    report.append(f"    role={role}, group={group}, device={dev_id}")
+            if only_in_iox:
+                report.append(f"  Expected by NuCore but NOT present on the device ({len(only_in_iox)}):")
+                for role, group, dev_id in only_in_iox:
+                    report.append(f"    role={role}, group={group}, device={dev_id}")
+            if data_mismatches:
+                report.append(f"  Present on both sides but with different data ({len(data_mismatches)}):")
+                for role, group, dev_id in data_mismatches:
+                    key = (role, group, dev_id)
+                    report.append(f"    role={role}, group={group}, device={dev_id}: device={device_map[key]} vs iox={iox_map[key]}")
+
+        return "\n".join(report)
+
+    async def _compare_device_links(self, device_id: str = None, **kwargs) -> str:
+        """Fetch a device's live link table and NuCore's own replica of it,
+        then compare them (see _compare_links_files) -- one step instead of
+        the model manually calling get_dev_links_table/get_iox_links_table
+        itself and eyeballing the difference, which is exactly the kind of
+        mechanical row-matching a fast model is prone to hallucinate over.
+
+        The two fetches happen sequentially (never in parallel), same as
+        every other Insteon step, since they drive the same real hardware.
+        """
+        if device_id is None:
+            logger.warning(no_device_id_message)
+            return no_device_id_message
+
+        device_result = await self._get_dev_links_table(device_id)
+        if not device_result or LINKS_TABLE_FENCE_OPEN not in device_result:
+            return device_result or "Failed to retrieve the device's live link table."
+
+        iox_result = await self._get_iox_links_table(device_id)
+        if not iox_result or LINKS_TABLE_FENCE_OPEN not in iox_result:
+            return iox_result or "Failed to retrieve NuCore's replica of the link table."
+
+        device_path = self._get_file_path("device", device_id)
+        iox_path = self._get_file_path("iox", device_id)
+        return self._compare_links_files(device_path, iox_path)
+
+    async def _quick_plm_sanity_check(self, **kwargs) -> str:
+        """Fast, system-wide first pass for "none of my devices report status
+        back to the PLM" -- compares the PLM's actual link record count
+        against a rough expected count derived from NuCore's own node/group
+        database (nodes + groups + group memberships), instead of checking
+        every device's own links one at a time.
+
+        Not a replacement for get_all_plm_links/compare_device_links once you
+        suspect a specific device -- this just tells "PLM's link database
+        looks broadly healthy" from "badly out of sync" before committing to
+        a deeper per-device dive.
+
+        Records with role in _ROLES_EXCLUDED_FROM_COMPARISON (deleted/
+        end_of_table) aren't real, current links, so they're excluded from
+        the actual count the same way they're excluded from
+        _compare_links_files -- one definition of "a real link record" for
+        both.
+        """
+        plm_result = await self._get_all_plm_links()
+        # _get_all_plm_links already ran _get_plm_info as part of fetching --
+        # report the connectivity it found instead of re-querying for it.
+        lines = [f"PLM connected: {self._plm_connected}"]
+        if not plm_result or LINKS_TABLE_FENCE_OPEN not in plm_result:
+            lines.append(plm_result or "Failed to retrieve the PLM's link table.")
+            return "\n".join(lines)
+
+        rows = _parse_links_csv(plm_result)
+        actual = sum(1 for r in rows if r["role"] not in _ROLES_EXCLUDED_FROM_COMPARISON)
+
+        nodes = self._iox_wrapper.nodes
+        groups = self._iox_wrapper.groups
+        num_members = sum(len(g.members) for g in groups.values())
+        expected = len(nodes) + len(groups) + num_members
+
+        if expected == 0:
+            lines.append(
+                f"Cannot run the record-count check -- NuCore reports 0 nodes/groups, nothing to "
+                f"compare the PLM's {actual} link record(s) against."
+            )
+            return "\n".join(lines)
+
+        diff_pct = abs(actual - expected) / expected * 100
+        within_tolerance = diff_pct <= _PLM_SANITY_CHECK_TOLERANCE_PCT
+
+        lines += [
+            f"PLM link records (excluding deleted/end_of_table): {actual}",
+            f"Expected from NuCore's database (nodes={len(nodes)} + groups={len(groups)} "
+            f"+ group memberships={num_members}): {expected}",
+            f"Difference: {diff_pct:.1f}% "
+            f"({'within' if within_tolerance else 'OUTSIDE'} the {_PLM_SANITY_CHECK_TOLERANCE_PCT:.0f}% tolerance)",
+        ]
+        if within_tolerance:
+            lines.append("SANE: the PLM's link count is in line with what NuCore expects.")
+        elif actual < expected:
+            lines.append(
+                "PROBLEM: the PLM has far fewer link records than expected -- consistent with devices "
+                "not reporting status back to the PLM (missing device->PLM responder links). The PLM's "
+                "link database is likely stale or was never fully restored."
+            )
+        else:
+            lines.append(
+                "NOTE: the PLM has more link records than expected -- possible stale/duplicate links "
+                "rather than a missing-status-feedback issue; worth checking specific devices."
+            )
+        return "\n".join(lines)
 
     async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:
@@ -262,11 +529,6 @@ class INSTEONDiagnostics:
             logger.error(f"Error formatting flag: {e}")
             flag_hex = "Unknown"
         role = _decode_role(flag_hex)
-
-        if role == "end_of_table":
-            # stop device specific 
-            await self.stop_insteon_diagnostics(False)
-            return f"{index},{role},,,"
 
         data = eventInfo.get('data', 'Unknown')
         try:
@@ -392,3 +654,11 @@ class INSTEONDiagnostics:
             formatted_event = await self.format_links_event(eventInfo, type)
             await self._write_to_file(file_path, formatted_event + "\n", mode="a")
             logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, formatted_event={formatted_event if formatted_event else 'Unknown'}") 
+
+
+        
+    async def on_node_device_event(self, node, control, action, eventInfo):
+        if not node or not action:
+            return
+        if action in ["NR", "ND", "RV", "NI", "DI", "AA", "MV", "CL", "RG", "WD","GR", "GD"]:
+            self._refresh_plm_links = True

@@ -75,7 +75,7 @@
                "--secrets-file=secrets/keys.json",
                "--log-level=INFO",
                "--diagnostic-step=get_dev_links_table",
-               "--diagnostic-params={\"device_id\": \"1F 62 BC 1\"}",
+               "--diagnostic-params={\"device_id\": \"17 F8 44 1\"}",
                "--json-output=true"
             ],
             "justMyCode": false

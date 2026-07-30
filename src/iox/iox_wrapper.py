@@ -2152,6 +2152,7 @@ class IoXWrapper(NuCoreInterface):
         node = message.get('node', None)
         eventInfo = message.get('eventInfo', None)
         if control == "_3": #node updated event
+            await self.diagnostics.on_node_updated_event(node, control, action, eventInfo)
             if action and action in [ 'NX', 'PI', 'WD', 'EN', 'WH' ]:
                 if action == 'WH':
                     node = self.nodes.get(node, None) # just to be on the safe side
@@ -2170,25 +2171,25 @@ class IoXWrapper(NuCoreInterface):
     def _get_node_family(self, device_id) -> str | None:
         node = self._get_node(device_id)
         if node is None:
-            return None
+            return None, None
         if not hasattr(node, "family"):
             logger.error(f"Node object for device_id {device_id} does not have 'family' attribute")
-            return None
+            return None, None
 
         family = node.family
         if family is None:
             logger.error(f"Node object for device_id {device_id} has 'family' attribute set to None")
-            return None
+            return None, None
 
         family_code = str(family).strip()
         try:
             if family_code not in DEVICE_FAMILIES:
                 logger.error(f"Node object for device_id {device_id} has unrecognized 'family' value: {family}")
-                return None
+                return None, None
             return family_code, DEVICE_FAMILIES[family_code]
         except KeyError:
             logger.error(f"Node object for device_id {device_id} has unrecognized 'family' value: {family}")
-            return None
+            return None, None
 
     def _is_insteon_family(self, device_id) -> bool:
         family, _ = self._get_node_family(device_id)

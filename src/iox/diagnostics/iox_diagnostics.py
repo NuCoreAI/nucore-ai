@@ -335,6 +335,23 @@ class IoXDiagnostics:
         return response
 
 
+    async def _get_system_options(self) -> dict[str, Any]:
+        """Fetch and parse GetSystemOptions once -- shared by
+        _get_full_system_config (all 5 subsystems' "enabled" flags) and
+        quick_plm_sanity_check's INSTEON-enabled check, so the fetch/parse
+        logic lives in exactly one place instead of being duplicated."""
+        options = await self._iox_wrapper._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
+        if options is None:
+            logger.error("Failed to get system options: no response")
+            return {}
+        try:
+            root = ET.fromstring(options)
+            system_opts = root.find('.//SystemOptions')
+            return _element_to_dict_excluding(system_opts) if system_opts is not None else {}
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse system options XML: {e}")
+            return {}
+
     # get system configuration
     async def _get_full_system_config(self, **kwargs) -> dict[str, str] | None:
         full_config = {}
@@ -480,26 +497,12 @@ class IoXDiagnostics:
         # gets a combined list of:
         # system options, system config, about, and availabe upgrades
         # First get system options and update info in subsystem state
-        options = await self._iox_wrapper._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
-        if options is None:
-            logger.error(f"Failed to get system options: {options.status_code if options else 'No response'}")
-        else: 
-            # parse the result into a dict
-            try:
-                options_config = {}
-                root = ET.fromstring(options)
-                system_opts = root.find('.//SystemOptions')
-                if system_opts is not None:
-                    options_config = _element_to_dict_excluding(system_opts)
-
-                self._subsystem_state[Subsystems.INSTEON.value]["enabled"] = options_config.get("INSTEONSupport", False)
-                self._subsystem_state[Subsystems.GENERIC_ZWAVE.value]["enabled"] = options_config.get("ZWaveSupport", False)
-                self._subsystem_state[Subsystems.ZWAVE.value]["enabled"] = options_config.get("ZMatterZWave", False)
-                self._subsystem_state[Subsystems.ZIGBEE.value]["enabled"] = options_config.get("ZigbeeSupport", False)
-                self._subsystem_state[Subsystems.MATTER.value]["enabled"] = options_config.get("MatterSupport", False)
-
-            except ET.ParseError as e:
-                logger.error(f"Failed to parse system options XML: {e}")
+        options_config = await self._get_system_options()
+        self._subsystem_state[Subsystems.INSTEON.value]["enabled"] = options_config.get("INSTEONSupport", False)
+        self._subsystem_state[Subsystems.GENERIC_ZWAVE.value]["enabled"] = options_config.get("ZWaveSupport", False)
+        self._subsystem_state[Subsystems.ZWAVE.value]["enabled"] = options_config.get("ZMatterZWave", False)
+        self._subsystem_state[Subsystems.ZIGBEE.value]["enabled"] = options_config.get("ZigbeeSupport", False)
+        self._subsystem_state[Subsystems.MATTER.value]["enabled"] = options_config.get("MatterSupport", False)
 
         # second get PLM Infomation and update subsystem state
         if self._subsystem_state[Subsystems.INSTEON.value]["enabled"]:
@@ -514,9 +517,15 @@ class IoXDiagnostics:
 
         subsystems = {}
         for subsystem in self._subsystem_state.values():
-            name = subsystem.get("name", "Unknown")
-            subsystem.pop("name", None)
-            subsystems[name] = subsystem
+            # Copy before popping "name" -- self._subsystem_state lives for
+            # this instance's whole lifetime (reused across every diagnostic
+            # session, not just this call), so mutating the stored dict
+            # directly destroyed "name" permanently after the first call
+            # ever made, collapsing every subsystem into one bogus "Unknown"
+            # entry on every call after that.
+            entry = dict(subsystem)
+            name = entry.pop("name", "Unknown")
+            subsystems[name] = entry
 
         # add subsystem_config
         full_config["Subsystem States"] = subsystems
@@ -590,6 +599,11 @@ class IoXDiagnostics:
             #self._subsystem_state[control]["updated"] =  True
             self._subsystem_state[control]["connected"] =  True
 
+    async def on_node_updated_event(self, node, control, action, eventInfo):
+        if not self._iox_wrapper._is_insteon_family(node):
+            return
+        if self._init_insteon_diag(node):
+            await self._insteon_diag.on_node_device_event(node, control, action, eventInfo)
 
     def _get_core_services_status(self) -> dict[str, Any]:
         """
@@ -646,6 +660,42 @@ class IoXDiagnostics:
         if self._init_insteon_diag(None):
             return await self._insteon_diag._get_all_plm_links(**kwargs)
         return None
+
+    async def _compare_device_links(self, device_id: str = None, **kwargs) -> str | None:
+        if self._init_insteon_diag(device_id):
+            return await self._insteon_diag._compare_device_links(device_id, **kwargs)
+        return None
+
+    async def _quick_plm_sanity_check(self, **kwargs) -> str | None:
+        """System-level checks (INSTEON enabled, core services) plus
+        INSTEONDiagnostics's own PLM-connected/link-count check, merged into
+        one report -- so the model never needs to separately call
+        get_full_system_config/get_core_services_status for this scenario.
+        """
+        if not self._init_insteon_diag(None):
+            return None
+
+        options_config = await self._get_system_options()
+        insteon_enabled = bool(options_config.get("INSTEONSupport", False))
+
+        try:
+            services_status: Any = self._get_core_services_status()
+        except NotImplementedError as ex:
+            services_status = f"not available yet ({ex})"
+
+        lines = [
+            f"INSTEON enabled: {insteon_enabled}",
+            f"Core services status: {services_status}",
+        ]
+        if not insteon_enabled:
+            lines.append(
+                "INSTEON is not enabled in system config -- that alone explains no status "
+                "feedback from any Insteon device; nothing else to check until it's enabled."
+            )
+            return "\n".join(lines)
+
+        insteon_report = await self._insteon_diag._quick_plm_sanity_check(**kwargs)
+        return "\n".join(lines) + "\n" + insteon_report
 
     async def update_links_table(self, node, control, action, eventInfo):
         if self._insteon_diag is not None:
