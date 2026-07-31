@@ -47,7 +47,12 @@ logger = get_logger(__name__)
 # apart (malformed JSON, or a function name that no longer exists) -- the
 # prompt file is the single source of truth; this class only validates and
 # dispatches against it.
-_PROMPTS_DIR = Path(__file__).parent / "prompts"
+#
+# Lives under unified/diagnostics rather than alongside this file -- mirrors
+# where the Plan feature's prompts live (unified/planning/prompts), keeping
+# every feature's prompt content under unified/ regardless of which backend
+# implements its steps.
+_PROMPTS_DIR = Path(__file__).parent.parent.parent / "unified" / "diagnostics" / "prompts"
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
 # The only two steps with no backend function -- ended/aborted by the
