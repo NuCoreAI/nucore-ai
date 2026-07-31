@@ -106,6 +106,9 @@ class FakeBackend(NuCoreInterface):
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
     def get_running_diagnostic(self): return None
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+    async def add_device(self, device_address, **kwargs): raise NotImplementedError
+    async def discover_devices(self): raise NotImplementedError
+    async def finish_device_discovery(self): raise NotImplementedError
 
 
 CODE = 'if device("25 80 3C 1").status("ST", uom=17, precision=1) > 72:\n    device("BAR1").command("DON")'

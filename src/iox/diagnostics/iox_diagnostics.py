@@ -545,19 +545,6 @@ class IoXDiagnostics:
         return family_name
 
 
-    # add node
-    async def _add_node(self) -> str | None:
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_ADD_NODE, None, None, 0x01, None)
-
-    # discover nodes
-    async def _discover_nodes(self) -> str | None:
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_DISCOVER_NODES, None, None, 0x01, None)
-
-    # cancel nodes discovery
-    async def _cancel_nodes_discovery(self) -> str | None:
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_CANCEL_NODES_DISCOVERY, None, None, 0x01, None)
-
-
     # get nodes config
     async def _get_nodes_config(self) -> str | None:
         return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_NODES_CONFIG, None, None, 0x01, None)

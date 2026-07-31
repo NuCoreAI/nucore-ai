@@ -1134,10 +1134,14 @@ class IoXWrapper(NuCoreInterface):
     
     async def add_node(self, node_name:str, type:Literal["folder", "group"]):
         """
-        Add a new node (folder or group) to the device structure.
+        Add a new node (folder or group) to the device structure. Distinct
+        from start_device_pairing -- this creates a software organizational
+        node via the REST API; it has nothing to do with physical devices,
+        despite "AddNode" being the (unrelated) name of the SOAP action
+        start_device_pairing uses.
         :param node_name: The name of the node to add.
         :param type: The type of the node, either "folder" or "group".
-        :return: response from the API or None if failure 
+        :return: response from the API or None if failure
         """
         type=type.lower()
         if not type in ["folder", "group"]:
@@ -1535,6 +1539,27 @@ class IoXWrapper(NuCoreInterface):
         IoXDiagnostics.get_running_diagnostic.
         """
         return self.diagnostics.get_running_diagnostic()
+
+    # ------------------------------------------------------------------
+    # Device pairing -- previously dead diagnostics-only SOAP calls (never
+    # wired into a diagnostic step), moved here rather than wiring up the
+    # untested, zero-call-site SetDeviceLinkMode action. Distinct from
+    # add_node above -- these drive the PLM's physical pairing/linking
+    # hardware workflow, not NuCore's own node database. INSTEON only for
+    # now -- no Z-Wave/Zigbee/Matter pairing primitives exist anywhere in
+    # this class yet.
+    # ------------------------------------------------------------------
+
+    async def add_device(self, device_address: str, **kwargs) -> Any:
+        return await self._send_device_specific_with_option(
+            IoXSOAPAction.SOAP_TYPE_ADD_NODE, device_address, None, 0x01, None
+        )
+
+    async def discover_devices(self) -> Any:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_DISCOVER_NODES, None, None, 0x01, None)
+
+    async def finish_device_discovery(self) -> Any:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_CANCEL_NODES_DISCOVERY, None, None, 0x01, None)
 
     # ------------------------------------------------------------------
     # WebSocket event subscription

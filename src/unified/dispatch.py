@@ -12,6 +12,7 @@ from .handlers import (
     diagnostics,
     group_scene_ops,
     node_ops,
+    plan,
     plugin_management,
     routine_automation,
     routine_status_ops,
@@ -26,6 +27,15 @@ logger = get_logger(__name__)
 # a real hub-level operation another conversation shouldn't be able to touch,
 # restart, or interrupt.
 _DIAGNOSTICS_EXEMPT_TOOLS = frozenset({"start_diagnostics", "run_diagnostic_step"})
+
+# Same idea, for an in-progress plan session. Diagnostics and Plan are also
+# mutually exclusive with EACH OTHER: neither tool set is in the other's
+# exempt set, so the two gates below already block one while the other is
+# running, with no extra code -- both can drive real hub hardware, so only
+# one of either kind should ever be in flight at a time.
+_PLAN_EXEMPT_TOOLS = frozenset({"start_plan", "run_plan_step"})
+
+_SESSION_SCOPED_TOOLS = _DIAGNOSTICS_EXEMPT_TOOLS | _PLAN_EXEMPT_TOOLS
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
 
@@ -47,6 +57,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_installed_plugins": plugin_management.list_installed_plugins,
     "start_diagnostics": diagnostics.start_diagnostics,
     "run_diagnostic_step": diagnostics.run_diagnostic_step,
+    "start_plan": plan.start_plan,
+    "run_plan_step": plan.run_plan_step,
 }
 
 
@@ -64,21 +76,34 @@ async def execute_tool(
     if handler is None:
         return {"error": f"unknown tool '{name}'"}
 
-    running = nucore_interface.get_running_diagnostic()
-    if running is not None:
-        owner = running.get("session_id")
+    running_diag = nucore_interface.get_running_diagnostic()
+    if running_diag is not None:
+        owner = running_diag.get("session_id")
         if name not in _DIAGNOSTICS_EXEMPT_TOOLS or session_id != owner:
             return {
                 "error": (
                     f"a diagnostic session is currently in progress "
-                    f"(started {running['elapsed_s']}s ago) -- no other actions can be performed until it "
+                    f"(started {running_diag['elapsed_s']}s ago) -- no other actions can be performed until it "
                     "concludes, times out, or is stopped. Ask the customer whether to stop it, then call "
                     "run_diagnostic_step with step='stop', or wait."
                 )
             }
 
+    running_plan = plan.get_running_plan(nucore_interface)
+    if running_plan is not None:
+        owner = running_plan.get("session_id")
+        if name not in _PLAN_EXEMPT_TOOLS or session_id != owner:
+            return {
+                "error": (
+                    f"a plan session is currently in progress "
+                    f"(started {running_plan['elapsed_s']}s ago) -- no other actions can be performed until it "
+                    "concludes, times out, or is stopped. Ask the customer whether to stop it, then call "
+                    "run_plan_step with step='stop', or wait."
+                )
+            }
+
     try:
-        if name in _DIAGNOSTICS_EXEMPT_TOOLS:
+        if name in _SESSION_SCOPED_TOOLS:
             return await handler(nucore_interface, args, session_id=session_id)
         return await handler(nucore_interface, args)
     except Exception as exc:

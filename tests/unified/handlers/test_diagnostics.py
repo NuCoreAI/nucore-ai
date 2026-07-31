@@ -57,6 +57,9 @@ class FakeBackend(NuCoreInterface):
     def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
     def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+    async def add_device(self, device_address, **kwargs): raise NotImplementedError
+    async def discover_devices(self): raise NotImplementedError
+    async def finish_device_discovery(self): raise NotImplementedError
 
 
 @pytest.mark.asyncio

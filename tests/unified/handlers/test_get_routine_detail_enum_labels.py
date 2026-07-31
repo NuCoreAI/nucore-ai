@@ -95,6 +95,9 @@ class FakeBackend(NuCoreInterface):
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
     def get_running_diagnostic(self): return None
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+    async def add_device(self, device_address, **kwargs): raise NotImplementedError
+    async def discover_devices(self): raise NotImplementedError
+    async def finish_device_discovery(self): raise NotImplementedError
 
 
 @pytest.mark.asyncio

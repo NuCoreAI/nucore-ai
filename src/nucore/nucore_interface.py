@@ -338,13 +338,17 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the get_routine method.")
 
-    @abstractmethod 
+    @abstractmethod
     async def add_node(self, node_name:str, type:Literal["folder", "group"]):
         """
-        Add a new node (folder or group) to the device structure.
+        Add a new node (folder or group) to the device structure. Distinct
+        from start_device_pairing -- this creates a software organizational
+        node via the REST API; it has nothing to do with physical devices,
+        despite "AddNode" being the (unrelated) name of the SOAP action
+        start_device_pairing uses.
         :param node_name: The name of the node to add.
         :param type: The type of the node, either "folder" or "group".
-        :return: response from the API or None if failure 
+        :return: response from the API or None if failure
         """
         raise NotImplementedError("Subclasses must implement the add_node method.")
     
@@ -573,6 +577,69 @@ class NuCoreInterface(ABC):
                  or None if nothing is running (including a stale/timed-out one).
         """
         raise NotImplementedError("Subclasses must implement the get_running_diagnostic method.")
+
+    # ------------------------------------------------------------------
+    # Device pairing (used by the Plan feature's "new_installation" flow).
+    # Distinct from add_node -- add_node creates a software node (folder/
+    # group) via the REST API; these drive the physical hub's actual
+    # pairing/linking hardware workflow instead.
+    #
+    # Two genuinely different, mutually exclusive ways to add a physical
+    # device (INSTEON/X10):
+    #  - add_device(address): targeted, self-contained, no follow-up call
+    #    needed -- given a specific device's own address, add it directly.
+    #  - discover_devices() + finish_device_discovery(): an open-ended
+    #    batch session instead -- puts the hub in linking mode, the
+    #    customer presses the set button on as many devices as they want
+    #    (no addresses needed upfront), and finish_device_discovery() is
+    #    THEN REQUIRED to actually program everything that was linked
+    #    during the session (it commits, it does not cancel/abort despite
+    #    the underlying SOAP action's name).
+    #
+    # Plan only ever uses add_device -- the batch workflow has no reliable
+    # way to map an anonymously-discovered address back to which room/name
+    # the customer actually meant, so it's deliberately not exposed there.
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def add_device(self, device_address: str, **kwargs):
+        """
+        Add one specific physical device by its own address. Self-contained
+        -- no discover/finish follow-up call needed. Protocol-specific under
+        the hood -- a backend that doesn't support this for its protocol(s)
+        should raise NotImplementedError or return a clear error rather than
+        silently no-op.
+        :param device_address: The physical device's own address.
+        :param kwargs: Reserved for additional protocol-specific parameters.
+        :return: response from the hub, or None/error info on failure.
+        """
+        raise NotImplementedError("Subclasses must implement the add_device method.")
+
+    @abstractmethod
+    async def discover_devices(self):
+        """
+        Put the hub into linking mode for a batch pairing session -- the
+        customer can press the set button on as many devices as they want
+        while this is active, with no addresses needed upfront. Must be
+        followed by finish_device_discovery() to actually program the
+        devices that were linked; there's no address-to-name mapping
+        provided by this call, which is why Plan doesn't use it (see above).
+        :return: response from the hub, or None/error info on failure.
+        """
+        raise NotImplementedError("Subclasses must implement the discover_devices method.")
+
+    @abstractmethod
+    async def finish_device_discovery(self):
+        """
+        End the batch pairing session started by discover_devices() and
+        program every device that was linked during it. This COMMITS the
+        session -- it is not a cancel/abort, despite the underlying SOAP
+        action being named "CancelNodesDiscovery". discover_devices()
+        requires this call to actually take effect; add_device() requires
+        neither this nor discover_devices() at all.
+        :return: response from the hub, or None/error info on failure.
+        """
+        raise NotImplementedError("Subclasses must implement the finish_device_discovery method.")
 
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None):
         """
