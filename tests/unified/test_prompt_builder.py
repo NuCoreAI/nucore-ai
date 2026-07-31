@@ -48,6 +48,9 @@ class FakeBackend(NuCoreInterface):
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
     def get_running_diagnostic(self): return None
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+    async def add_device(self, device_address, **kwargs): raise NotImplementedError
+    async def discover_devices(self): raise NotImplementedError
+    async def finish_device_discovery(self): raise NotImplementedError
 
 
 @pytest.mark.asyncio
@@ -58,3 +61,32 @@ async def test_build_system_prompt_substitutes_every_placeholder():
     assert "# VARIABLES DATABASE" not in prompt
     assert "Bedtime" in prompt
     assert "Irrigation_Mode" in prompt  # via ROUTINES DATABASE's variable_names cross-reference
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_reports_time_info_unavailable_when_not_implemented():
+    # FakeBackend doesn't override get_timespecs -- the base class's
+    # NotImplementedError must be swallowed, not crash prompt building.
+    prompt = await build_system_prompt(FakeBackend())
+
+    assert "Time/timezone/location information is unavailable" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_includes_time_info_when_available():
+    class TimeAwareBackend(FakeBackend):
+        async def get_timespecs(self):
+            return {
+                "current_time": "2026-06-02T02:02:44-07:00",
+                "timezone": "America/Los_Angeles",
+                "latitude": 34.05,
+                "longitude": -118.233,
+                "sunrise": "2026-05-29T05:43:41-07:00",
+                "sunset": "2026-05-29T19:56:42-07:00",
+            }
+
+    prompt = await build_system_prompt(TimeAwareBackend())
+
+    assert "TIMEZONE = 'America/Los_Angeles'" in prompt
+    assert "LATITUDE = 34.05" in prompt
+    assert "SUNRISE_TODAY = '2026-05-29T05:43:41-07:00'" in prompt

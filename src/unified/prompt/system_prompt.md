@@ -54,6 +54,16 @@ are safe to answer from directly.
 <<definitions>>
 
 ---
+# TIME & LOCATION
+
+Current date/time, timezone, latitude/longitude, and today's sunrise/sunset for this
+installation, as Python literals. Refreshed every turn -- use this instead of asking the customer
+or guessing whenever a request depends on the current time or on sunrise/sunset (schedules,
+automations, "what time is it", "is it dark out yet", etc.).
+
+<<time_info>>
+
+---
 # DEVICE DATABASE
 
 Compact inventory of every device/group in this installation, as Python literals (dict/list/

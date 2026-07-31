@@ -4,6 +4,7 @@ import sys
 import os
 import base64
 import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
@@ -1367,8 +1368,11 @@ class IoXWrapper(NuCoreInterface):
     # ------------------------------------------------------------------
     async def get_timespecs(self) -> dict[str, str]:
         """
-        Get a list of timezones that can be set on the device. 
-        :return: Dictionary of timezones or None if failure
+        Get time/timezone/location information from the device, including the
+        current time and today's sunrise/sunset (both localized to the
+        device's own configured timezone) -- useful for the LLM when setting
+        up or explaining time- or sunrise/sunset-based routines.
+        :return: Dictionary of timespecs or None if failure
 
         API:
         /rest/time
@@ -1377,7 +1381,7 @@ class IoXWrapper(NuCoreInterface):
             response = self.get(f'/rest/time')
             if response == None or response.status_code != 200:
                 return response if response else None
-            
+
             #response is in xml, convert to json
             root = ET.fromstring(response.text)
 #                <DT>
@@ -1395,22 +1399,35 @@ class IoXWrapper(NuCoreInterface):
 #                    <IsMilitary>false</IsMilitary>
 #                    <TzId>America/Los_Angeles</TzId>
 #                </DT>
-            #convert to dictionary
-            #include current date/time in the response since that's useful for the LLM to know when setting routines that are time-based, and also include timezone, latitude, and longitude since those are useful for calculating sunrise/sunset times for routines that are based on sunrise/sunset
-            time_data = {
-                "current_time": datetime.datetime.now().isoformat(),
-            }
-            for child in root:
+            #convert to dictionary -- read every field first since TzId (needed
+            #to localize the GMT/SunriseGMT/SunsetGMT epoch fields below) comes
+            #last in the XML, after the fields that depend on it
+            raw = {child.tag: child.text for child in root}
 
-                if child.tag == "TzId":
-                    time_data["timezone"] = child.text
-                elif child.tag == "Lat":
-                    time_data["latitude"] = float(child.text)
-                elif child.tag == "Long":
-                    time_data["longitude"] = float(child.text) * -1 #the API returns longitude as a positive value, convert it to negative since that's the standard format for longitude
+            tz_name = raw.get("TzId")
+            tzinfo = ZoneInfo(tz_name) if tz_name else datetime.timezone.utc
 
-            return time_data 
-        except Exception as ex: 
+            time_data: dict[str, Any] = {"timezone": tz_name}
+
+            if raw.get("Lat") is not None:
+                time_data["latitude"] = float(raw["Lat"])
+            if raw.get("Long") is not None:
+                time_data["longitude"] = float(raw["Long"]) * -1 #the API returns longitude as a positive value, convert it to negative since that's the standard format for longitude
+
+            #GMT/SunriseGMT/SunsetGMT are already Unix epoch seconds (unlike
+            #NTP/Sunrise/Sunset, which are NTP epoch -- seconds since 1900, not
+            #1970) -- so no epoch conversion is needed, just localization
+            for key, field in (("current_time", "GMT"), ("sunrise", "SunriseGMT"), ("sunset", "SunsetGMT")):
+                value = raw.get(field)
+                if value is not None:
+                    time_data[key] = (
+                        datetime.datetime.fromtimestamp(int(value), tz=datetime.timezone.utc)
+                        .astimezone(tzinfo)
+                        .isoformat()
+                    )
+
+            return time_data
+        except Exception as ex:
             logger.error(f"Error performing timespecs operation: {ex}")
 
     # ------------------------------------------------------------------
