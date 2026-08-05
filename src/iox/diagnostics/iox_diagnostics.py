@@ -597,31 +597,58 @@ class IoXDiagnostics:
         if self._init_insteon_diag(node):
             await self._insteon_diag.on_node_device_event(node, control, action, eventInfo)
 
-    def _get_core_services_status(self) -> dict[str, Any]:
+    async def _get_core_services_status(self) -> dict[str, Any]:
         """
         Get the status of core services  (isy, udx, ...)
         :return: Dictionary with the status of each core service
         """
-        # /rest/udx.sys.ops/services.ops/services_status
-        raise NotImplementedError("Core services status retrieval is not implemented yet.")
+        try:
+            # /rest/udx.sys.ops/services.ops/services_status
+            response = self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/services_status", "e=mc2")            
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to get core services status: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to get core services status: {response.status_code if response else 'No response'}"}
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get core services status: {e}")
+            return {"error": f"Failed to get core services status: {e}"}
 
-    def _get_plugin_services_status(self) -> dict[str, Any]:
+    async def _get_plugin_services_status(self) -> dict[str, Any]:
         """
         Get the status of core services  (isy, udx, ...)
         :return: Dictionary with the status of each core service
         """
-        # /rest/udx.sys.ops/services.ops/plugin_services_status
-        raise NotImplementedError("Plugin services status retrieval is not implemented yet.")
+        try:
+            # /rest/udx.sys.ops/services.ops/plugin_services_status
+            response = self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/plugin_services_status", "e=mc2")            
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to get plugin services status: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to get plugin services status: {response.status_code if response else 'No response'}"}
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get plugin services status: {e}")
+            return {"error": f"Failed to get plugin services status: {e}"}
 
-    def _services_ops(self, op: Literal["start", "stop", "restart"]) -> dict[str, Any]: 
+    async def _services_ops(self, service:str, op: Literal["start", "stop", "restart"]) -> dict[str, Any]: 
         """
         An operation on a core or plugin service (start, stop, restart)
+        :param service_name: The name of the service to operate on
         :param op: The operation to perform (start, stop, restart)
-        Get the status of core services  (isy, udx, ...)
         :return: Dictionary with the status of each core service or failure
         """
-        # /rest/udx.sys.ops/services.ops/$op
-        raise NotImplementedError("Core services status retrieval is not implemented yet.")
+        try:
+            # /rest/udx.sys.ops/services.ops/$op
+            response = self._iox_wrapper.post(f"/api/udx/rest/udx.sys.ops/services.ops/{op}_service/{service}", "e=mc2")            
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to {op} service {service}: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to {op} service {service}: {response.status_code if response else 'No response'}"}
+            try:
+                return response.json()
+            except Exception as e:
+                return f"{service} {op} successful"
+        except Exception as e:
+            logger.error(f"Failed to {op} service {service}: {e}")
+            return {"error": f"Failed to {op} service {service}: {e}"}
 
     # ---------------------------------------------------
     # INSTEON DIAGNOSTICS

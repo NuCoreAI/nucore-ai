@@ -65,7 +65,7 @@ Don't generalize a single device's data into a system-wide conclusion. Checking 
     "description": "Returns the status (running/stopped/failed) of NuCore plugin services: there's one service for each plugin"
   },
   "services_ops": {
-    "description": "start/stop/restart a known service. Params: op (\"start\"|\"stop\"|\"restart\")."
+    "description": "start/stop/restart a known service. Params: op (\"start\"|\"stop\"|\"restart\"), service: service name (str)"
   },
   "get_device_family": {
     "description": "Returns insteon, z-wave, zigbee, matter, plugin, or unknown. Params: device_id. You need this information before you can do any device-specific diagnostics."

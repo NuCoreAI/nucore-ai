@@ -227,7 +227,7 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed put: {ex}")
             return None
 
-    def post(self, path: str, body: str, headers: dict):
+    def post(self, path: str, body: str, headers: dict=None):
         """Send an authenticated HTTP POST request to the ISY hub.
 
         Args:
