@@ -181,6 +181,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the agentic loop's max tool-call iterations per query (defaults to runtime config's 'max_iterations', or 8).",
     )
     parser.add_argument(
+        "--preferences-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory to store this installation's customer preferences (aliases/events) in -- "
+            "overrides runtime config's 'preferences_dir'. There is no default: preferences are "
+            "unavailable for an installation that hasn't set either."
+        ),
+    )
+    parser.add_argument(
         "--diagnostic-step",
         type=str,
         default=None,
@@ -504,6 +514,14 @@ def main(args:Any=None, websocket=None) -> None:
 
     if nucore_interface is None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
+
+    # No default -- None means preferences (aliases/events) are simply
+    # unavailable for this installation. --preferences-dir wins over runtime
+    # config's 'preferences_dir', same CLI-overrides-config precedence
+    # already used for --max-iterations.
+    nucore_interface.preferences_dir = (
+        args.preferences_dir if args.preferences_dir is not None else runtime_config.get("preferences_dir")
+    )
 
     if args.diagnostic_step:
         # Direct-to-backend testing mode: no LLM, no AgenticLoop, no

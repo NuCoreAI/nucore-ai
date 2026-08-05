@@ -14,6 +14,7 @@ from .handlers import (
     node_ops,
     plan,
     plugin_management,
+    preferences,
     routine_automation,
     routine_status_ops,
     variable_ops,
@@ -59,6 +60,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "run_diagnostic_step": diagnostics.run_diagnostic_step,
     "start_plan": plan.start_plan,
     "run_plan_step": plan.run_plan_step,
+    "list_preferences": preferences.list_preferences,
+    "preference_op": preferences.preference_op,
 }
 
 

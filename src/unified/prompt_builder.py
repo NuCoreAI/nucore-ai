@@ -13,6 +13,8 @@ from typing import Any
 from nucore import NuCoreInterface
 from rag import DedupeRoutines
 
+from .preferences.preference_store import get_store
+
 _PROMPT_DIR = Path(__file__).parent / "prompt"
 
 # (time_data key, rendered Python variable name), in display order.
@@ -37,6 +39,25 @@ def _render_time_info(time_data: dict[str, Any] | None) -> str:
     return f"```python\n{chr(10).join(lines)}\n```"
 
 
+def _render_preference_aliases(nucore_interface: NuCoreInterface) -> str:
+    """Render every stored alias as a Python dict literal, same convention as
+    TIME & LOCATION/DEVICE DATABASE. Events are deliberately not rendered
+    here -- see list_preferences -- only aliases are small/static enough to
+    justify a standing, always-on slot."""
+    store = get_store(nucore_interface)
+    if store is None:
+        return "```python\n# Preferences are not configured for this installation.\n```"
+
+    aliases = store.list("alias")
+    if not aliases:
+        return "```python\n# No aliases saved yet.\n```"
+
+    lines = ["ALIASES = {"]
+    lines += [f"  {a['alias']!r}: {a['target']!r}," for a in aliases]
+    lines.append("}")
+    return f"```python\n{chr(10).join(lines)}\n```"
+
+
 async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
     """Build the complete unified system prompt for the given backend."""
     await nucore_interface._refresh_routines_database()
@@ -55,10 +76,12 @@ async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
     except NotImplementedError:
         time_data = None
     time_info = _render_time_info(time_data)
+    preference_aliases = _render_preference_aliases(nucore_interface)
 
     prompt = system_prompt.replace("<<definitions>>", definitions)
     prompt = prompt.replace("<<ui_navigation_rules>>", ui_navigation_rules)
     prompt = prompt.replace("<<device_database>>", device_database)
     prompt = prompt.replace("<<routines_database>>", routines_database)
     prompt = prompt.replace("<<time_info>>", time_info)
+    prompt = prompt.replace("<<preference_aliases>>", preference_aliases)
     return prompt

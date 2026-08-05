@@ -77,6 +77,20 @@ own comment header.
 <<device_database>>
 
 ---
+# USER PREFERENCES
+
+Aliases the customer has taught you -- personal shorthand for a real device/scene/group name
+above (e.g. "mbr" -> "Master Bedroom Scene"), as a Python dict literal. Resolve the customer's own
+words against this before asking for clarification or guessing. This does not include event-type
+preferences (birthdays, anniversaries, reminders) -- call `list_preferences` for those, or to
+manage preferences at all (`preference_op`). If you notice a likely new alias or event in
+conversation that the customer didn't explicitly ask you to save, confirm with them before calling
+`preference_op` to create it -- a bad create is cheap to undo, but don't invent preferences
+silently.
+
+<<preference_aliases>>
+
+---
 # ROUTINES DATABASE
 
 Compact summary of every automation routine in this installation, as Python literals. Use these

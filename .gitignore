@@ -221,6 +221,7 @@ finetuning_data/old/
 finetuning_data/secrets/
 logs/
 secrets/
+data/
 
 # Real-device test harness run output (ephemeral, machine/run-specific)
 tests/real_device/results/

@@ -1,0 +1,14 @@
+{
+  "name": "list_preferences",
+  "description": "List stored customer preferences -- aliases (personal shorthand for a real device/scene/group name, e.g. 'mbr' -> 'Master Bedroom Scene') and events (dated facts like a birthday/anniversary, optionally flagged to remind N days before). Aliases are also always visible in the standing USER PREFERENCES section of the system prompt -- call this for the full list, to check which events are due soon, or to get an id for preference_op's delete. Event entries include a computed next_occurrence/days_until (and due_soon when remind_days_before is set) -- use those instead of doing your own date math. To answer 'do I have any routines for X', cross-reference an event's name against ROUTINES DATABASE yourself -- there is no separate link between the two.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": ["string", "null"],
+        "enum": ["alias", "event", null],
+        "description": "Optional filter. Omit to list both types."
+      }
+    }
+  }
+}

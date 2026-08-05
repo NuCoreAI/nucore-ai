@@ -72,6 +72,7 @@
                "--backend-api-password=",
                "--backend-api-classpath=iox.IoXWrapper",
                "--runtime-config=src/unified/runtime_config.example.json",
+               "--preferences-dir=/usr/home/admin/.config/nucore_unified_runtime",
                "--secrets-file=secrets/keys.json",
                "--log-level=INFO",
                "--diagnostic-step=get_dev_links_table",
@@ -93,6 +94,7 @@
                "--backend-api-password=",
                "--backend-api-classpath=iox.IoXWrapper",
                "--runtime-config=src/unified/runtime_config.example.json",
+               "--preferences-dir=/usr/home/admin/.config/nucore_unified_runtime",
                "--secrets-file=secrets/keys.json",
                "--log-level=INFO",
                "--json-output=true"

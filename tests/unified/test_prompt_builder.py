@@ -90,3 +90,36 @@ async def test_build_system_prompt_includes_time_info_when_available():
     assert "TIMEZONE = 'America/Los_Angeles'" in prompt
     assert "LATITUDE = 34.05" in prompt
     assert "SUNRISE_TODAY = '2026-05-29T05:43:41-07:00'" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_reports_preferences_not_configured_by_default():
+    # FakeBackend never sets preferences_dir -- there's no default location
+    # (see design/user-pref.md), so this must render a clear message, not
+    # crash or silently invent a path.
+    prompt = await build_system_prompt(FakeBackend())
+
+    assert "Preferences are not configured for this installation" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_reports_no_aliases_yet_when_configured_but_empty(tmp_path):
+    backend = FakeBackend()
+    backend.preferences_dir = str(tmp_path)
+
+    prompt = await build_system_prompt(backend)
+
+    assert "No aliases saved yet" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_includes_saved_aliases(tmp_path):
+    from unified.preferences.preference_store import get_store
+
+    backend = FakeBackend()
+    backend.preferences_dir = str(tmp_path)
+    get_store(backend).add("alias", alias="mbr", target="Master Bedroom Scene")
+
+    prompt = await build_system_prompt(backend)
+
+    assert "'mbr': 'Master Bedroom Scene'" in prompt

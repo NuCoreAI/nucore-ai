@@ -75,3 +75,24 @@ def test_max_iterations_rejects_non_integer(tmp_path):
 
     with pytest.raises(ValueError):
         _load_runtime_config(path=path, stream_handler=None)
+
+
+def test_preferences_dir_parsed_from_top_level_config(tmp_path):
+    path = _write_config(tmp_path, preferences_dir="/some/dir")
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["preferences_dir"] == "/some/dir"
+
+
+def test_preferences_dir_has_no_default_when_absent(tmp_path):
+    path = _write_config(tmp_path)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["preferences_dir"] is None
+
+
+def test_preferences_dir_rejects_non_string(tmp_path):
+    path = _write_config(tmp_path, preferences_dir=123)
+
+    with pytest.raises(ValueError):
+        _load_runtime_config(path=path, stream_handler=None)

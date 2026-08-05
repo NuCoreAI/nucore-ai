@@ -1,5 +1,6 @@
 {
   "max_iterations": 8,
+  "preferences_dir": null,
   "nucore_runtime": {
     "default": {
       "provider": "claude",

@@ -99,6 +99,7 @@ def _load_runtime_config(
 
     {
       "max_iterations": 8,
+      "preferences_dir": null,
       "nucore_runtime": {
         "default": {...},
         "router": {...},
@@ -164,10 +165,17 @@ def _load_runtime_config(
     if configured_max_iterations is not None and not isinstance(configured_max_iterations, int):
         raise ValueError("max_iterations must be an integer when provided")
 
+    configured_preferences_dir = payload.get("preferences_dir")
+    if configured_preferences_dir is not None and not isinstance(configured_preferences_dir, str):
+        raise ValueError("preferences_dir must be a string when provided")
+
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
         "max_iterations": int(configured_max_iterations) if configured_max_iterations is not None else 8,
+        # No default -- None means preferences are simply unavailable for
+        # this installation (see unified.preferences.preference_store.get_store).
+        "preferences_dir": configured_preferences_dir,
         "default_llm": "default",
         "router_llm": "router" if "router" in supported_llms else "default",
         "default_max_turns": default_max_turns,
