@@ -1,0 +1,23 @@
+{
+  "name": "call_plugin_tool",
+  "description": "Invoke one of a plugin's own declared tools (from get_plugin_capabilities), to actually answer the customer's request or gather what you need to build a scene/automation. Use the result the way you'd use any other tool's result -- relay it, or feed it into further steps.",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id", "tool_name"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The installed `plugin-id`, from get_plugin_capabilities."
+      },
+      "tool_name": {
+        "type": "string",
+        "description": "The exact tool name from get_plugin_capabilities' tools list -- never invented."
+      },
+      "args": {
+        "type": "object",
+        "description": "Arguments for the plugin tool, as described by its entry in get_plugin_capabilities' tools list. Omit or leave empty for tools that need nothing.",
+        "additionalProperties": true
+      }
+    }
+  }
+}

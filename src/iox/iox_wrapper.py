@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
+from requests import api
 import websockets
 import urllib3
 import re 
@@ -1486,18 +1487,19 @@ class IoXWrapper(NuCoreInterface):
             response = self.get(f'/api/plugins')
             if response == None or response.status_code != 200:
                 return response if response else None
+            # now go through the list and rename profileNum to plugin_id for consistency with other plugin APIs
             return response.json()
         except Exception as ex:
             logger.error(f"Error performing get installed plugins operation: {ex}")
             return None
     
-    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart"]):
+    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart", "purchase"]):
         """
         Perform an operation on a plugin.
         :param plugin_id: The ID of the plugin to operate on -- profileNum
                            from get_installed_plugins() for start/stop/restart
                            (and, once implemented, install/uninstall/status);
-                           nsid for details.
+                           nsid for details/purchase.
         :param operation: The operation to perform.
         :return: response from the API or None if failure
 
@@ -1508,6 +1510,9 @@ class IoXWrapper(NuCoreInterface):
         /api/plugins/<profileNum>/start
         /api/plugins/<profileNum>/stop
         /api/plugins/<profileNum>/restart
+
+        Install/Purchase: no real API exists yet -- stubbed with a simulated
+        success so callers can be built/tested end-to-end.
         """
         if operation in ("start", "stop", "restart"):
             try:
@@ -1520,16 +1525,119 @@ class IoXWrapper(NuCoreInterface):
                 logger.error(f"Error performing plugin {operation} operation: {ex}")
                 return None
 
+        if operation in ("install", "purchase"):
+            # STUB: no real install/purchase API exists yet -- simulate
+            # success so the calling flow can be built/tested end-to-end.
+            # Replace with a real HTTP call once NuCore ships one.
+            return {
+                "successful": True,
+                "data": {"plugin_id": plugin_id, "operation": operation, "stub": True},
+            }
+
         raise NotImplementedError(f"plugin_ops operation '{operation}' is not yet implemented.")
-    
+
     async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
         """
-        Configure a plugin on the device. 
+        Configure a plugin on the device.
         :param plugin_id: The ID of the plugin to configure.
         :param config: A dictionary containing the configuration parameters.
-        :return: response from the API or None if failure 
+        :return: response from the API or None if failure
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
+
+    async def get_plugin_prompt(self, plugin_id: str) -> dict:
+        """
+        Returns usage guidance deterministic from plugin_id alone. 
+        """
+        try:
+            response = self.get(f'/api/plugin/{plugin_id}/prompt')
+            if response == None or response.status_code != 200:
+                return {
+                    "successful": False,
+                    "data": f"No response" if response is None else f"HTTP {response.status_code} from /api/plugin/{plugin_id}/prompt",
+                }
+            out = response.json()
+            if not isinstance(out, dict) or "successful" not in out or "data" not in out:
+                return {
+                    "successful": False,
+                    "data": "Invalid response format",
+                }
+            return out
+        except Exception as ex:
+                return {
+                    "successful": False,
+                    "data": str(ex),
+                }
+
+    async def get_plugin_tools(self, plugin_id: str) -> dict:
+        """
+        Returns tool-spec list deterministic from plugin_id alone, uniquified with
+        the plugin's own id per the naming convention used for multiple
+        installed instances of the same plugin type. 
+        """
+        try:
+            response = self.get(f'/api/plugin/{plugin_id}/tools')
+            if response == None or response.status_code != 200:
+                return {
+                    "successful": False,
+                    "data": f"No response" if response is None else f"HTTP {response.status_code} from /api/plugin/{plugin_id}/tools",
+                }
+            out = response.json()
+            if not isinstance(out, dict) or "successful" not in out or "data" not in out:
+                return {
+                    "successful": False,
+                    "data": "Invalid response format",
+                }
+            tools = out.get("data", [])
+            if not isinstance(tools, list):
+                return {
+                    "successful": False,
+                    "data": "Invalid tools format",
+                }
+            # rename the tools to make them unique per plugin_id, since multiple instances of the same plugin type can be installed
+            for tool in tools:
+                if "name" in tool:
+                    tool["name"] = f"{plugin_id}_{tool['name']}"
+            return {
+                "successful": True,
+                "data": {
+                    "tools": tools,
+                },
+            }
+
+        except Exception as ex:
+                return {
+                    "successful": False,
+                    "data": str(ex),
+                }
+
+    async def handle_plugin_llm_result(self, plugin_id: str, args: dict[str, Any]) -> dict:
+        """
+        Returns the result of the plugin's execution of the tool specified in *args["tool_name"]*
+        with *args*, deterministic from plugin_id/tool_name. 
+        """
+        timeout=60000
+
+        try:
+            response = self.post(f'/api/plugin/{plugin_id}/request',
+                                 body=json.dumps({"timeout": timeout, "payload": args}), headers={"Content-Type": "application/json"})
+            if response == None or response.status_code != 200:
+                return {
+                    "successful": False,
+                    "data": f"No response" if response is None else f"HTTP {response.status_code} from /api/plugin/{plugin_id}/request",
+                }
+            out = response.json()
+            if not isinstance(out, dict) or "successful" not in out or "data" not in out:
+                return {
+                    "successful": False,
+                    "data": "Invalid response format",
+                }
+            return out
+        except Exception as ex:
+            return {
+                "successful": False,
+                "data": str(ex),
+            }
 
     # ------------------------------------------------------------------
     # Diagnostics -- all actual registry/state/dispatch logic lives on

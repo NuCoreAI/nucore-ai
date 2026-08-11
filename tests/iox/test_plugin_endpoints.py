@@ -74,4 +74,17 @@ async def test_plugin_ops_unimplemented_operation_raises():
     wrapper = _bare_wrapper()
 
     with pytest.raises(NotImplementedError):
-        await wrapper.plugin_ops("3", "install")
+        await wrapper.plugin_ops("3", "uninstall")
+
+
+@pytest.mark.parametrize("operation", ["install", "purchase"])
+@pytest.mark.asyncio
+async def test_plugin_ops_install_and_purchase_are_stubbed_success(operation):
+    """No real install/purchase API exists yet -- these simulate success
+    instead of hitting the network, so no wrapper.post/get is even wired up
+    here."""
+    wrapper = _bare_wrapper()
+
+    result = await wrapper.plugin_ops("3", operation)
+
+    assert result == {"successful": True, "data": {"plugin_id": "3", "operation": operation, "stub": True}}

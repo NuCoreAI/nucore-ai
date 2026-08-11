@@ -61,6 +61,10 @@ class FakeBackend(NuCoreInterface):
         self.store_response = STORE_RESPONSE
         self.licenses_response = LICENSES_RESPONSE
         self.installed_response = INSTALLED_RESPONSE
+        self.plugin_ops_response = {"successful": True, "data": {"plugin_id": "stub", "operation": "stub"}}
+        self.plugin_prompt_response = {"successful": True, "data": {"prompt": "stub prompt"}}
+        self.plugin_tools_response = {"successful": True, "data": {"tools": [{"name": "stub_tool", "description": "stub", "params": {}}]}}
+        self.plugin_llm_result_response = {"successful": True, "data": {"result": "stub result"}}
 
     async def get_active_plugins(self):
         return self.store_response
@@ -70,6 +74,18 @@ class FakeBackend(NuCoreInterface):
 
     async def get_installed_plugins(self):
         return self.installed_response
+
+    async def plugin_ops(self, plugin_id, operation):
+        return self.plugin_ops_response
+
+    async def get_plugin_prompt(self, plugin_id):
+        return self.plugin_prompt_response
+
+    async def get_plugin_tools(self, plugin_id):
+        return self.plugin_tools_response
+
+    async def handle_plugin_llm_result(self, plugin_id, args):
+        return self.plugin_llm_result_response
 
     async def _load(self, **kwargs): raise NotImplementedError
     async def _load_routines(self): raise NotImplementedError
@@ -192,3 +208,131 @@ async def test_list_installed_plugins_error_on_failed_fetch():
     backend.installed_response = None
     result = await execute_tool("list_installed_plugins", {}, nucore_interface=backend)
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_install_plugin_simulates_success():
+    backend = FakeBackend()
+    backend.plugin_ops_response = {"successful": True, "data": {"plugin_id": "abc", "operation": "install"}}
+    result = await execute_tool("install_plugin", {"nsid": "abc"}, nucore_interface=backend)
+    assert result == {"status": "installed", "plugin_id": "abc", "stub": True, "note": "simulated install -- no real install API exists yet"}
+
+
+@pytest.mark.asyncio
+async def test_install_plugin_requires_nsid():
+    backend = FakeBackend()
+    result = await execute_tool("install_plugin", {}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_install_plugin_error_on_failed_op():
+    backend = FakeBackend()
+    backend.plugin_ops_response = {"successful": False}
+    result = await execute_tool("install_plugin", {"nsid": "abc"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_buy_plugin_simulates_purchase_and_install():
+    backend = FakeBackend()
+    backend.plugin_ops_response = {"successful": True, "data": {"plugin_id": "xyz", "operation": "purchase"}}
+    result = await execute_tool("buy_plugin", {"plugin_id": "xyz"}, nucore_interface=backend)
+    assert result["status"] == "purchased_and_installed"
+    assert result["plugin_id"] == "xyz"
+    assert result["stub"] is True
+
+
+@pytest.mark.asyncio
+async def test_buy_plugin_requires_plugin_id():
+    backend = FakeBackend()
+    result = await execute_tool("buy_plugin", {}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_capabilities_combines_prompt_and_tools():
+    backend = FakeBackend()
+    result = await execute_tool("get_plugin_capabilities", {"plugin_id": "3"}, nucore_interface=backend)
+    assert result == {
+        "plugin_id": "3",
+        "prompt": "stub prompt",
+        "tools": [{"name": "stub_tool", "description": "stub", "params": {}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_capabilities_requires_plugin_id():
+    backend = FakeBackend()
+    result = await execute_tool("get_plugin_capabilities", {}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_capabilities_error_when_prompt_fetch_fails():
+    backend = FakeBackend()
+    backend.plugin_prompt_response = {"successful": False}
+    result = await execute_tool("get_plugin_capabilities", {"plugin_id": "3"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_capabilities_error_when_tools_fetch_fails():
+    backend = FakeBackend()
+    backend.plugin_tools_response = {"successful": False}
+    result = await execute_tool("get_plugin_capabilities", {"plugin_id": "3"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_call_plugin_tool_returns_stub_result():
+    backend = FakeBackend()
+    backend.plugin_llm_result_response = {"successful": True, "data": {"result": "42"}}
+    result = await execute_tool(
+        "call_plugin_tool", {"plugin_id": "3", "tool_name": "3_get_status", "args": {}}, nucore_interface=backend
+    )
+    assert result == {"result": "42"}
+
+
+@pytest.mark.asyncio
+async def test_call_plugin_tool_requires_plugin_id_and_tool_name():
+    backend = FakeBackend()
+    result = await execute_tool("call_plugin_tool", {"tool_name": "x"}, nucore_interface=backend)
+    assert "error" in result
+    result = await execute_tool("call_plugin_tool", {"plugin_id": "3"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_call_plugin_tool_error_on_failed_result():
+    backend = FakeBackend()
+    backend.plugin_llm_result_response = {"successful": False}
+    result = await execute_tool(
+        "call_plugin_tool", {"plugin_id": "3", "tool_name": "3_get_status"}, nucore_interface=backend
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_call_plugin_tool_strips_plugin_id_prefix_and_embeds_tool_name():
+    """The plugin_id prefix is a global-uniqueness convention on this side --
+    the plugin's own handle_plugin_llm_result should see its bare tool name,
+    passed inside the single args payload (not as a separate parameter)."""
+    backend = FakeBackend()
+    captured = {}
+
+    async def fake_handle_plugin_llm_result(plugin_id, args):
+        captured["plugin_id"] = plugin_id
+        captured["args"] = args
+        return {"successful": True, "data": {"ok": True}}
+
+    backend.handle_plugin_llm_result = fake_handle_plugin_llm_result
+
+    await execute_tool(
+        "call_plugin_tool",
+        {"plugin_id": "3", "tool_name": "3_get_status", "args": {"foo": "bar"}},
+        nucore_interface=backend,
+    )
+
+    assert captured["plugin_id"] == "3"
+    assert captured["args"] == {"foo": "bar", "tool_name": "get_status"}

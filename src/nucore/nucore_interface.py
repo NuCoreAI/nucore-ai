@@ -482,13 +482,13 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the get_installed_plugins method.")
     
-    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart"]):
+    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart", "purchase"]):
         """
         Perform an operation on a plugin.
         :param plugin_id: The ID of the plugin to operate on -- profileNum
                            from get_installed_plugins() for start/stop/restart
                            (and, once implemented, install/uninstall/status);
-                           nsid for details.
+                           nsid for details/purchase.
         :param operation: The operation to perform.
         :return: response from the API or None if failure
 
@@ -499,17 +499,57 @@ class NuCoreInterface(ABC):
         /api/plugins/<profileNum>/start
         /api/plugins/<profileNum>/stop
         /api/plugins/<profileNum>/restart
+
+        Install/Purchase: no real API exists yet -- implementations stub these
+        with a simulated success so callers can be built/tested end-to-end.
         """
         raise NotImplementedError("Subclasses must implement the plugin_ops method.")
-    
+
     async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
         """
-        Configure a plugin on the device. 
+        Configure a plugin on the device.
         :param plugin_id: The ID of the plugin to configure.
         :param config: A dictionary containing the configuration parameters.
-        :return: response from the API or None if failure 
+        :return: response from the API or None if failure
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
+
+    async def get_plugin_prompt(self, plugin_id: str) -> dict:
+        """
+        Fetch an installed plugin's natural-language usage guidance for its
+        declared capabilities. No real per-plugin content exists on the
+        backend side of this yet, so implementations may call a real
+        endpoint that doesn't exist in production -- treat a non-2xx/
+        connection failure as an expected outcome (successful=False),
+        not a bug, until NuCore ships this API for real.
+        :param plugin_id: The installed plugin's id (profileNum).
+        :return: {"successful": bool, "data": {"prompt": str}}
+        """
+        raise NotImplementedError("Subclasses must implement the get_plugin_prompt method.")
+
+    async def get_plugin_tools(self, plugin_id: str) -> dict:
+        """
+        Fetch an installed plugin's declared tool-spec list (name/params/
+        description). Same caveat as get_plugin_prompt -- the backing
+        endpoint may not exist yet; a failure response is expected, not
+        exceptional.
+        :param plugin_id: The installed plugin's id (profileNum).
+        :return: {"successful": bool, "data": {"tools": [...]}}
+        """
+        raise NotImplementedError("Subclasses must implement the get_plugin_tools method.")
+
+    async def handle_plugin_llm_result(self, plugin_id: str, args: dict[str, Any]) -> dict:
+        """
+        Forward the LLM's call of one of a plugin's declared tools (name +
+        arguments) to that plugin for real execution, and return whatever it
+        reports back. Same caveat as get_plugin_prompt -- the backing
+        endpoint may not exist yet; a failure response is expected, not
+        exceptional.
+        :param plugin_id: The installed plugin's id (profileNum).
+        :param args: The arguments the LLM supplied for that tool call. ** it includes the tool_name key, which is the name of the tool to call. **
+        :return: {"successful": bool, "data": {...}}
+        """
+        raise NotImplementedError("Subclasses must implement the handle_plugin_llm_result method.")
 
     # ------------------------------------------------------------------
     # Diagnostics
