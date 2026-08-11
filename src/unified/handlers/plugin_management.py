@@ -122,7 +122,9 @@ def _op_data(response: Any) -> dict | None:
     if not response.get("successful"):
         return None
     data = response.get("data")
-    return data if isinstance(data, dict) else None
+    if data is None:
+        return None
+    return data if isinstance(data, dict) else {"result": data}
 
 
 async def install_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
