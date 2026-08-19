@@ -1,0 +1,43 @@
+Method,Current Path,New Path,Description
+DELETE,/plugin/:profileNum,/plugin/:profileNum,Uninstall a plugin
+POST,/plugin/:profileNum/config,/plugin/:profileNum/config,Save plugin config
+GET,/plugin/:profileNum/custom/:key,/plugin/:profileNum/custom/:key,Get a custom record for a plugin
+POST,/plugin/:profileNum/custom/:key,/plugin/:profileNum/custom/:key,Set a custom record for a plugin
+GET,/plugin/:profileNum/details,/plugin/:profileNum/details,Get installed plugin details
+POST,/plugin/:profileNum/discover,/plugin/:profileNum/discover,Trigger discovery on a plugin
+GET,/plugin/:profileNum/log/download,/plugin/:profileNum/log/download,Download plugin log as ZIP
+DELETE,/plugin/:profileNum/notice/:noticeId,/plugin/:profileNum/notice/:noticeId,Remove a notice from a plugin
+GET,/plugin/:profileNum/notices,/plugin/:profileNum/notices,Get notices for a plugin
+POST,/plugin/:profileNum/oauth/cloudlink,/plugin/:profileNum/oauth/cloudlink,Initiate OAuth flow
+POST,/plugin/:profileNum/oauth/token,/plugin/:profileNum/oauth/token,Exchange OAuth auth code for tokens
+GET,/plugin/:profileNum/prompt,/plugin/:profileNum/prompt,Get AI prompt for a plugin
+POST,/plugin/:profileNum/request,/plugin/:profileNum/request,Send a custom request to a plugin
+POST,/plugin/:profileNum/restart,/plugin/:profileNum/restart,Restart a plugin
+POST,/plugin/:profileNum/start,/plugin/:profileNum/start,Start a plugin
+POST,/plugin/:profileNum/stop,/plugin/:profileNum/stop,Stop a plugin
+GET,/plugin/:profileNum/tools,/plugin/:profileNum/tools,Get AI tools for a plugin
+GET,/plugins/connections,/plugins/connections,Get plugin connections/slots
+GET,/plugins/licenses,/plugins/licenses,Get plugin licenses from portal
+GET,/plugins/notices,/plugins/notices,Get all plugin notices
+PUT,/plugins/store/local,/plugins/store/local/entry,Create a local dev plugin
+GET,/plugins/store/local/:nsid,/plugins/store/local/entry/:nsid,Get a single local dev plugin
+POST,/plugins/store/local/:nsid,/plugins/store/local/entry/:nsid,Update a local dev plugin
+DELETE,/plugins/store/local/:nsid,/plugins/store/local/entry/:nsid,Delete a local dev plugin
+POST,/plugins/local/install,/plugins/store/local/install,Install a plugin from local dev store
+GET,/plugins/store/list/local,/plugins/store/local/list,Get local dev plugins list
+GET,/plugins/store/actions/:nsid,/plugins/store/prod/actions/:nsid,Get store entry with computed purchase actions
+POST,/plugins/activate/beta,/plugins/store/prod/activate/beta,Activate a beta plugin
+POST,/plugins/activate/free,/plugins/store/prod/activate/free,Activate a free plugin
+POST,/plugins/activate/trial,/plugins/store/prod/activate/trial,Activate a trial plugin
+POST,/plugins/store/archive/:nsid,/plugins/store/prod/archive/:nsid,Upload a plugin archive to the portal
+PUT,/plugins/store/entry,/plugins/store/prod/entry,Add a new plugin to the portal
+GET,/plugins/store/entry/:nsid,/plugins/store/prod/entry/:nsid,Get a store entry by nsid
+POST,/plugins/store/entry/:nsid,/plugins/store/prod/entry/:nsid,Update a plugin on the portal
+DELETE,/plugins/store/entry/:nsid,/plugins/store/prod/entry/:nsid,Remove a plugin from the portal
+POST,/plugins/store/install,/plugins/store/prod/install,Install a plugin from the store
+GET,/plugins/store/list/active,/plugins/store/prod/list/active,Get active plugins list from portal
+GET,/plugins/store/list/all,/plugins/store/prod/list/all,Get all plugins list from portal
+GET,/plugins/store/list/developer,/plugins/store/prod/list/developer,Get developer plugins list from portal
+GET,/plugins/purchase/:nsid,/plugins/store/prod/purchase/:nsid,Get purchase info for a plugin
+POST,/plugins/purchase/order/capture,/plugins/store/prod/purchase/order/capture,Capture a PayPal order
+POST,/plugins/purchase/order/create,/plugins/store/prod/purchase/order/create,Create a PayPal order
