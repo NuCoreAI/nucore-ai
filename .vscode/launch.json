@@ -5,23 +5,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "LAN-chat",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "src/assistant/chat.py",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/secrets/.env",
-            "args": [
-               "--url=https://192.168.6.149" ,
-               "--username=",
-               "--password=",
-               "--model_url=http://192.168.6.106:8013/v1/chat/completions",
-               "--prompt_type=per-device",
-               "--json_output=true"
-            ],
-            "justMyCode": false
-        },
-        {
             "name": "LAN-LakeEncino",
             "type": "debugpy",
             "request": "launch",
@@ -35,27 +18,6 @@
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
                "--prompt_type=shared-features",
                "--json_output=true"
-            ],
-            "justMyCode": false
-        },
-        {
-            "name": "Chat-Claude-LakeEncino",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "src/assistant/chat.py",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/secrets/.env",
-            "args": [
-               "--backend-api-base-url=https://192.168.4.21" ,
-               "--backend-api-classpath=iox.IoXWrapper",
-               "--backend-api-username=",
-               "--backend-api-password=",
-               "--provider=claude",
-               "--model=claude-haiku-4-5-20251001",
-               "--log-level=ERROR",
-               "--secrets-file=secrets/keys.json",
-               "--json-output=true",
-               "--stream"
             ],
             "justMyCode": false
         },

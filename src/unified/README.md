@@ -9,7 +9,7 @@ backend.
 
 | File/dir | Purpose |
 |---|---|
-| `run_unified_runtime.py` | CLI entrypoint (`python -m unified.run_unified_runtime`) -- also reused by `src/assistant/chat.py`'s WebSocket server. |
+| `run_unified_runtime.py` | CLI entrypoint (`python -m unified.run_unified_runtime`) -- also reused by the `nucore_assistant` project's WebSocket chat server (sibling repo, depends on `nucore-ai`). |
 | `runtime.py` | `UnifiedRuntime` -- builds the system prompt, runs the agentic loop, records conversation history. |
 | `loop.py` | `AgenticLoop` -- the multi-turn tool-calling loop against an `LLMAdapter`. |
 | `dispatch.py` | Tool name → handler dispatch table (`execute_tool`). |

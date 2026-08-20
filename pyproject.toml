@@ -14,15 +14,13 @@ authors = [
 dependencies = [
  "requests",
  "openai",
- "numpy",
+ "anthropic",
  "httpx",
- "APScheduler>=3.10,<4.0",
- "astral>=2.2",
- "aiohttp>=3.9",
  "pytest-asyncio",
- "fastapi",
  "websockets",
- "uvicorn",
+ "udi_interface",
+ "PyYAML",
+ "python-dotenv",
 ]
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
@@ -31,7 +29,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["assistant*", "rag*", "nucore*", "iox*", "unified*", "utils*"]
+include = ["rag*", "nucore*", "iox*", "unified*", "utils*"]
 exclude = ["tests*", "*.tests", "*.tests.*"]
 
 [tool.setuptools.package-data]

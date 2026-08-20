@@ -230,6 +230,26 @@ Runtime profile for llama.cpp (`--runtime-config` target):
 }
 ```
 
+## Capabilities
+
+Beyond device/group/routine/variable command-and-control, the unified runtime supports:
+
+- **Diagnostics** -- `start_diagnostics` opens a guided, single-session troubleshooting flow
+  (e.g. "my thermostat keeps rebooting"); `run_diagnostic_step` drives it step by step, including
+  checking and starting/stopping/restarting core or plugin services.
+- **Plan** -- `start_plan`/`run_plan_step` walk a customer through a structured multi-step task
+  such as a new device installation, rather than a single command/response turn.
+- **User preferences** -- `preference_op`/`list_preferences` store per-user aliases (e.g. naming
+  a device or routine) and event subscriptions, persisted across sessions.
+- **Plugin management** -- `list_store_plugins`/`list_purchased_plugins`/`list_installed_plugins`
+  cover NuCore's plugin marketplace (browse/license/installed state); `install_plugin`/
+  `buy_plugin`/`get_plugin_capabilities`/`call_plugin_tool` let the model extend its own
+  capabilities with a plugin's tools when no built-in tool covers a request. Starting/stopping/
+  restarting a plugin's underlying service goes through the diagnostics flow above, not this one.
+
+See `src/unified/prompt/definitions.md` for the exact tool-selection rules the model follows for
+each of these, and `src/unified/README.md` for the tool/handler layout.
+
 ## Hardware
 
 Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
