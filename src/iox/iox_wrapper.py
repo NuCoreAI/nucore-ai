@@ -1441,10 +1441,10 @@ class IoXWrapper(NuCoreInterface):
         :return: Dictionary of active plugins or None if failure
 
         API:
-        /api/plugins/store/list/active
+        /api/plugins/store/prod/list/active
         """
         try:
-            response = self.get(f'/api/plugins/store/list/active')
+            response = self.get(f'/api/plugins/store/prod/list/active')
             if response == None or response.status_code != 200:
                 return response if response else None
             return response.json()
@@ -1504,12 +1504,12 @@ class IoXWrapper(NuCoreInterface):
         :return: response from the API or None if failure
 
         Details API:
-        /api/plugins/store/entry/:nsid
+        /api/plugins/store/prod/entry/:nsid
 
         Start/Stop/Restart API:
-        /api/plugins/<profileNum>/start
-        /api/plugins/<profileNum>/stop
-        /api/plugins/<profileNum>/restart
+        /api/plugin/<profileNum>/start
+        /api/plugin/<profileNum>/stop
+        /api/plugin/<profileNum>/restart
 
         Install/Purchase: no real API exists yet -- stubbed with a simulated
         success so callers can be built/tested end-to-end.
@@ -1517,7 +1517,7 @@ class IoXWrapper(NuCoreInterface):
         if operation in ("start", "stop", "restart"):
             try:
                 headers = {"Content-Type": "application/json"}
-                response = self.post(f'/api/plugins/{plugin_id}/{operation}', body="{}", headers=headers)
+                response = self.post(f'/api/plugin/{plugin_id}/{operation}', body="{}", headers=headers)
                 if response == None or response.status_code != 200:
                     return response if response else None
                 return response.json()

@@ -449,7 +449,7 @@ class NuCoreInterface(ABC):
         :return: Dictionary of active plugins or None if failure
 
         API:
-        /api/plugins/store/list/active
+        /api/plugins/store/prod/list/active
         """
         raise NotImplementedError("Subclasses must implement the get_active_plugins method.")
 
@@ -493,12 +493,12 @@ class NuCoreInterface(ABC):
         :return: response from the API or None if failure
 
         Details API:
-        /api/plugins/store/entry/:nsid
+        /api/plugins/store/prod/entry/:nsid
 
         Start/Stop/Restart API:
-        /api/plugins/<profileNum>/start
-        /api/plugins/<profileNum>/stop
-        /api/plugins/<profileNum>/restart
+        /api/plugin/<profileNum>/start
+        /api/plugin/<profileNum>/stop
+        /api/plugin/<profileNum>/restart
 
         Install/Purchase: no real API exists yet -- implementations stub these
         with a simulated success so callers can be built/tested end-to-end.

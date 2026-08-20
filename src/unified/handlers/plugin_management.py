@@ -32,6 +32,28 @@ from typing import Any
 
 from nucore import NuCoreInterface
 
+@staticmethod
+def _get_plugin_number(plugin_id:str):
+    if not plugin_id:
+        return None
+
+    try:
+        # test if the format is n008_hebcalcontroll:
+        if plugin_id.startswith("n") and "_" in plugin_id:
+            return int(plugin_id.split("_")[0][1:])
+        # test if the format is plugin_<number> 
+        if plugin_id.startswith("plugin_"):
+            return int(plugin_id.split("_")[1])
+        # test if it's a number string, e.g., "123" 
+        if plugin_id.isdigit():
+            return int(plugin_id)
+
+        # if none of the above formats match, return whatever was sent to us
+        return plugin_id
+
+    except (ValueError, TypeError):
+        return None
+
 
 def _data(response: Any) -> list[dict] | None:
     """``get_active_plugins``/``get_purchased_plugins`` return the raw
@@ -82,8 +104,9 @@ async def list_installed_plugins(nucore_interface: NuCoreInterface, args: dict[s
                 "plugin_id": p.get("profileNum"),
                 "name": p.get("name"),
                 "is_local": p.get("isLocal"),
+                "ai_support": p.get("aiSupport")
             }
-            for p in plugins
+            for p in plugins 
         ]
     }
 
@@ -146,14 +169,14 @@ async def install_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]
 
 
 async def buy_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    plugin_id = args.get("plugin_id")
-    if not plugin_id:
-        return {"error": "plugin_id is required"}
+    nsid = args.get("nsid")
+    if not nsid:
+        return {"error": "nsid is required"}
 
-    response = await nucore_interface.plugin_ops(plugin_id, "purchase")
+    response = await nucore_interface.plugin_ops(nsid, "purchase")
     data = _op_data(response)
     if data is None:
-        return {"error": f"failed to purchase plugin '{plugin_id}'"}
+        return {"error": f"failed to purchase plugin '{nsid}'"}
 
     return {
         "status": "purchased_and_installed",
@@ -169,7 +192,7 @@ async def buy_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
 
 
 async def get_plugin_capabilities(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    plugin_id = args.get("plugin_id")
+    plugin_id = _get_plugin_number(args.get("plugin_id"))
     if not plugin_id:
         return {"error": "plugin_id is required"}
 
@@ -191,7 +214,7 @@ async def get_plugin_capabilities(nucore_interface: NuCoreInterface, args: dict[
 
 
 async def call_plugin_tool(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    plugin_id = args.get("plugin_id")
+    plugin_id = _get_plugin_number(args.get("plugin_id"))
     tool_name = args.get("tool_name")
     if not plugin_id:
         return {"error": "plugin_id is required"}

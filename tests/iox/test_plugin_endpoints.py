@@ -1,5 +1,5 @@
 """Verifies IoXWrapper's plugin-management REST support: GET /api/plugins
-(get_installed_plugins) and POST /api/plugins/<profileNum>/{start,stop,restart}
+(get_installed_plugins) and POST /api/plugin/<profileNum>/{start,stop,restart}
 (plugin_ops).
 """
 
@@ -55,7 +55,7 @@ async def test_plugin_ops_hits_the_right_endpoint(operation):
 
     result = await wrapper.plugin_ops("3", operation)
 
-    assert calls == [f"/api/plugins/3/{operation}"]
+    assert calls == [f"/api/plugin/3/{operation}"]
     assert result == {"successful": True}
 
 

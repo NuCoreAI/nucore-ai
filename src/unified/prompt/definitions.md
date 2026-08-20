@@ -65,7 +65,18 @@ no separate `install_plugin` call needed after buying). Once a plugin is availab
 `get_plugin_capabilities(plugin_id)` for its usage guidance and callable tools, then
 `call_plugin_tool(plugin_id, tool_name, args)` to actually invoke it, using the result to answer
 the customer or to build a scene/automation from. Never invent a plugin's capability or skip the
-customer's confirmation before installing/buying.
+customer's confirmation before installing/buying. This flow is for *using* a plugin's
+functionality, not for starting/stopping/restarting its underlying service — see below for that.
+
+**Starting/stopping/restarting a plugin or core service** — This is diagnostics, not the plugin
+flow above: call `start_diagnostics` (or reuse the open session), then `run_diagnostic_step` with
+step `get_plugin_services_status` (for a plugin) or `get_core_services_status` (for a core
+service like isy/udx) to see the exact service names and current status. Match the one that
+corresponds to what the customer means — never guess or invent a service name, always resolve it
+from that status step's response first — then call `run_diagnostic_step` with step `services_ops`
+and params `{"op": "start"|"stop"|"restart", "service": <that exact name>}`. Same session caveat
+as above: only one diagnostic session at a time, and it blocks every other tool until it
+concludes, times out, or is stopped — tell the customer that before starting one.
 
 # GLOBAL ID RULES
 
