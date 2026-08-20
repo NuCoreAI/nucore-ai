@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse,os
 import asyncio
 import functools, json
+import ssl
+import uuid
 from pathlib import Path
 from typing import Any
 
+import websockets
 from dotenv import load_dotenv
 
 from unified.models import IntentHandlerResult
@@ -95,6 +98,26 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Single query mode (non-interactive)",
+    )
+    parser.add_argument(
+        "--websocket-port",
+        type=int,
+        default=None,
+        help="Run as a WebSocket server on this port instead of --query/REPL mode; "
+             "each connection gets its own session, every received message is treated "
+             "as a query, and responses stream back over the same connection.",
+    )
+    parser.add_argument(
+        "--ssl-certfile",
+        type=str,
+        default=None,
+        help="Path to a PEM certificate file; with --ssl-keyfile, serves --websocket-port over wss:// instead of ws://.",
+    )
+    parser.add_argument(
+        "--ssl-keyfile",
+        type=str,
+        default=None,
+        help="Path to a PEM private key file; with --ssl-certfile, serves --websocket-port over wss:// instead of ws://.",
     )
     parser.add_argument(
         "--backend-api-classpath",
@@ -241,10 +264,12 @@ def _load_backend_api(
     username: str | None,
     password: str | None,
     json_output: bool = False,
+    poly: Any = None,
 ) -> Any:
     """Dynamically load and instantiate a backend API class.
 
-    Returns None if any required parameter is None.
+    Returns None if classpath is missing, or if neither ``poly`` nor all of
+    base_url/username/password are provided.
 
     Args:
         classpath: Fully qualified class path (e.g., 'iox.IoXWrapper')
@@ -252,11 +277,13 @@ def _load_backend_api(
         username: Backend API username
         password: Backend API password
         json_output: Whether to enable JSON output for backend API
+        poly: Polyglot interface instance -- alternative to base_url/username/
+              password, passed through as-is to the backend API class.
 
     Returns:
         Instantiated backend API object or None if parameters incomplete.
     """
-    if not all([classpath, base_url, username, password]):
+    if not classpath or not (poly or all([base_url, username, password])):
         return None
 
     return _load_backend_api_cached(
@@ -265,6 +292,7 @@ def _load_backend_api(
         username=username,
         password=password,
         json_output=bool(json_output),
+        poly=poly,
     )
 
 
@@ -276,6 +304,7 @@ def _load_backend_api_cached(
     username: str,
     password: str,
     json_output: bool,
+    poly: Any = None,
 ) -> Any:
     """LRU-cached backend API instantiation.
 
@@ -289,6 +318,7 @@ def _load_backend_api_cached(
         username:    Authentication username.
         password:    Authentication password.
         json_output: Whether the backend should return JSON-formatted data.
+        poly:        Polyglot interface instance, passed through as-is.
 
     Raises:
         ValueError: If ``classpath`` is malformed or the class cannot be
@@ -311,7 +341,8 @@ def _load_backend_api_cached(
             username=username,
             password=password,
             json_output=json_output,
-            prompt_format_type=PromptFormatTypes.PROFILE
+            prompt_format_type=PromptFormatTypes.PROFILE,
+            poly=poly,
         )
     except (ImportError, AttributeError) as e:
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
@@ -438,13 +469,82 @@ async def _run_loop(runtime: UnifiedRuntime) -> None:
             break
 
 
+class _RawWebSocketAdapter:
+    """Adapts a ``websockets`` connection to the small surface
+    :meth:`StreamHandler.send_chunk` expects -- ``.client_state.name`` /
+    ``await .send_text(...)``, matching Starlette's ``WebSocket`` (what
+    ``eisy_ai/chat.py``'s FastAPI path already passes it). Keeps
+    ``stream_handler.py`` provider-agnostic instead of teaching it two APIs.
+    """
+
+    class _State:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    def __init__(self, websocket) -> None:
+        self._websocket = websocket
+
+    @property
+    def client_state(self):
+        connected = self._websocket.state is websockets.protocol.State.OPEN
+        return self._State("CONNECTED" if connected else "DISCONNECTED")
+
+    async def send_text(self, data: str) -> None:
+        await self._websocket.send(data)
+
+
+async def _run_websocket_server(
+    nucore_interface: NuCoreInterface,
+    llm_adapter,
+    runtime_config: dict[str, Any],
+    max_iterations: int,
+    port: int,
+    ssl_context: ssl.SSLContext | None = None,
+) -> None:
+    """Serve WebSocket connections directly, no HTTP framework involved.
+
+    ``nucore_interface``/``llm_adapter``/``runtime_config`` are shared across
+    every connection (same CLI-configured backend for the life of the
+    process); each connection gets its own :class:`UnifiedRuntime` (own
+    session/history) and its own :class:`StreamHandler` (own websocket
+    target), matching the isolation ``eisy_ai/chat.py`` already gives each
+    browser tab -- just without needing a caller-supplied connection object
+    or an HTTP server in front of it.
+
+    ``ssl_context``, when given, serves ``wss://`` instead of ``ws://`` --
+    required for clients (e.g. the Eisy UI) that always connect over TLS, the
+    way ``eisy_ai/chat.py`` did via its ``certs/`` files.
+    """
+    async def handler(websocket) -> None:
+        session_id = str(uuid.uuid4())
+        stream_handler = StreamHandler()
+        stream_handler.set_websocket(_RawWebSocketAdapter(websocket))
+        runtime = UnifiedRuntime(
+            nucore_interface=nucore_interface,
+            llm_client=llm_adapter,
+            runtime_config=runtime_config,
+            max_iterations=max_iterations,
+        )
+        runtime.stream_handler = stream_handler
+        try:
+            async for message in websocket:
+                runtime.reset_stream_handler()
+                await _run_once(runtime, message, session_id=session_id)
+        except websockets.ConnectionClosed:
+            pass
+
+    logger.info(f"WebSocket server listening on port {port} ({'wss' if ssl_context else 'ws'}://)")
+    async with websockets.serve(handler, "0.0.0.0", port, ssl=ssl_context):
+        await asyncio.Future()  # run forever, until KeyboardInterrupt/CancelledError
+
+
 # Module-level reference to the backend API instance; populated in main() so
 # that it can be inspected from a debugger or extended tests without re-running
 # the full startup sequence.
 nucore_interface: NuCoreInterface = None
 
 
-def main(args:Any=None, websocket=None) -> None:
+def main(args:Any=None, poly=None) -> None:
     """CLI entry point: parse arguments, configure logging, and start the runtime.
 
     Startup sequence:
@@ -480,10 +580,10 @@ def main(args:Any=None, websocket=None) -> None:
     # One StreamHandler instance covers both roles: per-request LLM token
     # streaming (wired into runtime_config below, gated per-profile by each
     # profile's own 'stream' key unless --stream/--no-stream forces it) and
-    # final-response delivery in _run_once (websocket when one is attached,
-    # stdout print otherwise -- send_chunk handles both).
+    # final-response delivery in _run_once -- stdout print in --query/REPL
+    # mode, or a per-connection WebSocket target in --websocket-port mode
+    # (set separately per connection in _run_websocket_server).
     stream_handler = StreamHandler()
-    stream_handler.set_websocket(websocket)
 
     # This load is used both to build the LLM dispatch adapter's provider
     # clients (below) and as UnifiedRuntime's own config.
@@ -510,6 +610,7 @@ def main(args:Any=None, websocket=None) -> None:
         username=backend_api_username,
         password=backend_api_password,
         json_output=args.json_output,
+        poly=poly,
     )
 
     if nucore_interface is None:
@@ -523,6 +624,10 @@ def main(args:Any=None, websocket=None) -> None:
         args.preferences_dir if args.preferences_dir is not None else runtime_config.get("preferences_dir")
     )
 
+    resolved_max_iterations = (
+        args.max_iterations if args.max_iterations is not None else int(runtime_config.get("max_iterations", 8))
+    )
+
     if args.diagnostic_step:
         # Direct-to-backend testing mode: no LLM, no AgenticLoop, no
         # UnifiedRuntime -- just the real hub connection built above.
@@ -531,9 +636,31 @@ def main(args:Any=None, websocket=None) -> None:
         asyncio.run(_run_diagnostic_step_direct(nucore_interface, args.diagnostic_step, args.diagnostic_params))
         return
 
-    resolved_max_iterations = (
-        args.max_iterations if args.max_iterations is not None else int(runtime_config.get("max_iterations", 8))
-    )
+    if args.websocket_port:
+        # Native WebSocket server mode: this process itself is the server --
+        # no external HTTP framework, no caller-supplied connection object.
+        # nucore_interface is shared across every connection for the life of
+        # the process, so it's shut down exactly once here -- never per
+        # connection (see _run_websocket_server's docstring).
+        if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
+            raise ValueError("--ssl-certfile and --ssl-keyfile must be given together")
+        ssl_context = None
+        if args.ssl_certfile and args.ssl_keyfile:
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_context.load_cert_chain(args.ssl_certfile, args.ssl_keyfile)
+
+        logger.info("Starting native WebSocket server; responses stream per connection.")
+        try:
+            asyncio.run(_run_websocket_server(
+                nucore_interface, llm_adapter, runtime_config,
+                resolved_max_iterations, args.websocket_port,
+                ssl_context=ssl_context,
+            ))
+        except KeyboardInterrupt:
+            logger.warning("\nInterrupted. Exiting.")
+        finally:
+            nucore_interface.shutdown()
+        return
 
     runtime = UnifiedRuntime(
         nucore_interface=nucore_interface,
@@ -543,10 +670,6 @@ def main(args:Any=None, websocket=None) -> None:
     )
     runtime.stream_handler = stream_handler
     logger.info("Unified runtime initialized")
-
-    if websocket:
-        logger.info("WebSocket connection detected; responses will be sent to the client.")
-        return runtime
 
     if args.query:
         # Single-query (non-interactive) mode: run once and exit.

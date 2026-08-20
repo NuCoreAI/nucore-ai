@@ -98,7 +98,7 @@ class UnifiedRuntime:
 
         user_message = query
         if framework_context:
-            user_message = f"<context>{framework_context}</context>\n\n{query}"
+            user_message = f"<ui_context>{framework_context}</ui_context>\n\n{query}"
 
         async def dispatch(name: str, args: dict[str, Any]) -> Any:
             # AgenticLoop's dispatch contract is a plain 2-arg callable --

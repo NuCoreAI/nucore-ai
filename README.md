@@ -54,6 +54,56 @@ python -m unified.run_unified_runtime \
   --backend-api-password yourpassword
 ```
 
+### WebSocket Server Mode
+
+Pass `--websocket-port` to run as a standalone WebSocket server instead of
+`--query`/REPL mode -- no HTTP framework involved (uses the `websockets` package, already
+a project dependency). Each connection gets its own session and conversation history;
+every received message is treated as a query, and the response streams back over the
+same connection.
+
+```shell
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --websocket-port 8765
+```
+
+This is a lower-level alternative to `eisy_ai`'s FastAPI-based chat server (a separate
+sibling project) -- use this mode when a raw `ws://` endpoint is all you need, without
+serving a browser UI.
+
+#### TLS (wss://)
+
+Add `--ssl-certfile`/`--ssl-keyfile` (a PEM cert and private key, given together) to
+serve `wss://` instead of `ws://` -- needed for clients that always connect over TLS
+(e.g. the Eisy UI). Uses Python's standard-library `ssl` module, no extra dependency.
+
+```shell
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --websocket-port 8765 \
+  --ssl-certfile secrets/certificate.pem \
+  --ssl-keyfile secrets/private_key.pem
+```
+
+Generate a self-signed pair for local/dev use with:
+
+```shell
+openssl req -x509 -newkey rsa:2048 -keyout secrets/private_key.pem -out secrets/certificate.pem \
+  -days 825 -nodes -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+`secrets/` is already gitignored. A self-signed cert will trigger a browser warning
+unless the client is configured to skip verification.
+
 ### Secrets File
 
 Use `--secrets_file` to provide API keys as key/value pairs. These values are
@@ -146,6 +196,9 @@ logger.info("runtime started")
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
 | `--secrets_file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
+| `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode |
+| `--ssl-certfile` | PEM cert file; with `--ssl-keyfile`, serves `--websocket-port` over `wss://` |
+| `--ssl-keyfile` | PEM private key file; with `--ssl-certfile`, serves `--websocket-port` over `wss://` |
 | `--backend-api-classpath` | Python class path for backend API (e.g. `iox.IoXWrapper`) |
 | `--backend-api-base-url` | Base URL for backend API |
 | `--backend-api-username` | Backend API username |

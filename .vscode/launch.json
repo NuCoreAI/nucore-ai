@@ -64,6 +64,52 @@
             "justMyCode": false
         },
         {
+            "name": "Web-Claude-LakeEncino-Info",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/unified/run_unified_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-username=",
+               "--backend-api-password=",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/unified/runtime_config.example.json",
+               "--preferences-dir=/usr/home/admin/.config/nucore_unified_runtime",
+               "--secrets-file=secrets/keys.json",
+               "--websocket-port=8000",
+               "--ssl-certfile=secrets/cert.pem",
+               "--ssl-keyfile=secrets/key.pem",
+               "--log-level=INFO",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Web-eisy-dev-Info",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/unified/run_unified_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.6.149" ,
+               "--backend-api-username=",
+               "--backend-api-password=",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/unified/runtime_config.example.json",
+               "--preferences-dir=/usr/home/admin/.config/nucore_unified_runtime",
+               "--secrets-file=secrets/keys.json",
+               "--websocket-port=8000",
+               "--ssl-certfile=secrets/cert.pem",
+               "--ssl-keyfile=secrets/key.pem",
+               "--log-level=INFO",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
             "name": "Claude-LakeEncino",
             "type": "debugpy",
             "request": "launch",
