@@ -1,0 +1,19 @@
+{
+  "name": "run_plan_step",
+  "description": "Run one step of the plan session currently in progress (opened via start_plan -- see its response for the `instruction` and the list of steps under `available_tools`). Only usable while a session is in_progress; errors otherwise. Call as many steps as needed, in whatever order the instruction and the conversation with the customer call for. When you're done and the customer is satisfied, call the `conclude` step -- this ends the session normally, so other tools become available again. If the customer wants to stop before that, call `stop` instead.",
+  "input_schema": {
+    "type": "object",
+    "required": ["step"],
+    "properties": {
+      "step": {
+        "type": "string",
+        "description": "The exact step name from start_plan's `available_tools` (e.g. \"pair_device\", \"create_folder\", \"propose_scene\", \"review_plan\", \"apply_plan\", \"conclude\", \"stop\"). Never invented."
+      },
+      "params": {
+        "type": "object",
+        "description": "Parameters the step needs, e.g. {\"protocol\": \"insteon\", \"action\": \"start\"} for pair_device, {\"new_name\": \"...\"} for create_folder, {\"devices\": [...]} for propose_scene, or {\"summary\": \"...\"} for conclude. Omit or leave empty for steps that need nothing, like review_plan, apply_plan, or stop.",
+        "additionalProperties": true
+      }
+    }
+  }
+}

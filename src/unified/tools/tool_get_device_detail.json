@@ -1,0 +1,14 @@
+{
+  "name": "get_device_detail",
+  "description": "Fetch one device/group's FULL specification: every property/command's exact display name (properties/accepts/sends), plus each one's uom, precision, min/max, and enum key/label pairs, and each command parameter's real id. DEVICE DATABASE deliberately omits all of this (names only, to stay compact) -- call this tool for every device you're about to reference in create_or_update_routine's DSL, before writing any status()/was_controlled()/command()/param() call for it. Use the exact display name shown here for a property or command (e.g. .status(\"Status\", ...), .command(\"On\")) -- never the parameter's id, and never guessed -- the backend resolves the real property/command id server-side. Not needed for get_property/send_command, which already resolve names on the backend.",
+  "input_schema": {
+    "type": "object",
+    "required": ["device_id"],
+    "properties": {
+      "device_id": {
+        "type": "string",
+        "description": "The device/group's real id, exactly as shown in DEVICE DATABASE."
+      }
+    }
+  }
+}

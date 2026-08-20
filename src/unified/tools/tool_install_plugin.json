@@ -1,0 +1,14 @@
+{
+  "name": "install_plugin",
+  "description": "Install a plugin the customer already has a purchased license for (see list_purchased_plugins). Only call this after the customer has explicitly agreed to install it -- never speculatively. NOTE: this is currently a stub -- there is no real install API yet, so this always simulates success. On success, the returned plugin_id is immediately usable with get_plugin_capabilities/call_plugin_tool.",
+  "input_schema": {
+    "type": "object",
+    "required": ["nsid"],
+    "properties": {
+      "nsid": {
+        "type": "string",
+        "description": "The `nsid`, from list_purchased_plugins."
+      }
+    }
+  }
+}

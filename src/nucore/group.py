@@ -217,6 +217,7 @@ class Group(NodeBase):
 
     def __init__(self, node_elem:ET.Element):
         super().__init__(node_elem)
+        self.device_group = node_elem.find("./deviceGroup").text if node_elem.find("./deviceGroup") is not None else None
         self.members = {}
         #add ourselves as container
         self.members[self.address] = GroupMember(address=self.address, name=self.name, type=GroupMemberType.MEMBER_IS_CONTROLLER, family=self.family, instance=self.instance)
@@ -355,5 +356,4 @@ class Group(NodeBase):
 
     def __hash__(self) -> int:
         """Hash by unique node address."""
-        return hash(self.address)  # or another unique identifier
         return hash(self.address)  # or another unique identifier

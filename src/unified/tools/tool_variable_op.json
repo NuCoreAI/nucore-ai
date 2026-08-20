@@ -1,0 +1,65 @@
+{
+  "name": "variable_op",
+  "description": "Create, update, or delete a NuCore variable (an integer counter or a state flag routines can reference in their conditions/actions -- call list_variables for the current list, and see create_or_update_routine's var_ref()/set_var()/while_repeat() for how a variable is referenced inside routine logic). This tool manages the variable itself, not routine logic. `value`/`init` here are the RAW stored integers, same as list_variables returns -- not display values, do not scale them yourself. Create: type + optional name/prec (the hub assigns the id, returned in the response). Update (id required): only the fields given change, everything else is left as-is -- name/prec/value/init are all optional. Delete: type + id only.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "type",
+      "operation"
+    ],
+    "properties": {
+      "type": {
+        "type": "integer",
+        "enum": [
+          1,
+          2
+        ],
+        "description": "1 = integer variable (a counter; changing it does not re-trigger routines that reference it in a condition). 2 = state variable (changing it does re-trigger routines that reference it in a condition)."
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "create",
+          "update",
+          "delete"
+        ]
+      },
+      "id": {
+        "type": [
+          "string",
+          "integer",
+          "null"
+        ],
+        "description": "Real variable id, as returned by list_variables. Required for update/delete, omit for create."
+      },
+      "name": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Variable name. create/update only."
+      },
+      "prec": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "description": "Precision (decimal digits val/init are scaled by). create/update only."
+      },
+      "value": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "description": "New current value, as a RAW stored integer (not scaled/unscaled). update only."
+      },
+      "init": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "description": "New init value (what the variable resets to when a routine runs set_var(..., op=\"init\") on it), as a RAW stored integer. update only."
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "preference_op",
+  "description": "Create or delete a customer preference (an alias or an event -- call list_preferences for the current list). There is no update: to change one, delete it and create a new one. Confirm with the customer before creating anything you inferred rather than that they explicitly asked for -- a bad create is just deleted, but don't silently invent preferences. Create an alias when the customer says something like 'when I say X, I mean Y' (X -> alias, Y -> target, a real device/scene/group name). Create an event for a dated fact they want tracked (birthday, anniversary, etc.) -- 'annual' repeats every year on month/day (e.g. a yahrtzeit), 'once' is a single date. remind_days_before is optional and only records the reminder intent -- no notification is actually sent (no delivery channel exists yet), but list_preferences will flag it as due_soon once it's within that window.",
+  "input_schema": {
+    "type": "object",
+    "required": ["operation"],
+    "properties": {
+      "operation": {
+        "type": "string",
+        "enum": ["create", "delete"]
+      },
+      "type": {
+        "type": ["string", "null"],
+        "enum": ["alias", "event", null],
+        "description": "Required for create. Not needed for delete -- id alone is enough, ids are unique across every preference."
+      },
+      "id": {
+        "type": ["string", "null"],
+        "description": "Required for delete, as returned by list_preferences or by a prior create. Omit for create."
+      },
+      "alias": {
+        "type": ["string", "null"],
+        "description": "type == 'alias', create only. The customer's shorthand, e.g. 'mbr'."
+      },
+      "target": {
+        "type": ["string", "null"],
+        "description": "type == 'alias', create only. What the alias resolves to -- a real device/scene/group name."
+      },
+      "name": {
+        "type": ["string", "null"],
+        "description": "type == 'event', create only. Human name for the event, e.g. \"Dad's yahrtzeit\"."
+      },
+      "recurrence": {
+        "type": ["string", "null"],
+        "enum": ["annual", "once", null],
+        "description": "type == 'event', create only. 'annual' repeats every year on month/day; 'once' is a single date."
+      },
+      "month": {
+        "type": ["integer", "null"],
+        "description": "recurrence == 'annual' only. 1-12."
+      },
+      "day": {
+        "type": ["integer", "null"],
+        "description": "recurrence == 'annual' only. Day of month."
+      },
+      "date": {
+        "type": ["string", "null"],
+        "description": "recurrence == 'once' only. ISO format YYYY-MM-DD."
+      },
+      "remind_days_before": {
+        "type": ["integer", "null"],
+        "description": "type == 'event', create only, optional. If set, list_preferences flags the event as due_soon starting this many days before it occurs. No notification is actually sent."
+      }
+    }
+  }
+}

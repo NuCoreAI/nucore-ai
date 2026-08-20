@@ -1,0 +1,8 @@
+{
+  "name": "list_store_plugins",
+  "description": "List every plugin available in the NuCore plugin store (the vetted third-party marketplace) -- name, author, description, nsid, and type. Call this when the customer asks what plugins/node servers exist or are available to install. This is not the same as what's purchased (see list_purchased_plugins) or installed on this device.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

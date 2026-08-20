@@ -1,0 +1,22 @@
+{
+  "name": "routine_status_op",
+  "description": "Change a routine's runtime status: enable/disable it, run its then/else branch directly, stop it, change run-at-startup, or delete it. Use create_or_update_routine to change what a routine actually does, not this tool.",
+  "input_schema": {
+    "type": "object",
+    "required": ["id", "operation"],
+    "properties": {
+      "id": {
+        "type": "integer",
+        "description": "Real routine id, exactly as shown in ROUTINES DATABASE."
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "runIf", "runThen", "runElse", "stop",
+          "enable", "disable", "enableRunAtStartup", "disableRunAtStartup",
+          "delete"
+        ]
+      }
+    }
+  }
+}

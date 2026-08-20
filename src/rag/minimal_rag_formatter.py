@@ -6,6 +6,7 @@ Format: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
 
 import json
 from nucore import Node, Group, RuntimeProfile, NodeDef, NodeHierarchy
+from nucore.numeric_enum import describe_numeric_enum
 from .rag_data_struct import RAGData
 from .rag_formatter import RAGFormatter
 from .dedupe_profiles import DedupeProfiles
@@ -40,55 +41,62 @@ class MinimalRagFormatter(RAGFormatter):
                         enums.append(label)
         return enums
     
+    def _build_item(self, name: str, editor) -> dict:
+        """Build a ``{name: value}`` compact-DB item for a property/single-
+        editor item: the disguised-numeric descriptor (see
+        ``nucore.numeric_enum``) when *editor*'s id is a known numeric-enum
+        editor, else the plain enum label list (empty if none)."""
+        if editor:
+            spec = describe_numeric_enum(editor)
+            if spec is not None:
+                return {name: spec.descriptor}
+            return {name: self._collect_enum_values(editor)}
+        return {name: []}
+
+    def _build_command_item(self, name: str, parameters) -> dict:
+        """Same as ``_build_item`` but for a command's parameter list --
+        checks every parameter's editor for a numeric-enum match first
+        (commands with a numeric-enum parameter have exactly one parameter
+        in practice), else falls back to combining every parameter's plain
+        enum labels, same as before."""
+        if not parameters:
+            return {name: []}
+        for param in parameters:
+            if param.editor:
+                spec = describe_numeric_enum(param.editor)
+                if spec is not None:
+                    return {name: spec.descriptor}
+        enums: list[str] = []
+        for param in parameters:
+            if param.editor:
+                enums.extend(self._collect_enum_values(param.editor))
+        return {name: enums}
+
     def _format_nodedef_json(self, node_def: NodeDef) -> dict:
         """Format a single node into delimited string with sections."""
         if not node_def:
-            return None 
-        
+            return None
+
         out={}
 
         # Collect property names and their enums
         property_names = []
-        
+
         for prop_id, prop in node_def.properties.items():
             if prop.name:
-                value={f'{prop.name}': []}
-            # Collect enums from property editors
-                if prop.editor:
-                    enums=[]
-                    enums.extend(self._collect_enum_values(prop.editor))
-                    value={f'{prop.name}': enums}
-        
-                property_names.append(value)
+                property_names.append(self._build_item(prop.name, prop.editor))
         # Collect command names and their parameter enums
         accepts_commands = []
         sends_commands = []
-        
+
         for cmd in node_def.cmds.accepts:
             if cmd.name:
-                value={f'{cmd.name}': []}
-            # Collect enums from command parameters
-                if cmd.parameters:
-                    enums=[]
-                    for param in cmd.parameters:
-                        if param.editor:
-                            enums.extend(self._collect_enum_values(param.editor))
-                    value={f'{cmd.name}': enums}
-                accepts_commands.append(value)
+                accepts_commands.append(self._build_command_item(cmd.name, cmd.parameters))
 
-        
         for cmd in node_def.cmds.sends:
             if cmd.name:
-                value={f'{cmd.name}': []}
-            # Collect enums from command parameters
-                if cmd.parameters:
-                    enums=[]
-                    for param in cmd.parameters:
-                        if param.editor:
-                            enums.extend(self._collect_enum_values(param.editor))
-                    value={f'{cmd.name}': enums}
-                sends_commands.append(value)
-        
+                sends_commands.append(self._build_command_item(cmd.name, cmd.parameters))
+
         out["props"] = property_names
         out["accepts-cmds"] = accepts_commands
         out["sends-cmds"] = sends_commands
@@ -231,10 +239,18 @@ class MinimalRagFormatter(RAGFormatter):
         folders = []
         for node in profile.nodes:
             if node.address:
+                entry = {"id": node.address, "name": node.name, "parent": self._get_parent(node)}
+                # Sparse -- only set when abnormal, so the common case (enabled,
+                # no error) costs nothing. DedupeProfiles.render_python collects
+                # these into top-level DISABLED/IN_ERROR tables.
+                if node.enabled is False:
+                    entry["disabled"] = True
+                if node.node_is_in_err():
+                    entry["error"] = True
                 if isinstance(node, Group):
-                    groups.append({ "id": node.address, "name": node.name, "parent": self._get_parent(node)})
+                    groups.append(entry)
                 else:
-                    devices.append({ "id": node.address, "name": node.name, "parent": self._get_parent(node)})
+                    devices.append(entry)
         if len(devices) > 0:
             out["devices"] = devices
         if len(groups) > 0:

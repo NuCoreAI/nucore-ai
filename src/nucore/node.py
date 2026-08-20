@@ -61,6 +61,7 @@ class Node (NodeBase):
     properties: dict[str, Property] = field(default_factory=dict) 
     custom: dict = field(default=None)
     devtype: dict = field(default=None)
+    pending_write: bool = field(default=False)
 
     def __init__(self, node_elem: ET.Element) -> None:
         """Initialise a ``Node`` from an IoX XML element.

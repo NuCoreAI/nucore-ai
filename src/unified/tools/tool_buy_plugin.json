@@ -1,0 +1,14 @@
+{
+  "name": "buy_plugin",
+  "description": "Buy a plugin found in the marketplace (see list_store_plugins) that the customer doesn't already hold a license for. Only call this after the customer has explicitly agreed to buy it -- never speculatively. Buying also makes the plugin installable -- there is no separate install_plugin call needed afterward; use the returned `plugin_id` directly with get_plugin_capabilities/call_plugin_tool. NOTE: this is currently a stub -- there is no real purchase API yet, so this always simulates success.",
+  "input_schema": {
+    "type": "object",
+    "required": ["nsid"],
+    "properties": {
+      "nsid": {
+        "type": "string",
+        "description": "The `nsid`, from list_store_plugins."
+      }
+    }
+  }
+}

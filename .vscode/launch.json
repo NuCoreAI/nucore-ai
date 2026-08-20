@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "LAN-chat", 
+            "name": "LAN-chat",
             "type": "debugpy",
             "request": "launch",
             "program": "src/assistant/chat.py",
@@ -14,7 +14,7 @@
             "args": [
                "--url=https://192.168.6.149" ,
                "--username=",
-               "--password=", 
+               "--password=",
                "--model_url=http://192.168.6.106:8013/v1/chat/completions",
                "--prompt_type=per-device",
                "--json_output=true"
@@ -22,7 +22,7 @@
             "justMyCode": false
         },
         {
-            "name": "LAN-LakeEncino", 
+            "name": "LAN-LakeEncino",
             "type": "debugpy",
             "request": "launch",
             "program": "src/assistant/generic_assistant.py",
@@ -39,7 +39,7 @@
             "justMyCode": false
         },
         {
-            "name": "Chat-Claude-IntentHandler-LakeEncino",
+            "name": "Chat-Claude-LakeEncino",
             "type": "debugpy",
             "request": "launch",
             "program": "src/assistant/chat.py",
@@ -60,10 +60,10 @@
             "justMyCode": false
         },
         {
-            "name": "Claude-IntentHandler-LakeEncino",
+            "name": "Diag-Claude-LakeEncino-Info",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/intent_handler/run_intent_runtime.py",
+            "program": "src/unified/run_unified_runtime.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [
@@ -71,26 +71,49 @@
                "--backend-api-username=",
                "--backend-api-password=",
                "--backend-api-classpath=iox.IoXWrapper",
-               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--runtime-config=src/unified/runtime_config.example.json",
+               "--preferences-dir=/usr/home/admin/.config/nucore_unified_runtime",
                "--secrets-file=secrets/keys.json",
-               "--log-level=ERROR",
+               "--log-level=INFO",
+               "--diagnostic-step=get_dev_links_table",
+               "--diagnostic-params={\"device_id\": \"17 F8 44 1\"}",
                "--json-output=true"
             ],
             "justMyCode": false
         },
         {
-            "name": "Claude-Test-IntentHandler-LakeEncino",
+            "name": "Claude-LakeEncino-Info",
             "type": "debugpy",
             "request": "launch",
-            "program": "tests/real_device/run_real_device_tests.py",
+            "program": "src/unified/run_unified_runtime.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [
                "--backend-api-base-url=https://192.168.4.21" ,
-               "--backend-api-classpath=iox.IoXWrapper",
                "--backend-api-username=",
                "--backend-api-password=",
-               "--runtime-config=src/intent_handler/runtime_assets/nucore_runtime.example.json",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/unified/runtime_config.example.json",
+               "--preferences-dir=/usr/home/admin/.config/nucore_unified_runtime",
+               "--secrets-file=secrets/keys.json",
+               "--log-level=INFO",
+               "--json-output=true"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Claude-LakeEncino",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "src/unified/run_unified_runtime.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/secrets/.env",
+            "args": [
+               "--backend-api-base-url=https://192.168.4.21" ,
+               "--backend-api-username=",
+               "--backend-api-password=",
+               "--backend-api-classpath=iox.IoXWrapper",
+               "--runtime-config=src/unified/runtime_config.example.json",
                "--secrets-file=secrets/keys.json",
                "--log-level=ERROR",
                "--json-output=true"
@@ -98,10 +121,10 @@
             "justMyCode": false
         },
         {
-            "name": "OpenAI-IntentHandler-LakeEncino",
+            "name": "OpenAI-LakeEncino",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/intent_handler/run_intent_runtime.py",
+            "program": "src/unified/run_unified_runtime.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [
@@ -118,10 +141,10 @@
             "justMyCode": false
         },
         {
-            "name": "LLamacpp-IntentHandler-LakeEncino",
+            "name": "LLamacpp-LakeEncino",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/intent_handler/run_intent_runtime.py",
+            "program": "src/unified/run_unified_runtime.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/secrets/.env",
             "args": [

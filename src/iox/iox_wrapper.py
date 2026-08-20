@@ -4,9 +4,11 @@ import sys
 import os
 import base64
 import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
+from requests import api
 import websockets
 import urllib3
 import re 
@@ -15,17 +17,56 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
 from nucore.nodedef import Property
 from nucore.node import Node
+from nucore.group import Group
 from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM, is_enumeration_uom
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 from typing import Literal, Any
 from utils import get_logger
+from xml.sax.saxutils import escape as xml_escape
+from .diagnostics.iox_diagnostics import IoXDiagnostics
+from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER
 
 logger = get_logger(__name__)
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+def xml_elem_to_obj(elem):
+    if elem is None:
+        return None
+
+    children = list(elem)
+    text = (elem.text or "").strip()
+
+    # Leaf node
+    if not children:
+        if elem.attrib:
+            out = {"@attrs": dict(elem.attrib)}
+            if text:
+                out["#text"] = text
+            return out if out else None
+        return text if text else None
+
+    # Node with children
+    out = {}
+    if elem.attrib:
+        out["@attrs"] = dict(elem.attrib)
+    if text:
+        out["#text"] = text
+
+    for child in children:
+        value = xml_elem_to_obj(child)
+        tag = child.tag
+
+        if tag in out:
+            if not isinstance(out[tag], list):
+                out[tag] = [out[tag]]
+            out[tag].append(value)
+        else:
+            out[tag] = value
+
+    return out
 
 class IoXWrapper(NuCoreInterface):
     """Direct HTTP/WebSocket wrapper for the Universal Devices IoX (ISY) controller.
@@ -91,6 +132,7 @@ class IoXWrapper(NuCoreInterface):
             raise ValueError("Either poly or base_url, username, and password must be provided")
         
         self.unauthorized = False
+        self.diagnostics = IoXDiagnostics(self)
 
     def __info__(self, info) -> None:
         """Polyglot ISY-info subscription callback.
@@ -186,7 +228,7 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed put: {ex}")
             return None
 
-    def post(self, path: str, body: str, headers: dict):
+    def post(self, path: str, body: str, headers: dict=None):
         """Send an authenticated HTTP POST request to the ISY hub.
 
         Args:
@@ -227,8 +269,141 @@ class IoXWrapper(NuCoreInterface):
         except Exception as ex:
             logger.error(f"failed patch: {ex}")
             return None
+
+    def soap_post(self, path: str, body: str, soap_action: str = None, headers: dict = None):
+        """Send an authenticated SOAP POST request to the ISY hub.
+
+        Thin wrapper over :meth:`post` that fills in the SOAP-specific
+        headers (``Content-Type: text/xml`` and, when given, ``SOAPAction``)
+        so callers only need to supply the XML envelope.
+
+        Args:
+            path:        API path (with or without a leading ``/``).
+            body:        The SOAP XML envelope string.
+            soap_action: Value for the ``SOAPAction`` header, if the target
+                         service requires one.
+            headers:     Additional headers to merge in; these override the
+                         SOAP defaults on key collision (e.g. to pass a
+                         non-default charset).
+
+        Returns:
+            :class:`requests.Response`, or ``None`` on connection error.
+        """
+        soap_headers = {"Content-Type": "text/xml; charset=utf-8"}
+        if soap_action is not None:
+            soap_headers["SOAPAction"] = soap_action
+        if headers:
+            soap_headers.update(headers)
+        return self.post(path, body, soap_headers)
+
+    def _get_soap_envelope(self, soap_action: str, inner: str) -> str:
+        """Wrap *inner* (the already-built ``<command>``/``<node>``/... element
+        block) in the DeviceSpecific SOAP envelope."""
+        return (
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            "<s:Body>"
+            f'<u:{soap_action} xmlns:u="urn:udi-com:service:X_Insteon_Lighting_Service:1">'
+            f"{inner if inner else ''}"
+            f"</u:{soap_action}>"
+            "</s:Body>"
+            "</s:Envelope>"
+        )
+
+    async def _submit_soap_request(self, soap_action: str, inner_body: str) -> str | None:
+        """POST *inner_body* wrapped in the SOAP envelope for *soap_action*;
+        returns the raw response body text, or ``None`` on a connection error
+        or non-200 response (mirrors the Java method returning ``null`` when
+        ``resp == null`` or ``!resp.opStat``)."""
+        envelope = self._get_soap_envelope(soap_action, inner_body)
+        response = self.soap_post("/services", envelope, soap_action=soap_action)
+        if response is None or response.status_code != 200:
+            return None
+        return response.text
+
+    async def _submit_device_specific(self, inner_body: str) -> str | None:
+        """POST *inner_body* wrapped in the DeviceSpecific SOAP envelope;
+        equivalent to the Java client's ``submitSOAPRequest`` (minus HMAC
+        signing -- not carried over per instruction). Returns the raw
+        response body text, or ``None`` on a connection error or non-200
+        response (mirrors the Java method returning ``null`` when
+        ``resp == null`` or ``!resp.opStat``)."""
+        response = await self._submit_soap_request(IoXSOAPAction.SOAP_TYPE_DEVICE_SPECIFIC, inner_body)
+        return response
         
-        
+    async def _send_device_specific(
+        self,
+        command: str = None,
+        node: str = None,
+        param1: str = None,
+        param2: str = None,
+        param3: str = None,
+        specs: str = None,
+    ) -> str | None:
+        """Device-specific (e.g. Insteon) operation that isn't a generic ISY
+        service -- three free-form parameter slots (``p1``/``p2``/``p3``).
+
+        Port of the Java SDK's ``sendDeviceSpecific(command, node, param1,
+        param2, param3, specs)`` overload, via ``IoXWrapper.soap_post``.
+
+        Args:
+            command: The command to perform.
+            node:    The affected node's address.
+            param1:  Optional parameter 1 (``<p1>``).
+            param2:  Optional parameter 2 (``<p2>``).
+            param3:  Optional parameter 3 (``<p3>``).
+            specs:   Optional raw XML document to embed in ``<CDATA>``,
+                     unescaped exactly as the caller supplies it -- this is
+                     meant to carry an XML document, not plain text.
+
+        Returns:
+            The raw response body text, or ``None`` on failure.
+        """
+        inner = (
+            f"<command>{xml_escape(command or '')}</command>"
+            f"<node>{xml_escape(node or '')}</node>"
+            f"<p1>{xml_escape(param1 or '')}</p1>"
+            f"<p2>{xml_escape(param2 or '')}</p2>"
+            f"<p3>{xml_escape(param3 or '')}</p3>"
+            "<flag>0</flag>"
+            f"<CDATA>{specs or ''}</CDATA>"
+        )
+        return await self._submit_device_specific(inner)
+
+    async def _send_device_specific_with_option(
+        self,
+        command: str = None,
+        node: str = None,
+        option: str = None,
+        flag: int = 0,
+        specs: str = None,
+    ) -> str | None:
+        """Device-specific (e.g. Insteon) operation taking a single ``option``
+        plus a flag character, instead of three ``p1``/``p2``/``p3`` slots.
+
+        Port of the Java SDK's ``sendDeviceSpecific(command, node, option,
+        flag, specs)`` overload, via ``IoXWrapper.soap_post``.
+
+        Args:
+            command: The command to perform.
+            node:    The affected node's address.
+            option:  Optional parameter (``<option>``).
+            flag:    Optional hex value (0-255) to send in the ``<flag>`` element; if empty, ``0`` is sent.
+            specs:   Optional raw XML document to embed in ``<CDATA>``,
+                     unescaped exactly as the caller supplies it.
+
+        Returns:
+            The raw response body text, or ``None`` on failure.
+        """
+        flag_value = int(flag) if flag else 0
+        inner = (
+            f"<command>{xml_escape(command or '')}</command>"
+            f"<node>{xml_escape(node or '')}</node>"
+            f"<option>{xml_escape(option or '')}</option>"
+            f"<flag>{flag_value}</flag>"
+            f"<CDATA>{specs or ''}</CDATA>"
+        )
+        return await self._submit_device_specific(inner)
+
     # ------------------------------------------------------------------
     # IoX REST helpers
     # ------------------------------------------------------------------
@@ -342,11 +517,11 @@ class IoXWrapper(NuCoreInterface):
             body=payload,
         )
 
-    def group_scene_remove_member(self, controller_address: str, link_address: str) -> dict[str, Any]:
+    def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
         """Remove a member node from a group."""
         return self._group_scene_response(
             method="DELETE",
-            path=f"/api/groups/members/{quote(controller_address, safe='')}",
+            path=f"/api/groups/members/{quote(group_address, safe='')}",
             body={"nodeAddress": link_address},
         )
 
@@ -520,6 +695,17 @@ class IoXWrapper(NuCoreInterface):
             logger.error(out)
             return False, out
         return True, None
+    
+    def _get_node(self, node_id: str):
+        """
+        Determine the family of a given node ID.
+        if not found, return None and log an error.
+        if found, return family and the node
+        """
+        if not node_id:
+            logger.error("Node ID is empty.")
+            return None
+        return self.nodes.get(node_id, None)  # Return None if node_id not found
     
     def _get_node_type(self, node_id: str):
         """
@@ -735,203 +921,86 @@ class IoXWrapper(NuCoreInterface):
             responses.append(self.get(url))
         return responses
     
-    async def create_automation_routine(self, routine: dict):
-        """Translate an LLM-generated routine definition and submit it to IoX.
+    async def create_automation_routine(self, trigger: dict):
+        """Submit a new ``Trigger`` (see the new trigger/action schema) to IoX.
 
-        The LLM produces device names and symbolic UOM/value pairs.  This
-        method:
-
-        1. Resolves device names → raw IoX node addresses (Base-64 decoded).
-        2. Scales numeric values by ``10 ** precision`` where required by the
-           IoX API (precision scaling does *not* apply to UOM 25 / INDEX).
-        3. Builds a normalised ``{name, parent, enabled, if, then, else}``
-           dict and passes it to :meth:`_create_routine`.
+        Unlike the old shape this replaces, the caller (the ``routine_compiler``
+        package) is responsible for producing an already-fully-resolved
+        ``NewTrigger`` dict -- real device/group/routine ids (the unified
+        path's device ids are already real IoX addresses, never display
+        names, so no ``get_device_id`` name-resolution step is needed here
+        the way the old shape required) and already uom/precision-scaled
+        values (the compiler has real uom/precision in hand via
+        ``get_device_detail``, the same way ``resolve_value``/``send_command``
+        already do deterministic scaling elsewhere in this codebase). This
+        method's job shrinks to wire submission only -- no per-condition/
+        per-action translation, since there's no longer a bespoke
+        intermediate shape to translate *from*.
 
         Args:
-            routine: Dict with keys ``name``, ``parent``, ``enabled``,
-                     ``if`` (list of condition dicts), ``then`` (list of action
-                     dicts), and ``else`` (list of else-action dicts).
+            trigger: A ``NewTrigger``-shaped dict (no ``id``; ``parent``
+                     optional).
 
         Returns:
             :class:`requests.Response` from :meth:`_create_routine`, or
-            ``None`` when processing fails.
+            ``None`` on failure.
 
         Raises:
-            :class:`~nucore.nucore_error.NuCoreError`: When the routine dict
-                is empty or ``None``.
+            :class:`~nucore.nucore_error.NuCoreError`: When *trigger* is
+                empty or ``None``.
         """
-        if not routine:
-            raise NuCoreError ("No valid routine provided.")
-        try: 
-            out_routine={
-                "name": f"{routine['name']}",
-                "parent": routine['parent'],
-                "enabled": routine['enabled'] ,
-                "if": [],
-                "then": [],
-                "else": []
-            }
-            ifs = routine.get("if", None)
-            if ifs is not None and len (ifs) > 0:
-                for if_ in ifs:
-                    if not isinstance(if_, dict):
-                        continue
+        if not trigger:
+            raise NuCoreError("No valid trigger provided.")
+        return self._create_routine(trigger)
 
-                    # Keep logic operators and schedule blocks as-is.
-                    if "logic" in if_ or "weekly" in if_ or "at" in if_ or "from" in if_ or "to" in if_ or "for" in if_:
-                        out_routine['if'].append(if_)
-                        continue
-
-                    # COS: property-state comparison condition.
-                    if "comp" in if_:
-                        condition = if_
-                        required = {"device", "status", "comp", "value", "uom", "precision"}
-                        if not required.issubset(condition.keys()):
-                            logger.error(f"Invalid COS condition (missing required fields): {condition}")
-                            continue
-
-                        device_id = self.get_device_id(condition.get("device"))
-                        if device_id is None:
-                            logger.error(f"Device not found for COS condition: {condition}")
-                            continue
-                        condition["device"] = ProfileRagFormatter.decode_id(device_id)
-
-                        uom_id = condition.get("uom")
-                        precision = condition.get("precision")
-                        value = condition.get("value")
-                        if uom_id is not None and not is_enumeration_uom(uom_id) and precision is not None and value is not None:
-                            condition["value"] = int(value * (10 ** int(precision)))
-
-                        out_routine['if'].append(condition)
-                        continue
-
-                    # COC: physical control event condition.
-                    if "eq" in if_:
-                        condition = if_
-                        required = {"device", "eq", "control"}
-                        if not required.issubset(condition.keys()):
-                            logger.error(f"Invalid COC condition (missing required fields): {condition}")
-                            continue
-
-                        device_id = self.get_device_id(condition.get("device"))
-                        if device_id is None:
-                            logger.error(f"Device not found for COC condition: {condition}")
-                            continue
-                        condition["device"] = ProfileRagFormatter.decode_id(device_id)
-
-                        parameters = condition.get("parameters")
-                        if isinstance(parameters, list):
-                            for param in parameters:
-                                uom_id = param.get("uom")
-                                precision = param.get("precision")
-                                value = param.get("value")
-                                if precision is not None and uom_id is not None and not is_enumeration_uom(uom_id) and value is not None:
-                                    param["value"] = value * (10 ** int(precision))
-
-                        out_routine['if'].append(condition)
-                        continue
-
-                    logger.error(f"Unsupported IF condition shape, dropping: {if_}")
-            
-            thens = routine.get("then", None)
-            if thens is not None and len (thens) > 0:
-                for then in thens:
-                    device_id = then.get("device", None)
-                    if device_id is not None:
-                        device_id = self.get_device_id(device_id)
-                        if device_id is None: 
-                            continue
-                        # device ids are in base64 encoded, decode it
-                        device_id = ProfileRagFormatter.decode_id(device_id)
-                        then["device"] = device_id
-                    parameters = then.get("parameters", None)
-                    if parameters is not None:
-                        for param in parameters:
-                            uom_id = param.get("uom", None)
-                            precision = param.get("precision", None)
-                            value = param.get("value", None)
-                            if precision is not None:
-                                prec = int(precision)
-                                if uom_id is not None and not is_enumeration_uom(uom_id): 
-                                    value = value * (10 ** prec)
-                                    param["value"] = value 
-                    out_routine['then'].append(then)
-            elses = routine.get("else", None)
-            if elses is not None and len (elses) > 0:
-                for else_ in elses:
-                    device_id = else_.get("device", None)
-                    if device_id is not None:
-                        device_id = self.get_device_id(device_id)
-                        if device_id is None:
-                            #remove this else from elses
-                            logger.error(f"Device not found for else condition: {else_}")
-                            continue
-                        # device ids are in base64 encoded, decode it
-                        device_id = ProfileRagFormatter.decode_id(device_id)
-                        else_["device"] = device_id
-                    parameters = else_.get("parameters", None)
-                    if parameters is not None:
-                        for param in parameters:
-                            uom_id = param.get("uom", None)
-                            precision = param.get("precision", None)
-                            value = param.get("value", None)
-                            if precision is not None:
-                                prec = int(precision)
-                                if uom_id is not None and not is_enumeration_uom(uom_id): 
-                                    value = value * (10 ** prec)
-                                    param["value"] = value
-                    out_routine['else'].append(else_)
-
-        except Exception as e:
-            logger.error(f"Failed to process routine: {str(e)}")
-            return None
-
-        logger.info("****Routine after processing:") 
-        logger.info(json.dumps(out_routine, indent=4))
-        response=self._create_routine(out_routine)
-        return response
-
-    def _create_routine(self, program: dict):
-        """Submit a processed routine definition to the IoX hub via PUT.
+    def _create_routine(self, trigger: dict):
+        """Submit a ``NewTrigger``-shaped dict to the IoX hub via PUT.
 
         Args:
-            program: Normalised routine dict with ``name``, ``parent``,
-                     ``enabled``, ``if``, ``then``, and ``else`` keys.
+            trigger: ``NewTrigger``-shaped dict (see ``create_automation_routine``).
 
         Returns:
-            :class:`requests.Response`, or ``False`` when ``program`` is
-            empty.
+            :class:`requests.Response`, or ``None`` on failure.
         """
-        response=None
+        response = None
         try:
-            program_content = {
-                'routine': program
-            }
+            # Confirmed: unlike the old /api/ai/trigger endpoint, the new
+            # /api/trigger endpoint takes the NewTrigger/UpdatedTrigger dict
+            # directly as the request body -- no {"routine": ...} wrapper.
+            body = trigger
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.put(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+            response = self.put(f'/api/trigger', body=json.dumps(body), headers=headers)
         except Exception as ex:
-            logger.error(f"Error creating routine: {ex}")
-        
+            logger.error(f"Error creating trigger: {ex}")
+
         return response
 
-    
     async def get_all_routines_summary(self):
-        """Fetch lightweight summary records for all routines from the hub.
+        """Fetch lightweight runtime-state summaries for all routines/folders.
 
-        Returns the ``data`` array from ``/api/ai/programs``.  Each entry
-        contains runtime state (enabled, last-run, etc.) but not the full
-        trigger/action logic.
+        Returns the ``data`` array from ``/api/programs``. Each entry carries
+        live runtime state -- ``folder`` (program vs. folder; a folder can
+        carry its own gating condition), ``status`` (its if-condition's
+        current evaluation), ``lastRunTime``/``lastFinishTime``,
+        ``enabled``, ``runAtStartup``, ``running``, and
+        ``nextScheduledRunTime`` -- but not the if/then/else trigger/action
+        logic itself (see :meth:`get_all_routines`/:meth:`get_routine` for
+        that). ``_load_routines`` merges this onto the condensed routines
+        list by id.
 
         Returns:
-            List of routine summary dicts, or the raw response / ``None`` on
-            failure.
+            List of runtime summary dicts, or ``None`` on failure.
         """
-        response = self.get("/api/ai/programs")
-        if response == None or response.status_code != 200:
-            return response if response else None
-        return response.json()['data']
+        response = self.get("/api/programs")
+        if response is None or response.status_code != 200:
+            return None
+        try:
+            return response.json()['data']
+        except Exception as ex:
+            logger.error(f"Error retrieving routines summary: {ex}")
+            return None
 
     async def get_routine_summary(self, program_id: int):
         """Fetch the runtime summary for a single routine.
@@ -977,14 +1046,15 @@ class IoXWrapper(NuCoreInterface):
     async def get_all_routines(self):
         """Fetch complete trigger/action definitions for all routines.
 
-        Returns the ``data`` array from ``/api/ai/triggers`` which includes
-        the full ``if``/``then``/``else`` logic for every routine.
+        Returns the ``data`` array from ``/api/triggers`` -- a list of
+        ``Trigger``/``InvalidTrigger``-shaped dicts, one per routine, with the
+        full ``if``/``then``/``else`` logic for every routine.
 
         Returns:
             List of full routine dicts, or the raw response / ``None`` on
             failure.
         """
-        response = self.get("/api/ai/triggers")
+        response = self.get("/api/triggers")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -992,18 +1062,23 @@ class IoXWrapper(NuCoreInterface):
         except Exception as ex:
             logger.error(f"Error retrieving all routines: {ex}")
             return None
-    
+
     async def get_routine(self, program_id: str):
         """Fetch the complete trigger/action definition for a single routine.
 
         Args:
             program_id: Routine ID (integer or string form accepted by the
-                        ``/api/ai/trigger/<id>`` endpoint).
+                        ``/api/triggers/<id>`` endpoint).
 
         Returns:
-            ``data`` value from the API response, or ``None`` on failure.
+            ``data`` value from the API response (a ``Trigger``/
+            ``InvalidTrigger``-shaped dict), or ``None`` on failure.
         """
-        response = await self.get(f"/api/ai/trigger/{program_id}")
+        # NOTE: self.get is synchronous (line ~143) -- the `await` here was
+        # a pre-existing bug (present before this endpoint migration) that
+        # would have made this method crash unconditionally; fixed in
+        # passing since this exact line was already being touched.
+        response = self.get(f"/api/triggers/{program_id}")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -1013,10 +1088,12 @@ class IoXWrapper(NuCoreInterface):
             return None
 
     async def update_routine(self, program: dict):
-        """Update an existing routine on the hub via POST.
+        """Update an existing routine (``UpdatedTrigger``-shaped -- has a
+        real ``id``, real resolved ids/values, same as ``create_automation_routine``)
+        on the hub via POST.
 
         Args:
-            program: Updated routine dict (same schema as :meth:`_create_routine`).
+            program: ``UpdatedTrigger``-shaped dict.
 
         Returns:
             :class:`requests.Response`, or ``False`` when ``program`` is empty.
@@ -1025,17 +1102,16 @@ class IoXWrapper(NuCoreInterface):
             return False
         response=None
         try:
-            program_content = {
-                'routine': program
-            }
+            # Same confirmed no-wrapper contract as _create_routine.
+            program_content = program
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.post(f'/api/ai/trigger', body=json.dumps(program_content), headers=headers)
+            response = self.post(f'/api/trigger', body=json.dumps(program_content), headers=headers)
         except Exception as ex:
             logger.error(f"Error updating routine: {ex}")
-        
-        return response 
+
+        return response
 
     async def delete_routine(self, program_id: str):
         """Delete a routine by its ID.
@@ -1050,18 +1126,24 @@ class IoXWrapper(NuCoreInterface):
         if not program_id:
             return None
         try:
-            response = await self.delete(f'/api/ai/trigger/{program_id}')
+            # self.delete is synchronous -- same pre-existing await-on-sync
+            # bug as get_routine, fixed in passing.
+            response = self.delete(f'/api/trigger/{program_id}')
         except Exception as ex:
             logger.error(f"Error deleting routine: {ex}")
-        
-        return response 
+
+        return response
     
     async def add_node(self, node_name:str, type:Literal["folder", "group"]):
         """
-        Add a new node (folder or group) to the device structure.
+        Add a new node (folder or group) to the device structure. Distinct
+        from start_device_pairing -- this creates a software organizational
+        node via the REST API; it has nothing to do with physical devices,
+        despite "AddNode" being the (unrelated) name of the SOAP action
+        start_device_pairing uses.
         :param node_name: The name of the node to add.
         :param type: The type of the node, either "folder" or "group".
-        :return: response from the API or None if failure 
+        :return: response from the API or None if failure
         """
         type=type.lower()
         if not type in ["folder", "group"]:
@@ -1220,29 +1302,78 @@ class IoXWrapper(NuCoreInterface):
         response = None
         try:
             if operation == "delete":
-                response = self.delete(f'/api/ai/trigger/{routine_id}')
+                # The one routine_ops operation that lives on the trigger-
+                # content endpoint rather than /rest/programs -- moves with
+                # the rest of the CRUD migration, unlike every other
+                # operation below (confirmed unchanged).
+                response = self.delete(f'/api/trigger/{routine_id}')
             else:
                 if isinstance(routine_id, str):
                     try:
                         routine_id = int(routine_id)
                         #convert it to 4 digit hex string without 0x prefix since that's what the API expects
-                        routine_id = format(routine_id, '04x')
                     except ValueError:
                         #already in hex
                         pass
+                routine_id = format(routine_id, '04x')
                 response = self.get(f'/rest/programs/{routine_id}/{operation}')
         except Exception as ex:
             logger.error(f"Error performing routine operation: {ex}")
-        
+
+        return response
+
+    async def variable_ops(
+        self,
+        var_type: int,
+        var_id: str | None,
+        operation: Literal["create", "update", "delete"],
+        **kwargs,
+    ):
+        """Create, update, or delete a NuCore variable.
+
+        Args:
+            var_type: 1 (integer variable) or 2 (state variable).
+            var_id: Required for "update"/"delete", ignored for "create".
+            operation: "create", "update", or "delete".
+            kwargs: For "create"/"update": name, prec, value, init (all optional).
+
+        Returns:
+            :class:`requests.Response`, or ``None`` when the operation is
+            unrecognised or a required id is missing.
+        """
+        if operation not in ("create", "update", "delete"):
+            logger.error(f"Invalid variable operation: {operation}")
+            return None
+        if operation != "create" and not var_id:
+            logger.error("var_id is required for update/delete variable operations")
+            return None
+
+        response = None
+        headers = {"Content-Type": "application/json"}
+        try:
+            if operation == "create":
+                body = {k: kwargs[k] for k in ("name", "prec") if k in kwargs}
+                response = self.put(f'/api/variables/{var_type}', body=json.dumps(body), headers=headers)
+            elif operation == "update":
+                body = {k: kwargs[k] for k in ("value", "init", "prec", "name") if k in kwargs}
+                response = self.post(f'/api/variables/{var_type}/{var_id}', body=json.dumps(body), headers=headers)
+            else:  # delete
+                response = self.delete(f'/api/variables/{var_type}/{var_id}')
+        except Exception as ex:
+            logger.error(f"Error performing variable operation: {ex}")
+
         return response
 
     # ------------------------------------------------------------------
-    # Timezone management 
+    # Timezone management
     # ------------------------------------------------------------------
     async def get_timespecs(self) -> dict[str, str]:
         """
-        Get a list of timezones that can be set on the device. 
-        :return: Dictionary of timezones or None if failure
+        Get time/timezone/location information from the device, including the
+        current time and today's sunrise/sunset (both localized to the
+        device's own configured timezone) -- useful for the LLM when setting
+        up or explaining time- or sunrise/sunset-based routines.
+        :return: Dictionary of timespecs or None if failure
 
         API:
         /rest/time
@@ -1251,7 +1382,7 @@ class IoXWrapper(NuCoreInterface):
             response = self.get(f'/rest/time')
             if response == None or response.status_code != 200:
                 return response if response else None
-            
+
             #response is in xml, convert to json
             root = ET.fromstring(response.text)
 #                <DT>
@@ -1269,22 +1400,35 @@ class IoXWrapper(NuCoreInterface):
 #                    <IsMilitary>false</IsMilitary>
 #                    <TzId>America/Los_Angeles</TzId>
 #                </DT>
-            #convert to dictionary
-            #include current date/time in the response since that's useful for the LLM to know when setting routines that are time-based, and also include timezone, latitude, and longitude since those are useful for calculating sunrise/sunset times for routines that are based on sunrise/sunset
-            time_data = {
-                "current_time": datetime.datetime.now().isoformat(),
-            }
-            for child in root:
+            #convert to dictionary -- read every field first since TzId (needed
+            #to localize the GMT/SunriseGMT/SunsetGMT epoch fields below) comes
+            #last in the XML, after the fields that depend on it
+            raw = {child.tag: child.text for child in root}
 
-                if child.tag == "TzId":
-                    time_data["timezone"] = child.text
-                elif child.tag == "Lat":
-                    time_data["latitude"] = float(child.text)
-                elif child.tag == "Long":
-                    time_data["longitude"] = float(child.text) * -1 #the API returns longitude as a positive value, convert it to negative since that's the standard format for longitude
+            tz_name = raw.get("TzId")
+            tzinfo = ZoneInfo(tz_name) if tz_name else datetime.timezone.utc
 
-            return time_data 
-        except Exception as ex: 
+            time_data: dict[str, Any] = {"timezone": tz_name}
+
+            if raw.get("Lat") is not None:
+                time_data["latitude"] = float(raw["Lat"])
+            if raw.get("Long") is not None:
+                time_data["longitude"] = float(raw["Long"]) * -1 #the API returns longitude as a positive value, convert it to negative since that's the standard format for longitude
+
+            #GMT/SunriseGMT/SunsetGMT are already Unix epoch seconds (unlike
+            #NTP/Sunrise/Sunset, which are NTP epoch -- seconds since 1900, not
+            #1970) -- so no epoch conversion is needed, just localization
+            for key, field in (("current_time", "GMT"), ("sunrise", "SunriseGMT"), ("sunset", "SunsetGMT")):
+                value = raw.get(field)
+                if value is not None:
+                    time_data[key] = (
+                        datetime.datetime.fromtimestamp(int(value), tz=datetime.timezone.utc)
+                        .astimezone(tzinfo)
+                        .isoformat()
+                    )
+
+            return time_data
+        except Exception as ex:
             logger.error(f"Error performing timespecs operation: {ex}")
 
     # ------------------------------------------------------------------
@@ -1297,10 +1441,10 @@ class IoXWrapper(NuCoreInterface):
         :return: Dictionary of active plugins or None if failure
 
         API:
-        /api/plugins/store/list/active
+        /api/plugins/store/prod/list/active
         """
         try:
-            response = self.get(f'/api/plugins/store/list/active')
+            response = self.get(f'/api/plugins/store/prod/list/active')
             if response == None or response.status_code != 200:
                 return response if response else None
             return response.json()
@@ -1308,34 +1452,240 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error performing get active plugins operation: {ex}")
             return None
 
+    async def get_purchased_plugins(self) -> dict[str, str]:
+        """
+        Get the licenses this installation has purchased for plugins.
+        :return: Dictionary of purchased plugin licenses or None if failure
+
+        API:
+        /api/plugins/licenses
+        """
+        try:
+            response = self.get(f'/api/plugins/licenses')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error performing get purchased plugins operation: {ex}")
+            return None
+
     async def get_installed_plugins(self) -> dict[str, str]:
         """
-        Get a list of installed plugins on the device. 
+        Get a list of plugins installed on this device.
         :return: Dictionary of installed plugins or None if failure
+
+        API:
+        /api/plugins
+
+        Response shape:
+        {"successful": true, "data": [{"profileNum": 3, "name": "YouTube", "isLocal": false}, ...]}
+
+        ``profileNum`` is this plugin's id -- used as ``plugin_id`` for
+        subsequent plugin_ops()/configure_plugin() calls.
         """
-        raise NotImplementedError("Subclasses must implement the get_installed_plugins method.")
+        try:
+            response = self.get(f'/api/plugins')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            # now go through the list and rename profileNum to plugin_id for consistency with other plugin APIs
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error performing get installed plugins operation: {ex}")
+            return None
     
-    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstsall", "status", "start", "stop"]):
+    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart", "purchase"]):
         """
         Perform an operation on a plugin.
-        :param plugin_id: The ID of the plugin to operate on.
-        :param operation: The operation to perform (e.g., "start", "stop", "uninstall").
-        :return: response from the API or None if failure 
+        :param plugin_id: The ID of the plugin to operate on -- profileNum
+                           from get_installed_plugins() for start/stop/restart
+                           (and, once implemented, install/uninstall/status);
+                           nsid for details/purchase.
+        :param operation: The operation to perform.
+        :return: response from the API or None if failure
 
-        Details API: 
-        /api/plugins/store/entry/:nsid
+        Details API:
+        /api/plugins/store/prod/entry/:nsid
+
+        Start/Stop/Restart API:
+        /api/plugin/<profileNum>/start
+        /api/plugin/<profileNum>/stop
+        /api/plugin/<profileNum>/restart
+
+        Install/Purchase: no real API exists yet -- stubbed with a simulated
+        success so callers can be built/tested end-to-end.
         """
-        raise NotImplementedError("Subclasses must implement the plugin_ops method.")
-    
+        if operation in ("start", "stop", "restart"):
+            try:
+                headers = {"Content-Type": "application/json"}
+                response = self.post(f'/api/plugin/{plugin_id}/{operation}', body="{}", headers=headers)
+                if response == None or response.status_code != 200:
+                    return response if response else None
+                return response.json()
+            except Exception as ex:
+                logger.error(f"Error performing plugin {operation} operation: {ex}")
+                return None
+
+        if operation in ("install", "purchase"):
+            # STUB: no real install/purchase API exists yet -- simulate
+            # success so the calling flow can be built/tested end-to-end.
+            # Replace with a real HTTP call once NuCore ships one.
+            return {
+                "successful": True,
+                "data": {"plugin_id": plugin_id, "operation": operation, "stub": True},
+            }
+
+        raise NotImplementedError(f"plugin_ops operation '{operation}' is not yet implemented.")
+
     async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
         """
-        Configure a plugin on the device. 
+        Configure a plugin on the device.
         :param plugin_id: The ID of the plugin to configure.
         :param config: A dictionary containing the configuration parameters.
-        :return: response from the API or None if failure 
+        :return: response from the API or None if failure
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
-    
+
+    async def get_plugin_prompt(self, plugin_id: str) -> dict:
+        """
+        Returns usage guidance deterministic from plugin_id alone. 
+        """
+        try:
+            response = self.get(f'/api/plugin/{plugin_id}/prompt')
+            if response == None or response.status_code != 200:
+                return {
+                    "successful": False,
+                    "data": f"No response" if response is None else f"HTTP {response.status_code} from /api/plugin/{plugin_id}/prompt",
+                }
+            out = response.json()
+            if not isinstance(out, dict) or "successful" not in out or "data" not in out:
+                return {
+                    "successful": False,
+                    "data": "Invalid response format",
+                }
+            return out
+        except Exception as ex:
+                return {
+                    "successful": False,
+                    "data": str(ex),
+                }
+
+    async def get_plugin_tools(self, plugin_id: str) -> dict:
+        """
+        Returns tool-spec list deterministic from plugin_id alone, uniquified with
+        the plugin's own id per the naming convention used for multiple
+        installed instances of the same plugin type. 
+        """
+        try:
+            response = self.get(f'/api/plugin/{plugin_id}/tools')
+            if response == None or response.status_code != 200:
+                return {
+                    "successful": False,
+                    "data": f"No response" if response is None else f"HTTP {response.status_code} from /api/plugin/{plugin_id}/tools",
+                }
+            out = response.json()
+            if not isinstance(out, dict) or "successful" not in out or "data" not in out:
+                return {
+                    "successful": False,
+                    "data": "Invalid response format",
+                }
+            tools = out.get("data", [])
+            if not isinstance(tools, list):
+                return {
+                    "successful": False,
+                    "data": "Invalid tools format",
+                }
+            # rename the tools to make them unique per plugin_id, since multiple instances of the same plugin type can be installed
+            for tool in tools:
+                if "name" in tool:
+                    tool["name"] = f"{plugin_id}_{tool['name']}"
+            return {
+                "successful": True,
+                "data": {
+                    "tools": tools,
+                },
+            }
+
+        except Exception as ex:
+                return {
+                    "successful": False,
+                    "data": str(ex),
+                }
+
+    async def handle_plugin_llm_result(self, plugin_id: str, args: dict[str, Any]) -> dict:
+        """
+        Returns the result of the plugin's execution of the tool specified in *args["tool_name"]*
+        with *args*, deterministic from plugin_id/tool_name. 
+        """
+        timeout=60000
+
+        try:
+            response = self.post(f'/api/plugin/{plugin_id}/request',
+                                 body=json.dumps({"timeout": timeout, "payload": args}), headers={"Content-Type": "application/json"})
+            if response == None or response.status_code != 200:
+                return {
+                    "successful": False,
+                    "data": f"No response" if response is None else f"HTTP {response.status_code} from /api/plugin/{plugin_id}/request",
+                }
+            out = response.json()
+            if not isinstance(out, dict) or "successful" not in out or "data" not in out:
+                return {
+                    "successful": False,
+                    "data": "Invalid response format",
+                }
+            return out
+        except Exception as ex:
+            return {
+                "successful": False,
+                "data": str(ex),
+            }
+
+    # ------------------------------------------------------------------
+    # Diagnostics -- all actual registry/state/dispatch logic lives on
+    # IoXDiagnostics (self.diagnostics); these just satisfy NuCoreInterface.
+    # ------------------------------------------------------------------
+
+    async def start_diagnostics(self, **kwargs) -> Any:
+        """
+        Open (or re-show) the diagnostic session -- see
+        IoXDiagnostics.start_diagnostics.
+        """
+        return await self.diagnostics.start_diagnostics(**kwargs)
+
+    async def run_diagnostic_step(self, step: str, **params) -> Any:
+        """
+        Run one step of the in-progress diagnostic session -- see
+        IoXDiagnostics.run_diagnostic_step.
+        """
+        return await self.diagnostics.run_diagnostic_step(step, **params)
+
+    def get_running_diagnostic(self) -> dict[str, Any] | None:
+        """
+        Return info about the diagnostic currently in flight, if any -- see
+        IoXDiagnostics.get_running_diagnostic.
+        """
+        return self.diagnostics.get_running_diagnostic()
+
+    # ------------------------------------------------------------------
+    # Device pairing -- previously dead diagnostics-only SOAP calls (never
+    # wired into a diagnostic step), moved here rather than wiring up the
+    # untested, zero-call-site SetDeviceLinkMode action. Distinct from
+    # add_node above -- these drive the PLM's physical pairing/linking
+    # hardware workflow, not NuCore's own node database. INSTEON only for
+    # now -- no Z-Wave/Zigbee/Matter pairing primitives exist anywhere in
+    # this class yet.
+    # ------------------------------------------------------------------
+
+    async def add_device(self, device_address: str, **kwargs) -> Any:
+        return await self._send_device_specific_with_option(
+            IoXSOAPAction.SOAP_TYPE_ADD_NODE, device_address, None, 0x01, None
+        )
+
+    async def discover_devices(self) -> Any:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_DISCOVER_NODES, None, None, 0x01, None)
+
+    async def finish_device_discovery(self) -> Any:
+        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_CANCEL_NODES_DISCOVERY, None, None, 0x01, None)
+
     # ------------------------------------------------------------------
     # WebSocket event subscription
     # ------------------------------------------------------------------
@@ -1433,7 +1783,8 @@ class IoXWrapper(NuCoreInterface):
                                     'node': node.text if node is not None else None,
                                     'fmtAct': fmtAct.text if fmtAct is not None else None,
                                     'fmtName': fmtName.text if fmtName is not None else None,
-                                    'eventInfo': eventInfo.text if eventInfo is not None else None
+                                    # parsed structure (works for text OR nested tags)
+                                    'eventInfo': xml_elem_to_obj(eventInfo),
                                 }
                                 await on_message_callback(event_data)
                             except Exception as ex:
@@ -1668,6 +2019,60 @@ class IoXWrapper(NuCoreInterface):
         device_rag_formatter = MinimalRagFormatter(json_output=self.json_output, condense=condense_profiles)
         return self._formatter_format_nodes(device_rag_formatter)
     
+    # Runtime-state fields /api/programs carries that /api/triggers does not
+    # -- see get_all_routines_summary(). Copied verbatim (no renaming/
+    # reshaping) onto each condensed routine when present.
+    _RUNTIME_SUMMARY_FIELDS = (
+        "folder", "status", "lastRunTime", "lastFinishTime",
+        "enabled", "runAtStartup", "running", "nextScheduledRunTime",
+    )
+
+    def _merge_routine_runtime_summary(self, condensed_routine: dict, summary: dict | None) -> None:
+        if not summary:
+            return
+        for field in self._RUNTIME_SUMMARY_FIELDS:
+            if field in summary:
+                condensed_routine[field] = summary[field]
+
+    async def _load_variables(self) -> None:
+        """Fetch all integer (type 1) and state (type 2) variables from the
+        hub and populate ``self.variables``/``self.condensed_variables``.
+
+        ``self.variables`` is keyed ``"<type>:<id>"`` (see
+        ``NuCoreInterface.get_variable``) so the two id spaces never
+        collide. Rebuilt from scratch each call (unlike ``_load_routines``,
+        which appends -- there's no existing accumulate-across-refreshes
+        behavior to preserve here since this store is brand new).
+
+        Called from ``_refresh_routines_database`` before ``_load_routines``
+        so routines' ``variable_names`` cross-reference has fresh data to
+        resolve against. Silently ignores exceptions so a partial failure
+        does not block startup -- same convention as ``_load_routines``.
+        """
+        try:
+            variables: dict[str, Any] = {}
+            condensed: list = []
+            for var_type in (1, 2):
+                response = self.get(f'/api/variables/{var_type}')
+                if response is None or response.status_code != 200:
+                    continue
+                try:
+                    records = response.json().get('data') or []
+                except Exception as ex:
+                    logger.error(f"Error parsing variables (type {var_type}): {ex}")
+                    continue
+                for record in records:
+                    var_id = record.get("id")
+                    if var_id is None:
+                        continue
+                    entry = {**record, "type": var_type}
+                    variables[f"{var_type}:{var_id}"] = entry
+                    condensed.append(entry)
+            self.variables = variables
+            self.condensed_variables = condensed
+        except Exception as ex:
+            logger.error(f"Error loading variables: {ex}")
+
     async def _load_routines(self) -> None:
         """Fetch all routines from the hub and populate the in-memory stores.
 
@@ -1677,8 +2082,19 @@ class IoXWrapper(NuCoreInterface):
           (including trigger/action logic).  Used by the
           ``routine_status_ops`` handler for direct access.
         * ``self.condensed_routines`` — list of lightweight dicts with
-          ``id``, ``name``, ``comment``, and ``device_names``.  Used by the
-          ``routine_filter`` handler as the LLM prompt payload.
+          ``id``, ``name``, ``comment``, ``device_names``, and the runtime
+          fields listed in ``_RUNTIME_SUMMARY_FIELDS`` (when known).  Used by
+          the ``routine_filter`` handler as the LLM prompt payload.
+
+        Runtime state comes from ``get_all_routines_summary()``
+        (``/api/programs``), merged onto each entry by id -- fetched
+        best-effort: a failure there still leaves the trigger-sourced fields
+        populated, it just means the runtime fields are missing. Folders
+        (and anything else that ``/api/programs`` knows about but
+        ``/api/triggers`` doesn't -- folders carry a gating condition but no
+        if/then/else trigger content) still get a condensed entry, with
+        ``device_names``/``comment`` empty since there's no trigger content
+        to derive them from.
 
         Silently ignores exceptions so a partial failure does not block
         startup.
@@ -1686,26 +2102,51 @@ class IoXWrapper(NuCoreInterface):
         try:
             all_routines = await self.get_all_routines()
 
-            # now go thorugh the list and create both the full and condensed versions of the routines database 
-            # codensed version is used for filtering using device names, while the full version is sent to intent handlers for full processing
-            for r in all_routines:
-                routine = r.get("routine", {})
+            try:
+                summaries = await self.get_all_routines_summary() or []
+            except Exception as ex:
+                logger.error(f"Error retrieving routines runtime summary: {ex}")
+                summaries = []
+            summary_by_id = {str(s["id"]): s for s in summaries if s.get("id") is not None}
+
+            # New schema: each list item IS the Trigger/InvalidTrigger dict
+            # directly -- no more {"routine": {...}, "invalid"?, "error"?}
+            # wrapper (that was the old shape's convention; the new
+            # Trigger/InvalidTrigger types carry id/name/if/then/else and,
+            # for InvalidTrigger, invalid/error/xml all at their own top
+            # level, per the schema).
+            seen_ids: set[str] = set()
+            for routine in all_routines:
                 routine_id = routine.get("id", "")
                 if not routine_id:
                     continue
+                seen_ids.add(str(routine_id))
                 condensed_routine = {
-                    "id": routine_id, 
+                    "id": routine_id,
                     "name": routine.get("name"),
                     "comment": routine.get("comment"),
-                    "device_names": self._get_device_name_list_from_routine(routine) 
+                    "device_names": self._get_device_name_list_from_routine(routine),
+                    "variable_names": self._get_variable_name_list_from_routine(routine),
                 }
 
-                if "invalid" in r:
-                    routine["invalid"]=r.get("invalid", False)
-                    routine["invalid_reason"]=r.get("error", "")
-                    condensed_routine["invalid"]=r.get("invalid", False)
-                    condensed_routine["invalid_reason"]=r.get("error", "")
+                if routine.get("invalid"):
+                    condensed_routine["invalid"] = True
+                    condensed_routine["invalid_reason"] = routine.get("error", "")
+                self._merge_routine_runtime_summary(condensed_routine, summary_by_id.get(str(routine_id)))
                 self.all_routines[routine_id] = routine
+                self.condensed_routines.append(condensed_routine)
+
+            for sid, summary in summary_by_id.items():
+                if sid in seen_ids:
+                    continue
+                condensed_routine = {
+                    "id": summary.get("id"),
+                    "name": summary.get("name"),
+                    "comment": "",
+                    "device_names": [],
+                    "variable_names": [],
+                }
+                self._merge_routine_runtime_summary(condensed_routine, summary)
                 self.condensed_routines.append(condensed_routine)
 
             self.routines_changed = False
@@ -1715,9 +2156,21 @@ class IoXWrapper(NuCoreInterface):
     def _get_device_name_list_from_routine(self, routine: dict) -> list[str]:
         """Extract the human-readable device names referenced by a routine.
 
-        Scans the ``if``, ``then``, and ``else`` sections of the routine for
-        ``"device"`` fields, resolves each raw address to its display name via
-        :meth:`get_device_name`, and returns the deduplicated list.
+        Scans the ``if``, ``then``, and ``else`` sections for a device/node
+        reference and resolves each to its display name via
+        :meth:`get_device_name`, deduplicated.
+
+        Only conditions/actions carrying a device reference at their own top
+        level are scanned -- ``status``/``control`` conditions and ``cmd``
+        actions, via the new schema's ``"node"`` field (a real rename from
+        the old shape's ``"device"`` key, not cosmetic -- the new schema is
+        the authoritative wire shape). ``paren`` conditions are recursed into
+        since they nest their own ``conditions`` list. Every other construct
+        type (``var``, ``x10``, ``triggerref``, ``inet``, ``comment``,
+        ``sys``, ``notify``, the program-control actions, ``lp``, ``device``)
+        legitimately has no top-level device reference and is silently
+        skipped -- this was never meant to be exhaustive, just a best-effort
+        "what devices does this routine mention" summary for prompt display.
 
         Args:
             routine: Full routine dict with optional ``if``/``then``/``else``
@@ -1729,28 +2182,29 @@ class IoXWrapper(NuCoreInterface):
         if routine is None:
             return []
 
-        #first check the if section:        
-        if_section: list[dict] = routine.get("if", [])
-        then_section: list[dict] = routine.get("then", [])
-        else_section: list[dict] = routine.get("else", [])
-        device_id_list = set() 
-        for condition in if_section:
-            if "device" in condition:
-                device = condition.get("device", None)
-                if device:                    
-                    device_id_list.add(device)
-        
-        for action in then_section:
-            if "device" in action:
-                device = action.get("device", None)
-                if device:
-                    device_id_list.add(device)
-   
-        for action in else_section:
-            if "device" in action:
-                device = action.get("device", None)
-                if device:
-                    device_id_list.add(device)
+        def _collect_condition_nodes(conditions, into: set) -> None:
+            for condition in conditions or []:
+                if not isinstance(condition, dict):
+                    continue
+                if condition.get("type") == "paren":
+                    _collect_condition_nodes(condition.get("conditions"), into)
+                    continue
+                node = condition.get("node")
+                if node:
+                    into.add(node)
+
+        def _collect_action_nodes(actions, into: set) -> None:
+            for action in actions or []:
+                if not isinstance(action, dict):
+                    continue
+                node = action.get("node")
+                if node:
+                    into.add(node)
+
+        device_id_list: set = set()
+        _collect_condition_nodes(routine.get("if", []), device_id_list)
+        _collect_action_nodes(routine.get("then", []), device_id_list)
+        _collect_action_nodes(routine.get("else", []), device_id_list)
 
         device_names: list[str] = []
         for device_id in device_id_list:
@@ -1763,4 +2217,176 @@ class IoXWrapper(NuCoreInterface):
 
         return list(device_names)
 
-    
+    def _get_variable_name_list_from_routine(self, routine: dict) -> list[str]:
+        """Extract the human-readable variable names referenced by a
+        routine -- mirrors :meth:`_get_device_name_list_from_routine`.
+
+        A variable can appear as: a ``var`` condition/action's own top-level
+        ``id``/``varType``; a nested ``var`` reference (comparing/assigning
+        against another variable -- keyed ``id``/``type``, not ``varType``,
+        per the compiler's own output shape); or nested inside a ``repeat``
+        action's ``while`` sub-object. ``paren`` conditions are recursed
+        into. Resolved via ``self.variables`` (populated by
+        ``_load_variables``, which always runs first -- see
+        ``NuCoreInterface._refresh_routines_database``).
+
+        Returns:
+            List of variable display name strings (may be empty).
+        """
+        if routine is None:
+            return []
+
+        refs: set[str] = set()
+
+        def _add_ref(var_type, var_id) -> None:
+            if var_type is not None and var_id is not None:
+                refs.add(f"{var_type}:{var_id}")
+
+        def _collect_condition_vars(conditions) -> None:
+            for condition in conditions or []:
+                if not isinstance(condition, dict):
+                    continue
+                ctype = condition.get("type")
+                if ctype == "paren":
+                    _collect_condition_vars(condition.get("conditions"))
+                    continue
+                if ctype != "var":
+                    continue
+                _add_ref(condition.get("varType"), condition.get("id"))
+                nested = condition.get("var")
+                if isinstance(nested, dict):
+                    _add_ref(nested.get("type"), nested.get("id"))
+
+        def _collect_action_vars(actions) -> None:
+            for action in actions or []:
+                if not isinstance(action, dict):
+                    continue
+                atype = action.get("type")
+                if atype == "var":
+                    _add_ref(action.get("varType"), action.get("id"))
+                    nested = action.get("var")
+                    if isinstance(nested, dict):
+                        _add_ref(nested.get("type"), nested.get("id"))
+                elif atype == "repeat":
+                    while_block = action.get("while")
+                    nested = while_block.get("var") if isinstance(while_block, dict) else None
+                    if isinstance(nested, dict):
+                        _add_ref(nested.get("varType"), nested.get("id"))
+
+        _collect_condition_vars(routine.get("if", []))
+        _collect_action_vars(routine.get("then", []))
+        _collect_action_vars(routine.get("else", []))
+
+        variable_names: list[str] = []
+        for ref in refs:
+            variable = self.variables.get(ref)
+            if variable and variable.get("name"):
+                variable_names.append(variable["name"])
+
+        return variable_names
+
+    async def _on_device_event(self, message:dict):
+        """
+        We'll override the superclass to give more information to the diagnostics module.
+        Callback function to handle device events.
+        What we are looking for are events that change device structure such as device added/removed, property added/removed, etc.
+        :param event: The event data received.
+        """
+        if message is None or 'node' not in message or 'control' not in message:
+            logger.debug(f"Received invalid message format {message}")
+            return
+        control = message['control']
+        action = message.get('action', '')
+        if action:
+            action=action.get('value', None)
+        node = message.get('node', None)
+        eventInfo = message.get('eventInfo', None)
+        if control == "_3": #node updated event
+            await self.diagnostics.on_node_updated_event(node, control, action, eventInfo)
+            if action and action in [ 'NX', 'PI', 'WD', 'EN', 'WH' ]:
+                if action == 'WH':
+                    node = self.nodes.get(node, None) # just to be on the safe side
+                    if node:
+                        node.pending_write = True
+                    #we may want to use 'WD' (device write pending) later for diagnostics 
+                    return
+            self.device_structure_changed = True # just to be on the safe side
+        elif control == "_1": #programs updated event
+            self.routines_changed = True # just to be on the safe side
+        elif control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
+            await self.diagnostics.on_device_event(node, control, action, eventInfo)
+        elif control == "_2": # variable write pending
+            await self.diagnostics.update_links_table(node, control, action, eventInfo)
+
+    def _get_node_family(self, device_id) -> str | None:
+        node = self._get_node(device_id)
+        if node is None:
+            return None, None
+        if not hasattr(node, "family"):
+            logger.error(f"Node object for device_id {device_id} does not have 'family' attribute")
+            return None, None
+
+        family = node.family
+        if family is None:
+            logger.error(f"Node object for device_id {device_id} has 'family' attribute set to None")
+            return None, None
+
+        family_code = str(family).strip()
+        try:
+            if family_code not in DEVICE_FAMILIES:
+                logger.error(f"Node object for device_id {device_id} has unrecognized 'family' value: {family}")
+                return None, None
+            return family_code, DEVICE_FAMILIES[family_code]
+        except KeyError:
+            logger.error(f"Node object for device_id {device_id} has unrecognized 'family' value: {family}")
+            return None, None
+
+    def _is_insteon_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_INSTEON
+
+    def _is_legacy_z_wave_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_LEGACY_Z_WAVE
+
+    def _is_zway_z_wave_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_Z_WAVE
+
+    def _is_z_wave_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family in [DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_Z_WAVE]
+
+    def _is_zigbee_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_ZIGBEE 
+
+    def _is_matter_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_MATTER 
+
+    def _is_plug_in_family(self, device_id) -> bool:
+        family, _ = self._get_node_family(device_id)
+        if not family:
+            return False
+        return family == DEVICE_FAMILY_PLUGIN
+
+    def _get_group_by_device_group_id(self, device_group_id) -> Group | None:
+        if not self.groups:
+            return None
+        for group in self.groups.values():
+            if group.device_group == device_group_id:
+                return group
+        return None

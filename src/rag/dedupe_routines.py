@@ -23,16 +23,40 @@ class DedupeRoutines:
         "# REASONS: id -> reason text. A handful of distinct \"why this routine\n"
         "#   can't run as authored\" explanations, shared across many routines.\n"
         "#\n"
-        "# ROUTINES: list of (id, name, comment, device_names, invalid, invalid_reason)\n"
-        "#   tuples, one per routine.\n"
-        "#     id: routine id (int).\n"
-        "#     name: routine name.\n"
+        "# ROUTINES: list of (id, name, comment, device_names, variable_names, invalid,\n"
+        "#   invalid_reason, folder, enabled, running, status, run_at_startup,\n"
+        "#   last_run_time, last_finish_time, next_scheduled_run_time) tuples, one per\n"
+        "#   routine/folder.\n"
+        "#     id: routine/folder id (int).\n"
+        "#     name: routine/folder name.\n"
         "#     comment: user-authored comment, '' if none.\n"
         "#     device_names: list of device names referenced by the routine's\n"
         "#       conditions/actions.\n"
+        "#     variable_names: list of variable names referenced by the routine's\n"
+        "#       conditions/actions -- call list_variables for their real ids/types.\n"
         "#     invalid: True if this routine cannot currently run as authored.\n"
         "#     invalid_reason: None if valid, else a REASONS id -- substitute\n"
         "#       REASONS[invalid_reason] for the actual explanation text.\n"
+        "#     folder: True if this entry is a folder, not a program. A folder\n"
+        "#       can carry its own gating condition -- programs inside it only\n"
+        "#       get evaluated when the folder's condition is true.\n"
+        "#     enabled: False means this entry is never evaluated.\n"
+        "#     running: True if its actions are executing right now.\n"
+        "#     status: current evaluation of its `if` condition (true/false),\n"
+        "#       None if never evaluated.\n"
+        "#     run_at_startup: True if its `then` actions run once right after\n"
+        "#       hub reboot.\n"
+        "#     last_run_time / last_finish_time: when its `then`/`else` actions\n"
+        "#       last started/finished running, None if never run.\n"
+        "#     next_scheduled_run_time: when it's next due to be evaluated, None\n"
+        "#       if not schedule-driven or unknown.\n"
+        "#   Any runtime field is None when the hub's runtime summary didn't\n"
+        "#   report it.\n"
+    )
+
+    _RUNTIME_SUMMARY_KEYS = (
+        "folder", "enabled", "running", "status", "runAtStartup",
+        "lastRunTime", "lastFinishTime", "nextScheduledRunTime",
     )
 
     @staticmethod
@@ -59,10 +83,14 @@ class DedupeRoutines:
             reason_ref = reasons.get(reason) if reason else None
             comment = routine.get("comment") or ""
             device_names = routine.get("device_names") or []
+            variable_names = routine.get("variable_names") or []
+            runtime = tuple(routine.get(key) for key in DedupeRoutines._RUNTIME_SUMMARY_KEYS)
             lines.append(
                 f"  ({routine.get('id')!r}, {routine.get('name')!r}, "
-                f"{comment!r}, {device_names!r}, "
-                f"{routine.get('invalid', False)!r}, {reason_ref!r}),"
+                f"{comment!r}, {device_names!r}, {variable_names!r}, "
+                f"{routine.get('invalid', False)!r}, {reason_ref!r}, "
+                + ", ".join(repr(value) for value in runtime)
+                + "),"
             )
         lines.append("]")
 

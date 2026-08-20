@@ -1,0 +1,26 @@
+{
+  "name": "node_op",
+  "description": "Manage a device/group/folder node: enable, disable, delete, rename, move it, or create a new group/folder. add_group/add_folder's result includes the new node's real id -- use that as new_parent_id for a following move, never the name you gave it.",
+  "input_schema": {
+    "type": "object",
+    "required": ["operation"],
+    "properties": {
+      "operation": {
+        "type": "string",
+        "enum": ["enable", "disable", "delete", "rename", "move", "add_group", "add_folder"]
+      },
+      "node_id": {
+        "type": ["string", "null"],
+        "description": "Real id of the node to operate on, exactly as shown in DEVICE DATABASE. Not used for add_group/add_folder."
+      },
+      "new_name": {
+        "type": ["string", "null"],
+        "description": "New display name. Required for rename, add_group, add_folder."
+      },
+      "new_parent_id": {
+        "type": ["string", "null"],
+        "description": "Real id of the new parent folder/group. Required for move."
+      }
+    }
+  }
+}

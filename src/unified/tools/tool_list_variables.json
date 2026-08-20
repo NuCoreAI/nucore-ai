@@ -1,0 +1,14 @@
+{
+  "name": "list_variables",
+  "description": "List every NuCore variable (integer counter or state flag) in this installation, with its real id/type/precision/current value/init value. Call this before authoring var_ref()/set_var()/while_repeat() inside create_or_update_routine (their id/type/precision must come from here, never invented or guessed), or whenever the customer asks about a variable's existence or current value -- there is no standing database for these, and no other tool reads a variable's current value.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": ["integer", "null"],
+        "enum": [1, 2, null],
+        "description": "Optional: 1 (integer variables only) or 2 (state variables only). Omit to list both."
+      }
+    }
+  }
+}
