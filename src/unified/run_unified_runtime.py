@@ -496,20 +496,31 @@ class _RawWebSocketAdapter:
 async def _run_websocket_server(
     nucore_interface: NuCoreInterface,
     llm_adapter,
-    runtime_config: dict[str, Any],
+    runtime_config_path: str,
+    force_stream: bool | None,
     max_iterations: int,
     port: int,
     ssl_context: ssl.SSLContext | None = None,
 ) -> None:
     """Serve WebSocket connections directly, no HTTP framework involved.
 
-    ``nucore_interface``/``llm_adapter``/``runtime_config`` are shared across
-    every connection (same CLI-configured backend for the life of the
-    process); each connection gets its own :class:`UnifiedRuntime` (own
-    session/history) and its own :class:`StreamHandler` (own websocket
-    target), matching the isolation ``eisy_ai/chat.py`` already gives each
-    browser tab -- just without needing a caller-supplied connection object
-    or an HTTP server in front of it.
+    ``nucore_interface``/``llm_adapter`` are shared across every connection
+    (same CLI-configured backend for the life of the process); each
+    connection gets its own :class:`UnifiedRuntime` (own session/history) and
+    its own :class:`StreamHandler` (own websocket target), matching the
+    isolation ``eisy_ai/chat.py`` already gives each browser tab -- just
+    without needing a caller-supplied connection object or an HTTP server in
+    front of it.
+
+    ``runtime_config`` is *not* shared, unlike the other two -- it's rebuilt
+    fresh per connection (a cheap local JSON read, no network I/O) because
+    ``_load_runtime_config`` bakes a bound ``stream_handler.handle_stream_chunk``
+    callback directly into it (see ``runtime_config.py``'s
+    ``_coerce_runtime_profile``). Reusing one shared ``runtime_config`` across
+    connections would mean every connection's live token stream gets routed to
+    whichever ``StreamHandler`` built it first -- one with no websocket
+    attached -- so streaming silently no-ops and only the final complete
+    answer (sent separately by ``_run_once``) ever reaches the client.
 
     ``ssl_context``, when given, serves ``wss://`` instead of ``ws://`` --
     required for clients (e.g. the Eisy UI) that always connect over TLS, the
@@ -519,6 +530,11 @@ async def _run_websocket_server(
         session_id = str(uuid.uuid4())
         stream_handler = StreamHandler()
         stream_handler.set_websocket(_RawWebSocketAdapter(websocket))
+        runtime_config = _load_runtime_config(
+            path=runtime_config_path,
+            stream_handler=stream_handler,
+            force_stream=force_stream,
+        )
         runtime = UnifiedRuntime(
             nucore_interface=nucore_interface,
             llm_client=llm_adapter,
@@ -652,7 +668,7 @@ def main(args:Any=None, poly=None) -> None:
         logger.info("Starting native WebSocket server; responses stream per connection.")
         try:
             asyncio.run(_run_websocket_server(
-                nucore_interface, llm_adapter, runtime_config,
+                nucore_interface, llm_adapter, str(runtime_config_path), args.stream,
                 resolved_max_iterations, args.websocket_port,
                 ssl_context=ssl_context,
             ))
