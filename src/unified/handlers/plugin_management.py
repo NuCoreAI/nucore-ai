@@ -12,7 +12,7 @@ database -- store/license state changes rarely and isn't needed on most
 turns.
 
 ``install_plugin``/``buy_plugin``/``delete_plugin``/``get_plugin_capabilities``/
-``call_plugin_tool`` -- the capability-extension mechanism: when no existing
+``call_plugin`` -- the capability-extension mechanism: when no existing
 tool covers what the customer wants, the model checks
 installed/purchased/store plugins (the three ``list_*`` tools above) in
 order, confirms with the customer before installing, buying, or deleting,
@@ -228,7 +228,7 @@ async def get_plugin_capabilities(nucore_interface: NuCoreInterface, args: dict[
     }
 
 
-async def call_plugin_tool(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+async def call_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
     tool_name = args.get("tool_name")
     if not plugin_id:

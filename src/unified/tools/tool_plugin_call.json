@@ -1,5 +1,5 @@
 {
-  "name": "call_plugin_tool",
+  "name": "call_plugin",
   "description": "Invoke one of a plugin's own declared tools (from get_plugin_capabilities), to actually answer the customer's request or gather what you need to build a scene/automation. Use the result the way you'd use any other tool's result -- relay it, or feed it into further steps.",
   "input_schema": {
     "type": "object",

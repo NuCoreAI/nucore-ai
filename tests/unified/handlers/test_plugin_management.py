@@ -420,36 +420,36 @@ async def test_get_plugin_capabilities_error_when_tools_fetch_fails():
 
 
 @pytest.mark.asyncio
-async def test_call_plugin_tool_returns_stub_result():
+async def test_call_plugin_returns_stub_result():
     backend = FakeBackend()
     backend.plugin_llm_result_response = {"successful": True, "data": {"result": "42"}}
     result = await execute_tool(
-        "call_plugin_tool", {"plugin_id": "3", "tool_name": "3_get_status", "args": {}}, nucore_interface=backend
+        "call_plugin", {"plugin_id": "3", "tool_name": "3_get_status", "args": {}}, nucore_interface=backend
     )
     assert result == {"result": "42"}
 
 
 @pytest.mark.asyncio
-async def test_call_plugin_tool_requires_plugin_id_and_tool_name():
+async def test_call_plugin_requires_plugin_id_and_tool_name():
     backend = FakeBackend()
-    result = await execute_tool("call_plugin_tool", {"tool_name": "x"}, nucore_interface=backend)
+    result = await execute_tool("call_plugin", {"tool_name": "x"}, nucore_interface=backend)
     assert "error" in result
-    result = await execute_tool("call_plugin_tool", {"plugin_id": "3"}, nucore_interface=backend)
+    result = await execute_tool("call_plugin", {"plugin_id": "3"}, nucore_interface=backend)
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_call_plugin_tool_error_on_failed_result():
+async def test_call_plugin_error_on_failed_result():
     backend = FakeBackend()
     backend.plugin_llm_result_response = {"successful": False}
     result = await execute_tool(
-        "call_plugin_tool", {"plugin_id": "3", "tool_name": "3_get_status"}, nucore_interface=backend
+        "call_plugin", {"plugin_id": "3", "tool_name": "3_get_status"}, nucore_interface=backend
     )
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_call_plugin_tool_strips_plugin_id_prefix_and_embeds_tool_name():
+async def test_call_plugin_strips_plugin_id_prefix_and_embeds_tool_name():
     """The plugin_id prefix is a global-uniqueness convention on this side --
     the plugin's own handle_plugin_llm_result should see its bare tool name,
     passed inside the single args payload (not as a separate parameter)."""
@@ -464,7 +464,7 @@ async def test_call_plugin_tool_strips_plugin_id_prefix_and_embeds_tool_name():
     backend.handle_plugin_llm_result = fake_handle_plugin_llm_result
 
     await execute_tool(
-        "call_plugin_tool",
+        "call_plugin",
         {"plugin_id": "3", "tool_name": "3_get_status", "args": {"foo": "bar"}},
         nucore_interface=backend,
     )
