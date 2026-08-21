@@ -222,14 +222,16 @@ results and lets it reason over them directly, in this fixed order:
    plausibly already covers the needed capability, it's available -- nothing to stage.
 2. If nothing in installed matches, read `list_purchased_plugins` (`plugin_management.py:77`). If
    a match is found there, the customer already holds a license but hasn't installed it -- stage
-   an `install_plugin(plugin_id)` step. This is a stub in the same sense as `pair_device`:
-   `plugin_ops`'s `install` action exists in the interface signature (`nucore_interface.py:481`)
-   but raises `NotImplementedError` in the current implementation (`iox_wrapper.py:1502`) -- the
-   step is built now so the hook exists, even though it can't actually execute yet.
+   an `install_plugin(nsid, name)` step. Unlike `pair_device`'s stub-awaiting-a-real-API framing,
+   this isn't temporary: `install_plugin` deliberately never installs anything itself -- for
+   security reasons, installation always happens on the web, so it just returns an `install_url`
+   for the customer to finish there.
 3. If still no match, read `list_store_plugins` (`plugin_management.py:35`, the full
    marketplace). A match here means the customer doesn't own it at all -- there is no purchase API
    anywhere in the surveyed code, so this case can only ever be a customer-facing recommendation
-   ("you'd need to purchase X from the marketplace"), never a stub call, unlike case 2.
+   ("you'd need to purchase X from the marketplace"), never a stub call, unlike case 2. This is now
+   concretely implemented by `buy_plugin`, which returns a `purchase_url` for the customer to
+   complete the purchase on the web rather than simulating one.
 
 Every plan type that leans on a plugin (Serenity, Security, Animal protection) should follow this
 three-step order and land on the narrowest applicable outcome -- already available, install-stub,

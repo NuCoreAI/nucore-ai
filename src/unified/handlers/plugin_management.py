@@ -11,15 +11,17 @@ Deliberately on-demand (like ``list_variables``), not a standing prompt
 database -- store/license state changes rarely and isn't needed on most
 turns.
 
-``install_plugin``/``buy_plugin``/``get_plugin_capabilities``/
+``install_plugin``/``buy_plugin``/``delete_plugin``/``get_plugin_capabilities``/
 ``call_plugin_tool`` -- the capability-extension mechanism: when no existing
 tool covers what the customer wants, the model checks
 installed/purchased/store plugins (the three ``list_*`` tools above) in
-order, confirms with the customer before installing or buying, then loads a
-plugin's own declared capabilities and calls one to actually answer the
-request. Install/purchase (``plugin_ops``) are backend stubs today -- no
-real install/purchase API exists yet, so these always simulate success. The
-plugin-facing get_prompt/get_tools/handle_llm_result calls attempt a real
+order, confirms with the customer before installing, buying, or deleting,
+then loads a plugin's own declared capabilities and calls one to actually
+answer the request. None of ``install_plugin``/``buy_plugin``/
+``delete_plugin`` completes anything server-side -- for security reasons,
+installing, purchasing, and deleting all happen on the web, not through this
+assistant, so each just returns a link (``install_url``/``purchase_url``/
+``delete_url``) for the customer to finish there themselves. The plugin-facing get_prompt/get_tools/handle_llm_result calls attempt a real
 per-plugin API (see ``NuCoreInterface``'s docstrings); that API may not
 exist in production yet either, in which case they fail gracefully
 (``successful: false``) rather than raising. See ``design/plan-design.md``'s
@@ -31,28 +33,6 @@ from __future__ import annotations
 from typing import Any
 
 from nucore import NuCoreInterface
-
-@staticmethod
-def _get_plugin_number(plugin_id:str):
-    if not plugin_id:
-        return None
-
-    try:
-        # test if the format is n008_hebcalcontroll:
-        if plugin_id.startswith("n") and "_" in plugin_id:
-            return int(plugin_id.split("_")[0][1:])
-        # test if the format is plugin_<number> 
-        if plugin_id.startswith("plugin_"):
-            return int(plugin_id.split("_")[1])
-        # test if it's a number string, e.g., "123" 
-        if plugin_id.isdigit():
-            return int(plugin_id)
-
-        # if none of the above formats match, return whatever was sent to us
-        return plugin_id
-
-    except (ValueError, TypeError):
-        return None
 
 
 def _data(response: Any) -> list[dict] | None:
@@ -152,47 +132,82 @@ def _op_data(response: Any) -> dict | None:
 
 async def install_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     nsid = args.get("nsid")
+    name = args.get("name")
     if not nsid:
         return {"error": "nsid is required"}
+    if not name:
+        return {"error": "name is required"}
 
-    response = await nucore_interface.plugin_ops(nsid, "install")
-    data = _op_data(response)
-    if data is None:
-        return {"error": f"failed to install plugin '{nsid}'"}
+    # The model has guessed an nsid from a plugin's display name (e.g. passing
+    # "TeslaEVstream" instead of the real UUID) even when the real value was
+    # right there in the conversation -- resolve the real nsid server-side.
+    resolved_nsid = await nucore_interface._get_plugin_nsid(nsid)
+    if resolved_nsid is None:
+        return {"error": f"'{name}' is not a known plugin -- call list_purchased_plugins for the real nsid"}
 
+    # For security reasons, installation must be completed on the web, not
+    # through this assistant -- there is no install API to call.
     return {
-        "status": "installed",
-        "plugin_id": data.get("plugin_id", nsid),
-        "stub": True,
-        "note": "simulated install -- no real install API exists yet",
+        "install_required": True,
+        "nsid": resolved_nsid,
+        "name": name,
+        "install_url": f"/plugins/store/{resolved_nsid}",
     }
 
 
 async def buy_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     nsid = args.get("nsid")
+    name = args.get("name")
     if not nsid:
         return {"error": "nsid is required"}
+    if not name:
+        return {"error": "name is required"}
 
-    response = await nucore_interface.plugin_ops(nsid, "purchase")
-    data = _op_data(response)
-    if data is None:
-        return {"error": f"failed to purchase plugin '{nsid}'"}
+    # Same guessed-nsid risk as install_plugin -- resolve the real nsid
+    # server-side rather than trust what the model passed.
+    resolved_nsid = await nucore_interface._get_plugin_nsid(nsid)
+    if resolved_nsid is None:
+        return {"error": f"'{name}' is not a known plugin -- call list_store_plugins for the real nsid"}
 
+    # Purchases happen on the web, not through this assistant -- there is no
+    # purchase API to call. This just hands back a link for the customer to
+    # finish buying it themselves; it does not install or license anything.
     return {
-        "status": "purchased_and_installed",
-        # No real backend can mint a fresh post-purchase install id, so the
-        # same id the customer bought is carried forward as-is -- buying
-        # already implies installed, so this is immediately usable with
-        # get_plugin_capabilities/call_plugin_tool; no separate
-        # install_plugin call needed.
-        "plugin_id": data.get("plugin_id", plugin_id),
-        "stub": True,
-        "note": "simulated purchase+install -- no real purchase API exists yet",
+        "purchase_required": True,
+        "nsid": resolved_nsid,
+        "name": name,
+        "purchase_url": f"/plugins/store/{resolved_nsid}",
+    }
+
+
+async def delete_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    plugin_id = args.get("plugin_id")
+    name = args.get("name")
+    if not plugin_id:
+        return {"error": "plugin_id is required"}
+    if not name:
+        return {"error": "name is required"}
+
+    # The model has repeatedly guessed a plugin_id by slugifying the plugin's
+    # name (e.g. "Sun" -> "sun") instead of using the real profileNum from
+    # list_installed_plugins, even when that real value was right there in
+    # the conversation -- resolve the real id server-side rather than trust it.
+    resolved_id = await nucore_interface._get_plugin_number(plugin_id)
+    if resolved_id is None:
+        return {"error": f"'{name}' is not an installed plugin -- call list_installed_plugins for the real plugin_id"}
+
+    # For security reasons, deletion must be completed on the web, not
+    # through this assistant -- same as install_plugin/buy_plugin.
+    return {
+        "delete_required": True,
+        "plugin_id": resolved_id,
+        "name": name,
+        "delete_url": f"/plugins/dashboard/{resolved_id}",
     }
 
 
 async def get_plugin_capabilities(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    plugin_id = _get_plugin_number(args.get("plugin_id"))
+    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
     if not plugin_id:
         return {"error": "plugin_id is required"}
 
@@ -214,7 +229,7 @@ async def get_plugin_capabilities(nucore_interface: NuCoreInterface, args: dict[
 
 
 async def call_plugin_tool(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    plugin_id = _get_plugin_number(args.get("plugin_id"))
+    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
     tool_name = args.get("tool_name")
     if not plugin_id:
         return {"error": "plugin_id is required"}

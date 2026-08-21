@@ -1,13 +1,17 @@
 {
   "name": "install_plugin",
-  "description": "Install a plugin the customer already has a purchased license for (see list_purchased_plugins). Only call this after the customer has explicitly agreed to install it -- never speculatively. NOTE: this is currently a stub -- there is no real install API yet, so this always simulates success. On success, the returned plugin_id is immediately usable with get_plugin_capabilities/call_plugin_tool.",
+  "description": "Get the install link for a plugin the customer already has a purchased license for (see list_purchased_plugins). Only call this after the customer has explicitly agreed to install it -- never speculatively. For security reasons, installation must be completed on the web, not through this assistant -- this tool does not install the plugin; it returns an `install_url` for the customer to finish installing it themselves.",
   "input_schema": {
     "type": "object",
-    "required": ["nsid"],
+    "required": ["nsid", "name"],
     "properties": {
       "nsid": {
         "type": "string",
         "description": "The `nsid`, from list_purchased_plugins."
+      },
+      "name": {
+        "type": "string",
+        "description": "The plugin's exact display `name`, from list_purchased_plugins -- used to build the customer-facing link text without a separate lookup."
       }
     }
   }

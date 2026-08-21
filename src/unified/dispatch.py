@@ -58,6 +58,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_installed_plugins": plugin_management.list_installed_plugins,
     "install_plugin": plugin_management.install_plugin,
     "buy_plugin": plugin_management.buy_plugin,
+    "delete_plugin": plugin_management.delete_plugin,
     "get_plugin_capabilities": plugin_management.get_plugin_capabilities,
     "call_plugin_tool": plugin_management.call_plugin_tool,
     "start_diagnostics": diagnostics.start_diagnostics,

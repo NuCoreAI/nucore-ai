@@ -211,42 +211,177 @@ async def test_list_installed_plugins_error_on_failed_fetch():
 
 
 @pytest.mark.asyncio
-async def test_install_plugin_simulates_success():
+async def test_install_plugin_returns_install_link_without_completing_an_install():
     backend = FakeBackend()
-    backend.plugin_ops_response = {"successful": True, "data": {"plugin_id": "abc", "operation": "install"}}
-    result = await execute_tool("install_plugin", {"nsid": "abc"}, nucore_interface=backend)
-    assert result == {"status": "installed", "plugin_id": "abc", "stub": True, "note": "simulated install -- no real install API exists yet"}
+    result = await execute_tool(
+        "install_plugin",
+        {"nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291", "name": "Airscape"},
+        nucore_interface=backend,
+    )
+    assert result == {
+        "install_required": True,
+        "nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291",
+        "name": "Airscape",
+        "install_url": "/plugins/store/0bec5267-b1c0-44e3-aa60-e1f84d1c5291",
+    }
+
+
+@pytest.mark.asyncio
+async def test_install_plugin_ignores_a_guessed_nsid_and_resolves_by_name():
+    """Regression: the model has called install_plugin with the plugin's
+    display name as nsid (e.g. "TeslaEVstream") instead of the real UUID, even
+    when the real value was in the same conversation. A non-UUID nsid must be
+    re-resolved against the real store list, by name, rather than trusted."""
+    backend = FakeBackend()
+    result = await execute_tool(
+        "install_plugin", {"nsid": "Airscape", "name": "Airscape"}, nucore_interface=backend
+    )
+    assert result == {
+        "install_required": True,
+        "nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291",
+        "name": "Airscape",
+        "install_url": "/plugins/store/0bec5267-b1c0-44e3-aa60-e1f84d1c5291",
+    }
+
+
+@pytest.mark.asyncio
+async def test_install_plugin_errors_when_nsid_and_name_are_both_unknown():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "install_plugin", {"nsid": "NotARealPlugin", "name": "Not A Real Plugin"}, nucore_interface=backend
+    )
+    assert "error" in result
 
 
 @pytest.mark.asyncio
 async def test_install_plugin_requires_nsid():
     backend = FakeBackend()
-    result = await execute_tool("install_plugin", {}, nucore_interface=backend)
+    result = await execute_tool("install_plugin", {"name": "Cool Plugin"}, nucore_interface=backend)
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_install_plugin_error_on_failed_op():
+async def test_install_plugin_requires_name():
     backend = FakeBackend()
-    backend.plugin_ops_response = {"successful": False}
-    result = await execute_tool("install_plugin", {"nsid": "abc"}, nucore_interface=backend)
+    result = await execute_tool(
+        "install_plugin", {"nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291"}, nucore_interface=backend
+    )
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_buy_plugin_simulates_purchase_and_install():
+async def test_buy_plugin_returns_purchase_link_without_completing_a_purchase():
     backend = FakeBackend()
-    backend.plugin_ops_response = {"successful": True, "data": {"plugin_id": "xyz", "operation": "purchase"}}
-    result = await execute_tool("buy_plugin", {"plugin_id": "xyz"}, nucore_interface=backend)
-    assert result["status"] == "purchased_and_installed"
-    assert result["plugin_id"] == "xyz"
-    assert result["stub"] is True
+    result = await execute_tool(
+        "buy_plugin",
+        {"nsid": "c9527579-10bd-4be3-8f12-e6c40e57aabf", "name": "HusqvarnaMower"},
+        nucore_interface=backend,
+    )
+    assert result == {
+        "purchase_required": True,
+        "nsid": "c9527579-10bd-4be3-8f12-e6c40e57aabf",
+        "name": "HusqvarnaMower",
+        "purchase_url": "/plugins/store/c9527579-10bd-4be3-8f12-e6c40e57aabf",
+    }
 
 
 @pytest.mark.asyncio
-async def test_buy_plugin_requires_plugin_id():
+async def test_buy_plugin_ignores_a_guessed_nsid_and_resolves_by_name():
     backend = FakeBackend()
-    result = await execute_tool("buy_plugin", {}, nucore_interface=backend)
+    result = await execute_tool(
+        "buy_plugin", {"nsid": "HusqvarnaMower", "name": "HusqvarnaMower"}, nucore_interface=backend
+    )
+    assert result == {
+        "purchase_required": True,
+        "nsid": "c9527579-10bd-4be3-8f12-e6c40e57aabf",
+        "name": "HusqvarnaMower",
+        "purchase_url": "/plugins/store/c9527579-10bd-4be3-8f12-e6c40e57aabf",
+    }
+
+
+@pytest.mark.asyncio
+async def test_buy_plugin_errors_when_nsid_and_name_are_both_unknown():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "buy_plugin", {"nsid": "NotARealPlugin", "name": "Not A Real Plugin"}, nucore_interface=backend
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_buy_plugin_requires_nsid():
+    backend = FakeBackend()
+    result = await execute_tool("buy_plugin", {"name": "Cool Plugin"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_buy_plugin_requires_name():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "buy_plugin", {"nsid": "c9527579-10bd-4be3-8f12-e6c40e57aabf"}, nucore_interface=backend
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_returns_delete_link_without_completing_a_deletion():
+    backend = FakeBackend()
+    result = await execute_tool("delete_plugin", {"plugin_id": "3", "name": "YouTube"}, nucore_interface=backend)
+    assert result == {
+        "delete_required": True,
+        "plugin_id": 3,
+        "name": "YouTube",
+        "delete_url": "/plugins/dashboard/3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_ignores_a_guessed_plugin_id_and_resolves_by_name():
+    """Regression: the model has repeatedly called delete_plugin with a
+    slugified name as plugin_id (e.g. "sun" for a plugin actually named
+    "Sun", profileNum 6) instead of the real plugin_id, even when the real
+    value was in the same conversation. The handler must not trust the given
+    plugin_id -- it re-resolves against the real installed list, falling back
+    to a name match when the given id doesn't correspond to any of them."""
+    backend = FakeBackend()
+    backend.installed_response = {
+        "successful": True,
+        "data": [{"profileNum": 6, "name": "Sun", "isLocal": False}],
+    }
+    result = await execute_tool("delete_plugin", {"plugin_id": "sun", "name": "Sun"}, nucore_interface=backend)
+    assert result == {
+        "delete_required": True,
+        "plugin_id": 6,
+        "name": "Sun",
+        "delete_url": "/plugins/dashboard/6",
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_errors_when_not_actually_installed():
+    # A non-numeric, non-matching plugin_id/name falls through to the name
+    # lookup in NuCoreInterface._get_plugin_number and finds nothing -- unlike
+    # a bare digit string, which is trusted as a real profileNum without
+    # verification (same as the rest of the id-resolution fast paths).
+    backend = FakeBackend()
+    result = await execute_tool(
+        "delete_plugin", {"plugin_id": "not-a-real-plugin", "name": "Not Installed"}, nucore_interface=backend
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_requires_plugin_id():
+    backend = FakeBackend()
+    result = await execute_tool("delete_plugin", {"name": "Cool Plugin"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_requires_name():
+    backend = FakeBackend()
+    result = await execute_tool("delete_plugin", {"plugin_id": "3"}, nucore_interface=backend)
     assert "error" in result
 
 
@@ -255,7 +390,7 @@ async def test_get_plugin_capabilities_combines_prompt_and_tools():
     backend = FakeBackend()
     result = await execute_tool("get_plugin_capabilities", {"plugin_id": "3"}, nucore_interface=backend)
     assert result == {
-        "plugin_id": "3",
+        "plugin_id": 3,
         "prompt": "stub prompt",
         "tools": [{"name": "stub_tool", "description": "stub", "params": {}}],
     }
@@ -334,5 +469,5 @@ async def test_call_plugin_tool_strips_plugin_id_prefix_and_embeds_tool_name():
         nucore_interface=backend,
     )
 
-    assert captured["plugin_id"] == "3"
+    assert captured["plugin_id"] == 3
     assert captured["args"] == {"foo": "bar", "tool_name": "get_status"}

@@ -1,13 +1,17 @@
 {
   "name": "buy_plugin",
-  "description": "Buy a plugin found in the marketplace (see list_store_plugins) that the customer doesn't already hold a license for. Only call this after the customer has explicitly agreed to buy it -- never speculatively. Buying also makes the plugin installable -- there is no separate install_plugin call needed afterward; use the returned `plugin_id` directly with get_plugin_capabilities/call_plugin_tool. NOTE: this is currently a stub -- there is no real purchase API yet, so this always simulates success.",
+  "description": "Get the store link for a plugin found in the marketplace (see list_store_plugins) that the customer doesn't already hold a license for. Only call this after the customer has explicitly agreed to buy it -- never speculatively. For security reasons, purchases happen on the web, not through this assistant -- this tool does not complete a purchase or make the plugin installable; it returns a `purchase_url` for the customer to finish buying it themselves.",
   "input_schema": {
     "type": "object",
-    "required": ["nsid"],
+    "required": ["nsid", "name"],
     "properties": {
       "nsid": {
         "type": "string",
         "description": "The `nsid`, from list_store_plugins."
+      },
+      "name": {
+        "type": "string",
+        "description": "The plugin's exact display `name`, from list_store_plugins -- used to build the customer-facing link text without a separate lookup."
       }
     }
   }

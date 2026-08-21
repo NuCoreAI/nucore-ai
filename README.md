@@ -295,10 +295,12 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
 - **User preferences** -- `preference_op`/`list_preferences` store per-user aliases (e.g. naming
   a device or routine) and event subscriptions, persisted across sessions.
 - **Plugin management** -- `list_store_plugins`/`list_purchased_plugins`/`list_installed_plugins`
-  cover NuCore's plugin marketplace (browse/license/installed state); `install_plugin`/
-  `buy_plugin`/`get_plugin_capabilities`/`call_plugin_tool` let the model extend its own
-  capabilities with a plugin's tools when no built-in tool covers a request. Starting/stopping/
-  restarting a plugin's underlying service goes through the diagnostics flow above, not this one.
+  cover NuCore's plugin marketplace (browse/license/installed state); `get_plugin_capabilities`/
+  `call_plugin_tool` let the model extend its own capabilities with a plugin's tools when no
+  built-in tool covers a request. `install_plugin`/`buy_plugin`/`delete_plugin` don't complete
+  anything themselves -- for security reasons, installing, purchasing, and deleting all happen on
+  the web -- each returns a link for the customer to finish there. Starting/stopping/restarting a
+  plugin's underlying service goes through the diagnostics flow above, not this one.
 
 See `src/unified/prompt/definitions.md` for the exact tool-selection rules the model follows for
 each of these, and `src/unified/README.md` for the tool/handler layout.

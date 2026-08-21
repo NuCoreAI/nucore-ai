@@ -11,6 +11,7 @@ from time import sleep
 import threading
 
 import asyncio
+import uuid
 
 from .profile import Profile
 from .group import Group, GroupMemberType
@@ -481,7 +482,68 @@ class NuCoreInterface(ABC):
         subsequent plugin_ops()/configure_plugin() calls.
         """
         raise NotImplementedError("Subclasses must implement the get_installed_plugins method.")
-    
+
+    async def _get_plugin_number(self, plugin_id: str | None) -> int | None:
+        """Resolve plugin_id to the real profileNum. plugin_id may already be a
+        known encoding of a real profileNum (n008_x, plugin_N, or a plain digit
+        string), or -- when the caller guessed instead of using a real value --
+        the plugin's display name, lowercased/slugified. Falls back to matching
+        it against get_installed_plugins()' real names rather than trusting it.
+        """
+        if not plugin_id:
+            return None
+
+        try:
+            if plugin_id.startswith("n") and "_" in plugin_id:
+                return int(plugin_id.split("_")[0][1:])
+            if plugin_id.startswith("plugin_"):
+                return int(plugin_id.split("_")[1])
+            if plugin_id.isdigit():
+                return int(plugin_id)
+        except (ValueError, TypeError):
+            return None
+
+        response = await self.get_installed_plugins()
+        if not isinstance(response, dict) or not response.get("successful"):
+            return None
+        installed = response.get("data")
+        if not isinstance(installed, list):
+            return None
+
+        match = next(
+            (p for p in installed if (p.get("name") or "").strip().lower() == plugin_id.strip().lower()),
+            None,
+        )
+        return match.get("profileNum") if match else None
+
+    async def _get_plugin_nsid(self, nsid: str | None) -> str | None:
+        """Resolve nsid to the real store nsid (a UUID). nsid may already be a
+        real nsid, or -- when the caller guessed instead of using a real value --
+        the plugin's display name. Falls back to matching it against
+        get_active_plugins()' real names rather than trusting it.
+        """
+        if not nsid:
+            return None
+
+        try:
+            uuid.UUID(nsid)
+            return nsid
+        except (ValueError, AttributeError, TypeError):
+            pass
+
+        response = await self.get_active_plugins()
+        if not isinstance(response, dict) or not response.get("successful"):
+            return None
+        plugins = response.get("data")
+        if not isinstance(plugins, list):
+            return None
+
+        match = next(
+            (p for p in plugins if (p.get("name") or "").strip().lower() == nsid.strip().lower()),
+            None,
+        )
+        return match.get("nsid") if match else None
+
     async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart", "purchase"]):
         """
         Perform an operation on a plugin.

@@ -1,0 +1,18 @@
+{
+  "name": "delete_plugin",
+  "description": "Get the dashboard link to delete/uninstall a plugin the customer already has installed (see list_installed_plugins). Only call this after the customer has explicitly agreed to delete it -- never speculatively. This tool re-verifies plugin_id/name against the real installed list itself and returns an error if it isn't actually installed, but still pass the exact plugin_id/name from list_installed_plugins rather than guessing -- don't rely on this check in place of that. For security reasons, deletion happens on the web, not through this assistant -- same as buy_plugin/install_plugin -- this tool does not delete anything; it returns a `delete_url` for the customer to finish there themselves.",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id", "name"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The `plugin_id`, from list_installed_plugins."
+      },
+      "name": {
+        "type": "string",
+        "description": "The plugin's exact display `name`, from list_installed_plugins -- used to build the customer-facing link text without a separate lookup."
+      }
+    }
+  }
+}
