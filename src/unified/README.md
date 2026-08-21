@@ -9,18 +9,18 @@ backend.
 
 | File/dir | Purpose |
 |---|---|
-| `run_unified_runtime.py` | CLI entrypoint (`python -m unified.run_unified_runtime`) -- also reused by the `nucore_assistant` project's WebSocket chat server (sibling repo, depends on `nucore-ai`). |
+| `run_unified_runtime.py` | CLI entrypoint (`python -m unified.run_unified_runtime`) -- also runs as a native `wss://`-capable WebSocket server (`--websocket-port`, no HTTP framework involved), a lower-level alternative to the `eisy_ai` project's FastAPI-based chat server (sibling repo, depends on `nucore-ai`). |
 | `runtime.py` | `UnifiedRuntime` -- builds the system prompt, runs the agentic loop, records conversation history. |
 | `loop.py` | `AgenticLoop` -- the multi-turn tool-calling loop against an `LLMAdapter`. |
 | `dispatch.py` | Tool name → handler dispatch table (`execute_tool`). |
 | `prompt_builder.py`, `prompt/` | Assembles the system prompt from `system_prompt.md`/`definitions.md` plus live `DEVICE DATABASE`/`ROUTINES DATABASE`. |
-| `tools/` | One `tool_*.json` file per tool, auto-discovered by `run_unified_runtime.py`. |
+| `tools/` | One `tool_<category>_<function>.json` file per tool (e.g. `tool_plugin_buy.json`), auto-discovered via a `tool_*.json` glob by `run_unified_runtime.py` -- the category prefix is a filenames-only convention for browsing/sorting, unrelated to each tool's own `"name"` field. |
 | `handlers/` | One module per tool family, implementing the actual `NuCoreInterface`/`IoXWrapper` calls. |
 | `routine_compiler/` | The DSL compiler `create_or_update_routine` uses to turn `if`/`then`/`else` Python-like source into NuCore's `Trigger` schema. |
 | `adapters/` | Per-provider `LLMAdapter` implementations (Claude, OpenAI, Gemini, Grok, llama.cpp). |
 | `models.py` | `IntentHandlerResult` (the return type `handle_query` produces), `ConversationTurn`/`ConversationHistory`. |
 | `session_store.py` | In-memory `session_id → ConversationHistory` map. |
-| `stream_handler.py` | `StreamHandler` base class (the runtime doesn't stream yet -- present for the CLI's result-printing path and future use). |
+| `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
 | `dispatch_builder.py`, `provider_dispatch_adapter.py`, `provider_clients.py`, `runtime_config.py` | Runtime-profile JSON loading and per-provider `LLMAdapter` construction, shared by both process entrypoints. |
 | `runtime_config.example.json` | Example runtime profile (see below). |
 
@@ -45,8 +45,10 @@ reference, secrets-file format, and logging flags -- they're identical for this 
 
 ## Adding a new tool
 
-1. Add `tools/tool_<name>.json` (`name`, `description`, `input_schema` -- Claude tool-authoring
-   format). It's auto-discovered by `run_unified_runtime.py`'s `tool_*.json` glob, no registration
+1. Add `tools/tool_<category>_<function>.json` (`name`, `description`, `input_schema` -- Claude
+   tool-authoring format; `name` itself stays whatever reads best, e.g. `buy_plugin` in
+   `tool_plugin_buy.json` -- the filename's category prefix is just for grouping related tools on
+   disk). It's auto-discovered by `run_unified_runtime.py`'s `tool_*.json` glob, no registration
    needed there.
 2. Implement `async def <name>(nucore_interface: NuCoreInterface, args: dict) -> Any` in the
    relevant `handlers/*.py` module (new or existing).

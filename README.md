@@ -90,14 +90,14 @@ python -m unified.run_unified_runtime \
   --backend-api-username admin \
   --backend-api-password yourpassword \
   --websocket-port 8765 \
-  --ssl-certfile secrets/certificate.pem \
-  --ssl-keyfile secrets/private_key.pem
+  --ssl-certfile secrets/cert.pem \
+  --ssl-keyfile secrets/key.pem
 ```
 
 Generate a self-signed pair for local/dev use with:
 
 ```shell
-openssl req -x509 -newkey rsa:2048 -keyout secrets/private_key.pem -out secrets/certificate.pem \
+openssl req -x509 -newkey rsa:2048 -keyout secrets/key.pem -out secrets/cert.pem \
   -days 825 -nodes -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 ```
 
