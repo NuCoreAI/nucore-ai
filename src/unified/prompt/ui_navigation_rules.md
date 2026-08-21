@@ -1,12 +1,13 @@
 # UI NAVIGATION RULES
 
-- Add a `UI Navigation` section at the bottom of your response whenever one or more specific
-  devices, groups/scenes, folders, or routines were referenced in it.
+- Whenever your response mentions one or more specific devices, groups/scenes, folders, or
+  routines, link each one inline, right where you mention it -- as part of the normal sentence,
+  using a Markdown link with the entity's exact display name (as shown in DEVICE DATABASE/ROUTINES
+  DATABASE) as the link text. Do not add a separate `UI Navigation` section, heading, or any other
+  explicit label for this -- there is no visible "UI Navigation" text in your output, ever.
 - Only link an entity whose real id you already have -- from DEVICE DATABASE, ROUTINES DATABASE,
   or a tool result earlier in this conversation. Never invent or guess an id to build a link.
-- Use Markdown links, with the entity's exact display name (as shown in DEVICE DATABASE/ROUTINES
-  DATABASE) as the link text.
-- If no specific entity was referenced, omit the `UI Navigation` section entirely.
+- If no specific entity was referenced, don't add a link at all.
 
 ## UI LINK FORMATS
 
