@@ -1,0 +1,22 @@
+{
+  "name": "run_shell_command",
+  "description": "Run a shell command on the host this assistant's backend process runs on, and return its stdout, stderr, and exit code. This is a general host-level escape hatch, not a device/hub tool -- it has nothing to do with IoX/Insteon and does not go through NuCoreInterface; use the device/routine/plugin/diagnostics tools for anything about the customer's smart home. Reach for this only when nothing else covers what's being asked (e.g. an explicit request to run a command, inspect/manage the host system, or a scripting task with no dedicated tool).\n\nRuns via `bash -c COMMAND`, so pipes, redirects, globs, and multi-command lines (`&&`, `;`, `|`) all work exactly as in an interactive shell. There is no command-content allowlist -- any command this account is permitted to run will run. A `sudo`-prefixed command only succeeds for the specific operations this account's sudoers policy allows (e.g. restarting a known service); anything outside that list is refused by `sudo` itself, which is normal, expected output -- not a tool failure. Never run a command that modifies, deletes, or restarts anything without the customer having actually asked for that outcome; when a request is ambiguous or looks destructive, confirm what will happen in plain language before calling this tool.\n\nA non-zero `exit_code` or non-empty `stderr` is normal command output for you to interpret and relay/act on -- it is NOT a tool failure (only a top-level `error` key indicates the command couldn't be run at all, e.g. a bad `cwd`). Output is capped in size and by a wall-clock timeout: check `truncated`/`timed_out` before assuming you saw everything, and narrow the command (e.g. add `| head`, `| tail`, `| wc -l`, or a more targeted filter) and retry rather than re-running the same unbounded command.",
+  "input_schema": {
+    "type": "object",
+    "required": ["command"],
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The full command line to execute, exactly as you'd type it at a bash prompt (may include pipes, redirects, &&, sudo, etc). Required."
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Working directory to run the command in. Optional -- defaults to the backend process's own working directory. Must already exist; relative paths are resolved against that same default."
+      },
+      "timeout_s": {
+        "type": "number",
+        "description": "Override the default execution timeout, in seconds. Optional -- capped at a hard maximum server-side; requests above the cap are silently clamped, not rejected."
+      }
+    }
+  }
+}
