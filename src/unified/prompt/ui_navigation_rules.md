@@ -11,8 +11,5 @@
 
 ## UI LINK FORMATS
 
-- Device, group/scene, or folder: `[device name](/nodes/{node_id})` -- `node_id` is the real id
-  exactly as shown in DEVICE DATABASE, used as-is.
-- Routine/program: `[routine name](/programs/{program_id})` -- `program_id` must be a zero-padded
-  4-digit hex string, no `0x` prefix (e.g. routine id `41` -> `0029`), converted from the decimal
-  id shown in ROUTINES DATABASE.
+- Device, group/scene, or folder: `[device name](/nodes/{node_id})` -- `node_id` is the real id exactly as shown in DEVICE DATABASE, used as-is.
+- Routine/program: `[routine name](/programs/{program_id})` -- `program_id` is the routine's real id exactly as shown in ROUTINES DATABASE, used as-is (no hex conversion, no padding).

@@ -33,8 +33,8 @@ def _get_engine(nucore_interface: NuCoreInterface) -> PlanEngine:
 
 def get_running_plan(nucore_interface: NuCoreInterface) -> dict[str, Any] | None:
     """Used by ``dispatch.execute_tool`` to gate every other tool call while
-    a plan session is in flight -- mirrors ``NuCoreInterface.get_running_diagnostic``'s
-    role, just not on the interface itself (see module docstring)."""
+    a plan session is in flight -- Diagnostics has no equivalent any more
+    (no session left to gate), so Plan is the only feature this applies to."""
     return _get_engine(nucore_interface).get_running_plan()
 
 

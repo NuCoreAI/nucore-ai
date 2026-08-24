@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from unified.models import IntentHandlerResult
-from unified.run_unified_runtime import _run_once
+from unified.run_unified_runtime import EisyUIContext, _run_once
 
 
 class FakeRuntime:
@@ -40,7 +40,7 @@ async def test_sends_final_text_over_stream_handler_when_attached():
     handler = FakeStreamHandler()
     runtime.stream_handler = handler
 
-    await _run_once(runtime, "what's the status", session_id="s1")
+    await _run_once(runtime, "what's the status", EisyUIContext(), session_id="s1")
 
     assert handler.sent == [("the answer", True)]
 
@@ -51,7 +51,7 @@ async def test_closes_stream_without_resending_when_already_streamed_live():
     handler = FakeStreamHandler(chunk_count=3)
     runtime.stream_handler = handler
 
-    await _run_once(runtime, "what's the status", session_id="s1")
+    await _run_once(runtime, "what's the status", EisyUIContext(), session_id="s1")
 
     assert handler.sent == [("", True)]
 
@@ -60,7 +60,7 @@ async def test_closes_stream_without_resending_when_already_streamed_live():
 async def test_prints_to_stdout_when_no_stream_handler(capsys):
     runtime = FakeRuntime("the answer")
 
-    await _run_once(runtime, "what's the status", session_id="s1")
+    await _run_once(runtime, "what's the status", EisyUIContext(), session_id="s1")
 
     captured = capsys.readouterr()
     assert "the answer" in captured.out

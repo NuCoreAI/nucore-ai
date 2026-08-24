@@ -3,10 +3,14 @@ Diagnostics: proposes and commits configuration changes (devices, folders,
 scenes, automations, variables) instead of just investigating existing
 state.
 
-Mirrors ``iox.diagnostics.iox_diagnostics.IoXDiagnostics``'s session/dispatch
-pattern almost exactly (single in-flight session dict, a fenced ```json```
-step catalog parsed out of a prompt file and validated against real ``_<step>``
-methods, ``conclude``/``stop`` as the only terminal steps) -- but lives here in
+Mirrors ``iox.diagnostics.iox_diagnostics.IoXDiagnostics``'s catalog/dispatch
+pattern almost exactly (a fenced ```json``` step catalog parsed out of a
+prompt file and validated against real backend methods, ``conclude``/``stop``
+as the only terminal steps) plus a single in-flight session dict on top --
+Diagnostics dropped its own session/terminal-steps entirely (every step is
+always callable, no start/conclude/stop), but Plan keeps one since staging
+changes across multiple turns before ``apply_plan`` is real state that has to
+survive between calls, unlike Diagnostics' plain reads. Plan lives here in
 ``unified`` rather than being delegated through ``NuCoreInterface`` the way
 Diagnostics is. Diagnostics needs that delegation because its steps are raw,
 protocol-specific SOAP calls that only make sense for an IoX/INSTEON backend.
@@ -40,8 +44,7 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
 # The only two steps with no backend function -- ended by run_plan_step's own
-# dispatch logic, by literal name, before any getattr lookup. Same convention
-# as IoXDiagnostics._TERMINAL_STEPS.
+# dispatch logic, by literal name, before any getattr lookup.
 _TERMINAL_STEPS = frozenset({"conclude", "stop"})
 
 # Every plan type from design/plan-design.md's catalog. Only "new_installation"
@@ -69,11 +72,12 @@ _PLAN_TYPES: dict[str, str | None] = {
 
 def _parse_plan_config(engine_cls: type, plan_type: str, text: str) -> tuple[str, dict[str, dict[str, Any]]]:
     """Parse *text* (a plan type's prompt file content) and return
-    ``(full_text, step_registry)`` -- mirrors
-    ``IoXDiagnostics._parse_diagnostic_config`` exactly: the fenced ```json
-    block is the single source of truth for both the model-facing step
-    descriptions and the ``_<step>`` methods they dispatch to. Raises
-    ``RuntimeError`` at load time (not first use) if the prompt and the code
+    ``(full_text, step_registry)`` -- same idea as
+    ``IoXDiagnostics._parse_diagnostic_config``: the fenced ```json block is
+    the single source of truth for both the model-facing step descriptions
+    and the ``_<step>`` methods they dispatch to (Plan's own convention;
+    Diagnostics dispatches to same-named methods, no leading underscore).
+    Raises ``RuntimeError`` at load time (not first use) if the prompt and the code
     have drifted apart.
     """
     match = _JSON_BLOCK_RE.search(text)
@@ -118,15 +122,14 @@ def _load_plan_configs(engine_cls: type) -> dict[str, tuple[str, dict[str, dict[
 
 
 class PlanEngine:
-    """One in-flight plan session, system-wide (not per-conversation) --
-    same shape as ``IoXDiagnostics``'s ``_diagnostics_state``. Attached
-    lazily to a ``nucore_interface`` instance (see
+    """One in-flight plan session, system-wide (not per-conversation).
+    Attached lazily to a ``nucore_interface`` instance (see
     ``unified.handlers.plan._get_engine``) rather than constructed eagerly,
     so its lifetime still matches that instance's without ``iox`` ever
     importing from ``unified``.
     """
 
-    _PLAN_TIMEOUT_S = 300  # 5 minutes, mirrors IoXDiagnostics._DIAGNOSTICS_TIMEOUT_S
+    _PLAN_TIMEOUT_S = 300  # 5 minutes -- a backstop against an abandoned session, not an expected duration
 
     # Populated once, at class-definition time (see bottom of this module) --
     # shared by every instance, not re-parsed per PlanEngine().
@@ -136,8 +139,9 @@ class PlanEngine:
         self._plan_state: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
-    # Session management -- mirrors IoXDiagnostics.start_diagnostics /
-    # run_diagnostic_step / get_running_diagnostic almost exactly.
+    # Session management -- Plan's staged-ops flow needs real cross-call
+    # state (propose_* -> apply_plan), unlike Diagnostics, which has no
+    # session at all any more.
     # ------------------------------------------------------------------
 
     async def start_plan(self, plan_type: str, *, session_id: str | None = None) -> Any:
@@ -158,8 +162,7 @@ class PlanEngine:
                             "for a different conversation -- wait for it to finish or time out"
                         )
                     }
-                # Re-show the ORIGINALLY started plan type's instruction/steps,
-                # same "re-show, don't restart" semantics as start_diagnostics
+                # Re-show the ORIGINALLY started plan type's instruction/steps
                 # -- a second start_plan call in the same conversation doesn't
                 # switch plan types mid-session.
                 instruction, steps = self._CONFIGS[state["plan_type"]]

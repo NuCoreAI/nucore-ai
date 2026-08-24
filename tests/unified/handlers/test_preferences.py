@@ -1,6 +1,6 @@
 """End-to-end: list_preferences/preference_op dispatched through
-execute_tool. Preferences aren't session-scoped (unlike Plan/Diagnostics) --
-plain immediate CRUD, same shape as variable_op/list_variables.
+execute_tool. Preferences aren't session-scoped (unlike Plan) -- plain
+immediate CRUD, same shape as variable_op/list_variables.
 
 FakeBackend gets its preferences_dir set to a tmp_path per test (rather than
 pre-attaching a PreferenceStore directly) so these tests exercise the same
@@ -20,12 +20,7 @@ class FakeBackend(NuCoreInterface):
     def __init__(self, preferences_dir=None):
         super().__init__(json_output=True, formatter_type="minimal")
         self.preferences_dir = preferences_dir
-        self.running_diagnostic = None
 
-    def get_running_diagnostic(self):
-        return self.running_diagnostic
-
-    async def start_diagnostics(self, **kwargs): raise NotImplementedError
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
@@ -177,15 +172,5 @@ async def test_delete_unknown_id_returns_an_error(tmp_path):
     backend = FakeBackend(preferences_dir=str(tmp_path))
 
     result = await execute_tool("preference_op", {"operation": "delete", "id": "p999"}, nucore_interface=backend)
-
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_preferences_are_blocked_while_a_diagnostic_is_running(tmp_path):
-    backend = FakeBackend(preferences_dir=str(tmp_path))
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 5, "session_id": "s1"}
-
-    result = await execute_tool("list_preferences", {}, nucore_interface=backend, session_id="s1")
 
     assert "error" in result

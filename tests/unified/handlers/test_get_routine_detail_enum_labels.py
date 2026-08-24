@@ -91,9 +91,7 @@ class FakeBackend(NuCoreInterface):
     def group_scene_update_link(self, *a, **kw): raise NotImplementedError
     def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
     def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
-    async def start_diagnostics(self, **kwargs): raise NotImplementedError
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
-    def get_running_diagnostic(self): return None
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError

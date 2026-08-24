@@ -35,10 +35,18 @@ if _default_env_file.exists():
     load_dotenv(_default_env_file)
 
 class EisyUIContext:
-    """Class to represent context messages from the Eisy UI."""
+    """Class to represent context messages from the Eisy UI.
+
+    One instance per websocket connection -- NOT a shared/global object.
+    Concurrent connections used to clobber a single module-level instance's
+    ``context``/``message`` (and would have done the same to ``user_id``),
+    so each connection (and each --query/REPL invocation) now constructs its
+    own.
+    """
     def __init__(self):
         self.context:dict = None
         self.message:str = None
+        self.user_id:str | None = None
 
     def process_message(self, message_data: str)->str:
         """
@@ -58,6 +66,9 @@ class EisyUIContext:
             type = message.get("type", "")
             if type == "context":
                 self.context = message.get("context", None)
+                # Keep the last known user_id if a later context payload
+                # omits it, rather than clearing it -- safer degradation.
+                self.user_id = (self.context or {}).get("user_id") or self.user_id
                 self.message = None
                 return None
             if type == "message":
@@ -76,6 +87,14 @@ class EisyUIContext:
     def get_message(self)->str:
         """Get the last user message stored in the UI context object."""
         return self.message
+
+    def get_user_id(self) -> str | None:
+        """The authenticated user's durable id (an email address), sourced
+        from the context payload -- used as this conversation's session_id
+        instead of a fresh uuid4 per connection, so identity (and therefore
+        e.g. Plan's session ownership) survives a reconnect. None if no
+        context carrying one has been seen yet on this connection."""
+        return self.user_id
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -218,9 +237,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "Bypass the LLM/agentic loop entirely and call this diagnostic step "
-            "directly against the backend (e.g. 'start' to open a session, "
-            "'check_device_links', 'get_full_system_config', 'conclude', 'stop'). "
+            "Bypass the LLM/agentic loop entirely and call this diagnostic tool "
+            "directly against the backend (e.g. 'get_full_system_config', "
+            "'get_dev_links_table', 'quick_plm_sanity_check'). "
             "Prints the raw result and exits. Pairs with --diagnostic-params. "
             "For manual testing against a live hub only."
         ),
@@ -348,10 +367,10 @@ def _load_backend_api_cached(
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
 
 
-eisy_ui_context = EisyUIContext()
 async def _run_once(
     runtime: UnifiedRuntime,
     query: str,
+    eisy_ui_context: EisyUIContext,
     session_id: str | None = None,
 ) -> None:
     """Execute a single query through the runtime and deliver the result.
@@ -375,15 +394,21 @@ async def _run_once(
         here would duplicate it, so just signal end-of-stream instead.
 
     Args:
-        runtime:    The active :class:`~UnifiedRuntime` instance.
-        query:      The user query string to process.
-        session_id: Optional session identifier for conversation tracking.
+        runtime:          The active :class:`~UnifiedRuntime` instance.
+        query:            The user query string to process.
+        eisy_ui_context:  This connection's own EisyUIContext (never shared
+                           across connections -- see its class docstring).
+        session_id:       Fallback session identifier, used only if
+                           eisy_ui_context has no durable user_id yet (e.g.
+                           the client never sent a context message).
     """
-    global eisy_ui_context
     query = eisy_ui_context.process_message(query)
     if not query:
         return
-    session_id = session_id or "default"
+    # Prefer the durable, authenticated user_id over the per-connection
+    # fallback -- this is what lets identity (and Plan's session ownership)
+    # survive a reconnect instead of resetting to a fresh uuid4 every time.
+    session_id = eisy_ui_context.get_user_id() or session_id or "default"
     results = await runtime.handle_query(query, framework_context=eisy_ui_context.get_context(), session_id=session_id)
     if not results:
         return
@@ -416,15 +441,12 @@ async def _run_diagnostic_step_direct(
     a live hub without spending on LLM calls or needing conversational
     back-and-forth to reach a specific step.
 
-    ``step == "start"`` opens a session (``start_diagnostics``); any other
-    value is passed straight to ``run_diagnostic_step`` (e.g. 'conclude',
-    'stop', or a real step name from the catalog).
+    *step* is passed straight to ``run_diagnostic_step`` (e.g.
+    'get_full_system_config', 'get_dev_links_table') -- there's no session to
+    open first.
     """
     params = json.loads(params_json) if params_json else {}
-    if step == "start":
-        result = await nucore_interface.start_diagnostics()
-    else:
-        result = await nucore_interface.run_diagnostic_step(step, **params)
+    result = await nucore_interface.run_diagnostic_step(step, **params)
     print(json.dumps(result, indent=2, default=str))
 
 
@@ -443,6 +465,7 @@ async def _run_loop(runtime: UnifiedRuntime) -> None:
     """
     print("Standalone Unified Runtime")
     print("Type 'quit' to exit")
+    eisy_ui_context = EisyUIContext()
     while True:
         try:
             query = input("\n> ").strip()
@@ -463,7 +486,7 @@ async def _run_loop(runtime: UnifiedRuntime) -> None:
         # Reset per-call stream handler state before dispatching.
         runtime.reset_stream_handler()
         try:
-            await _run_once(runtime, query, session_id="default")
+            await _run_once(runtime, query, eisy_ui_context, session_id="default")
         except asyncio.CancelledError:
             logger.info("\nCancelled. Exiting.")
             break
@@ -527,7 +550,10 @@ async def _run_websocket_server(
     way ``eisy_ai/chat.py`` did via its ``certs/`` files.
     """
     async def handler(websocket) -> None:
-        session_id = str(uuid.uuid4())
+        # Fallback only -- used until/unless this connection's own
+        # EisyUIContext picks up a durable user_id from a context message.
+        fallback_session_id = str(uuid.uuid4())
+        eisy_ui_context = EisyUIContext()
         stream_handler = StreamHandler()
         stream_handler.set_websocket(_RawWebSocketAdapter(websocket))
         runtime_config = _load_runtime_config(
@@ -545,7 +571,7 @@ async def _run_websocket_server(
         try:
             async for message in websocket:
                 runtime.reset_stream_handler()
-                await _run_once(runtime, message, session_id=session_id)
+                await _run_once(runtime, message, eisy_ui_context, session_id=fallback_session_id)
         except websockets.ConnectionClosed:
             pass
 
@@ -648,7 +674,6 @@ def main(args:Any=None, poly=None) -> None:
         # Direct-to-backend testing mode: no LLM, no AgenticLoop, no
         # UnifiedRuntime -- just the real hub connection built above.
         asyncio.run(nucore_interface._refresh_device_structure())
-        asyncio.run(_run_diagnostic_step_direct(nucore_interface, "start", None))
         asyncio.run(_run_diagnostic_step_direct(nucore_interface, args.diagnostic_step, args.diagnostic_params))
         return
 
@@ -692,7 +717,7 @@ def main(args:Any=None, poly=None) -> None:
         if runtime.stream_state is not None:
             runtime.stream_state["chunks"] = 0
         try:
-            asyncio.run(_run_once(runtime, args.query))
+            asyncio.run(_run_once(runtime, args.query, EisyUIContext()))
         except KeyboardInterrupt:
             logger.warning("\nInterrupted. Exiting.")
         finally:

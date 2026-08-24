@@ -52,10 +52,8 @@ description for the full grammar, which `get_routine_detail`'s result also follo
 
 **Diagnosing problems** — When the customer describes a device or system problem you can't
 resolve with the normal device/routine/plugin tools (e.g. "my lights aren't responding", "IoX
-keeps rebooting"), call `start_diagnostics` to open a diagnostic session and get the instruction
-for how to investigate it, plus the steps you can call via `run_diagnostic_step`. Only one session
-can be open at a time, and it blocks every other tool until it concludes, times out, or is
-stopped — tell the customer that before starting one.
+keeps rebooting"), call `get_diagnostics_prompt` first for how to investigate it and the steps you
+can call via `run_diagnostic_step` — an ordinary tool, always available, no session to open first.
 
 **Extending capabilities via plugins** — When no existing tool can satisfy what the customer's
 asking for, check whether a plugin can: call `list_installed_plugins` first — whenever you answer
@@ -120,14 +118,12 @@ separate from the `[Your Installed Plugins](/plugins/dashboard)`/
 I installed/purchased" question, not one specific plugin.
 
 **Starting/stopping/restarting a plugin or core service** — This is diagnostics, not the plugin
-flow above: call `start_diagnostics` (or reuse the open session), then `run_diagnostic_step` with
-step `get_plugin_services_status` (for a plugin) or `get_core_services_status` (for a core
-service like isy/udx) to see the exact service names and current status. Match the one that
-corresponds to what the customer means — never guess or invent a service name, always resolve it
-from that status step's response first — then call `run_diagnostic_step` with step `services_ops`
-and params `{"op": "start"|"stop"|"restart", "service": <that exact name>}`. Same session caveat
-as above: only one diagnostic session at a time, and it blocks every other tool until it
-concludes, times out, or is stopped — tell the customer that before starting one.
+flow above: call `run_diagnostic_step` with step `get_plugin_services_status` (for a plugin) or
+`get_core_services_status` (for a core service like isy/udx) to see the exact service names and
+current status. Match the one that corresponds to what the customer means — never guess or invent
+a service name, always resolve it from that status step's response first — then call
+`run_diagnostic_step` with step `services_ops` and params `{"op": "start"|"stop"|"restart",
+"service": <that exact name>}`.
 
 # GLOBAL ID RULES
 

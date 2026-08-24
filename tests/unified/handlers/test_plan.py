@@ -1,8 +1,10 @@
 """End-to-end: start_plan/run_plan_step dispatched through execute_tool --
 confirms the handler's string-params recovery, the lazy per-instance
-PlanEngine attachment, the session-ownership gate, and that Plan and
-Diagnostics are mutually exclusive with each other (both can drive real hub
-hardware, so only one of either kind should be in flight at a time).
+PlanEngine attachment, the session-ownership gate, and that a running Plan
+session still blocks Diagnostics tools (Plan's own blanket lock refuses
+every other tool). This is one-directional now, not mutual: Diagnostics has
+no session/blanket lock of its own any more, so a Diagnostics tool never
+blocks Plan.
 """
 
 from __future__ import annotations
@@ -18,12 +20,7 @@ class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
         self.pairing_calls: list[str] = []
-        self.running_diagnostic = None
 
-    def get_running_diagnostic(self):
-        return self.running_diagnostic
-
-    async def start_diagnostics(self, **kwargs): raise NotImplementedError
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
 
     async def add_device(self, device_address, **kwargs):
@@ -152,23 +149,16 @@ async def test_a_different_session_is_refused_even_for_the_plan_tools():
 
 
 @pytest.mark.asyncio
-async def test_a_running_diagnostic_blocks_starting_a_plan():
-    backend = FakeBackend()
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 5, "session_id": "s1"}
-
-    result = await execute_tool(
-        "start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1"
-    )
-
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_a_running_plan_blocks_starting_a_diagnostic():
+async def test_a_running_plan_blocks_a_diagnostics_tool():
+    # Plan's own blanket lock refuses every other tool, including
+    # Diagnostics' -- Diagnostics has no equivalent lock of its own (no
+    # session left to gate), so this is one-directional.
     backend = FakeBackend()
     await execute_tool("start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1")
 
-    result = await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="s1")
+    result = await execute_tool(
+        "run_diagnostic_step", {"step": "get_full_system_config"}, nucore_interface=backend, session_id="s1"
+    )
 
     assert "error" in result
 

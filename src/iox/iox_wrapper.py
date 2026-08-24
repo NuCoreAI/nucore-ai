@@ -1641,29 +1641,15 @@ class IoXWrapper(NuCoreInterface):
 
     # ------------------------------------------------------------------
     # Diagnostics -- all actual registry/state/dispatch logic lives on
-    # IoXDiagnostics (self.diagnostics); these just satisfy NuCoreInterface.
+    # IoXDiagnostics (self.diagnostics); this just satisfies NuCoreInterface.
     # ------------------------------------------------------------------
-
-    async def start_diagnostics(self, **kwargs) -> Any:
-        """
-        Open (or re-show) the diagnostic session -- see
-        IoXDiagnostics.start_diagnostics.
-        """
-        return await self.diagnostics.start_diagnostics(**kwargs)
 
     async def run_diagnostic_step(self, step: str, **params) -> Any:
         """
-        Run one step of the in-progress diagnostic session -- see
+        Run one diagnostic step directly -- see
         IoXDiagnostics.run_diagnostic_step.
         """
         return await self.diagnostics.run_diagnostic_step(step, **params)
-
-    def get_running_diagnostic(self) -> dict[str, Any] | None:
-        """
-        Return info about the diagnostic currently in flight, if any -- see
-        IoXDiagnostics.get_running_diagnostic.
-        """
-        return self.diagnostics.get_running_diagnostic()
 
     # ------------------------------------------------------------------
     # Device pairing -- previously dead diagnostics-only SOAP calls (never

@@ -67,6 +67,11 @@ never something to mention or quote back to the customer.
 <<definitions>>
 
 ---
+# HOST ENVIRONMENT
+
+<<host_environment>>
+
+---
 # TIME & LOCATION
 
 Current date/time, timezone, latitude/longitude, and today's sunrise/sunset for this
