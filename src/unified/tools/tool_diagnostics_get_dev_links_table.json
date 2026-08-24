@@ -1,0 +1,14 @@
+{
+  "name": "get_dev_links_table",
+  "description": "INSTEON ONLY. Get the physical device's own live link table (what's actually stored on the device right now) -- distinct from get_iox_links_table (NuCore's stored replica, not a live query). This drives the PLM's serial hardware directly, so it cannot run at the same time as compare_device_links/get_all_plm_links/quick_plm_sanity_check or a second call to itself -- if one of those is already in progress this returns an immediate {\"error\": ...} rather than waiting; just retry shortly. Params: device_id (the device's address).",
+  "input_schema": {
+    "type": "object",
+    "required": ["device_id"],
+    "properties": {
+      "device_id": {
+        "type": "string",
+        "description": "The device's real id/address, exactly as shown in DEVICE DATABASE."
+      }
+    }
+  }
+}

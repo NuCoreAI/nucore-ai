@@ -1,0 +1,13 @@
+{
+  "name": "get_all_plm_links",
+  "description": "INSTEON ONLY. Get all the links in the PLM. A full scan is slow, so a result from the last hour is reused automatically -- pass refresh_plm_links=true only if the customer explicitly asks for a fresh scan. This drives the PLM's serial hardware directly, so it cannot run at the same time as get_dev_links_table/compare_device_links/quick_plm_sanity_check or a second call to itself -- if one of those is already in progress this returns an immediate {\"error\": ...} rather than waiting; just retry shortly. Params: refresh_plm_links (optional bool, default false).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "refresh_plm_links": {
+        "type": "boolean",
+        "description": "Force a fresh PLM scan instead of reusing a result from the last hour. Optional, defaults to false."
+      }
+    }
+  }
+}

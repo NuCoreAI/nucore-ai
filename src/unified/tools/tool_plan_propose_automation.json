@@ -1,0 +1,15 @@
+{
+  "name": "propose_automation",
+  "description": "Stage a routine/automation proposal for the customer to review before committing anything -- does NOT create it yet. Shows up in review_plan's staged_ops list; edit it with revise_plan, remove it with revise_plan(remove=true), or commit every staged item (this and any others) at once with apply_plan. params must match create_or_update_routine's own input_schema exactly -- it's passed through verbatim at apply time.",
+  "input_schema": {
+    "type": "object",
+    "required": ["params"],
+    "properties": {
+      "params": {
+        "type": "object",
+        "description": "Same shape as create_or_update_routine's arguments (name, code, etc.) -- see that tool's own description for the full grammar.",
+        "additionalProperties": true
+      }
+    }
+  }
+}

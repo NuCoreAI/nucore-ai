@@ -1,0 +1,18 @@
+{
+  "name": "pair_device",
+  "description": "Pair a single physical device by its known address -- immediate, not staged, takes effect right away. INSTEON only for now; any other protocol returns guidance to use the vendor's manual pairing procedure instead. This drives the PLM's serial hardware directly, so it cannot run at the same time as get_dev_links_table/compare_device_links/get_all_plm_links/quick_plm_sanity_check or a second call to itself -- if one of those is already in progress this returns an immediate {\"error\": ...} rather than waiting; just retry shortly.",
+  "input_schema": {
+    "type": "object",
+    "required": ["protocol"],
+    "properties": {
+      "protocol": {
+        "type": "string",
+        "description": "The device's protocol, e.g. \"insteon\". Only \"insteon\" is currently supported for automatic pairing."
+      },
+      "device_address": {
+        "type": "string",
+        "description": "The device's known address, required for insteon pairing."
+      }
+    }
+  }
+}

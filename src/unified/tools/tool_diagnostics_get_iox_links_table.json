@@ -1,0 +1,14 @@
+{
+  "name": "get_iox_links_table",
+  "description": "INSTEON ONLY. Get the `nucore` link table for a specific device -- NuCore's own stored replica of what the device's links should be, not a live device query (see get_dev_links_table for that). Free-standing -- does not touch the PLM directly, callable any time, including while a PLM-exclusive tool is running. Params: device_id (the device's address).",
+  "input_schema": {
+    "type": "object",
+    "required": ["device_id"],
+    "properties": {
+      "device_id": {
+        "type": "string",
+        "description": "The device's real id/address, exactly as shown in DEVICE DATABASE."
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "quick_plm_sanity_check",
+  "description": "INSTEON ONLY. Fast system-wide check for 'none of my devices report status back to the PLM'. Reports INSTEON enabled, PLM connected, AND the PLM's actual link record count vs. an expected count derived from NuCore's node/group database -- all in one call, so you don't need get_full_system_config separately for this. Does not include core/plugin service status -- use run_shell_command for that separately if relevant. This drives the PLM's serial hardware directly, so it cannot run at the same time as get_dev_links_table/compare_device_links/get_all_plm_links or a second call to itself -- if one of those is already in progress this returns an immediate {\"error\": ...} rather than waiting; just retry shortly. No params.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

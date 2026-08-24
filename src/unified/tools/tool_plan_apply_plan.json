@@ -1,0 +1,8 @@
+{
+  "name": "apply_plan",
+  "description": "Commit every item currently staged in this conversation (from propose_scene/propose_automation/propose_variable) that hasn't been applied yet, as a batch -- creates the real scenes/automations/variables on the hub. Returns a per-item success/failure breakdown plus a summary count; already-applied items from an earlier apply_plan call are skipped, not redone. Call review_plan first so the customer knows what's about to be committed. No params.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

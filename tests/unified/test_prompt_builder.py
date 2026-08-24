@@ -44,9 +44,15 @@ class FakeBackend(NuCoreInterface):
     def group_scene_update_link(self, *a, **kw): raise NotImplementedError
     def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
     def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
-    async def start_diagnostics(self, **kwargs): raise NotImplementedError
-    async def run_diagnostic_step(self, step, **params): raise NotImplementedError
-    def get_running_diagnostic(self): return None
+    async def diagnostics_get_full_system_config(self, **kwargs): raise NotImplementedError
+    async def diagnostics_get_device_family(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_get_dev_links_table(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_get_iox_links_table(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_compare_device_links(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_get_all_plm_links(self, refresh_plm_links=False, **kwargs): raise NotImplementedError
+    async def diagnostics_quick_plm_sanity_check(self, **kwargs): raise NotImplementedError
+    async def begin_plm_op(self, step): raise NotImplementedError
+    async def end_plm_op(self): raise NotImplementedError
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
@@ -61,6 +67,33 @@ async def test_build_system_prompt_substitutes_every_placeholder():
     assert "# VARIABLES DATABASE" not in prompt
     assert "Bedtime" in prompt
     assert "Irrigation_Mode" in prompt  # via ROUTINES DATABASE's variable_names cross-reference
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_does_not_include_the_diagnostics_prose():
+    # diagnostics.md's prose (~2,500 tokens) is deliberately kept out of the
+    # standing system prompt -- most turns never touch diagnostics, so it's
+    # fetched on demand via the get_diagnostics_prompt tool instead (see
+    # tests/unified/handlers/test_diagnostics.py) rather than paid for on
+    # every single turn.
+    prompt = await build_system_prompt(FakeBackend())
+
+    assert "How INSTEON links work" not in prompt
+    assert "udx_svc_supervisor" not in prompt  # from the "Core and plugin services" catalog
+    assert "get_diagnostics_prompt" in prompt  # pointed at from definitions.md instead
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_includes_host_environment_with_os_specific_guidance():
+    # Asserts on the section/instruction text, not a literal OS name -- this
+    # test's own platform varies by machine (sandbox is Linux, real
+    # deployments are FreeBSD) and must pass either way without mocking
+    # `platform`.
+    prompt = await build_system_prompt(FakeBackend())
+
+    assert "HOST ENVIRONMENT" in prompt
+    assert "run_shell_command" in prompt
+    assert "not Linux's" in prompt
 
 
 @pytest.mark.asyncio

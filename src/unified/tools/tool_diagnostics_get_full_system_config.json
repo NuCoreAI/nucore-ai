@@ -1,0 +1,8 @@
+{
+  "name": "get_full_system_config",
+  "description": "Get the full system configuration: subsystem states (INSTEON/Z-Wave/Zigbee/Matter enabled/connected), PLM info, OS/network/USB info, and available upgrades. No params. Free-standing -- callable any time, including while a PLM-exclusive diagnostic tool (get_dev_links_table/compare_device_links/get_all_plm_links/quick_plm_sanity_check) is running.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

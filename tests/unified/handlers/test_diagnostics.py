@@ -1,9 +1,8 @@
-"""End-to-end: start_diagnostics/run_diagnostic_step dispatched through
-execute_tool -- confirms the thin pass-through to
-NuCoreInterface.start_diagnostics()/run_diagnostic_step(), plus the
-session-ownership gate (only the session_id that owns the active diagnostic
-may call the two diagnostics tools; every other session is refused, same as
-every other tool).
+"""End-to-end: the eight standalone diagnostic tools dispatched through
+execute_tool -- confirms TOOL_HANDLERS routing, required-arg validation, and
+that the old session-wrapper tools (start_diagnostics/run_diagnostic_step)
+are gone. No session/session_id involvement at all -- these are ordinary,
+always-available tools, same as get_property/node_op.
 """
 
 from __future__ import annotations
@@ -11,29 +10,45 @@ from __future__ import annotations
 import pytest
 
 from nucore.nucore_interface import NuCoreInterface
-from unified.dispatch import execute_tool
+from unified.dispatch import TOOL_HANDLERS, execute_tool
 
 
 class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
-        self.start_calls: list[dict] = []
-        self.start_result = {"status": "in_progress", "instruction": "...", "available_tools": []}
-        self.step_calls: list[tuple] = []
-        self.step_result = {"step": "get_full_system_config", "result": "ok"}
-        self.running_diagnostic = None
+        self.calls: list[tuple[str, dict]] = []
+        self.result = {"ok": True}
 
-    async def start_diagnostics(self, **kwargs):
-        self.start_calls.append(kwargs)
-        return self.start_result
+    async def diagnostics_get_full_system_config(self, **kwargs):
+        self.calls.append(("get_full_system_config", kwargs))
+        return self.result
 
-    async def run_diagnostic_step(self, step, **params):
-        self.step_calls.append((step, params))
-        return self.step_result
+    async def diagnostics_get_device_family(self, device_id, **kwargs):
+        self.calls.append(("get_device_family", {"device_id": device_id, **kwargs}))
+        return self.result
 
-    def get_running_diagnostic(self):
-        return self.running_diagnostic
+    async def diagnostics_get_dev_links_table(self, device_id, **kwargs):
+        self.calls.append(("get_dev_links_table", {"device_id": device_id, **kwargs}))
+        return self.result
 
+    async def diagnostics_get_iox_links_table(self, device_id, **kwargs):
+        self.calls.append(("get_iox_links_table", {"device_id": device_id, **kwargs}))
+        return self.result
+
+    async def diagnostics_compare_device_links(self, device_id, **kwargs):
+        self.calls.append(("compare_device_links", {"device_id": device_id, **kwargs}))
+        return self.result
+
+    async def diagnostics_get_all_plm_links(self, refresh_plm_links=False, **kwargs):
+        self.calls.append(("get_all_plm_links", {"refresh_plm_links": refresh_plm_links, **kwargs}))
+        return self.result
+
+    async def diagnostics_quick_plm_sanity_check(self, **kwargs):
+        self.calls.append(("quick_plm_sanity_check", kwargs))
+        return self.result
+
+    async def begin_plm_op(self, step): raise NotImplementedError
+    async def end_plm_op(self): raise NotImplementedError
     async def _load(self, **kwargs): raise NotImplementedError
     async def _load_routines(self): raise NotImplementedError
     async def _load_variables(self): pass
@@ -63,130 +78,94 @@ class FakeBackend(NuCoreInterface):
 
 
 @pytest.mark.asyncio
-async def test_start_diagnostics_returns_backend_result():
+async def test_get_full_system_config_dispatches():
+    backend = FakeBackend()
+    result = await execute_tool("get_full_system_config", {}, nucore_interface=backend)
+    assert result == backend.result
+    assert backend.calls == [("get_full_system_config", {})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name",
+    ["get_device_family", "get_dev_links_table", "get_iox_links_table", "compare_device_links"],
+)
+async def test_device_id_tools_dispatch_with_device_id(tool_name):
+    backend = FakeBackend()
+    result = await execute_tool(tool_name, {"device_id": "n001"}, nucore_interface=backend)
+    assert result == backend.result
+    assert backend.calls == [(tool_name, {"device_id": "n001"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name",
+    ["get_device_family", "get_dev_links_table", "get_iox_links_table", "compare_device_links"],
+)
+async def test_device_id_tools_require_device_id(tool_name):
+    backend = FakeBackend()
+    result = await execute_tool(tool_name, {}, nucore_interface=backend)
+    assert "error" in result
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_all_plm_links_defaults_refresh_to_false():
+    backend = FakeBackend()
+    result = await execute_tool("get_all_plm_links", {}, nucore_interface=backend)
+    assert result == backend.result
+    assert backend.calls == [("get_all_plm_links", {"refresh_plm_links": False})]
+
+
+@pytest.mark.asyncio
+async def test_get_all_plm_links_passes_refresh_true():
+    backend = FakeBackend()
+    await execute_tool("get_all_plm_links", {"refresh_plm_links": True}, nucore_interface=backend)
+    assert backend.calls == [("get_all_plm_links", {"refresh_plm_links": True})]
+
+
+@pytest.mark.asyncio
+async def test_quick_plm_sanity_check_dispatches():
+    backend = FakeBackend()
+    result = await execute_tool("quick_plm_sanity_check", {}, nucore_interface=backend)
+    assert result == backend.result
+    assert backend.calls == [("quick_plm_sanity_check", {})]
+
+
+def test_old_session_tools_are_gone():
+    assert "start_diagnostics" not in TOOL_HANDLERS
+    assert "run_diagnostic_step" not in TOOL_HANDLERS
+
+
+@pytest.mark.asyncio
+async def test_calling_a_removed_tool_returns_unknown_tool_error():
     backend = FakeBackend()
     result = await execute_tool("start_diagnostics", {}, nucore_interface=backend)
-    assert result == backend.start_result
-    assert backend.start_calls == [{"session_id": None}]
+    assert result == {"error": "unknown tool 'start_diagnostics'"}
 
 
 @pytest.mark.asyncio
-async def test_start_diagnostics_passes_candidate_devices_and_routines_through():
+async def test_get_diagnostics_prompt_returns_the_prose_without_touching_the_backend():
+    # This tool is static content (prompt/diagnostics.md), not backend data --
+    # confirms it never calls into nucore_interface at all, unlike the other
+    # seven diagnostic tools.
+    from unified.handlers.diagnostics import _DIAGNOSTICS_PROMPT
+
     backend = FakeBackend()
-    candidate_devices = [{"device_id": "n001", "score": 0.9}]
-    candidate_routines = [{"routine_id": "r001", "score": 0.8}]
-
-    await execute_tool(
-        "start_diagnostics",
-        {"candidate_devices": candidate_devices, "candidate_routines": candidate_routines},
-        nucore_interface=backend,
-    )
-
-    assert backend.start_calls == [
-        {"session_id": None, "candidate_devices": candidate_devices, "candidate_routines": candidate_routines}
-    ]
+    result = await execute_tool("get_diagnostics_prompt", {}, nucore_interface=backend)
+    assert result == _DIAGNOSTICS_PROMPT
+    assert "How INSTEON links work" in result
+    assert backend.calls == []
 
 
 @pytest.mark.asyncio
-async def test_start_diagnostics_omits_candidate_kwargs_when_absent():
+async def test_diagnostics_tools_are_not_blocked_by_anything_diagnostics_related():
+    # There is no diagnostics blanket lock any more -- two diagnostics tools
+    # back to back both just dispatch normally, no gating between them at
+    # the dispatch layer (the four PLM-exclusive tools' own mutual exclusion
+    # is enforced inside IoXDiagnostics, not here -- see tests/iox).
     backend = FakeBackend()
-    await execute_tool("start_diagnostics", {}, nucore_interface=backend)
-    assert backend.start_calls == [{"session_id": None}]
-
-
-@pytest.mark.asyncio
-async def test_start_diagnostics_forwards_the_callers_session_id():
-    backend = FakeBackend()
-    await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="session-A")
-    assert backend.start_calls == [{"session_id": "session-A"}]
-
-
-@pytest.mark.asyncio
-async def test_other_tools_are_blocked_while_a_diagnostic_is_running():
-    backend = FakeBackend()
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12, "session_id": "session-A"}
-
-    result = await execute_tool(
-        "get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend, session_id="session-A"
-    )
-
-    # Even the OWNING session can't use a non-diagnostics tool while its own
-    # diagnostic is in progress -- only start_diagnostics/run_diagnostic_step
-    # are ever exempt, and only for that session.
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_start_diagnostics_and_run_diagnostic_step_stay_exempt_for_the_owning_session():
-    backend = FakeBackend()
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12, "session_id": "session-A"}
-
-    start_result = await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="session-A")
-    step_result = await execute_tool(
-        "run_diagnostic_step", {"step": "conclude"}, nucore_interface=backend, session_id="session-A"
-    )
-
-    assert start_result == backend.start_result
-    assert backend.start_calls == [{"session_id": "session-A"}]
-    assert step_result == backend.step_result
-    assert backend.step_calls == [("conclude", {"session_id": "session-A"})]
-
-
-@pytest.mark.asyncio
-async def test_a_different_session_is_refused_even_for_the_diagnostics_tools():
-    backend = FakeBackend()
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 12, "session_id": "session-A"}
-
-    start_result = await execute_tool("start_diagnostics", {}, nucore_interface=backend, session_id="session-B")
-    step_result = await execute_tool(
-        "run_diagnostic_step", {"step": "conclude"}, nucore_interface=backend, session_id="session-B"
-    )
-
-    assert "error" in start_result
-    assert "error" in step_result
-    # never reached the backend -- refused at the gate
-    assert backend.start_calls == []
-    assert backend.step_calls == []
-
-
-@pytest.mark.asyncio
-async def test_run_diagnostic_step_passes_step_and_params_through():
-    backend = FakeBackend()
-
-    result = await execute_tool(
-        "run_diagnostic_step", {"step": "check_device_links", "params": {"device_id": "n001"}}, nucore_interface=backend
-    )
-
-    assert result == backend.step_result
-    assert backend.step_calls == [("check_device_links", {"device_id": "n001", "session_id": None})]
-
-
-@pytest.mark.asyncio
-async def test_run_diagnostic_step_defaults_params_to_empty_dict():
-    backend = FakeBackend()
-
-    await execute_tool("run_diagnostic_step", {"step": "get_full_system_config"}, nucore_interface=backend)
-
-    assert backend.step_calls == [("get_full_system_config", {"session_id": None})]
-
-
-@pytest.mark.asyncio
-async def test_run_diagnostic_step_requires_step():
-    backend = FakeBackend()
-
-    result = await execute_tool("run_diagnostic_step", {}, nucore_interface=backend)
-
-    assert "error" in result
-    assert backend.step_calls == []
-
-
-@pytest.mark.asyncio
-async def test_other_tools_proceed_normally_when_nothing_is_running():
-    backend = FakeBackend()
-    backend.running_diagnostic = None
-
-    result = await execute_tool("get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend)
-
-    # Reached the real handler (no devices loaded -> device-not-found), not
-    # blocked by the diagnostics lock.
-    assert result == {"error": "no device found with id 'n001'; check DEVICE DATABASE"}
+    first = await execute_tool("get_full_system_config", {}, nucore_interface=backend)
+    second = await execute_tool("quick_plm_sanity_check", {}, nucore_interface=backend)
+    assert first == backend.result
+    assert second == backend.result

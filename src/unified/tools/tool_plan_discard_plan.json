@@ -1,0 +1,8 @@
+{
+  "name": "discard_plan",
+  "description": "Clear everything currently staged in this conversation (from propose_scene/propose_automation/propose_variable) without applying any of it -- use when the customer decides not to go ahead. Nothing that was already committed by an earlier apply_plan is undone; this only clears items still pending. No params.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

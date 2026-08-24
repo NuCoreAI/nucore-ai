@@ -1,13 +1,15 @@
-"""``start_plan``/``run_plan_step`` -- Plan is the write-heavy counterpart to
-Diagnostics: proposes and commits configuration changes (devices, folders,
-scenes, automations, variables) instead of just investigating existing state.
+"""Ten standalone Plan tools -- backend-vetted configuration-change
+functions (device pairing, folder creation, staged scene/automation/
+variable proposals, and applying them), distinct from Diagnostics' read-only
+tools. No session wrapper (no start/conclude/stop) -- each of these is an
+ordinary, always-available tool, the same shape as ``handlers/diagnostics.py``.
 
-Unlike Diagnostics, Plan's session state is not delegated through
-``NuCoreInterface`` -- it lives entirely in ``unified.planning.PlanEngine``
-(see that module's docstring for why). ``_get_engine`` attaches one
-``PlanEngine`` per ``nucore_interface`` instance lazily, the first time it's
-needed, so its lifetime still matches that instance's without ``iox`` ever
-importing from ``unified``.
+Three of these (``get_plan_prompt``, ``create_folder``, ``pair_device``) need
+nothing but their own arguments. The other seven need to find *this
+conversation's* staged changes, so they take ``session_id`` -- see
+``dispatch.py``'s ``_SESSION_SCOPED_TOOLS``, which now means only "needs
+``session_id`` forwarded," not anything about locking (there is no more
+blanket lock).
 
 Same string-params recovery as ``diagnostics.py``: models occasionally send
 ``params`` as a JSON-encoded string instead of a real object.
@@ -31,36 +33,91 @@ def _get_engine(nucore_interface: NuCoreInterface) -> PlanEngine:
     return engine
 
 
-def get_running_plan(nucore_interface: NuCoreInterface) -> dict[str, Any] | None:
-    """Used by ``dispatch.execute_tool`` to gate every other tool call while
-    a plan session is in flight -- mirrors ``NuCoreInterface.get_running_diagnostic``'s
-    role, just not on the interface itself (see module docstring)."""
-    return _get_engine(nucore_interface).get_running_plan()
-
-
-async def start_plan(
-    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
-) -> Any:
-    plan_type = args.get("plan_type")
-    if not plan_type:
-        return {"error": "plan_type is required"}
-    return await _get_engine(nucore_interface).start_plan(plan_type, session_id=session_id)
-
-
-async def run_plan_step(
-    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
-) -> Any:
-    step = args.get("step")
-    if not step:
-        return {"error": "step is required -- see start_plan's available_tools"}
-    params = args.get("params") or {}
+def _coerce_params(params: Any) -> dict[str, Any] | dict[str, str]:
     if isinstance(params, str):
         try:
             params = json.loads(params)
         except json.JSONDecodeError:
-            return {"error": f"params must be a JSON object, not a plain string: {params!r}"}
+            return {"__error__": f"params must be a JSON object, not a plain string: {params!r}"}
     if not isinstance(params, dict):
-        return {"error": f"params must be a JSON object, got {type(params).__name__}"}
-    return await _get_engine(nucore_interface).run_plan_step(
-        nucore_interface, step, session_id=session_id, **params
+        return {"__error__": f"params must be a JSON object, got {type(params).__name__}"}
+    return params
+
+
+async def get_plan_prompt(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    plan_type = args.get("plan_type") or "new_installation"
+    return await _get_engine(nucore_interface).get_plan_prompt(plan_type)
+
+
+async def create_folder(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    new_name = args.get("new_name")
+    if not new_name:
+        return {"error": "new_name is required"}
+    return await _get_engine(nucore_interface).create_folder(nucore_interface, new_name=new_name)
+
+
+async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    protocol = args.get("protocol")
+    if not protocol:
+        return {"error": "protocol is required"}
+    return await _get_engine(nucore_interface).pair_device(
+        nucore_interface, protocol, device_address=args.get("device_address")
     )
+
+
+async def propose_scene(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    params = _coerce_params(args.get("params") or {})
+    if "__error__" in params:
+        return {"error": params["__error__"]}
+    return await _get_engine(nucore_interface).propose_scene(session_id=session_id, **params)
+
+
+async def propose_automation(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    params = _coerce_params(args.get("params") or {})
+    if "__error__" in params:
+        return {"error": params["__error__"]}
+    return await _get_engine(nucore_interface).propose_automation(session_id=session_id, **params)
+
+
+async def propose_variable(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    params = _coerce_params(args.get("params") or {})
+    if "__error__" in params:
+        return {"error": params["__error__"]}
+    return await _get_engine(nucore_interface).propose_variable(session_id=session_id, **params)
+
+
+async def review_plan(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    return await _get_engine(nucore_interface).review_plan(session_id=session_id)
+
+
+async def revise_plan(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    params = args.get("params")
+    if params is not None:
+        params = _coerce_params(params)
+        if "__error__" in params:
+            return {"error": params["__error__"]}
+    return await _get_engine(nucore_interface).revise_plan(
+        session_id=session_id, id=args.get("id"), params=params, remove=bool(args.get("remove", False))
+    )
+
+
+async def apply_plan(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    return await _get_engine(nucore_interface).apply_plan(nucore_interface, session_id=session_id)
+
+
+async def discard_plan(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
+) -> Any:
+    return await _get_engine(nucore_interface).discard_plan(session_id=session_id)

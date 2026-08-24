@@ -1,0 +1,8 @@
+{
+  "name": "review_plan",
+  "description": "List everything currently staged in this conversation (via propose_scene/propose_automation/propose_variable) but not yet applied -- each with an id, its op type, its params, and its status. Use this to show the customer what's about to be committed before calling apply_plan, or to find an id to pass to revise_plan. No params.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

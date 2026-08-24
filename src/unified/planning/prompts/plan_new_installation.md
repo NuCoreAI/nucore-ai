@@ -34,45 +34,15 @@ configuration) -- they'll describe devices, where they are, and how they want th
    `review_plan` to walk them through it in plain language, revise anything they push back on,
    then `apply_plan` once they're happy. Report back honestly if anything failed to apply.
 
-6. **Conclude** once everything's applied and the customer is satisfied, or if they want to
-   continue later, `stop`.
+6. **Wrap up** once everything's applied and the customer is satisfied -- just tell them so, there's
+   no step to call. If they want to stop before applying anything, either walk away or call
+   `discard_plan` to clear what's staged.
 
-## Available steps (call via run_plan_step)
+## Tools used in this flow
 
-```json
-{
-  "list_variables": {
-    "description": "List existing variables (optionally filtered by type: 1=integer, 2=state). Devices/folders/scenes/automations are already visible in the standing system information -- this is only for variables. Params: type (optional, 1 or 2)."
-  },
-  "pair_device": {
-    "description": "Add one specific physical device by its own address -- self-contained, nothing else to call afterward. Params: protocol (\"insteon\" is the only one currently supported -- others return a not-yet-supported message), device_address (the device's own address)."
-  },
-  "create_folder": {
-    "description": "Create a folder (room) immediately -- not staged. Params: new_name."
-  },
-  "propose_scene": {
-    "description": "Stage a new scene/group. Params: group_name (optional), devices (list of {link_address, role: \"controller\"|\"responder\", name?})."
-  },
-  "propose_automation": {
-    "description": "Stage a new automation/routine. Params: name, comment (optional), code (the routine DSL source)."
-  },
-  "propose_variable": {
-    "description": "Stage a new variable. Params: type (1=integer, 2=state), name, prec (optional), value (optional), init (optional)."
-  },
-  "review_plan": {
-    "description": "Show everything currently staged (id/op/params/status), so you can explain it to the customer in plain language. No params."
-  },
-  "revise_plan": {
-    "description": "Edit or remove a staged item. Params: id (the staged item's id), params (optional, replaces the item's params entirely), remove (optional bool -- if true, deletes the item and params is ignored)."
-  },
-  "apply_plan": {
-    "description": "Commit every currently-staged item. Reports success/failure per item, not all-or-nothing. No params."
-  },
-  "conclude": {
-    "description": "Call once the customer is satisfied with what's been applied. Ends the session normally. Params: summary (optional but preferred)."
-  },
-  "stop": {
-    "description": "Abandon the session early. No params. Prefer conclude when you've actually applied something."
-  }
-}
-```
+`pair_device`, `create_folder`, `propose_scene`, `propose_automation`, `propose_variable`,
+`review_plan`, `revise_plan`, `apply_plan`, and `discard_plan` -- each is self-describing via its
+own tool description, the same as every other tool you have; see `plan_common.md` above for how
+staging/applying/hardware-exclusivity work across all of them. `list_variables` (not
+plan-specific -- it's a standalone tool) covers variables, the one thing not already visible in
+the standing device/routine information.

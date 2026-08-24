@@ -23,21 +23,21 @@ from .handlers import (
 
 logger = get_logger(__name__)
 
-# Tools still allowed through while a diagnostic is running -- everything
-# else is refused (see execute_tool), for every session. Even these two are
-# only let through for the session_id that started the active diagnostic --
-# a real hub-level operation another conversation shouldn't be able to touch,
-# restart, or interrupt.
-_DIAGNOSTICS_EXEMPT_TOOLS = frozenset({"start_diagnostics", "run_diagnostic_step"})
-
-# Same idea, for an in-progress plan session. Diagnostics and Plan are also
-# mutually exclusive with EACH OTHER: neither tool set is in the other's
-# exempt set, so the two gates below already block one while the other is
-# running, with no extra code -- both can drive real hub hardware, so only
-# one of either kind should ever be in flight at a time.
-_PLAN_EXEMPT_TOOLS = frozenset({"start_plan", "run_plan_step"})
-
-_SESSION_SCOPED_TOOLS = _DIAGNOSTICS_EXEMPT_TOOLS | _PLAN_EXEMPT_TOOLS
+# Neither Plan nor Diagnostics has a blanket lock -- every tool in both is an
+# ordinary, always-available tool (see handlers/plan.py, handlers/
+# diagnostics.py). The only mutual exclusion either needs is a hardware fact,
+# not a conversational one, so it's enforced where the hardware lives
+# (IoXDiagnostics._begin_plm_op/_end_plm_op, shared by the four promoted
+# diagnostic tools and Plan's pair_device via NuCoreInterface.begin_plm_op/
+# end_plm_op) rather than here.
+#
+# This set means only "this handler needs session_id forwarded to find its
+# own state" -- Plan's seven staged-ops tools need it to look up *this
+# conversation's* staged changes; nothing here is about locking.
+_SESSION_SCOPED_TOOLS = frozenset({
+    "propose_scene", "propose_automation", "propose_variable",
+    "review_plan", "revise_plan", "apply_plan", "discard_plan",
+})
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
 
@@ -62,10 +62,24 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "delete_plugin": plugin_management.delete_plugin,
     "get_plugin_capabilities": plugin_management.get_plugin_capabilities,
     "call_plugin": plugin_management.call_plugin,
-    "start_diagnostics": diagnostics.start_diagnostics,
-    "run_diagnostic_step": diagnostics.run_diagnostic_step,
-    "start_plan": plan.start_plan,
-    "run_plan_step": plan.run_plan_step,
+    "get_full_system_config": diagnostics.get_full_system_config,
+    "get_device_family": diagnostics.get_device_family,
+    "get_dev_links_table": diagnostics.get_dev_links_table,
+    "get_iox_links_table": diagnostics.get_iox_links_table,
+    "compare_device_links": diagnostics.compare_device_links,
+    "get_all_plm_links": diagnostics.get_all_plm_links,
+    "quick_plm_sanity_check": diagnostics.quick_plm_sanity_check,
+    "get_diagnostics_prompt": diagnostics.get_diagnostics_prompt,
+    "get_plan_prompt": plan.get_plan_prompt,
+    "create_folder": plan.create_folder,
+    "pair_device": plan.pair_device,
+    "propose_scene": plan.propose_scene,
+    "propose_automation": plan.propose_automation,
+    "propose_variable": plan.propose_variable,
+    "review_plan": plan.review_plan,
+    "revise_plan": plan.revise_plan,
+    "apply_plan": plan.apply_plan,
+    "discard_plan": plan.discard_plan,
     "list_preferences": preferences.list_preferences,
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,
@@ -80,37 +94,11 @@ async def execute_tool(
     take down the agentic loop.
 
     *session_id* identifies which conversation this call came from -- used
-    only for the diagnostics ownership check below; every other handler
-    ignores it."""
+    only to key Plan's staged-ops state for the tools in
+    ``_SESSION_SCOPED_TOOLS``; every other handler ignores it."""
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
         return {"error": f"unknown tool '{name}'"}
-
-    running_diag = nucore_interface.get_running_diagnostic()
-    if running_diag is not None:
-        owner = running_diag.get("session_id")
-        if name not in _DIAGNOSTICS_EXEMPT_TOOLS or session_id != owner:
-            return {
-                "error": (
-                    f"a diagnostic session is currently in progress "
-                    f"(started {running_diag['elapsed_s']}s ago) -- no other actions can be performed until it "
-                    "concludes, times out, or is stopped. Ask the customer whether to stop it, then call "
-                    "run_diagnostic_step with step='stop', or wait."
-                )
-            }
-
-    running_plan = plan.get_running_plan(nucore_interface)
-    if running_plan is not None:
-        owner = running_plan.get("session_id")
-        if name not in _PLAN_EXEMPT_TOOLS or session_id != owner:
-            return {
-                "error": (
-                    f"a plan session is currently in progress "
-                    f"(started {running_plan['elapsed_s']}s ago) -- no other actions can be performed until it "
-                    "concludes, times out, or is stopped. Ask the customer whether to stop it, then call "
-                    "run_plan_step with step='stop', or wait."
-                )
-            }
 
     try:
         if name in _SESSION_SCOPED_TOOLS:

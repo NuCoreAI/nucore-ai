@@ -1,0 +1,31 @@
+{
+  "name": "get_plan_prompt",
+  "description": "Get the full instructions for planning a system configuration change of the given type (new installation, vacation mode, room addition, etc.) -- workflow, what to ask the customer, and how to use pair_device/create_folder/propose_scene/propose_automation/propose_variable/review_plan/revise_plan/apply_plan together. Call this ONCE, first, before any other plan tool, at the start of any conversation that turns out to need one of these -- it is deliberately left out of the standing system prompt since most conversations never need it. Currently only plan_type='new_installation' is implemented; every other recognized value returns a not-yet-available message instead of instructions -- check for that before telling the customer you're proceeding.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "plan_type": {
+        "type": "string",
+        "enum": [
+          "new_installation",
+          "room_addition",
+          "vacation",
+          "holidays",
+          "remodel",
+          "move",
+          "irrigation",
+          "rental_turnover",
+          "aging_in_place",
+          "storm_prep",
+          "party_mode",
+          "downsizing",
+          "nursery",
+          "animal_protection",
+          "safety_security",
+          "serenity"
+        ],
+        "description": "Which kind of plan the customer wants. Only \"new_installation\" is currently functional -- every other value is a recognized but not-yet-available plan type. Defaults to \"new_installation\" if omitted."
+      }
+    }
+  }
+}

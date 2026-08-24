@@ -1,0 +1,23 @@
+{
+  "name": "revise_plan",
+  "description": "Edit or remove one item already staged in this conversation (from propose_scene/propose_automation/propose_variable) -- get its id from review_plan first, never invent one. Editing replaces that item's params wholesale (not a partial merge); removing takes it out of review_plan's list entirely and it will not be included in a later apply_plan.",
+  "input_schema": {
+    "type": "object",
+    "required": ["id"],
+    "properties": {
+      "id": {
+        "type": "integer",
+        "description": "The staged item's id, from review_plan's staged_ops list."
+      },
+      "params": {
+        "type": "object",
+        "description": "The item's full replacement params, same shape as when it was proposed. Omit when only removing.",
+        "additionalProperties": true
+      },
+      "remove": {
+        "type": "boolean",
+        "description": "Set true to remove this staged item entirely instead of editing it. Defaults to false."
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@ directory-loading machinery involved.
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,17 @@ from rag import DedupeRoutines
 from .preferences.preference_store import get_store
 
 _PROMPT_DIR = Path(__file__).parent / "prompt"
+
+# Resolved once at process start, not per-prompt -- the host this process (and
+# therefore run_shell_command) runs on cannot change over the process's lifetime.
+_HOST_PLATFORM = platform.platform()
+_HOST_ENVIRONMENT = (
+    f"This backend process (and therefore `run_shell_command`) runs on: {_HOST_PLATFORM}\n\n"
+    "Any command you pass to `run_shell_command` must use this OS's own conventions, not "
+    "Linux's -- e.g. on FreeBSD: `service <name> status/start/stop/restart`, not `systemctl`; "
+    "`pkg`, not `apt`/`yum`; BSD-flavored `ps`/`sed`/`ifconfig` flags, not GNU's; no `/proc`. "
+    "Check the platform string above before assuming Linux syntax."
+)
 
 # (time_data key, rendered Python variable name), in display order.
 _TIME_INFO_VARS = (
@@ -79,6 +91,7 @@ async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
     preference_aliases = _render_preference_aliases(nucore_interface)
 
     prompt = system_prompt.replace("<<definitions>>", definitions)
+    prompt = prompt.replace("<<host_environment>>", _HOST_ENVIRONMENT)
     prompt = prompt.replace("<<ui_navigation_rules>>", ui_navigation_rules)
     prompt = prompt.replace("<<device_database>>", device_database)
     prompt = prompt.replace("<<routines_database>>", routines_database)

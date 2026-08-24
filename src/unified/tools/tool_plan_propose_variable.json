@@ -1,0 +1,15 @@
+{
+  "name": "propose_variable",
+  "description": "Stage a new variable proposal for the customer to review before committing anything -- does NOT create it yet. Shows up in review_plan's staged_ops list; edit it with revise_plan, remove it with revise_plan(remove=true), or commit every staged item (this and any others) at once with apply_plan. params must match variable_op's own input_schema for a create operation (type, name, etc.) -- 'operation' itself is set automatically to \"create\" and must not be included.",
+  "input_schema": {
+    "type": "object",
+    "required": ["params"],
+    "properties": {
+      "params": {
+        "type": "object",
+        "description": "Same shape as variable_op's create arguments (type, name, prec, etc., but never 'operation') -- see that tool's own description for the full grammar.",
+        "additionalProperties": true
+      }
+    }
+  }
+}

@@ -1,9 +1,11 @@
-"""PlanEngine -- the write-heavy counterpart to IoXDiagnostics: session
-lifecycle (start/stub-type/step-dispatch/ownership/timeout), staging
-(propose/review/revise), and apply_plan's per-item success/failure
-aggregation. apply_plan is tested with the real handler functions
-monkeypatched (same FakeWrapper-style pattern as
-tests/iox/test_plm_links_cache.py) rather than a full live hub round-trip.
+"""PlanEngine -- the write-heavy counterpart to IoXDiagnostics: no session
+wrapper any more, just session_id-scoped staged-ops buckets (propose/review/
+revise/discard/apply) plus the one truly stateless method (get_plan_prompt).
+Covers what's awkward to exercise through execute_tool: prompt-loading
+validation and the idle-staleness backstop (both need direct access to
+PlanEngine's internals / the clock). Dispatch-layer behavior (routing,
+session isolation via execute_tool, the shared PLM lock) is covered in
+tests/unified/handlers/test_plan.py.
 """
 
 from __future__ import annotations
@@ -16,220 +18,137 @@ from unified.planning import plan_engine as plan_engine_module
 from unified.planning.plan_engine import PlanEngine, _PLAN_TYPES
 
 
-def _bare_engine() -> PlanEngine:
-    engine = object.__new__(PlanEngine)
-    engine._plan_state = None
-    return engine
-
-
 # ---------------------------------------------------------------------------
-# Config loading -- fails loudly at import time if the prompt and the code
-# have drifted apart (mirrors test_run_diagnostics.py's equivalent check).
+# Prompt loading -- fails loudly at import time if a prompt file is missing,
+# mirrors the old config-loading check.
 # ---------------------------------------------------------------------------
 
 
-def test_new_installation_prompt_parses_and_validates_cleanly():
-    instruction, steps = PlanEngine._CONFIGS["new_installation"]
-    assert "new_installation" not in _steps_missing_backend_methods(steps)
-    assert isinstance(instruction, str) and instruction.strip()
-    assert "conclude" in steps and "stop" in steps
+def test_new_installation_prompt_loaded_and_non_empty():
+    assert "new_installation" in PlanEngine._PROMPTS
+    assert isinstance(PlanEngine._PROMPTS["new_installation"], str)
+    assert PlanEngine._PROMPTS["new_installation"].strip()
 
 
-def _steps_missing_backend_methods(steps: dict) -> list[str]:
-    missing = []
-    for name in steps:
-        if name in {"conclude", "stop"}:
-            continue
-        if not callable(getattr(PlanEngine, f"_{name}", None)):
-            missing.append(name)
-    return missing
-
-
-def test_every_stub_plan_type_is_recognized_but_maps_to_no_config():
+def test_every_stub_plan_type_is_recognized_but_has_no_prompt():
     for plan_type, filename in _PLAN_TYPES.items():
         if plan_type == "new_installation":
             assert filename is not None
-            assert plan_type in PlanEngine._CONFIGS
+            assert plan_type in PlanEngine._PROMPTS
         else:
             assert filename is None
-            assert plan_type not in PlanEngine._CONFIGS
-
-
-# ---------------------------------------------------------------------------
-# start_plan
-# ---------------------------------------------------------------------------
+            assert plan_type not in PlanEngine._PROMPTS
 
 
 @pytest.mark.asyncio
-async def test_start_plan_rejects_unknown_type():
-    engine = _bare_engine()
-    result = await engine.start_plan("not_a_real_plan_type")
+async def test_get_plan_prompt_rejects_unknown_type():
+    engine = PlanEngine()
+    result = await engine.get_plan_prompt("not_a_real_plan_type")
     assert "error" in result
-    assert engine._plan_state is None
 
 
 @pytest.mark.asyncio
-async def test_start_plan_returns_not_implemented_for_a_stub_type():
-    engine = _bare_engine()
-    result = await engine.start_plan("vacation")
+async def test_get_plan_prompt_returns_not_implemented_for_a_stub_type():
+    engine = PlanEngine()
+    result = await engine.get_plan_prompt("vacation")
     assert result["status"] == "not_implemented"
     assert result["plan_type"] == "vacation"
-    assert engine._plan_state is None  # no lock taken for a stub type
 
 
 @pytest.mark.asyncio
-async def test_start_plan_opens_a_real_session_for_new_installation():
-    engine = _bare_engine()
-    result = await engine.start_plan("new_installation", session_id="s1")
-    assert result["status"] == "in_progress"
+async def test_get_plan_prompt_returns_real_text_for_new_installation():
+    engine = PlanEngine()
+    result = await engine.get_plan_prompt("new_installation")
     assert result["plan_type"] == "new_installation"
-    assert "pair_device" in result["available_tools"]
-    assert "apply_plan" in result["available_tools"]
-    assert engine._plan_state is not None
-
-
-@pytest.mark.asyncio
-async def test_start_plan_reshows_same_session_for_owning_session_id():
-    engine = _bare_engine()
-    first = await engine.start_plan("new_installation", session_id="s1")
-    second = await engine.start_plan("new_installation", session_id="s1")
-    assert second["status"] == "in_progress"
-    assert second["plan_type"] == first["plan_type"]
-
-
-@pytest.mark.asyncio
-async def test_start_plan_refuses_a_different_session_while_one_is_open():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    result = await engine.start_plan("new_installation", session_id="s2")
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_start_plan_clears_a_stale_session_past_timeout(monkeypatch):
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    engine._plan_state["started_at"] = time.monotonic() - (PlanEngine._PLAN_TIMEOUT_S + 1)
-
-    result = await engine.start_plan("new_installation", session_id="s2")
-
-    assert result["status"] == "in_progress"  # s2 got a fresh session, not refused
+    assert result["prompt"] == PlanEngine._PROMPTS["new_installation"]
 
 
 # ---------------------------------------------------------------------------
-# run_plan_step -- ownership/timeout/dispatch
+# Session-scoped staged-ops bucket -- creation, isolation, idle staleness
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_plan_step_requires_a_started_session():
-    engine = _bare_engine()
-    result = await engine.run_plan_step(None, "create_folder", session_id="s1")
-    assert "error" in result
+async def test_default_session_key_is_used_when_no_session_id_given():
+    engine = PlanEngine()
+    await engine.propose_variable(session_id=None, type=1, name="No Session")
+    result = await engine.review_plan(session_id=None)
+    assert len(result["staged_ops"]) == 1
+    assert "default" in engine._plan_sessions
 
 
 @pytest.mark.asyncio
-async def test_run_plan_step_refuses_a_different_session():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    result = await engine.run_plan_step(None, "review_plan", session_id="s2")
-    assert "error" in result
+async def test_stale_session_is_cleared_after_the_idle_timeout(monkeypatch):
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="Old")
+
+    fake_now = time.monotonic() + PlanEngine._PLAN_TIMEOUT_S + 1
+    monkeypatch.setattr(plan_engine_module.time, "monotonic", lambda: fake_now)
+
+    result = await engine.review_plan(session_id="s1")
+
+    assert result["staged_ops"] == []  # stale bucket cleared, fresh one created silently
 
 
 @pytest.mark.asyncio
-async def test_run_plan_step_rejects_an_unknown_step():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    result = await engine.run_plan_step(None, "totally_made_up_step", session_id="s1")
-    assert "error" in result
+async def test_touching_a_session_resets_its_idle_clock(monkeypatch):
+    real_monotonic = time.monotonic
+    clock = {"t": real_monotonic()}
+    monkeypatch.setattr(plan_engine_module.time, "monotonic", lambda: clock["t"])
 
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="A")
 
-@pytest.mark.asyncio
-async def test_conclude_ends_the_session():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    result = await engine.run_plan_step(None, "conclude", session_id="s1", summary="done")
-    assert result == {"status": "completed", "summary": "done"}
-    assert engine._plan_state is None
+    # Advance close to, but not past, the timeout, then touch the session --
+    # if the clock weren't reset on touch, a second identical advance would
+    # tip it over into staleness. It doesn't, because review_plan already
+    # touched it once.
+    clock["t"] += PlanEngine._PLAN_TIMEOUT_S - 1
+    await engine.review_plan(session_id="s1")
+    clock["t"] += PlanEngine._PLAN_TIMEOUT_S - 1
 
+    result = await engine.review_plan(session_id="s1")
 
-@pytest.mark.asyncio
-async def test_stop_ends_the_session():
-    # No pairing cleanup call expected -- pair_device only ever uses the
-    # self-contained add_device, never the discover/finish batch session, so
-    # there's nothing on the hub for stop to defensively clean up.
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(None, "stop", session_id="s1")
-
-    assert result == {"status": "stopped"}
-    assert engine._plan_state is None
+    assert len(result["staged_ops"]) == 1  # still there -- never went stale
 
 
 # ---------------------------------------------------------------------------
-# Staging: propose / review / revise
+# Staging: propose / review / revise / discard
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_propose_scene_stages_without_touching_the_live_system():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(
-        None, "propose_scene", session_id="s1", group_name="Movie Night", devices=[]
-    )
-
-    assert result["result"]["status"] == "proposed"
-    assert engine._plan_state["staged_ops"][0]["op"] == "scene"
-
-
-@pytest.mark.asyncio
-async def test_review_plan_lists_everything_staged():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Counter")
-
-    result = await engine.run_plan_step(None, "review_plan", session_id="s1")
-
-    assert len(result["result"]["staged_ops"]) == 1
-    assert result["result"]["staged_ops"][0]["params"]["name"] == "Counter"
+    engine = PlanEngine()
+    result = await engine.propose_scene(session_id="s1", group_name="Movie Night", devices=[])
+    assert result["status"] == "proposed"
+    assert engine._plan_sessions["s1"]["staged_ops"][0]["op"] == "scene"
 
 
 @pytest.mark.asyncio
 async def test_revise_plan_replaces_params():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Counter")
-
-    result = await engine.run_plan_step(
-        None, "revise_plan", session_id="s1", id=1, params={"type": 1, "name": "Renamed"}
-    )
-
-    assert result["result"]["params"]["name"] == "Renamed"
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="Counter")
+    result = await engine.revise_plan(session_id="s1", id=1, params={"type": 1, "name": "Renamed"})
+    assert result["params"]["name"] == "Renamed"
 
 
 @pytest.mark.asyncio
 async def test_revise_plan_removes_an_item():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Counter")
-
-    result = await engine.run_plan_step(None, "revise_plan", session_id="s1", id=1, remove=True)
-
-    assert result["result"]["status"] == "removed"
-    assert engine._plan_state["staged_ops"] == []
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="Counter")
+    result = await engine.revise_plan(session_id="s1", id=1, remove=True)
+    assert result["status"] == "removed"
+    assert engine._plan_sessions["s1"]["staged_ops"] == []
 
 
 @pytest.mark.asyncio
-async def test_revise_plan_errors_on_unknown_id():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(None, "revise_plan", session_id="s1", id=999)
-
-    assert "error" in result["result"]
+async def test_discard_plan_removes_the_whole_bucket():
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="Counter")
+    result = await engine.discard_plan(session_id="s1")
+    assert result == {"status": "discarded"}
+    assert "s1" not in engine._plan_sessions
 
 
 # ---------------------------------------------------------------------------
@@ -246,16 +165,15 @@ async def test_apply_plan_reports_itemized_success_and_failure(monkeypatch):
 
     monkeypatch.setattr(plan_engine_module.variable_ops, "variable_op", fake_variable_op)
 
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Good")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Bad")
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="Good")
+    await engine.propose_variable(session_id="s1", type=1, name="Bad")
 
-    result = await engine.run_plan_step(None, "apply_plan", session_id="s1")
+    result = await engine.apply_plan(None, session_id="s1")
 
-    summary = result["result"]["summary"]
+    summary = result["summary"]
     assert summary == {"total": 2, "successful": 1, "failed": 1}
-    statuses = {e["id"]: e["status"] for e in engine._plan_state["staged_ops"]}
+    statuses = {e["id"]: e["status"] for e in engine._plan_sessions["s1"]["staged_ops"]}
     assert statuses[1] == "applied"
     assert statuses[2] == "failed: hub rejected it"
 
@@ -270,104 +188,70 @@ async def test_apply_plan_skips_already_applied_items_on_a_second_call(monkeypat
 
     monkeypatch.setattr(plan_engine_module.variable_ops, "variable_op", fake_variable_op)
 
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Once")
+    engine = PlanEngine()
+    await engine.propose_variable(session_id="s1", type=1, name="Once")
 
-    await engine.run_plan_step(None, "apply_plan", session_id="s1")
-    await engine.run_plan_step(None, "apply_plan", session_id="s1")
+    await engine.apply_plan(None, session_id="s1")
+    await engine.apply_plan(None, session_id="s1")
 
-    assert calls == ["Once"]  # not re-applied the second time
-
-
-@pytest.mark.asyncio
-async def test_apply_plan_dispatches_scene_and_automation_ops_too(monkeypatch):
-    scene_calls = []
-    automation_calls = []
-
-    async def fake_multi_device_scene(nucore_interface, args):
-        scene_calls.append(args)
-        return {"group_address": "g1", "group_name": "Test", "summary": {}, "results": []}
-
-    async def fake_create_or_update_routine(nucore_interface, args):
-        automation_calls.append(args)
-        return {"name": args["name"], "id": "r1", "status": "saved"}
-
-    monkeypatch.setattr(plan_engine_module.group_scene_ops, "multi_device_scene", fake_multi_device_scene)
-    monkeypatch.setattr(plan_engine_module.routine_automation, "create_or_update_routine", fake_create_or_update_routine)
-
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_scene", session_id="s1", group_name="Test", devices=[])
-    await engine.run_plan_step(None, "propose_automation", session_id="s1", name="Sunset Lights", code="pass")
-
-    result = await engine.run_plan_step(None, "apply_plan", session_id="s1")
-
-    assert result["result"]["summary"] == {"total": 2, "successful": 2, "failed": 0}
-    assert len(scene_calls) == 1 and len(automation_calls) == 1
+    assert calls == ["Once"]
 
 
 # ---------------------------------------------------------------------------
-# pair_device -- protocol gating
+# pair_device -- protocol gating and the shared PLM lock
 # ---------------------------------------------------------------------------
+
+
+class _FakeNucore:
+    def __init__(self, busy_error=None):
+        self.pairing_calls = []
+        self.plm_calls = []
+        self.busy_error = busy_error
+
+    async def begin_plm_op(self, step):
+        self.plm_calls.append(f"begin:{step}")
+        return self.busy_error
+
+    async def end_plm_op(self):
+        self.plm_calls.append("end")
+
+    async def add_device(self, device_address):
+        self.pairing_calls.append(device_address)
+        return "added"
 
 
 @pytest.mark.asyncio
 async def test_pair_device_rejects_non_insteon_protocols():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(None, "pair_device", session_id="s1", protocol="zwave")
-
-    assert "not yet supported" in result["result"]
+    engine = PlanEngine()
+    result = await engine.pair_device(_FakeNucore(), protocol="zwave")
+    assert "not yet supported" in result
 
 
 @pytest.mark.asyncio
 async def test_pair_device_requires_a_device_address():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(None, "pair_device", session_id="s1", protocol="insteon")
-
-    assert "error" in result["result"]
+    engine = PlanEngine()
+    result = await engine.pair_device(_FakeNucore(), protocol="insteon")
+    assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_pair_device_adds_the_device_by_address():
-    class FakeNucore:
-        def __init__(self):
-            self.calls = []
+async def test_pair_device_adds_the_device_by_address_through_the_shared_lock():
+    nucore = _FakeNucore()
+    engine = PlanEngine()
 
-        async def add_device(self, device_address):
-            self.calls.append(device_address)
-            return "added"
+    result = await engine.pair_device(nucore, protocol="insteon", device_address="1A 2B 3C 1")
 
-    nucore = FakeNucore()
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(
-        nucore, "pair_device", session_id="s1", protocol="insteon", device_address="1A 2B 3C 1"
-    )
-
-    assert nucore.calls == ["1A 2B 3C 1"]
-    assert result["result"] == "added"
-
-
-# ---------------------------------------------------------------------------
-# get_running_plan
-# ---------------------------------------------------------------------------
-
-
-def test_get_running_plan_is_none_when_nothing_started():
-    engine = _bare_engine()
-    assert engine.get_running_plan() is None
+    assert nucore.pairing_calls == ["1A 2B 3C 1"]
+    assert result == "added"
+    assert nucore.plm_calls == ["begin:pair_device", "end"]
 
 
 @pytest.mark.asyncio
-async def test_get_running_plan_reports_the_owning_session():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-    running = engine.get_running_plan()
-    assert running["session_id"] == "s1"
-    assert running["status"] == "in_progress"
+async def test_pair_device_refused_when_the_shared_lock_is_busy():
+    nucore = _FakeNucore(busy_error={"error": "a PLM operation is already in progress"})
+    engine = PlanEngine()
+
+    result = await engine.pair_device(nucore, protocol="insteon", device_address="1A 2B 3C 1")
+
+    assert result == nucore.busy_error
+    assert nucore.pairing_calls == []

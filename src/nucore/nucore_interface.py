@@ -617,68 +617,77 @@ class NuCoreInterface(ABC):
     # Diagnostics
     # ------------------------------------------------------------------
 
-    @abstractmethod
-    async def start_diagnostics(self, *, session_id: str | None = None, **kwargs):
-        """
-        Open (or re-show) the one diagnostic session -- there's a single
-        diagnostics flow, not a menu of named plans. The response carries an
-        "instruction" (loaded from a prompt) plus the shared catalog of steps
-        the model can call via run_diagnostic_step, guided by that
-        instruction and by what the customer actually described, instead of
-        the backend pre-mapping every complaint to a canned plan.
-
-        Only one session may be open at a time, system-wide, and it's owned
-        by whichever session_id started it -- calling this again with the
-        SAME session_id while it's in progress just re-shows the
-        instruction/steps; a DIFFERENT session_id is refused (a real
-        hub-level diagnostic shouldn't be interruptible/restartable by an
-        unrelated conversation).
-
-        :param session_id: Identifies which conversation is starting/driving
-                       this session. unified.dispatch.execute_tool enforces
-                       the actual ownership gate (blocking every other tool
-                       for every OTHER session while one is active); backends
-                       should still track and check it themselves too.
-        :param kwargs: Optional candidate_devices/candidate_routines -- fuzzy
-                       devices/scenes/routines the caller identified as
-                       relevant, echoed back in every response for the
-                       session.
-        :return: {"status": "in_progress", "instruction", "available_tools", "candidates"?}
-                 or {"error": ...} if a different session already owns the active one.
-        """
-        raise NotImplementedError("Subclasses must implement the start_diagnostics method.")
+    # Seven standalone diagnostic tools -- no session wrapper, no
+    # session_id: each is an ordinary, always-available tool, the same shape
+    # as everything else on this interface. get_dev_links_table/
+    # compare_device_links/get_all_plm_links/quick_plm_sanity_check drive
+    # the single PLM serial connection directly and cannot run concurrently
+    # with each other or with a second call to themselves -- implementations
+    # enforce that with an immediate refusal (no locking/waiting), not
+    # anything callers need to coordinate. get_full_system_config/
+    # get_device_family/get_iox_links_table touch no PLM hardware directly
+    # and run freely, any time.
 
     @abstractmethod
-    async def run_diagnostic_step(self, step: str, *, session_id: str | None = None, **params):
-        """
-        Run one step of the diagnostic session currently in progress (see
-        start_diagnostics) -- the model picks which step to call, guided by
-        the standing instruction.
-        :param step: One of the step names from start_diagnostics' "available_tools".
-        :param session_id: Must match the session that started the current
-                       session -- see start_diagnostics.
-        :param params: Forwarded to the step's underlying function.
-        :return: {"step", "result"} on success, or {"error": ...}. The
-                 dedicated "conclude"/"stop" steps end the session instead,
-                 returning {"status": "completed", "summary"?} or
-                 {"status": "stopped", "result"}.
-        """
-        raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
+    async def diagnostics_get_full_system_config(self, **kwargs) -> Any:
+        """Full system configuration: subsystem states, PLM info, versions,
+        available upgrades. No params."""
+        raise NotImplementedError("Subclasses must implement diagnostics_get_full_system_config.")
 
     @abstractmethod
-    def get_running_diagnostic(self) -> dict[str, Any] | None:
-        """
-        Return info about the diagnostic session currently in flight, if
-        any -- used to gate every other tool call while one is running (see
-        unified.dispatch.execute_tool): one diagnostic system-wide, but
-        scoped by session_id so only the owning conversation's calls to
-        start_diagnostics/run_diagnostic_step get through -- every other
-        session's calls, of any tool, are refused. Counts as "in flight" for
-        its whole multi-step duration, not just its initial call.
-        :return: {"status": "in_progress", "elapsed_s": <int>, "session_id": <str|None>}
-                 or None if nothing is running (including a stale/timed-out one).
-        """
-        raise NotImplementedError("Subclasses must implement the get_running_diagnostic method.")
+    async def diagnostics_get_device_family(self, device_id: str, **kwargs) -> Any:
+        """Which subsystem a device belongs to: insteon, z-wave, zigbee,
+        matter, plugin, or unknown."""
+        raise NotImplementedError("Subclasses must implement diagnostics_get_device_family.")
+
+    @abstractmethod
+    async def diagnostics_get_dev_links_table(self, device_id: str, **kwargs) -> Any:
+        """INSTEON ONLY. The physical device's own live link table. PLM-
+        exclusive -- see module note above."""
+        raise NotImplementedError("Subclasses must implement diagnostics_get_dev_links_table.")
+
+    @abstractmethod
+    async def diagnostics_get_iox_links_table(self, device_id: str, **kwargs) -> Any:
+        """INSTEON ONLY. NuCore's own stored replica of a device's link
+        table (not a live device query) -- free-standing, not PLM-exclusive."""
+        raise NotImplementedError("Subclasses must implement diagnostics_get_iox_links_table.")
+
+    @abstractmethod
+    async def diagnostics_compare_device_links(self, device_id: str, **kwargs) -> Any:
+        """INSTEON ONLY. Fetches a device's live and NuCore-replica link
+        tables and reports matches/mismatches/anomalies. PLM-exclusive."""
+        raise NotImplementedError("Subclasses must implement diagnostics_compare_device_links.")
+
+    @abstractmethod
+    async def diagnostics_get_all_plm_links(self, refresh_plm_links: bool = False, **kwargs) -> Any:
+        """INSTEON ONLY. All links in the PLM. PLM-exclusive."""
+        raise NotImplementedError("Subclasses must implement diagnostics_get_all_plm_links.")
+
+    @abstractmethod
+    async def diagnostics_quick_plm_sanity_check(self, **kwargs) -> Any:
+        """INSTEON ONLY. Fast system-wide check for 'none of my devices
+        report status back to the PLM': INSTEON enabled, PLM connected, and
+        the PLM's actual link record count vs. an expected count. Does not
+        include core/plugin service status (see run_shell_command for that
+        separately). PLM-exclusive."""
+        raise NotImplementedError("Subclasses must implement diagnostics_quick_plm_sanity_check.")
+
+    @abstractmethod
+    async def begin_plm_op(self, step: str) -> Any:
+        """Claim the shared PLM lock for *step*, or return an error dict if
+        another PLM-exclusive operation is already in flight -- the same
+        lock the four diagnostics_* PLM tools above use (see
+        IoXDiagnostics._begin_plm_op), shared here so Plan's pair_device
+        can't collide with them on the one real PLM connection. Returns
+        None on success; the caller must call end_plm_op() when done,
+        including on error, or the lock is never released."""
+        raise NotImplementedError("Subclasses must implement begin_plm_op.")
+
+    @abstractmethod
+    async def end_plm_op(self) -> Any:
+        """Release the lock claimed by begin_plm_op. Always call this in a
+        finally block."""
+        raise NotImplementedError("Subclasses must implement end_plm_op.")
 
     # ------------------------------------------------------------------
     # Device pairing (used by the Plan feature's "new_installation" flow).

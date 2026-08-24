@@ -9,13 +9,9 @@ surface every backend needs.
 
 from __future__ import annotations
 
-import asyncio
-import json
-import re
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
-import xml.etree.ElementTree as ET
 import time
+from typing import TYPE_CHECKING, Any
+import xml.etree.ElementTree as ET
 from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name
 from .diag_utils import _element_to_dict_excluding
 
@@ -31,64 +27,51 @@ from utils import get_logger
 logger = get_logger(__name__)
 
 
-
-# One diagnostics flow, not a menu of named plans: start_diagnostics opens a
-# session and hands the model an instruction plus a catalog of steps it can
-# call via run_diagnostic_step, guided by that instruction and by what the
-# customer actually described -- the same way Bash is one general tool
-# steered by prompt convention, not a different tool per task -- instead of
-# the backend pre-mapping every complaint to a canned plan name.
+# Each diagnostic operation is its own standalone tool now (no
+# start_diagnostics/run_diagnostic_step session wrapper, no json-block step
+# registry parsed out of a prompt file -- the model-facing description for
+# each lives directly on its own tool_*.json, the same as every other tool
+# in the system). The guidance prose that used to be delivered as
+# start_diagnostics' "instruction" response now lives in
+# src/unified/prompt/diagnostics.md, loaded into every system prompt
+# unconditionally via prompt_builder.py -- this module has no dependency on
+# that file at all.
 #
-# The step catalog (name -> {"function", "description"}) lives entirely in
-# prompts/diagnose.md as a fenced ```json block -- NOT duplicated as a second,
-# hand-maintained registry here. IoXDiagnostics.__init__ parses that block and
-# validates every declared "function" resolves to a real callable method,
-# failing loudly at construction time if the prompt and the code have drifted
-# apart (malformed JSON, or a function name that no longer exists) -- the
-# prompt file is the single source of truth; this class only validates and
-# dispatches against it.
-#
-# Lives under unified/diagnostics rather than alongside this file -- mirrors
-# where the Plan feature's prompts live (unified/planning/prompts), keeping
-# every feature's prompt content under unified/ regardless of which backend
-# implements its steps.
-_PROMPTS_DIR = Path(__file__).parent.parent.parent / "unified" / "diagnostics" / "prompts"
-_JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
-
-# The only two steps with no backend function -- ended/aborted by the
-# dispatch logic in run_diagnostic_step itself (by literal name, before any
-# function lookup happens), not by calling a method. Every other step name
-# IS its backend method name minus the leading underscore, always -- no
-# per-step override, so there's exactly one place a step's name is decided.
-_TERMINAL_STEPS = frozenset({"conclude", "stop"})
-
+# get_dev_links_table/compare_device_links/get_all_plm_links/
+# quick_plm_sanity_check all drive the single PLM serial connection directly
+# and cannot run concurrently with each other or with a second call to
+# themselves -- see _begin_plm_op/_end_plm_op below. get_full_system_config/
+# get_device_family/get_iox_links_table touch no PLM hardware directly
+# (get_iox_links_table reads NuCore's own stored database replica, not the
+# live device) and run freely, any time, including while one of the four is
+# in flight.
 
 
 class IoXDiagnostics:
     """Wrapper around an :class:`IoXWrapper` instance providing
-    ``DeviceSpecific`` SOAP diagnostic operations, plus the diagnostics
-    session/dispatch logic backing ``NuCoreInterface``'s
-    ``start_diagnostics``/``run_diagnostic_step``/``get_running_diagnostic``
-    (``IoXWrapper`` just delegates to this class for those).
+    ``DeviceSpecific`` SOAP diagnostic operations, plus the seven standalone
+    diagnostic methods ``NuCoreInterface`` exposes as tools (``IoXWrapper``
+    just delegates to this class for those).
     """
 
-    # How long a diagnostic session can stay open (without conclude/stop)
-    # before a stale lock is cleared automatically and a new one is allowed.
-    _DIAGNOSTICS_TIMEOUT_S = 300  # 5 minutes
+    # Backstop against a wedged PLM operation that never reaches `finally`
+    # (see _begin_plm_op) -- not an expected duration for a normal SOAP/
+    # serial round-trip, just a ceiling past which a stuck lock is cleared
+    # rather than left stuck forever.
+    _PLM_OP_TIMEOUT_S = 300  # 5 minutes
 
     def __init__(self, iox_wrapper: IoXWrapper) -> None:
         self._iox_wrapper = iox_wrapper
-        # Tracks the one in-flight diagnostic session (see start_diagnostics)
-        # -- {"started_at", "status", "candidates"} or None.
-        self._diagnostics_state: dict[str, Any] | None = None
-        # Parses and validates prompts/diagnose.md once -- fails loudly here,
-        # at construction, rather than serving a broken diagnostics feature
-        # if the prompt and this class's methods have drifted apart.
-        self._diagnostic_instruction, self._diagnostic_steps = self._load_diagnostic_config()
+        # Tracks whichever of the four PLM-exclusive operations is currently
+        # in flight, if any -- {"step", "started_at"} or None. Not owned by
+        # any session/conversation: it's a hardware-availability fact, so
+        # any caller is refused while any one of the four is running,
+        # regardless of who's asking. See _begin_plm_op/_end_plm_op.
+        self._plm_op_state: dict[str, Any] | None = None
         self._subsystem_state: dict[str, Any] | None = {
             Subsystems.INSTEON.value: {
                 "name": "Insteon",
-                "enabled": False, 
+                "enabled": False,
                 "connected": False,
                 "PLM info": None,
             },
@@ -115,234 +98,32 @@ class IoXDiagnostics:
         }
         self._insteon_diag = None
 
-    @staticmethod
-    def _candidates_payload(
-        candidate_devices: list[dict[str, Any]] | None,
-        candidate_routines: list[dict[str, Any]] | None,
-    ) -> dict[str, Any] | None:
-        """Bundle the caller-supplied candidate devices/routines into a
-        single ``candidates`` payload, or ``None`` when neither was given --
-        so a diagnostic with no fuzzy device/scene reference (the common
-        case) doesn't carry a noisy empty key through every response."""
-        if not candidate_devices and not candidate_routines:
-            return None
-        return {"devices": candidate_devices or [], "routines": candidate_routines or []}
-
-    def _load_diagnostic_config(self) -> tuple[str, dict[str, dict[str, Any]]]:
-        """Read prompts/diagnose.md and parse/validate it -- see
-        _parse_diagnostic_config."""
-        text = (_PROMPTS_DIR / "diagnose.md").read_text(encoding="utf-8").strip()
-        return self._parse_diagnostic_config(text)
-
-    def _parse_diagnostic_config(self, text: str) -> tuple[str, dict[str, dict[str, Any]]]:
-        """Parse *text* (diagnose.md's content) and return
-        ``(full_text, step_registry)`` -- the full text (prose + the fenced
-        ```json block) is shown to the model verbatim as the "instruction";
-        the ```json block is additionally parsed out and validated here so
-        the file stays the single source of truth for both the model-facing
-        description of each step and the name -> backend-function it
-        dispatches to.
-
-        Raises ``RuntimeError`` if the ```json block is missing/malformed, or
-        if any non-terminal step name doesn't resolve to a real callable
-        ``_<step_name>`` method on this class -- either means the prompt and
-        the code have drifted apart, and that should fail loudly rather than
-        silently misbehave.
-        """
-        match = _JSON_BLOCK_RE.search(text)
-        if not match:
-            raise RuntimeError("diagnose.md is missing its ```json steps block")
-
-        try:
-            steps = json.loads(match.group(1))
-        except json.JSONDecodeError as ex:
-            raise RuntimeError(f"diagnose.md's ```json steps block is malformed: {ex}") from ex
-
-        for name in steps:
-            if name in _TERMINAL_STEPS:
-                continue
-            function_name = f"_{name}"
-            if not callable(getattr(self, function_name, None)):
-                raise RuntimeError(
-                    f"diagnose.md declares step '{name}', but IoXDiagnostics has no method '{function_name}'"
-                )
-
-        return text, steps
-
-    async def start_diagnostics(
-        self,
-        *,
-        session_id: str | None = None,
-        candidate_devices: list[dict[str, Any]] | None = None,
-        candidate_routines: list[dict[str, Any]] | None = None,
-    ) -> Any:
-        """
-        Open (or re-show) the one diagnostic session -- there's a single
-        diagnostics flow, not a menu of named plans. The model reads the
-        returned instruction, calls whichever steps (see run_diagnostic_step)
-        are relevant to whatever the customer actually described, in whatever
-        order makes sense, and ends the session with the "conclude" step (or
-        "stop" to abandon early without a diagnosis).
-
-        Only one session may be open at a time, and it's owned by whichever
-        *session_id* started it -- calling this again with the SAME
-        session_id while it's in progress just re-shows the instruction/steps
-        rather than starting a new one; calling it with a DIFFERENT session_id
-        is refused, since a diagnostic is a real hub-level operation another
-        conversation shouldn't be able to interrupt or restart. A session left
-        open longer than _DIAGNOSTICS_TIMEOUT_S is treated as abandoned and
-        cleared automatically, allowing a fresh one (from any session) to start.
-
-        :param session_id: Identifies which conversation is starting/driving
-                       this session -- unified.dispatch.execute_tool's
-                       diagnostics-lock gate is the primary place this is
-                       enforced; checked again here for defense-in-depth
-                       against any caller that bypasses that gate.
-        :param candidate_devices: Optional devices/groups/scenes the caller
-                       identified as relevant (e.g. a fuzzy "master bathroom"
-                       reference) -- recorded on the session and echoed back
-                       in every response for it.
-        :param candidate_routines: Same idea as candidate_devices, but for
-                       routines/folders.
-        :return: {"status": "in_progress", "instruction", "available_tools", "candidates"?}
-                 or {"error": ...} if a different session already owns the
-                 active one.
-        """
-        state = self._diagnostics_state
+    def _begin_plm_op(self, step: str) -> dict[str, Any] | None:
+        """Call at the top of each of the four PLM-exclusive methods.
+        Returns an error dict if another one is already in progress and not
+        yet stale; otherwise marks *step* as the current op and returns
+        None. No locking/waiting -- a second caller is refused immediately,
+        never blocked or queued."""
+        state = self._plm_op_state
         if state is not None:
             elapsed = time.monotonic() - state["started_at"]
-            if elapsed < self._DIAGNOSTICS_TIMEOUT_S:
-                if state.get("session_id") != session_id:
-                    return {
-                        "error": (
-                            f"a diagnostic session is already in progress "
-                            f"(started {int(elapsed)}s ago, times out after {self._DIAGNOSTICS_TIMEOUT_S}s) "
-                            "for a different conversation -- wait for it to finish or time out"
-                        )
-                    }
-                candidates = state.get("candidates")
-                response = {
-                    "status": "in_progress",
-                    "instruction": self._diagnostic_instruction,
-                    "available_tools": list(self._diagnostic_steps.keys()),
-                    "elapsed_s": int(elapsed),
+            if elapsed < self._PLM_OP_TIMEOUT_S:
+                return {
+                    "error": (
+                        f"a PLM operation ('{state['step']}') is already in progress "
+                        f"(started {int(elapsed)}s ago) -- try again shortly"
+                    )
                 }
-                if candidates:
-                    response["candidates"] = candidates
-                return response
-            logger.warning(f"diagnostic session exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing stale lock")
-            self._diagnostics_state = None
+            logger.warning(f"PLM op '{state['step']}' exceeded {self._PLM_OP_TIMEOUT_S}s; clearing stale lock")
+        self._plm_op_state = {"step": step, "started_at": time.monotonic()}
+        return None
 
-        candidates = self._candidates_payload(candidate_devices, candidate_routines)
-        self._diagnostics_state = {
-            "started_at": time.monotonic(),
-            "status": "in_progress",
-            "candidates": candidates,
-            "session_id": session_id,
-        }
-        response = {
-            "status": "in_progress",
-            "instruction": self._diagnostic_instruction,
-            "available_tools": list(self._diagnostic_steps.keys()),
-        }
-        if candidates:
-            response["candidates"] = candidates
-        return response
-
-    def _run_diagnostic_step_sync(self, function, params: dict[str, Any]) -> Any:
-        """Runs one step's backend call synchronously. This class's methods
-        are ``async def`` in name only -- the SOAP/HTTP calls underneath are
-        blocking ``requests`` calls, nothing is actually awaited -- so this is
-        safe to invoke via asyncio.to_thread in run_diagnostic_step to keep a
-        slow step (e.g. get_full_system_config's several sequential HTTP
-        calls) off the real event loop."""
-        return asyncio.run(function(**params))
-
-    async def run_diagnostic_step(self, step: str, *, session_id: str | None = None, **params) -> Any:
-        """
-        Run one step of the diagnostic session currently in progress (see
-        start_diagnostics) -- the model picks which step to call and with
-        what params, guided by the standing instruction, instead of the
-        backend pre-scripting a fixed sequence.
-
-        :param step: One of the step names declared in prompts/diagnose.md
-                     (also returned as start_diagnostics' "available_tools").
-        :param session_id: Must match the session that started the current
-                       session (see start_diagnostics) -- checked here for
-                       defense-in-depth on top of
-                       unified.dispatch.execute_tool's own gate.
-        :param params: Forwarded verbatim to the step's underlying function.
-        :return: {"step", "result"} on success, or {"error": ...}. The
-                 dedicated "conclude"/"stop" steps instead end the session,
-                 returning {"status": "completed", "summary"?} or
-                 {"status": "stopped", "result"}.
-        """
-        state = self._diagnostics_state
-        if state is None or state["status"] != "in_progress":
-            return {"error": "no diagnostic session is in progress -- call start_diagnostics first"}
-
-        elapsed = time.monotonic() - state["started_at"]
-        if elapsed >= self._DIAGNOSTICS_TIMEOUT_S:
-            logger.warning(f"diagnostic session exceeded {self._DIAGNOSTICS_TIMEOUT_S}s; clearing")
-            self._diagnostics_state = None
-            return {"status": "timed_out"}
-
-        if state.get("session_id") != session_id:
-            return {"error": "this diagnostic session belongs to a different conversation"}
-
-        if step not in self._diagnostic_steps:
-            return {"error": f"'{step}' is not a known diagnostic step; see start_diagnostics' available_tools"}
-
-        if step == "conclude":
-            self._diagnostics_state = None
-            return {"status": "completed", "summary": params.get("summary")}
-
-        if step == "stop":
-            self._diagnostics_state = None
-            result = await asyncio.to_thread(self._run_diagnostic_step_sync, self.stop_long_running_diagnostic, {})
-            return {"status": "stopped", "result": result}
-
-        function = getattr(self, f"_{step}", None)
-        if function is None or not callable(function):
-            return {"error": f"diagnostic step '{step}' is not yet implemented"}
-
-        try:
-            result = await asyncio.to_thread(self._run_diagnostic_step_sync, function, params)
-        except NotImplementedError as ex:
-            return {"error": str(ex)}
-        except Exception as ex:
-            logger.error(f"diagnostic step '{step}' failed: {ex}")
-            return {"error": f"diagnostic step '{step}' failed: {ex}"}
-
-        return {"step": step, "result": result}
-
-    def get_running_diagnostic(self) -> dict[str, Any] | None:
-        """
-        Return info about the diagnostic session currently in flight, if
-        any -- used by unified.dispatch.execute_tool to block every other
-        tool call for the whole multi-step session, not just its initial
-        call, and to check whether a given tool call's session_id matches
-        the one that owns it (the "session_id" key here). A stale
-        (past-timeout) session is reported as None -- start_diagnostics/
-        run_diagnostic_step clear it on the next real call, this getter just
-        doesn't advertise it as active in the meantime.
-        """
-        state = self._diagnostics_state
-        if state is None:
-            return None
-        elapsed = time.monotonic() - state["started_at"]
-        if elapsed >= self._DIAGNOSTICS_TIMEOUT_S:
-            return None
-        response = {"status": "in_progress", "elapsed_s": int(elapsed), "session_id": state.get("session_id")}
-        candidates = state.get("candidates")
-        if candidates:
-            response["candidates"] = candidates
-        return response
-
+    def _end_plm_op(self) -> None:
+        self._plm_op_state = None
 
     async def _get_system_options(self) -> dict[str, Any]:
         """Fetch and parse GetSystemOptions once -- shared by
-        _get_full_system_config (all 5 subsystems' "enabled" flags) and
+        get_full_system_config (all 5 subsystems' "enabled" flags) and
         quick_plm_sanity_check's INSTEON-enabled check, so the fetch/parse
         logic lives in exactly one place instead of being duplicated."""
         options = await self._iox_wrapper._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
@@ -358,7 +139,7 @@ class IoXDiagnostics:
             return {}
 
     # get system configuration
-    async def _get_full_system_config(self, **kwargs) -> dict[str, str] | None:
+    async def get_full_system_config(self, **kwargs) -> dict[str, str] | None:
         full_config = {}
         usb_lines = []
         re0_lines = []
@@ -367,7 +148,7 @@ class IoXDiagnostics:
 
         # now get web configuration
         web_config = self._iox_wrapper.get("/WEB/sysconfig.txt")
-        if web_config is None or web_config.status_code != 200: 
+        if web_config is None or web_config.status_code != 200:
             logger.error(f"Failed to get web configuration: {web_config.status_code if web_config else 'No response'}")
         else:
             web_config_lines = web_config.text.splitlines()
@@ -389,7 +170,7 @@ class IoXDiagnostics:
                     in_usb_section = True
                     continue
 
-                if in_nic_section and (line.strip().startswith("lo0:")): 
+                if in_nic_section and (line.strip().startswith("lo0:")):
                     in_re0_section = False
                     continue
 
@@ -432,13 +213,13 @@ class IoXDiagnostics:
         else:
             try:
                 payload = memory_usage.json().get("data", {})
-                full_config["memory"] = payload.get("memory", {}) 
-                full_config["storage"] = payload.get("storage", {}) 
+                full_config["memory"] = payload.get("memory", {})
+                full_config["storage"] = payload.get("storage", {})
             except Exception as e:
                 logger.error(f"Failed to parse system about JSON: {e}")
 
 
-        # the system description from /desc and parse it into a dict 
+        # the system description from /desc and parse it into a dict
         desc = self._iox_wrapper.get("/desc")
         if desc is None or desc.status_code != 200:
             logger.error(f"Failed to get system description: {desc.status_code if desc else 'No response'}")
@@ -453,7 +234,7 @@ class IoXDiagnostics:
                     full_config["Current OS Version"] = system_opt.get("currOSVersion", "")
                     full_config["Upgrade-to OS Version"] = system_opt.get("upgradeOSVersion", "")
                     full_config["Friendly Name"] = system_opt.get("friendlyName", "")
-                    full_config["MAC Address"] = system_opt.get("UDN", "").replace("uuid:", "") 
+                    full_config["MAC Address"] = system_opt.get("UDN", "").replace("uuid:", "")
                     #full_config["Model Name"] = system_opt.get("modelName", "")
                     #full_config["Model Number"] = system_opt.get("modelNumber", "")
                     full_config["Network Interface IP"] = system_opt.get("interfaceIP", "")
@@ -463,7 +244,7 @@ class IoXDiagnostics:
                         full_config["USB Devices"] = usb_lines
 
                     iot_provisioned = system_opt.get("iotProvisioned", "")
-                
+
             except ET.ParseError as e:
                 logger.error(f"Failed to parse system options XML: {e}")
 
@@ -514,7 +295,7 @@ class IoXDiagnostics:
             if self._init_insteon_diag(None):
                 connected, plm_info = await self._insteon_diag._get_plm_info()
 
-            if connected is None: 
+            if connected is None:
                 logger.error(plm_info)
             else:
                 self._subsystem_state[Subsystems.INSTEON.value]["PLM info"] = plm_info
@@ -523,11 +304,11 @@ class IoXDiagnostics:
         subsystems = {}
         for subsystem in self._subsystem_state.values():
             # Copy before popping "name" -- self._subsystem_state lives for
-            # this instance's whole lifetime (reused across every diagnostic
-            # session, not just this call), so mutating the stored dict
-            # directly destroyed "name" permanently after the first call
-            # ever made, collapsing every subsystem into one bogus "Unknown"
-            # entry on every call after that.
+            # this instance's whole lifetime (reused across every call, not
+            # just this one), so mutating the stored dict directly destroyed
+            # "name" permanently after the first call ever made, collapsing
+            # every subsystem into one bogus "Unknown" entry on every call
+            # after that.
             entry = dict(subsystem)
             name = entry.pop("name", "Unknown")
             subsystems[name] = entry
@@ -538,7 +319,7 @@ class IoXDiagnostics:
         logger.info(f"Full system configuration retrieved: {json.dumps(full_config, indent=2)}")
         return full_config
 
-    async def _get_device_family(self, device_id: str = None, **kwargs) -> str | None:
+    async def get_device_family(self, device_id: str = None, **kwargs) -> str | None:
         family_id, family_name = self._iox_wrapper._get_node_family(device_id)
         if not family_id:
             return "Unknown family"
@@ -562,7 +343,7 @@ class IoXDiagnostics:
         if action == None or control == None:
             logger.error(f"Missing action or control: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
             return
-        
+
         #control is the subsystem that generated the event, e.g. "Insteon", "Zigbee", "Z-Wave", etc.
         #action is of the form of a.b ... where a is the subsystem property and b is the status for that property
         if not control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
@@ -597,59 +378,6 @@ class IoXDiagnostics:
         if self._init_insteon_diag(node):
             await self._insteon_diag.on_node_device_event(node, control, action, eventInfo)
 
-    async def _get_core_services_status(self) -> dict[str, Any]:
-        """
-        Get the status of core services  (isy, udx, ...)
-        :return: Dictionary with the status of each core service
-        """
-        try:
-            # /rest/udx.sys.ops/services.ops/services_status
-            response = self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/services_status", "e=mc2")            
-            if response is None or response.status_code != 200:
-                logger.error(f"Failed to get core services status: {response.status_code if response else 'No response'}")
-                return {"error": f"Failed to get core services status: {response.status_code if response else 'No response'}"}
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get core services status: {e}")
-            return {"error": f"Failed to get core services status: {e}"}
-
-    async def _get_plugin_services_status(self) -> dict[str, Any]:
-        """
-        Get the status of core services  (isy, udx, ...)
-        :return: Dictionary with the status of each core service
-        """
-        try:
-            # /rest/udx.sys.ops/services.ops/plugin_services_status
-            response = self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/plugin_services_status", "e=mc2")            
-            if response is None or response.status_code != 200:
-                logger.error(f"Failed to get plugin services status: {response.status_code if response else 'No response'}")
-                return {"error": f"Failed to get plugin services status: {response.status_code if response else 'No response'}"}
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get plugin services status: {e}")
-            return {"error": f"Failed to get plugin services status: {e}"}
-
-    async def _services_ops(self, service:str, op: Literal["start", "stop", "restart"]) -> dict[str, Any]: 
-        """
-        An operation on a core or plugin service (start, stop, restart)
-        :param service_name: The name of the service to operate on
-        :param op: The operation to perform (start, stop, restart)
-        :return: Dictionary with the status of each core service or failure
-        """
-        try:
-            # /rest/udx.sys.ops/services.ops/$op
-            response = self._iox_wrapper.post(f"/api/udx/rest/udx.sys.ops/services.ops/{op}_service/{service}", "e=mc2")            
-            if response is None or response.status_code != 200:
-                logger.error(f"Failed to {op} service {service}: {response.status_code if response else 'No response'}")
-                return {"error": f"Failed to {op} service {service}: {response.status_code if response else 'No response'}"}
-            try:
-                return response.json()
-            except Exception as e:
-                return f"{service} {op} successful"
-        except Exception as e:
-            logger.error(f"Failed to {op} service {service}: {e}")
-            return {"error": f"Failed to {op} service {service}: {e}"}
-
     # ---------------------------------------------------
     # INSTEON DIAGNOSTICS
     # ---------------------------------------------------
@@ -664,57 +392,74 @@ class IoXDiagnostics:
             self._insteon_diag = INSTEONDiagnostics(self._iox_wrapper)
 
         return True
-        
-    async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
-        if self._init_insteon_diag(device_id):
-            return await self._insteon_diag._get_dev_links_table(device_id, **kwargs)
-        return None
 
-    async def _get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
+    async def get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        busy = self._begin_plm_op("get_dev_links_table")
+        if busy is not None:
+            return busy
+        try:
+            if self._init_insteon_diag(device_id):
+                return await self._insteon_diag._get_dev_links_table(device_id, **kwargs)
+            return None
+        finally:
+            self._end_plm_op()
+
+    async def get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
         if self._init_insteon_diag(device_id):
             return await self._insteon_diag._get_iox_links_table(device_id, **kwargs)
         return None
 
-    async def _get_all_plm_links(self, **kwargs) -> str | None:
-        if self._init_insteon_diag(None):
-            return await self._insteon_diag._get_all_plm_links(**kwargs)
-        return None
-
-    async def _compare_device_links(self, device_id: str = None, **kwargs) -> str | None:
-        if self._init_insteon_diag(device_id):
-            return await self._insteon_diag._compare_device_links(device_id, **kwargs)
-        return None
-
-    async def _quick_plm_sanity_check(self, **kwargs) -> str | None:
-        """System-level checks (INSTEON enabled, core services) plus
-        INSTEONDiagnostics's own PLM-connected/link-count check, merged into
-        one report -- so the model never needs to separately call
-        get_full_system_config/get_core_services_status for this scenario.
-        """
-        if not self._init_insteon_diag(None):
-            return None
-
-        options_config = await self._get_system_options()
-        insteon_enabled = bool(options_config.get("INSTEONSupport", False))
-
+    async def get_all_plm_links(self, **kwargs) -> str | None:
+        busy = self._begin_plm_op("get_all_plm_links")
+        if busy is not None:
+            return busy
         try:
-            services_status: Any = self._get_core_services_status()
-        except NotImplementedError as ex:
-            services_status = f"not available yet ({ex})"
+            if self._init_insteon_diag(None):
+                return await self._insteon_diag._get_all_plm_links(**kwargs)
+            return None
+        finally:
+            self._end_plm_op()
 
-        lines = [
-            f"INSTEON enabled: {insteon_enabled}",
-            f"Core services status: {services_status}",
-        ]
-        if not insteon_enabled:
-            lines.append(
-                "INSTEON is not enabled in system config -- that alone explains no status "
-                "feedback from any Insteon device; nothing else to check until it's enabled."
-            )
-            return "\n".join(lines)
+    async def compare_device_links(self, device_id: str = None, **kwargs) -> str | None:
+        busy = self._begin_plm_op("compare_device_links")
+        if busy is not None:
+            return busy
+        try:
+            if self._init_insteon_diag(device_id):
+                return await self._insteon_diag._compare_device_links(device_id, **kwargs)
+            return None
+        finally:
+            self._end_plm_op()
 
-        insteon_report = await self._insteon_diag._quick_plm_sanity_check(**kwargs)
-        return "\n".join(lines) + "\n" + insteon_report
+    async def quick_plm_sanity_check(self, **kwargs) -> Any:
+        """System-level INSTEON-enabled check plus INSTEONDiagnostics's own
+        PLM-connected/link-count check, merged into one report -- so the
+        model never needs to separately call get_full_system_config for
+        this scenario. No longer includes core/plugin services status (that
+        mechanism was removed -- see run_shell_command + the service
+        catalog in the diagnostics prompt for that separately)."""
+        busy = self._begin_plm_op("quick_plm_sanity_check")
+        if busy is not None:
+            return busy
+        try:
+            if not self._init_insteon_diag(None):
+                return None
+
+            options_config = await self._get_system_options()
+            insteon_enabled = bool(options_config.get("INSTEONSupport", False))
+
+            lines = [f"INSTEON enabled: {insteon_enabled}"]
+            if not insteon_enabled:
+                lines.append(
+                    "INSTEON is not enabled in system config -- that alone explains no status "
+                    "feedback from any Insteon device; nothing else to check until it's enabled."
+                )
+                return "\n".join(lines)
+
+            insteon_report = await self._insteon_diag._quick_plm_sanity_check(**kwargs)
+            return "\n".join(lines) + "\n" + insteon_report
+        finally:
+            self._end_plm_op()
 
     async def update_links_table(self, node, control, action, eventInfo):
         if self._insteon_diag is not None:

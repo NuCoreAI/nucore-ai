@@ -1,0 +1,8 @@
+{
+  "name": "get_diagnostics_prompt",
+  "description": "Get the full INSTEON diagnostics prompt: how PLM/device link records work, the system-wide 'no status feedback' workflow, device-vs-IoX link table reasoning, known fixes in order of likelihood, and the core/plugin service catalog for use with run_shell_command. Call this ONCE, first, before any other diagnostic tool, at the start of any conversation that turns out to need diagnostics -- it is deliberately left out of the standing system prompt (unlike device/routine data) since most conversations never need it, so you must fetch it explicitly rather than assuming you already have it. No params. Free-standing -- callable any time, including while a PLM-exclusive diagnostic tool is running.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

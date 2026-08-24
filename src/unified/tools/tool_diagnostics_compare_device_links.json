@@ -1,0 +1,14 @@
+{
+  "name": "compare_device_links",
+  "description": "INSTEON ONLY. Fetches a device's live link table and NuCore's own replica of it, then compares them and returns a plain-text report of matches, mismatches, and anomalies. Use this instead of calling get_dev_links_table/get_iox_links_table separately and comparing them yourself. This drives the PLM's serial hardware directly, so it cannot run at the same time as get_dev_links_table/get_all_plm_links/quick_plm_sanity_check or a second call to itself -- if one of those is already in progress this returns an immediate {\"error\": ...} rather than waiting; just retry shortly. Params: device_id (the device's address).",
+  "input_schema": {
+    "type": "object",
+    "required": ["device_id"],
+    "properties": {
+      "device_id": {
+        "type": "string",
+        "description": "The device's real id/address, exactly as shown in DEVICE DATABASE."
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "create_folder",
+  "description": "Create a new folder to organize devices/groups into, as part of setting up a plan (e.g. a new installation). Immediate -- not staged, takes effect right away, unlike propose_scene/propose_automation/propose_variable.",
+  "input_schema": {
+    "type": "object",
+    "required": ["new_name"],
+    "properties": {
+      "new_name": {
+        "type": "string",
+        "description": "The new folder's name."
+      }
+    }
+  }
+}

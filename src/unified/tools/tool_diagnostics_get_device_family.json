@@ -1,0 +1,14 @@
+{
+  "name": "get_device_family",
+  "description": "Returns which subsystem a device belongs to: insteon, z-wave, zigbee, matter, plugin, or unknown. Call this before any INSTEON-only diagnostic tool (get_dev_links_table, get_iox_links_table, compare_device_links) to confirm the device is actually INSTEON -- those silently return nothing useful for a non-INSTEON device. Free-standing -- callable any time.",
+  "input_schema": {
+    "type": "object",
+    "required": ["device_id"],
+    "properties": {
+      "device_id": {
+        "type": "string",
+        "description": "The device's real id, exactly as shown in DEVICE DATABASE."
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import sys
@@ -1640,30 +1641,48 @@ class IoXWrapper(NuCoreInterface):
             }
 
     # ------------------------------------------------------------------
-    # Diagnostics -- all actual registry/state/dispatch logic lives on
-    # IoXDiagnostics (self.diagnostics); these just satisfy NuCoreInterface.
+    # Diagnostics -- the real logic lives on IoXDiagnostics (self.diagnostics),
+    # whose methods are `async def` in name only (the SOAP/HTTP calls
+    # underneath are blocking `requests` calls) -- _run_diagnostics_sync
+    # offloads each one to a thread with its own event loop so a slow
+    # diagnostic call doesn't block the real one. One shared helper, reused
+    # by all seven delegates below, rather than duplicated per-method.
     # ------------------------------------------------------------------
 
-    async def start_diagnostics(self, **kwargs) -> Any:
-        """
-        Open (or re-show) the diagnostic session -- see
-        IoXDiagnostics.start_diagnostics.
-        """
-        return await self.diagnostics.start_diagnostics(**kwargs)
+    async def _run_diagnostics_sync(self, method, **kwargs) -> Any:
+        return await asyncio.to_thread(lambda: asyncio.run(method(**kwargs)))
 
-    async def run_diagnostic_step(self, step: str, **params) -> Any:
-        """
-        Run one step of the in-progress diagnostic session -- see
-        IoXDiagnostics.run_diagnostic_step.
-        """
-        return await self.diagnostics.run_diagnostic_step(step, **params)
+    async def diagnostics_get_full_system_config(self, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(self.diagnostics.get_full_system_config, **kwargs)
 
-    def get_running_diagnostic(self) -> dict[str, Any] | None:
-        """
-        Return info about the diagnostic currently in flight, if any -- see
-        IoXDiagnostics.get_running_diagnostic.
-        """
-        return self.diagnostics.get_running_diagnostic()
+    async def diagnostics_get_device_family(self, device_id: str, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(self.diagnostics.get_device_family, device_id=device_id, **kwargs)
+
+    async def diagnostics_get_dev_links_table(self, device_id: str, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(self.diagnostics.get_dev_links_table, device_id=device_id, **kwargs)
+
+    async def diagnostics_get_iox_links_table(self, device_id: str, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(self.diagnostics.get_iox_links_table, device_id=device_id, **kwargs)
+
+    async def diagnostics_compare_device_links(self, device_id: str, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(self.diagnostics.compare_device_links, device_id=device_id, **kwargs)
+
+    async def diagnostics_get_all_plm_links(self, refresh_plm_links: bool = False, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(
+            self.diagnostics.get_all_plm_links, refresh_plm_links=refresh_plm_links, **kwargs
+        )
+
+    async def diagnostics_quick_plm_sanity_check(self, **kwargs) -> Any:
+        return await self._run_diagnostics_sync(self.diagnostics.quick_plm_sanity_check, **kwargs)
+
+    async def begin_plm_op(self, step: str) -> Any:
+        # Pure in-memory state check, no I/O -- no need for
+        # _run_diagnostics_sync's thread-offload (that exists only for the
+        # blocking requests-based SOAP calls above).
+        return self.diagnostics._begin_plm_op(step)
+
+    async def end_plm_op(self) -> Any:
+        return self.diagnostics._end_plm_op()
 
     # ------------------------------------------------------------------
     # Device pairing -- previously dead diagnostics-only SOAP calls (never

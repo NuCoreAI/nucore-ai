@@ -20,13 +20,16 @@ class FakeBackend(NuCoreInterface):
     def __init__(self, preferences_dir=None):
         super().__init__(json_output=True, formatter_type="minimal")
         self.preferences_dir = preferences_dir
-        self.running_diagnostic = None
 
-    def get_running_diagnostic(self):
-        return self.running_diagnostic
-
-    async def start_diagnostics(self, **kwargs): raise NotImplementedError
-    async def run_diagnostic_step(self, step, **params): raise NotImplementedError
+    async def diagnostics_get_full_system_config(self, **kwargs): raise NotImplementedError
+    async def diagnostics_get_device_family(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_get_dev_links_table(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_get_iox_links_table(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_compare_device_links(self, device_id, **kwargs): raise NotImplementedError
+    async def diagnostics_get_all_plm_links(self, refresh_plm_links=False, **kwargs): raise NotImplementedError
+    async def diagnostics_quick_plm_sanity_check(self, **kwargs): raise NotImplementedError
+    async def begin_plm_op(self, step): raise NotImplementedError
+    async def end_plm_op(self): raise NotImplementedError
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
     async def finish_device_discovery(self): raise NotImplementedError
@@ -177,15 +180,5 @@ async def test_delete_unknown_id_returns_an_error(tmp_path):
     backend = FakeBackend(preferences_dir=str(tmp_path))
 
     result = await execute_tool("preference_op", {"operation": "delete", "id": "p999"}, nucore_interface=backend)
-
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_preferences_are_blocked_while_a_diagnostic_is_running(tmp_path):
-    backend = FakeBackend(preferences_dir=str(tmp_path))
-    backend.running_diagnostic = {"status": "in_progress", "elapsed_s": 5, "session_id": "s1"}
-
-    result = await execute_tool("list_preferences", {}, nucore_interface=backend, session_id="s1")
 
     assert "error" in result
