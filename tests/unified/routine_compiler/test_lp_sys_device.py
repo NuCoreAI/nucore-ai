@@ -17,7 +17,7 @@ def test_adjust_scene_with_command():
             "rsp": {
                 "type": "cmd",
                 "node": "B",
-                "cmd": {"cmdId": "DFON", "p": [{"type": "val", "id": "n/a", "val": {"value": 50, "prec": 0, "uom": 51}}]},
+                "cmd": {"cmdId": "DFON", "p": [{"type": "val", "id": "", "val": {"value": 50, "prec": 0, "uom": 51}}]},
             },
         }
     ]

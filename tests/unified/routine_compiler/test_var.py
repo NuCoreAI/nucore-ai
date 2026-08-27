@@ -100,6 +100,21 @@ def test_set_var_from_device_status():
     ]
 
 
+def test_set_var_from_device_status_uom_written_as_a_string_still_compiles_to_an_int():
+    # get_device_detail's own editor rendering shows uom as a string -- a
+    # model copying that literally into set_var(..., uom="17") must still
+    # produce a schema-valid int, per trigger-new.json's VarActionStatus.
+    compiled = compile_trigger_source(
+        name="t",
+        trigger_id=None,
+        comment=None,
+        source='set_var(id=3, type=2, op="=", device="A", property="ST", uom="17")',
+    )
+    uom = compiled["then"][0]["status"]["uom"]
+    assert uom == 17
+    assert isinstance(uom, int)
+
+
 def test_set_var_from_sysval():
     compiled = compile_trigger_source(
         name="t", trigger_id=None, comment=None, source='set_var(id=4, type=1, op="=", sysval="CurrentHour")'

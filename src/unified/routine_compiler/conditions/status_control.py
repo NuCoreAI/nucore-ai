@@ -44,13 +44,13 @@ def compile_status_condition(expr: ast.Compare) -> dict[str, Any] | None:
     device_id_node = dkwargs.get("id", dargs[0] if dargs else None)
     if device_id_node is None:
         raise TriggerCompileError("device(...) requires a device/group id string")
-    device_id = literal(device_id_node)
+    device_id = str(literal(device_id_node))
 
     args, kwargs = call_args(left)
     prop_id_node = kwargs.get("property", args[0] if args else None)
     if prop_id_node is None:
         raise TriggerCompileError("device(...).status(property_id, uom=..., precision=...) requires a property id.")
-    prop_id = literal(prop_id_node)
+    prop_id = str(literal(prop_id_node))
 
     if "uom" not in kwargs or "precision" not in kwargs:
         raise TriggerCompileError("status(...) requires uom and precision keyword arguments.")
@@ -65,12 +65,15 @@ def compile_status_condition(expr: ast.Compare) -> dict[str, Any] | None:
         raise TriggerCompileError("Comparison value must be a number.")
     scaled = scale_value(value, uom, precision)
 
+    # uom must be a schema-typed number (trigger-new.json) regardless of what
+    # literal type the model wrote -- see compile_cmd_param's comment for why
+    # this is a real, not hypothetical, risk.
     return {
         "type": "status",
         "id": prop_id,
         "node": device_id,
         "op": op,
-        "val": {"value": scaled, "prec": int(precision), "uom": uom},
+        "val": {"value": scaled, "prec": int(precision), "uom": int(uom)},
     }
 
 

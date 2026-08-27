@@ -214,39 +214,41 @@ class ProfileRagFormatter(RAGFormatter):
 
     # ------------------------------------------------------------------
     # Python-literal per-device rendering (used by format_per_device when
-    # json_output is True). Every parameterized command carries its
-    # editor's real id alongside its resolved uom/min/max/enums dict, so a
-    # downstream batch-level pass can tell true editor sharing (same id)
-    # from two editors that just happen to have identical content.
+    # json_output is True). Every parameterized command/property carries
+    # its resolved uom/min/max/enums dict directly -- no separate editor
+    # id (see _editor_dict's docstring for why that field was removed).
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _editor_ref_and_dict(editor):
-        """Return (editor_id, editor_python_dict), or (None, None) if the
-        editor has nothing to render."""
+    def _editor_dict(editor):
+        """Return the editor's Python-literal description dict, or None if
+        the editor has nothing to render. Deliberately does not expose the
+        editor's own id -- that field only ever existed for DedupeDevices's
+        cross-device editor-sharing pass (removed as dead code; nothing
+        performs that dedup any more), and its presence risked being
+        mistaken for a real parameter/property id (a real live bug: a
+        routine authored `param(id=<editor_id>, ...)` instead of the actual
+        parameter id, because the two looked equally id-shaped)."""
         if editor is None:
-            return None, None
-        desc = editor.get_python_description()
-        if desc is None:
-            return None, None
-        return editor.id, desc
+            return None
+        return editor.get_python_description()
 
     def _py_repr_param(self, param) -> str:
-        editor_id, editor_dict = self._editor_ref_and_dict(getattr(param, "editor", None))
+        editor_dict = self._editor_dict(getattr(param, "editor", None))
         name = param.name if getattr(param, "name", None) else "n/a"
-        pid = self.encode_id(param.id) if getattr(param, "id", None) else "n/a"
-        if editor_id is None:
+        pid = self.encode_id(param.id) if getattr(param, "id", None) else ""
+        if editor_dict is None:
             return f"({name!r}, {pid!r})"
-        return f"({name!r}, {pid!r}, {editor_id!r}, {editor_dict!r})"
+        return f"({name!r}, {pid!r}, {editor_dict!r})"
 
     def _py_repr_property(self, prop: NodeProperty) -> str:
         # No id -- same reasoning as _py_repr_command: the DSL's .status(...)
         # and set_var(..., property=...) take this display name directly,
         # resolved server-side rather than carried/positioned by the model.
-        editor_id, editor_dict = self._editor_ref_and_dict(prop.editor)
-        if editor_id is None:
+        editor_dict = self._editor_dict(prop.editor)
+        if editor_dict is None:
             return f"{prop.name!r}"
-        return f"({prop.name!r}, {editor_id!r}, {editor_dict!r})"
+        return f"({prop.name!r}, {editor_dict!r})"
 
     def _py_repr_command(self, command) -> str:
         # No id -- create_or_update_routine's DSL takes this display name

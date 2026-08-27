@@ -126,10 +126,14 @@ def compile_set_var(expr: ast.Call) -> dict[str, Any]:
             raise TriggerCompileError("set_var(..., device=...) doesn't take precision= -- pass the device property's own uom= instead.")
         if "property" not in kwargs or "uom" not in kwargs:
             raise TriggerCompileError("set_var(...)'s device= requires property= and uom= too.")
+        # uom must be a schema-typed number (trigger-new.json's VarActionStatus)
+        # regardless of what literal type the model wrote -- see
+        # compile_cmd_param's comment for why this is a real, not
+        # hypothetical, risk.
         out["status"] = {
-            "id": literal(kwargs["property"]),
-            "node": literal(kwargs["device"]),
-            "uom": literal(kwargs["uom"]),
+            "id": str(literal(kwargs["property"])),
+            "node": str(literal(kwargs["device"])),
+            "uom": int(literal(kwargs["uom"])),
         }
 
     else:  # sysval

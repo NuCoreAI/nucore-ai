@@ -17,6 +17,33 @@ def test_command_with_params():
     assert then[0]["p"] == [{"type": "val", "id": "OL", "val": {"value": 100, "prec": 0, "uom": 51}}]
 
 
+def test_command_param_with_no_id_compiles_to_empty_string_id():
+    # An anonymous parameter (no id= given at all) used to fall back to the
+    # sentinel "n/a" -- now it's an empty string instead, matching the tool
+    # description's documented convention (id="").
+    then = _then('device("A").command("DON", params=[param(value=100, uom=51, precision=0)])')
+    assert then[0]["p"] == [{"type": "val", "id": "", "val": {"value": 100, "prec": 0, "uom": 51}}]
+
+
+def test_command_param_legacy_na_id_normalizes_to_empty_string():
+    # Backward compatibility: if id="n/a" is still written (the old
+    # documented convention), it normalizes to "" too, not passed through
+    # literally.
+    then = _then('device("A").command("DON", params=[param(id="n/a", value=100, uom=51, precision=0)])')
+    assert then[0]["p"] == [{"type": "val", "id": "", "val": {"value": 100, "prec": 0, "uom": 51}}]
+
+
+def test_command_param_uom_written_as_a_string_still_compiles_to_an_int():
+    # get_device_detail's own editor rendering shows uom as a string
+    # (Editor/EditorMinMaxRange.to_dict()) -- a model copying that literally
+    # into param(uom="51", ...) must still produce a schema-valid int, per
+    # trigger-new.json's ValWithUom.uom: number.
+    then = _then('device("A").command("DON", params=[param(id="OL", value=100, uom="51", precision=0)])')
+    param = then[0]["p"][0]
+    assert param["val"]["uom"] == 51
+    assert isinstance(param["val"]["uom"], int)
+
+
 def test_wait_duration_decomposes_to_named_fields():
     assert _then("wait(duration(minute=10))") == [{"type": "wait", "minutes": 10}]
     assert _then("wait(duration(hour=1, minute=2, second=3))") == [

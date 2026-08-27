@@ -170,7 +170,16 @@ def compile_cmd_param(expr: ast.expr) -> dict[str, Any]:
         raise TriggerCompileError("params= must be a list of param(...) calls.")
     args, kwargs = call_args(expr)
     id_node = kwargs.get("id", args[0] if args else None)
-    param_id = literal(id_node) if id_node is not None else "n/a"
+    if id_node is None:
+        param_id = ""
+    else:
+        param_id = str(literal(id_node))
+        # Normalize the old "n/a" sentinel (previously the documented
+        # convention for an anonymous parameter) to "" too, in case the
+        # model still writes it out of habit after the tool description
+        # switched to recommending id="" directly.
+        if param_id == "n/a":
+            param_id = ""
 
     if "uom" not in kwargs or "precision" not in kwargs or "value" not in kwargs:
         raise TriggerCompileError("param(...) requires id, value, uom, and precision.")
@@ -179,7 +188,12 @@ def compile_cmd_param(expr: ast.expr) -> dict[str, Any]:
     value = literal(kwargs["value"])
     scaled = scale_value(value, uom, precision)
 
-    return {"type": "val", "id": param_id, "val": {"value": scaled, "prec": int(precision), "uom": uom}}
+    # uom/id must be schema-typed number/string (trigger-new.json's ValWithUom/
+    # CmdParamVal) regardless of what literal type the model wrote -- easy to
+    # get wrong here specifically because get_device_detail's own editor
+    # rendering shows uom as a string (Editor/EditorMinMaxRange.to_dict()),
+    # which a model can plausibly copy verbatim into param(uom="25", ...).
+    return {"type": "val", "id": param_id, "val": {"value": scaled, "prec": int(precision), "uom": int(uom)}}
 
 
 def compile_param_list(node: ast.expr | None) -> list[dict[str, Any]]:

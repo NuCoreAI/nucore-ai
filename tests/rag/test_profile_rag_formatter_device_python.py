@@ -55,12 +55,35 @@ def test_property_without_editor_renders_as_a_bare_name_no_id():
     assert "'ST'" not in rendered
 
 
-def test_property_with_editor_renders_name_and_editor_no_property_id():
+def test_property_with_editor_renders_name_and_editor_dict_no_ids_at_all():
     formatter = ProfileRagFormatter(json_output=True)
     prop = NodeProperty(id="ST", editor=_pct_editor("I_PCT"), name="Status")
 
     rendered = ast.literal_eval(formatter._py_repr_property(prop))
 
     assert rendered[0] == "Status"
-    assert rendered[1] == "I_PCT"  # the editor's own id -- shared-editor cross-reference, not the property's id
+    assert rendered[1] == prop.editor.get_python_description()  # editor's dict, not its id
     assert "'ST'" not in formatter._py_repr_property(prop)
+    assert "I_PCT" not in formatter._py_repr_property(prop)  # the editor's own id is gone entirely
+
+
+def test_named_param_with_editor_renders_name_id_and_editor_dict_no_editor_id():
+    # The exact live-bug shape: a command with a NAMED, non-"n/a" parameter
+    # (e.g. UD Mobile's "Send Message" -> Group/Sound/Content) carrying its
+    # own editor. Before this fix, a 4th tuple element (the editor's own id)
+    # sat right next to the real parameter id and was easy to mistake for
+    # it -- confirm that element is gone, not just unused.
+    formatter = ProfileRagFormatter(json_output=True)
+    editor = _pct_editor("IP_D_udmobile")
+    command = Command(
+        id="SEND_MSG",
+        name="Send Message",
+        parameters=[CommandParameter(id="Group", name="Group", editor=editor)],
+    )
+
+    rendered = ast.literal_eval(formatter._py_repr_command(command))
+    param = rendered[1][0]
+
+    assert param == ("Group", "Group", editor.get_python_description())
+    assert len(param) == 3
+    assert "IP_D_udmobile" not in formatter._py_repr_command(command)

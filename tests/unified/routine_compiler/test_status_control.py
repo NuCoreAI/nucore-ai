@@ -11,6 +11,17 @@ def test_status_condition_scales_by_precision():
     ]
 
 
+def test_status_condition_uom_written_as_a_string_still_compiles_to_an_int():
+    # get_device_detail's own editor rendering shows uom as a string -- a
+    # model copying that literally into status(uom="17", ...) must still
+    # produce a schema-valid int, per trigger-new.json's val.uom: number.
+    code = 'if device("A").status("ST", uom="17", precision=1) > 75.5:\n    device("B").command("DON")'
+    compiled = compile_trigger_source(name="t", trigger_id=None, comment=None, source=code)
+    uom = compiled["if"][0]["val"]["uom"]
+    assert uom == 17
+    assert isinstance(uom, int)
+
+
 def test_status_condition_index_uom_never_scaled():
     code = 'if device("A").status("ST", uom=25, precision=0) == 3:\n    device("B").command("DON")'
     compiled = compile_trigger_source(name="t", trigger_id=None, comment=None, source=code)
