@@ -169,6 +169,10 @@ def _load_runtime_config(
     if configured_preferences_dir is not None and not isinstance(configured_preferences_dir, str):
         raise ValueError("preferences_dir must be a string when provided")
 
+    configured_history_token_budget = payload.get("history_token_budget")
+    if configured_history_token_budget is not None and not isinstance(configured_history_token_budget, int):
+        raise ValueError("history_token_budget must be an integer when provided")
+
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
@@ -180,4 +184,11 @@ def _load_runtime_config(
         "router_llm": "router" if "router" in supported_llms else "default",
         "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
+        # Compaction trigger for UnifiedRuntime.handle_query's conversation
+        # history -- see history_compaction.maybe_compact_history. Bounds
+        # estimated token size, not turn count (default_max_turns above
+        # already bounds that separately).
+        "history_token_budget": (
+            int(configured_history_token_budget) if configured_history_token_budget is not None else 20000
+        ),
     }

@@ -1,6 +1,6 @@
 {
   "name": "get_diagnostics_prompt",
-  "description": "Get the full diagnostics prompt: how PLM/device link records work, the system-wide 'no status feedback' workflow, device-vs-IoX link table reasoning, and known fixes in order of likelihood. Call this ONCE, first, before any other diagnostic tool, at the start of any conversation that turns out to need diagnostics -- it is deliberately left out of the standing system prompt (unlike device/routine data) since most conversations never need it, so you must fetch it explicitly rather than assuming you already have it. No params.",
+  "description": "Get reference material for troubleshooting a device/system problem: how PLM/device link records work, the system-wide 'no status feedback' workflow, device-vs-IoX link table reasoning, how to read the device activity log for past behavior, and known fixes in order of likelihood. Call this before any other diagnostic tool, whenever the CURRENT customer question needs it -- it is deliberately left out of the standing system prompt (unlike device/routine data) since most questions never need it, so you must fetch it explicitly rather than assuming you already have it. This is scoped to the question at hand, not a conversation-wide mode: call it again if a later question needs it, and skip it entirely for questions that don't, even later in the same conversation. No params.",
   "input_schema": {
     "type": "object",
     "properties": {}

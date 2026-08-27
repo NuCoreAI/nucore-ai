@@ -14,6 +14,7 @@ from .session_store import SessionStore
 from nucore import NuCoreInterface
 
 from .dispatch import execute_tool
+from .history_compaction import maybe_compact_history
 from .loop import AgenticLoop
 from .prompt_builder import build_system_prompt
 from .stream_handler import StreamHandler
@@ -88,6 +89,12 @@ class UnifiedRuntime:
     ) -> IntentHandlerResult:
         session_id = session_id or "default"
         history = self.session_store.get(session_id, max_turns=int(self.runtime_config.get("default_max_turns", 20)))
+        await maybe_compact_history(
+            history,
+            llm_client=self.llm_client,
+            llm_config=self._resolve_llm_config(),
+            token_budget=int(self.runtime_config.get("history_token_budget", 20000)),
+        )
 
         system_prompt = await build_system_prompt(self.nucore_interface)
 

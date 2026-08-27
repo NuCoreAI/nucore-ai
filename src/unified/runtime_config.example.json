@@ -1,6 +1,7 @@
 {
-  "max_iterations": 8,
+  "max_iterations": 20,
   "preferences_dir": null,
+  "history_token_budget": 20000,
   "nucore_runtime": {
     "default": {
       "provider": "claude",
