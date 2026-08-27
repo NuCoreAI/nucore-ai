@@ -1315,8 +1315,8 @@ class IoXWrapper(NuCoreInterface):
                     except ValueError:
                         #already in hex
                         pass
-                routine_id = format(routine_id, '04x')
-                response = self.get(f'/rest/programs/{routine_id}/{operation}')
+                # The endpoint for routine operations follows the pattern /api/programs/:id/:cmd
+                response = self.get(f'/api/programs/{routine_id}/{operation}')
         except Exception as ex:
             logger.error(f"Error performing routine operation: {ex}")
 
