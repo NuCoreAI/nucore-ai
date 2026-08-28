@@ -26,6 +26,21 @@ def _write_config(tmp_path, **overrides):
     return str(path)
 
 
+def test_reasoning_effort_passed_through_when_set(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "default": {"provider": "openai", "model": "m", "reasoning_effort": "none"},
+            "unified": {"provider": "openai", "model": "m"},
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
+
+    assert cfg["supported_llms"]["default"]["reasoning_effort"] == "none"
+    assert cfg["supported_llms"]["unified"]["reasoning_effort"] is None
+
+
 def test_profile_stream_flag_honored_when_handler_present(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=StreamHandler())

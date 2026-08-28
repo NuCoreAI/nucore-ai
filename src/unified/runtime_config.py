@@ -74,6 +74,7 @@ def _coerce_runtime_profile(
         "max_turns": int(payload.get("max_turns", 20)),
         "temperature": payload.get("temperature"),
         "max_tokens": payload.get("max_tokens"),
+        "reasoning_effort": payload.get("reasoning_effort"),
         "supports_system_role": bool(
             payload.get("supports_system_role", capabilities.get("supports_system_role", True))
         ),

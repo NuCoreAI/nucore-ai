@@ -5,7 +5,8 @@
   "nucore_runtime": {
     "default": {
       "provider": "openai",
-      "model": "gpt-4.1-mini",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "none",
       "api_key": "${OPENAI_API_KEY}",
       "url": null,
       "max_turns": 20,
@@ -14,7 +15,8 @@
     },
     "unified": {
       "provider": "openai",
-      "model": "gpt-4.1-mini",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "none",
       "api_key": "${OPENAI_API_KEY}",
       "stream": true,
       "url": null,

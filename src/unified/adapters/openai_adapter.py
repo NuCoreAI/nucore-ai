@@ -71,6 +71,11 @@ class OpenAIAdapter(LLMAdapter):
                 kwargs["temperature"] = cfg["temperature"]
             if "max_tokens" in cfg:
                 kwargs["max_tokens"] = cfg["max_tokens"]
+        if cfg.get("reasoning_effort"):
+            # Opt-in only -- not every model accepts this field, but some
+            # reasoning-tier models reject function tools on chat.completions
+            # unless it's explicitly set (e.g. to "none").
+            kwargs["reasoning_effort"] = cfg["reasoning_effort"]
         if expect_json and self._supports_response_format:
             # Ask the model to guarantee JSON output (no extra prose).
             kwargs["response_format"] = {"type": "json_object"}

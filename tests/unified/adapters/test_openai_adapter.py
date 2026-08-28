@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from unified.adapters.base_adapter import LLMAdapter, ToolSpec
 from unified.adapters.openai_adapter import OpenAIAdapter
@@ -24,6 +27,11 @@ _TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "tools"
 
 def _adapter() -> OpenAIAdapter:
     return OpenAIAdapter(api_key="test-key")
+
+
+def _fake_completion_response():
+    message = SimpleNamespace(content="hi", tool_calls=None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], model_dump=lambda: {})
 
 
 def test_strict_true_by_default_forces_additional_properties_false():
@@ -84,3 +92,38 @@ def test_all_free_form_params_tool_files_declare_strict_false():
     for name in ("tool_diagnostics_run_step.json", "tool_plan_run_step.json", "tool_plugin_call.json"):
         data = json.loads((_TOOLS_DIR / name).read_text())
         assert data.get("strict") is False, name
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_forwarded_when_configured():
+    # Live bug: a reasoning-tier model rejected function tools on
+    # chat.completions unless reasoning_effort was explicitly set (e.g. to
+    # "none") -- the adapter never sent this field at all before.
+    adapter = _adapter()
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={"reasoning_effort": "none"})
+
+    assert captured["reasoning_effort"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_omitted_when_not_configured():
+    adapter = _adapter()
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert "reasoning_effort" not in captured
