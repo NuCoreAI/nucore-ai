@@ -49,7 +49,9 @@ class DedupeRoutines:
         "#     last_run_time / last_finish_time: when its `then`/`else` actions\n"
         "#       last started/finished running, None if never run.\n"
         "#     next_scheduled_run_time: when it's next due to be evaluated, None\n"
-        "#       if not schedule-driven or unknown.\n"
+        "#       if not schedule-driven or unknown. For a sunrise/sunset-relative\n"
+        "#       schedule (no fixed date), this is only the next single upcoming\n"
+        "#       instance, not the routine's fixed daily time -- it recomputes.\n"
         "#   Any runtime field is None when the hub's runtime summary didn't\n"
         "#   report it.\n"
     )

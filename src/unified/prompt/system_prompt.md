@@ -99,6 +99,12 @@ installation, as Python literals. Refreshed every turn -- use this instead of as
 or guessing whenever a request depends on the current time or on sunrise/sunset (schedules,
 automations, "what time is it", "is it dark out yet", etc.).
 
+SUNRISE_TODAY/SUNSET_TODAY are today's values only, useful for illustrating what a sunrise/sunset-
+relative schedule currently means. A compiled sunrise/sunset-relative routine trigger itself
+recomputes daily, with no fixed clock time stored anywhere -- when explaining such a routine to
+the customer, present the computed time as today's example/reference point (e.g. "today that's
+around 8:38 PM"), never state it as the fixed time the routine will always fire.
+
 <<time_info>>
 
 ---

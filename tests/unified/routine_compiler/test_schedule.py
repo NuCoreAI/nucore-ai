@@ -23,6 +23,26 @@ def test_weekly_at_days_and_time():
     assert cond["at"] == {"type": "time", "time": 64800}
 
 
+def test_weekly_at_sunset_offset_with_day_excluded():
+    # "every day at 1 hour after sunset except Friday" -- excluding a day means
+    # leaving it out of days=, not a separate exclusion construct.
+    cond = _if(
+        'if weekly_at(days="sun,mon,tue,wed,thu,sat", sunset=duration(hour=1)):\n'
+        '    device("A").command("DON")'
+    )
+    assert cond["daysofweek"] == {
+        "sun": True,
+        "mon": True,
+        "tue": True,
+        "wed": True,
+        "thu": True,
+        "sat": True,
+    }
+    assert "fri" not in cond["daysofweek"]
+    assert cond["at"] == {"type": "sunset", "offsetSec": 3600}
+    assert "date" not in cond["at"]
+
+
 def test_weekly_between_with_offset_days():
     cond = _if(
         'if weekly_between(days="tue", from_sunset=duration(minute=-10), to_time="01:00:00", to_day=1):\n'
