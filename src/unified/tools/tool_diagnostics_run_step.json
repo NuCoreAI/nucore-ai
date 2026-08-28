@@ -1,5 +1,6 @@
 {
   "name": "run_diagnostic_step",
+  "strict": false,
   "description": "Run one diagnostic step directly against the backend -- no session, no start call needed. Call get_diagnostics_prompt first to see the available steps and how to reason about them. Call one at a time, never several in the same turn -- these steps aren't independent reads, they drive real hub/PLM hardware.",
   "input_schema": {
     "type": "object",

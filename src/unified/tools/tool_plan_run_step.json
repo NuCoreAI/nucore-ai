@@ -1,5 +1,6 @@
 {
   "name": "run_plan_step",
+  "strict": false,
   "description": "Run one step of the plan session currently in progress (opened via start_plan -- see its response for the `instruction` and the list of steps under `available_tools`). Only usable while a session is in_progress; errors otherwise. Call as many steps as needed, in whatever order the instruction and the conversation with the customer call for. When you're done and the customer is satisfied, call the `conclude` step -- this ends the session normally, so other tools become available again. If the customer wants to stop before that, call `stop` instead.",
   "input_schema": {
     "type": "object",

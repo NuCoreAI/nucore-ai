@@ -218,8 +218,17 @@ class LLMAdapter(ABC):
         """Build a :class:`ToolSpec` from an already-parsed dict.
 
         Args:
-            data:   Dict conforming to the Claude tool authoring format.
-            strict: Passed through to the resulting :class:`ToolSpec`.
+            data:   Dict conforming to the Claude tool authoring format. An
+                    optional top-level ``"strict": false`` overrides the
+                    ``strict`` argument for this one tool -- needed for a
+                    tool whose schema has a genuinely free-form object
+                    parameter (``"additionalProperties": true`` by design,
+                    dynamic keys the caller can't enumerate in advance),
+                    which OpenAI's strict mode cannot represent at all
+                    (strict requires every property enumerated with
+                    ``additionalProperties: false``).
+            strict: Passed through to the resulting :class:`ToolSpec` unless
+                    overridden by the tool file's own ``"strict"`` key.
 
         Raises:
             TypeError:  If ``data`` is not a dict.
@@ -244,7 +253,7 @@ class LLMAdapter(ABC):
             name=name,
             description=description,
             json_schema=json_schema,
-            strict=strict,
+            strict=bool(data.get("strict", strict)),
         )
 
     @classmethod
