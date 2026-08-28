@@ -1,0 +1,1777 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "allOf": [
+        {
+            "$ref": "#/definitions/Omit%3CTrigger%2C%22id%22%7C%22parent%22%3E"
+        },
+        {
+            "properties": {
+                "parent": {
+                    "type": "number"
+                }
+            },
+            "type": "object"
+        }
+    ],
+    "definitions": {
+        "Action": {
+            "anyOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "string"
+                        },
+                        "node": {
+                            "type": "string"
+                        },
+                        "p": {
+                            "items": {
+                                "$ref": "#/definitions/CmdParam"
+                            },
+                            "type": "array"
+                        },
+                        "type": {
+                            "enum": [
+                                "cmd"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "node",
+                        "p",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "$ref": "#/definitions/VarActionVal"
+                },
+                {
+                    "$ref": "#/definitions/VarActionVar"
+                },
+                {
+                    "$ref": "#/definitions/VarActionStatus"
+                },
+                {
+                    "$ref": "#/definitions/VarActionSysval"
+                },
+                {
+                    "properties": {
+                        "content": {
+                            "type": "number"
+                        },
+                        "recipient": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "notify"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "recipient",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "hours": {
+                            "type": "number"
+                        },
+                        "minutes": {
+                            "type": "number"
+                        },
+                        "random": {
+                            "type": "boolean"
+                        },
+                        "seconds": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "wait"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "runif"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "runthen"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "runelse"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "enable"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "disable"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "stop"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "cmd": {
+                            "type": "number"
+                        },
+                        "parm": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "net"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "cmd",
+                        "parm",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "every": {
+                            "properties": {
+                                "hours": {
+                                    "type": "number"
+                                },
+                                "minutes": {
+                                    "type": "number"
+                                },
+                                "seconds": {
+                                    "type": "number"
+                                }
+                            },
+                            "type": "object"
+                        },
+                        "for": {
+                            "properties": {
+                                "random": {
+                                    "type": "boolean"
+                                },
+                                "times": {
+                                    "type": "number"
+                                }
+                            },
+                            "required": [
+                                "times"
+                            ],
+                            "type": "object"
+                        },
+                        "type": {
+                            "enum": [
+                                "repeat"
+                            ],
+                            "type": "string"
+                        },
+                        "while": {
+                            "properties": {
+                                "var": {
+                                    "properties": {
+                                        "id": {
+                                            "type": "number"
+                                        },
+                                        "op": {
+                                            "$ref": "#/definitions/StatusConditionOperator"
+                                        },
+                                        "val": {
+                                            "properties": {
+                                                "prec": {
+                                                    "type": "number"
+                                                },
+                                                "value": {
+                                                    "type": "number"
+                                                }
+                                            },
+                                            "required": [
+                                                "value"
+                                            ],
+                                            "type": "object"
+                                        },
+                                        "var": {
+                                            "properties": {
+                                                "id": {
+                                                    "type": "number"
+                                                },
+                                                "varType": {
+                                                    "$ref": "#/definitions/VarType"
+                                                }
+                                            },
+                                            "required": [
+                                                "id",
+                                                "varType"
+                                            ],
+                                            "type": "object"
+                                        },
+                                        "varType": {
+                                            "$ref": "#/definitions/VarType"
+                                        }
+                                    },
+                                    "required": [
+                                        "id",
+                                        "op",
+                                        "varType"
+                                    ],
+                                    "type": "object"
+                                }
+                            },
+                            "required": [
+                                "var"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "rebootrun"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "rebootnotrun"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "comment": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "enum": [
+                                "comment"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "comment",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "ctlId": {
+                            "type": "string"
+                        },
+                        "group": {
+                            "type": "string"
+                        },
+                        "rsp": {
+                            "properties": {
+                                "cmd": {
+                                    "properties": {
+                                        "cmdId": {
+                                            "type": "string"
+                                        },
+                                        "p": {
+                                            "items": {
+                                                "$ref": "#/definitions/CmdParam"
+                                            },
+                                            "type": "array"
+                                        }
+                                    },
+                                    "required": [
+                                        "cmdId"
+                                    ],
+                                    "type": "object"
+                                },
+                                "node": {
+                                    "type": "string"
+                                },
+                                "type": {
+                                    "$ref": "#/definitions/AdjustSceneType"
+                                }
+                            },
+                            "required": [
+                                "node",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        "type": {
+                            "enum": [
+                                "lp"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "ctlId",
+                        "group",
+                        "rsp",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "cc": {
+                            "type": "number"
+                        },
+                        "hc": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "enum": [
+                                "x10"
+                            ],
+                            "type": "string"
+                        },
+                        "uc": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "cc",
+                        "hc",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "cmd": {
+                            "$ref": "#/definitions/SystemCommand"
+                        },
+                        "type": {
+                            "enum": [
+                                "sys"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "cmd",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "control": {
+                            "type": "string"
+                        },
+                        "group": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "enum": [
+                                "device"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "control",
+                        "group",
+                        "type"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "AdjustSceneType": {
+            "enum": [
+                "cmd",
+                "default",
+                "ignore"
+            ],
+            "type": "string"
+        },
+        "AndOr": {
+            "enum": [
+                "and",
+                "or"
+            ],
+            "type": "string"
+        },
+        "CmdParam": {
+            "anyOf": [
+                {
+                    "$ref": "#/definitions/CmdParamVal"
+                },
+                {
+                    "$ref": "#/definitions/CmdParamVar"
+                }
+            ]
+        },
+        "CmdParamType": {
+            "enum": [
+                "val",
+                "var"
+            ],
+            "type": "string"
+        },
+        "CmdParamVal": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "$ref": "#/definitions/CmdParamType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "val": {
+                            "$ref": "#/definitions/ValWithUom"
+                        }
+                    },
+                    "required": [
+                        "val"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "CmdParamVar": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "$ref": "#/definitions/CmdParamType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "var": {
+                            "$ref": "#/definitions/VarWithUom"
+                        }
+                    },
+                    "required": [
+                        "var"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "Condition": {
+            "anyOf": [
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "conditions": {
+                            "items": {
+                                "$ref": "#/definitions/Condition"
+                            },
+                            "type": "array"
+                        },
+                        "type": {
+                            "enum": [
+                                "paren"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "conditions",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "allOf": [
+                        {
+                            "properties": {
+                                "andOr": {
+                                    "$ref": "#/definitions/AndOr"
+                                },
+                                "daysofweek": {
+                                    "properties": {
+                                        "fri": {
+                                            "type": "boolean"
+                                        },
+                                        "mon": {
+                                            "type": "boolean"
+                                        },
+                                        "sat": {
+                                            "type": "boolean"
+                                        },
+                                        "sun": {
+                                            "type": "boolean"
+                                        },
+                                        "thu": {
+                                            "type": "boolean"
+                                        },
+                                        "tue": {
+                                            "type": "boolean"
+                                        },
+                                        "wed": {
+                                            "type": "boolean"
+                                        }
+                                    },
+                                    "type": "object"
+                                },
+                                "type": {
+                                    "enum": [
+                                        "schedule"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "andOr",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        {
+                            "properties": {
+                                "from": {
+                                    "$ref": "#/definitions/ScheduleFrom"
+                                },
+                                "to": {
+                                    "$ref": "#/definitions/ScheduleTo"
+                                }
+                            },
+                            "required": [
+                                "from",
+                                "to"
+                            ],
+                            "type": "object"
+                        }
+                    ]
+                },
+                {
+                    "allOf": [
+                        {
+                            "properties": {
+                                "andOr": {
+                                    "$ref": "#/definitions/AndOr"
+                                },
+                                "daysofweek": {
+                                    "properties": {
+                                        "fri": {
+                                            "type": "boolean"
+                                        },
+                                        "mon": {
+                                            "type": "boolean"
+                                        },
+                                        "sat": {
+                                            "type": "boolean"
+                                        },
+                                        "sun": {
+                                            "type": "boolean"
+                                        },
+                                        "thu": {
+                                            "type": "boolean"
+                                        },
+                                        "tue": {
+                                            "type": "boolean"
+                                        },
+                                        "wed": {
+                                            "type": "boolean"
+                                        }
+                                    },
+                                    "type": "object"
+                                },
+                                "type": {
+                                    "enum": [
+                                        "schedule"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "andOr",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        {
+                            "properties": {
+                                "for": {
+                                    "properties": {
+                                        "hours": {
+                                            "type": "number"
+                                        },
+                                        "minutes": {
+                                            "type": "number"
+                                        },
+                                        "seconds": {
+                                            "type": "number"
+                                        },
+                                        "type": {
+                                            "enum": [
+                                                "for"
+                                            ],
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "type"
+                                    ],
+                                    "type": "object"
+                                },
+                                "from": {
+                                    "$ref": "#/definitions/ScheduleFrom"
+                                }
+                            },
+                            "required": [
+                                "for",
+                                "from"
+                            ],
+                            "type": "object"
+                        }
+                    ]
+                },
+                {
+                    "allOf": [
+                        {
+                            "properties": {
+                                "andOr": {
+                                    "$ref": "#/definitions/AndOr"
+                                },
+                                "daysofweek": {
+                                    "properties": {
+                                        "fri": {
+                                            "type": "boolean"
+                                        },
+                                        "mon": {
+                                            "type": "boolean"
+                                        },
+                                        "sat": {
+                                            "type": "boolean"
+                                        },
+                                        "sun": {
+                                            "type": "boolean"
+                                        },
+                                        "thu": {
+                                            "type": "boolean"
+                                        },
+                                        "tue": {
+                                            "type": "boolean"
+                                        },
+                                        "wed": {
+                                            "type": "boolean"
+                                        }
+                                    },
+                                    "type": "object"
+                                },
+                                "type": {
+                                    "enum": [
+                                        "schedule"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "andOr",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        {
+                            "properties": {
+                                "at": {
+                                    "$ref": "#/definitions/ScheduleFrom"
+                                }
+                            },
+                            "required": [
+                                "at"
+                            ],
+                            "type": "object"
+                        }
+                    ]
+                },
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "node": {
+                            "type": "string"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/ControlConditionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "control"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "id",
+                        "node",
+                        "op",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "node": {
+                            "type": "string"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/StatusConditionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "status"
+                            ],
+                            "type": "string"
+                        },
+                        "val": {
+                            "$ref": "#/definitions/ValWithUom"
+                        },
+                        "var": {
+                            "$ref": "#/definitions/VarWithUom"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "id",
+                        "node",
+                        "op",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "id": {
+                            "type": "number"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/VarConditionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "var"
+                            ],
+                            "type": "string"
+                        },
+                        "val": {
+                            "properties": {
+                                "prec": {
+                                    "type": "number"
+                                },
+                                "value": {
+                                    "type": "number"
+                                }
+                            },
+                            "required": [
+                                "value"
+                            ],
+                            "type": "object"
+                        },
+                        "var": {
+                            "properties": {
+                                "id": {
+                                    "type": "number"
+                                },
+                                "type": {
+                                    "$ref": "#/definitions/VarType"
+                                }
+                            },
+                            "required": [
+                                "id",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        "varType": {
+                            "$ref": "#/definitions/VarType"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "id",
+                        "op",
+                        "type",
+                        "varType"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "is": {
+                            "type": "boolean"
+                        },
+                        "refid": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "triggerref"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "is",
+                        "refid",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "cc": {
+                            "type": "number"
+                        },
+                        "hc": {
+                            "type": "string"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/X10ConditionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "x10"
+                            ],
+                            "type": "string"
+                        },
+                        "uc": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "cc",
+                        "hc",
+                        "op",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "action": {
+                            "type": "number"
+                        },
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "control": {
+                            "enum": [
+                                "price"
+                            ],
+                            "type": "string"
+                        },
+                        "id": {
+                            "enum": [
+                                "oadr"
+                            ],
+                            "type": "string"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/OpenADRPriceOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "inet"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "action",
+                        "andOr",
+                        "control",
+                        "id",
+                        "op",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "action": {
+                            "$ref": "#/definitions/OpenADRActionStatus"
+                        },
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "control": {
+                            "enum": [
+                                "status"
+                            ],
+                            "type": "string"
+                        },
+                        "id": {
+                            "enum": [
+                                "oadr"
+                            ],
+                            "type": "string"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/OpenADRStatusModeOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "inet"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "action",
+                        "andOr",
+                        "control",
+                        "id",
+                        "op",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "action": {
+                            "$ref": "#/definitions/OpenADRActionMode"
+                        },
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "control": {
+                            "enum": [
+                                "mode"
+                            ],
+                            "type": "string"
+                        },
+                        "id": {
+                            "enum": [
+                                "oadr"
+                            ],
+                            "type": "string"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/OpenADRStatusModeOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "inet"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "action",
+                        "andOr",
+                        "control",
+                        "id",
+                        "op",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "andOr": {
+                            "$ref": "#/definitions/AndOr"
+                        },
+                        "comment": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "enum": [
+                                "comment"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "andOr",
+                        "comment",
+                        "type"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "ControlConditionOperator": {
+            "enum": [
+                "IS",
+                "ISNOT"
+            ],
+            "type": "string"
+        },
+        "Omit<Trigger,\"id\"|\"parent\">": {
+            "properties": {
+                "comment": {
+                    "type": "string"
+                },
+                "else": {
+                    "items": {
+                        "$ref": "#/definitions/Action"
+                    },
+                    "type": "array"
+                },
+                "if": {
+                    "items": {
+                        "$ref": "#/definitions/Condition"
+                    },
+                    "type": "array"
+                },
+                "isFolder": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "then": {
+                    "items": {
+                        "$ref": "#/definitions/Action"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "OpenADRActionMode": {
+            "enum": [
+                "high",
+                "moderate",
+                "none",
+                "normal",
+                "special"
+            ],
+            "type": "string"
+        },
+        "OpenADRActionStatus": {
+            "enum": [
+                "active",
+                "inactive",
+                "pendingFar",
+                "pendingNear",
+                "pendingVeryFar",
+                "pendingVeryNear"
+            ],
+            "type": "string"
+        },
+        "OpenADRPriceOperator": {
+            "enum": [
+                "GE",
+                "GT",
+                "IS",
+                "ISNOT",
+                "LE",
+                "LT"
+            ],
+            "type": "string"
+        },
+        "OpenADRStatusModeOperator": {
+            "enum": [
+                "IS",
+                "ISNOT"
+            ],
+            "type": "string"
+        },
+        "ScheduleFrom": {
+            "anyOf": [
+                {
+                    "properties": {
+                        "date": {
+                            "type": "string"
+                        },
+                        "offsetSec": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "sunrise",
+                                "sunset"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "offsetSec",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "daily": {
+                            "type": "boolean"
+                        },
+                        "offsetSec": {
+                            "type": "number"
+                        },
+                        "refid": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "lastruntime"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "offsetSec",
+                        "refid",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "date": {
+                            "type": "string"
+                        },
+                        "time": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "enum": [
+                                "time"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "time",
+                        "type"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "ScheduleTo": {
+            "anyOf": [
+                {
+                    "allOf": [
+                        {
+                            "properties": {
+                                "date": {
+                                    "type": "string"
+                                },
+                                "offsetSec": {
+                                    "type": "number"
+                                },
+                                "type": {
+                                    "enum": [
+                                        "sunrise",
+                                        "sunset"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "offsetSec",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        {
+                            "properties": {
+                                "offsetDays": {
+                                    "type": "number"
+                                }
+                            },
+                            "type": "object"
+                        }
+                    ]
+                },
+                {
+                    "allOf": [
+                        {
+                            "properties": {
+                                "daily": {
+                                    "type": "boolean"
+                                },
+                                "offsetSec": {
+                                    "type": "number"
+                                },
+                                "refid": {
+                                    "type": "number"
+                                },
+                                "type": {
+                                    "enum": [
+                                        "lastruntime"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "offsetSec",
+                                "refid",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        {
+                            "properties": {
+                                "offsetDays": {
+                                    "type": "number"
+                                }
+                            },
+                            "type": "object"
+                        }
+                    ]
+                },
+                {
+                    "allOf": [
+                        {
+                            "properties": {
+                                "date": {
+                                    "type": "string"
+                                },
+                                "time": {
+                                    "type": "number"
+                                },
+                                "type": {
+                                    "enum": [
+                                        "time"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "time",
+                                "type"
+                            ],
+                            "type": "object"
+                        },
+                        {
+                            "properties": {
+                                "offsetDays": {
+                                    "type": "number"
+                                }
+                            },
+                            "type": "object"
+                        }
+                    ]
+                }
+            ]
+        },
+        "StatusConditionOperator": {
+            "enum": [
+                "GE",
+                "GT",
+                "IS",
+                "ISNOT",
+                "LE",
+                "LT"
+            ],
+            "type": "string"
+        },
+        "SystemCommand": {
+            "enum": [
+                1,
+                17
+            ],
+            "type": "number"
+        },
+        "ValWithUom": {
+            "allOf": [
+                {
+                    "properties": {
+                        "prec": {
+                            "type": "number"
+                        },
+                        "value": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "value"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "uom": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "uom"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "VarActionOperator": {
+            "enum": [
+                "ADD=",
+                "AND=",
+                "DIV=",
+                "EQ",
+                "INIT",
+                "MUL=",
+                "OR=",
+                "RDM=",
+                "REM=",
+                "SUB=",
+                "XOR="
+            ],
+            "type": "string"
+        },
+        "VarActionStatus": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/VarActionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "var"
+                            ],
+                            "type": "string"
+                        },
+                        "varType": {
+                            "$ref": "#/definitions/VarType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "op",
+                        "type",
+                        "varType"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "status": {
+                            "properties": {
+                                "id": {
+                                    "type": "string"
+                                },
+                                "node": {
+                                    "type": "string"
+                                },
+                                "uom": {
+                                    "type": "number"
+                                }
+                            },
+                            "required": [
+                                "id",
+                                "node",
+                                "uom"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "status"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "VarActionSysval": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/VarActionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "var"
+                            ],
+                            "type": "string"
+                        },
+                        "varType": {
+                            "$ref": "#/definitions/VarType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "op",
+                        "type",
+                        "varType"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "sysval": {
+                            "properties": {
+                                "id": {
+                                    "$ref": "#/definitions/VarActionSysvalId"
+                                }
+                            },
+                            "required": [
+                                "id"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "sysval"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "VarActionSysvalId": {
+            "enum": [
+                1,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+            ],
+            "type": "number"
+        },
+        "VarActionVal": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/VarActionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "var"
+                            ],
+                            "type": "string"
+                        },
+                        "varType": {
+                            "$ref": "#/definitions/VarType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "op",
+                        "type",
+                        "varType"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "val": {
+                            "properties": {
+                                "prec": {
+                                    "type": "number"
+                                },
+                                "value": {
+                                    "type": "number"
+                                }
+                            },
+                            "required": [
+                                "value"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "val"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "VarActionVar": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "op": {
+                            "$ref": "#/definitions/VarActionOperator"
+                        },
+                        "type": {
+                            "enum": [
+                                "var"
+                            ],
+                            "type": "string"
+                        },
+                        "varType": {
+                            "$ref": "#/definitions/VarType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "op",
+                        "type",
+                        "varType"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "var": {
+                            "properties": {
+                                "id": {
+                                    "type": "number"
+                                },
+                                "type": {
+                                    "$ref": "#/definitions/VarType"
+                                }
+                            },
+                            "required": [
+                                "id",
+                                "type"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "var"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "VarConditionOperator": {
+            "enum": [
+                "GE",
+                "GT",
+                "IS",
+                "ISNOT",
+                "LE",
+                "LT"
+            ],
+            "type": "string"
+        },
+        "VarType": {
+            "description": "Base Command Param Types, used in both Programs and Groups\nUsed to share formatting in util functions\nReuse <val> type for Favorite Commands / Geofencing when implemented\n\nGroup/Scene\n<link cmd=\"CONFIG\" node=\"ZY007_1\" type=\"cmd\">\n    <p id=\"NUM\">\n        <var id=\"6\" type=\"1\" uom=\"107\"/>\n    </p>\n    <p id=\"VAL\">\n        <val prec=\"0\" uom=\"111\">0</val>\n    </p>\n</link>\n\n\nProgram\n<cmd id=\"CONFIG\" node=\"ZY007_1\">\n    <p id=\"NUM\">\n        <val prec=\"0\" uom=\"107\">0</val>\n    </p>\n    <p id=\"VAL\">\n        <val prec=\"0\" uom=\"111\">0</val>\n    </p>\n</cmd>",
+            "enum": [
+                "1",
+                "2"
+            ],
+            "type": "string"
+        },
+        "VarWithUom": {
+            "allOf": [
+                {
+                    "properties": {
+                        "id": {
+                            "type": "number"
+                        },
+                        "type": {
+                            "$ref": "#/definitions/VarType"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "uom": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "uom"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "X10ConditionOperator": {
+            "enum": [
+                "=",
+                "IS",
+                "ISNOT"
+            ],
+            "type": "string"
+        }
+    }
+}
+

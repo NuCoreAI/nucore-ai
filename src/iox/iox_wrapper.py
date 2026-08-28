@@ -1107,7 +1107,8 @@ class IoXWrapper(NuCoreInterface):
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.post(f'/api/trigger', body=json.dumps(program_content), headers=headers)
+            body=json.dumps(program_content)
+            response = self.post(f'/api/trigger', body=body, headers=headers)
         except Exception as ex:
             logger.error(f"Error updating routine: {ex}")
 
