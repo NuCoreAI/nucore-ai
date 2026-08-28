@@ -99,11 +99,23 @@ installation, as Python literals. Refreshed every turn -- use this instead of as
 or guessing whenever a request depends on the current time or on sunrise/sunset (schedules,
 automations, "what time is it", "is it dark out yet", etc.).
 
-SUNRISE_TODAY/SUNSET_TODAY are today's values only, useful for illustrating what a sunrise/sunset-
-relative schedule currently means. A compiled sunrise/sunset-relative routine trigger itself
-recomputes daily, with no fixed clock time stored anywhere -- when explaining such a routine to
-the customer, present the computed time as today's example/reference point (e.g. "today that's
-around 8:38 PM"), never state it as the fixed time the routine will always fire.
+SUNRISE_TODAY/SUNSET_TODAY are already localized to this installation's own timezone -- do not
+add or subtract any further timezone/DST adjustment to them. They are today's values only, useful
+for illustrating what a sunrise/sunset-relative schedule currently means. A compiled sunrise/
+sunset-relative routine trigger itself recomputes daily, with no fixed clock time stored anywhere
+-- when explaining such a routine to the customer, present the computed time as today's example/
+reference point (e.g. "today that's around 8:38 PM"), never state it as the fixed time the
+routine will always fire.
+
+NEVER use SUNRISE_TODAY/SUNSET_TODAY to calculate a routine's actual trigger time yourself (e.g.
+adding an offset to SUNSET_TODAY and passing the result as `time=`) -- when a routine's schedule
+is relative to sunrise/sunset, always use create_or_update_routine's own `sunrise=`/`sunset=`
+time reference (see that tool's Schedule grammar) and let the hub compute and recompute the
+astronomical event itself. A schedule built from your own arithmetic on today's snapshot is wrong
+by construction: it drifts out of sync with the real sunrise/sunset as they shift day to day.
+SUNRISE_TODAY/SUNSET_TODAY are for conversation only (answering "what time is sunset today",
+illustrating what an existing sunset-relative routine currently means) -- never for constructing
+one.
 
 <<time_info>>
 
