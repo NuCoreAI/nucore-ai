@@ -60,7 +60,8 @@ async def _summarize_turns(
     summary_config.pop("stream_handler", None)
     summary_config["stream"] = False
     response = await llm_client.generate(messages=[{"role": "user", "content": prompt}], config=summary_config, tools=None)
-    return (response or {}).get("text", "").strip()
+    response = response or {}
+    return (response.get("text") or response.get("content") or "").strip()
 
 
 async def maybe_compact_history(

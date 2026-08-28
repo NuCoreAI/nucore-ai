@@ -18,16 +18,23 @@ from unified.models import ConversationHistory, ConversationTurn
 
 
 class _FakeLLMClient:
-    def __init__(self, *, text: str | None = "a summary", raises: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        text: str | None = "a summary",
+        raises: Exception | None = None,
+        response_key: str = "text",
+    ):
         self.text = text
         self.raises = raises
+        self.response_key = response_key
         self.calls: list[dict] = []
 
     async def generate(self, *, messages, config=None, tools=None, expect_json=False):
         self.calls.append({"messages": messages, "config": config, "tools": tools})
         if self.raises is not None:
             raise self.raises
-        return {"text": self.text}
+        return {self.response_key: self.text}
 
 
 def _history_with_turns(n: int, *, body: str = "x") -> ConversationHistory:
@@ -82,6 +89,21 @@ async def test_compaction_collapses_oldest_half_into_summary_turn():
     assert history.turns[0].response == "the summary text"
     assert [t.query for t in history.turns[1:]] == [f"query {i} {_big_body(2000)}" for i in range(4, 8)]
     assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_compaction_reads_summary_from_content_key_for_non_claude_adapters():
+    # Only ClaudeAdapter's generate() returns text under "text" -- OpenAI/Gemini
+    # adapters return it under "content". Without the fallback, this would
+    # silently summarize to "" and fall back to hard truncation instead.
+    history = _history_with_turns(8, body=_big_body(2000))
+    llm = _FakeLLMClient(text="the summary text", response_key="content")
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=100)
+
+    assert compacted is True
+    assert history.turns[0].query == _COMPACTED_QUERY_LABEL
+    assert history.turns[0].response == "the summary text"
 
 
 @pytest.mark.asyncio
