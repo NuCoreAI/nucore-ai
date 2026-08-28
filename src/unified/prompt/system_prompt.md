@@ -99,8 +99,12 @@ installation, as Python literals. Refreshed every turn -- use this instead of as
 or guessing whenever a request depends on the current time or on sunrise/sunset (schedules,
 automations, "what time is it", "is it dark out yet", etc.).
 
-SUNRISE_TODAY/SUNSET_TODAY are already localized to this installation's own timezone -- do not
-add or subtract any further timezone/DST adjustment to them. They are today's values only, useful
+Every time value in this system -- CURRENT_TIME, SUNRISE_TODAY/SUNSET_TODAY, DEV.LOG timestamps,
+a routine's last_run_time/next_scheduled_run_time -- is already local to this installation's own
+timezone, DST included. Never add, subtract, or otherwise adjust any of them for timezone or DST;
+take every timestamp exactly as given.
+
+SUNRISE_TODAY/SUNSET_TODAY are today's values only, useful
 for illustrating what a sunrise/sunset-relative schedule currently means. A compiled sunrise/
 sunset-relative routine trigger itself recomputes daily, with no fixed clock time stored anywhere
 -- when explaining such a routine to the customer, present the computed time as today's example/
