@@ -42,7 +42,10 @@ _TIME_INFO_VARS = (
 
 def _render_time_info(time_data: dict[str, Any] | None) -> str:
     """Render ``get_timespecs()``'s result as Python literals -- same
-    rendering convention as DEVICE DATABASE/ROUTINES DATABASE below it."""
+    rendering convention as DEVICE DATABASE/ROUTINES DATABASE. Placed last in
+    the assembled prompt (see system_prompt.md), after the databases, since
+    it changes every turn and would otherwise bust the prompt-cache prefix
+    for everything after it (see claude_adapter.py's system cache_control)."""
     if not time_data:
         return "```python\n# Time/timezone/location information is unavailable.\n```"
     lines = [
