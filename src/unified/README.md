@@ -22,13 +22,16 @@ backend.
 | `session_store.py` | In-memory `session_id → ConversationHistory` map. |
 | `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
 | `dispatch_builder.py`, `provider_dispatch_adapter.py`, `provider_clients.py`, `runtime_config.py` | Runtime-profile JSON loading and per-provider `LLMAdapter` construction, shared by both process entrypoints. |
-| `runtime_config.example.json` | Example runtime profile (see below). |
+| `history_compaction.py` | `maybe_compact_history` -- collapses the oldest half of a session's conversation history into one LLM-generated summary turn once its estimated token size exceeds `history_token_budget` (runtime config, default 20000); falls back to plain truncation if the summarization call itself fails. |
+| `runtime_config.example.json`, `runtime_config.openai.example.json`, `runtime_config.grok.example.json` | Example runtime profiles, one per provider (see below). |
 
 ## Running it
 
 Create a runtime profile JSON first (see `runtime_config.example.json` for the format: a
 `nucore_runtime.default` block, optionally a `nucore_runtime.unified` block for a dedicated
-model/temperature just for this path).
+model/temperature just for this path). `runtime_config.openai.example.json`/
+`runtime_config.grok.example.json` are ready-to-copy alternatives for those providers -- see the
+top-level `README.md`'s "Supported Providers" section.
 
 ```shell
 python -m unified.run_unified_runtime \

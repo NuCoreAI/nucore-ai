@@ -13,6 +13,17 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
+## Development
+
+`pip install -e .` installs production dependencies only. To run the test suite, install the dev
+extras instead:
+
+```shell
+pip install -e ".[dev]"
+# or: pip install -r requirements-dev.txt
+pytest
+```
+
 ## Running the Unified Runtime
 
 The entry point is the unified runtime: one system prompt, one native
@@ -106,7 +117,7 @@ unless the client is configured to skip verification.
 
 ### Secrets File
 
-Use `--secrets_file` to provide API keys as key/value pairs. These values are
+Use `--secrets-file` to provide API keys as key/value pairs. These values are
 loaded into a dict and passed to provider dispatch as the environment source.
 
 The file must be valid JSON with a single top-level object. Each property name
@@ -137,7 +148,7 @@ Usage:
 ```shell
 python -m unified.run_unified_runtime \
   --runtime-config src/unified/runtime_config.example.json \
-  --secrets_file /path/to/secrets.json \
+  --secrets-file /path/to/secrets.json \
   --query "Turn on the patio lights"
 ```
 
@@ -194,7 +205,7 @@ logger.info("runtime started")
 | Flag | Description |
 |---|---|
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
-| `--secrets_file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
+| `--secrets-file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
 | `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode |
 | `--ssl-certfile` | PEM cert file; with `--ssl-keyfile`, serves `--websocket-port` over `wss://` |
@@ -209,6 +220,11 @@ logger.info("runtime started")
 | `--log-file` | Optional rotating log file path |
 | `--log-json` | Emit logs in JSON format |
 | `--no-log-console` | Disable console logging |
+| `--stream` / `--no-stream` | Force LLM token streaming on/off for every `nucore_runtime` profile, overriding each profile's own `stream` setting |
+| `--max-iterations` | Override the agentic loop's max tool-call iterations per query (defaults to runtime config's `max_iterations`, or 8) |
+| `--preferences-dir` | Directory for this installation's customer preferences (aliases/events); overrides runtime config's `preferences_dir` -- no default, preferences are unavailable without one |
+| `--diagnostic-step` | Bypass the LLM/agentic loop and call one diagnostic tool directly against a live backend (e.g. `get_full_system_config`); prints the raw result and exits. Pairs with `--diagnostic-params`. Manual testing only |
+| `--diagnostic-params` | JSON object of keyword params for `--diagnostic-step` |
 
 ## Supported Providers
 
@@ -220,7 +236,16 @@ logger.info("runtime started")
 | xAI Grok | `grok`, `xai` | `XAI_API_KEY` |
 | llama.cpp (local) | `llama.cpp`, `llamacpp` | `LLAMACPP_API_KEY` (optional) |
 
-Provider and model settings come from the runtime profile file passed to `--runtime-config`. Profiles use a `provider` field and do not rely on legacy `llm` aliases or `supported_llms` fallback behavior. API keys can be embedded in the profile, supplied via `--secrets_file`, or read from process environment variables.
+Provider and model settings come from the runtime profile file passed to `--runtime-config`. Profiles use a `provider` field and do not rely on legacy `llm` aliases or `supported_llms` fallback behavior. API keys can be embedded in the profile, supplied via `--secrets-file`, or read from process environment variables.
+
+Ready-to-copy example profiles: `src/unified/runtime_config.example.json` (Claude, the default),
+`src/unified/runtime_config.openai.example.json`, `src/unified/runtime_config.grok.example.json`.
+Copy whichever one you want over your live `runtime_config.json` (or pass it directly via
+`--runtime-config`) and set that provider's env var.
+
+A profile can also set `"reasoning_effort"` (e.g. `"none"`/`"low"`/`"medium"`/`"high"`), forwarded
+to OpenAI-compatible providers only when present. Some reasoning-tier models reject function tools
+on `/v1/chat/completions` entirely unless this is explicitly set -- see the OpenAI example profile.
 
 ## Using a Local (Edge) LLM with llama.cpp
 
@@ -287,9 +312,14 @@ Runtime profile for llama.cpp (`--runtime-config` target):
 
 Beyond device/group/routine/variable command-and-control, the unified runtime supports:
 
-- **Diagnostics** -- `start_diagnostics` opens a guided, single-session troubleshooting flow
-  (e.g. "my thermostat keeps rebooting"); `run_diagnostic_step` drives it step by step, including
-  checking and starting/stopping/restarting core or plugin services.
+- **Diagnostics** -- stateless, no session or start call: `get_diagnostics_prompt` fetches
+  reference material (PLM/device link records, the DEVICE ACTIVITY LOG format and how to read it
+  for past behavior, known fixes) on demand for the current question only -- like consulting
+  DEVICE DATABASE/ROUTINES DATABASE, it never turns into a standing mode and doesn't carry over to
+  a later, unrelated question in the same conversation. `run_diagnostic_step` then runs one
+  diagnostic step directly against the backend (e.g. checking or starting/stopping/restarting core
+  or plugin services), and `run_shell_command` runs a shell command on the backend host (e.g. to
+  search the device activity log).
 - **Plan** -- `start_plan`/`run_plan_step` walk a customer through a structured multi-step task
   such as a new device installation, rather than a single command/response turn.
 - **User preferences** -- `preference_op`/`list_preferences` store per-user aliases (e.g. naming

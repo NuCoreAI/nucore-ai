@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nucore-ai"
-version = "1.3.0"
+version = "2.0.0"
 description = "Lightweight library for command/control/optimization/automation of smart home devices using LLMs"
 readme = "README.md"
 license = "MIT"
@@ -16,13 +16,14 @@ dependencies = [
  "openai",
  "anthropic",
  "httpx",
- "pytest-asyncio",
  "websockets",
  "udi_interface",
- "PyYAML",
  "python-dotenv",
 ]
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -33,4 +34,6 @@ include = ["rag*", "nucore*", "iox*", "unified*", "utils*"]
 exclude = ["tests*", "*.tests", "*.tests.*"]
 
 [tool.setuptools.package-data]
-unified = ["prompt/*.md", "tools/*.json", "runtime_config.example.json"]
+unified = ["prompt/*.md", "tools/*.json", "runtime_config.example.json", "runtime_config.openai.example.json", "runtime_config.grok.example.json"]
+"unified.diagnostics" = ["prompts/*.md"]
+"unified.planning" = ["prompts/*.md"]
