@@ -39,6 +39,24 @@ def test_status_condition_operator_mapping(op, expected):
     assert compiled["if"][0]["op"] == expected
 
 
+def test_status_condition_enum_label_string_compiles_unresolved_instead_of_raising():
+    # Same label-passthrough as command params (test_cmd_wait_repeat.py) --
+    # resolved server-side in routine_automation.py, not at compile time.
+    code = 'if device("A").status("ST", uom=25, precision=0) == "Occupied":\n    device("B").command("DON")'
+    compiled = compile_trigger_source(name="t", trigger_id=None, comment=None, source=code)
+    assert compiled["if"][0]["val"] == {"value": "Occupied", "prec": 0, "uom": 25}
+
+
+def test_status_condition_non_enum_uom_still_rejects_a_string_value():
+    with pytest.raises(TriggerCompileError, match="value must be a number"):
+        compile_trigger_source(
+            name="t",
+            trigger_id=None,
+            comment=None,
+            source='if device("A").status("ST", uom=17, precision=0) == "hot":\n    pass',
+        )
+
+
 def test_status_condition_requires_uom_and_precision():
     with pytest.raises(TriggerCompileError, match="uom and precision"):
         compile_trigger_source(

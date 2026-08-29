@@ -150,11 +150,22 @@ def is_index_uom(uom: Any) -> bool:
     return str(uom) in {"25", "146", "148"}
 
 
-def scale_value(value: Any, uom: Any, precision: Any) -> int:
+def scale_value(value: Any, uom: Any, precision: Any) -> int | str:
     """Scale a plain numeric value by precision, per the wire convention
     (raw value * 10**precision), except for index/enum uoms which are never
     scaled. Shared by every condition/action family that carries a
-    val/param value (status, cmd params, var actions, ...)."""
+    val/param value (status, cmd params, var actions, ...).
+
+    For an enumeration uom (25/146/148), a string value is passed through
+    unresolved instead of rejected -- get_device_detail's editor rendering
+    shows the model {index: label} for these, and it may write either the
+    real index or the label text (mirroring how command/property NAMES are
+    resolved server-side). The compiler is deliberately stateless (no
+    device profile access), so this label is resolved to its real index in
+    routine_automation.py's post-compile resolution pass, where live editor
+    data is available -- never sent to the hub unresolved."""
+    if is_index_uom(uom) and isinstance(value, str) and not isinstance(value, bool):
+        return value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TriggerCompileError("value must be a number.")
     if is_index_uom(uom):

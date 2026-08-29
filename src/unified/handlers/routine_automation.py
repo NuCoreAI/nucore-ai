@@ -62,6 +62,7 @@ from typing import Any
 
 from nucore import NuCoreInterface
 from nucore.uom import is_enumeration_uom
+from nucore.value_resolution import ValueResolutionError, resolve_value
 from rag.profile_rag_formatter import ProfileRagFormatter
 from unified.routine_compiler import TriggerCompileError, compile_trigger_source
 
@@ -218,6 +219,8 @@ def _resolve_condition(nucore_interface: NuCoreInterface, condition: Any, errors
             errors.append(f"'{given}' is not a known property name/id for device '{device_id}'; call get_device_detail again.")
             return
         condition["id"] = resolved
+        editor = _find_property_editor(node_def, resolved)
+        _resolve_val(editor, condition.get("val"), errors, f"status condition on '{device_id}'")
     else:  # control -- was_controlled checks what the device itself sent
         resolved = _resolve_command_id(node_def, given, "sends")
         if resolved is None:
@@ -244,6 +247,11 @@ def _resolve_action(nucore_interface: NuCoreInterface, action: Any, errors: list
             errors.append(f"'{given}' is not a known command name/id accepted by device '{device_id}'; call get_device_detail again.")
             return
         action["id"] = resolved
+        for index, param in enumerate(action.get("p") or []):
+            if not isinstance(param, dict) or param.get("type") != "val":
+                continue
+            editor = _find_command_param_editor(node_def, resolved, param.get("id"), index, "accepts")
+            _resolve_val(editor, param.get("val"), errors, f"command '{resolved}' parameter on '{device_id}'")
         return
 
     if atype == "var":
@@ -277,17 +285,55 @@ def _resolve_action(nucore_interface: NuCoreInterface, action: Any, errors: list
                 errors.append(f"'{given}' is not a known command name/id accepted by device '{device_id}'; call get_device_detail again.")
                 return
             cmd["cmdId"] = resolved
+            for index, param in enumerate(cmd.get("p") or []):
+                if not isinstance(param, dict) or param.get("type") != "val":
+                    continue
+                editor = _find_command_param_editor(node_def, resolved, param.get("id"), index, "accepts")
+                _resolve_val(editor, param.get("val"), errors, f"adjust_scene command '{resolved}' parameter on '{device_id}'")
         return
 
 
-def _find_command_param_editor(node_def: Any, command_id: Any, param_id: Any, direction: str):
+def _find_command_param_editor(node_def: Any, command_id: Any, param_id: Any, index: int, direction: str):
+    """Find a command parameter's Editor, matched by id when *param_id* is
+    given and matches, else by its position within the command's own
+    (ordered) parameter list -- needed for an anonymous param (id="") since
+    a command can have more than one, and id-matching alone can't tell them
+    apart (real bug shape: two id="" params on one command, each with a
+    different editor)."""
     commands = node_def.cmds.accepts if direction == "accepts" else node_def.cmds.sends
     for cmd in commands:
-        if cmd.id == command_id:
+        if cmd.id != command_id:
+            continue
+        if param_id:
             for param in cmd.parameters:
                 if param.id == param_id:
                     return param.editor
+        if 0 <= index < len(cmd.parameters):
+            return cmd.parameters[index].editor
+        return None
     return None
+
+
+def _resolve_val(editor: Any, val: Any, errors: list[str], context_label: str) -> None:
+    """Resolve an unresolved enum-label string left in val["value"] by
+    scale_value (see routine_compiler.core) to its real numeric index,
+    in place -- same "backend does deterministic lookup" pattern as
+    send_command's resolve_value (command_control_status.py). A value that's
+    already numeric (the common case) is left untouched."""
+    if not isinstance(val, dict):
+        return
+    value = val.get("value")
+    if not isinstance(value, str):
+        return
+    if editor is None:
+        errors.append(f"{context_label}: cannot resolve enum label '{value}' -- no value editor found; call get_device_detail again.")
+        return
+    try:
+        resolved = resolve_value(editor, value=value)
+    except ValueResolutionError as exc:
+        errors.append(f"{context_label}: {exc}")
+        return
+    val["value"] = int(resolved.value)
 
 
 def _label_for(editor: Any, value: Any) -> str | None:
@@ -400,10 +446,10 @@ def _annotate_action(nucore_interface: NuCoreInterface, action: Any) -> None:
     node_def = getattr(node, "node_def", None)
     if node_def is None:
         return
-    for param in action.get("p") or []:
+    for index, param in enumerate(action.get("p") or []):
         if not isinstance(param, dict) or param.get("type") != "val":
             continue
-        editor = _find_command_param_editor(node_def, action.get("id"), param.get("id"), "accepts")
+        editor = _find_command_param_editor(node_def, action.get("id"), param.get("id"), index, "accepts")
         _annotate_val(param.get("val"), editor)
 
 

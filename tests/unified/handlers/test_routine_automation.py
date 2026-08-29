@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import pytest
 
-from nucore.cmd import Command
+from nucore.cmd import Command, CommandParameter
+from nucore.editor import Editor, EditorSubsetRange
 from nucore.node import Node
 from nucore.nodedef import NodeCommands, NodeDef, NodeProperty
 from nucore.nucore_interface import NuCoreInterface
+from nucore.uom import UOMEntry
 from unified.dispatch import execute_tool
+
+UOM25 = UOMEntry(id="25", description="Enum", label="Enum", name="Enum")
+UOM146 = UOMEntry(id="146", description="Short Notification ID", label="Notification ID", name="Notification ID")
 
 
 def _build_node(address: str, *, properties=None, accepts=None, sends=None) -> Node:
@@ -229,6 +234,111 @@ async def test_adjust_scene_command_name_resolves_against_responder_accepts():
 
     assert result["status"] == "saved"
     assert backend.created_trigger["then"][0]["rsp"]["cmd"]["cmdId"] == "DON"
+
+
+@pytest.mark.asyncio
+async def test_command_param_enum_label_resolves_to_real_index_before_dispatch():
+    """Real reported bug: the model wrote an enum parameter's label text
+    (what it read next to the real index in get_device_detail's editor
+    dict) as value= instead of the index -- the compiler now lets that
+    label through unresolved (routine_compiler tests), and this confirms
+    create_or_update_routine resolves it to the real index server-side,
+    the same "backend does deterministic lookup" pattern as command/
+    property name resolution just above."""
+    backend = FakeBackend()
+    sound_editor = Editor(
+        id="I_SOUND", is_reference=False,
+        ranges=[EditorSubsetRange(id="I_SOUND", uom=UOM146, subset="0-3",
+                                   names={"1": "Clock Radio Alarm", "2": "Siren"})],
+    )
+    backend.nodes["n007_udmobile"] = _build_node("n007_udmobile", accepts=["GV10"])
+    backend.nodes["n007_udmobile"].node_def.cmds.accepts[0].name = "Send Message"
+    backend.nodes["n007_udmobile"].node_def.cmds.accepts[0].parameters = [
+        CommandParameter(id="Sound", editor=sound_editor)
+    ]
+
+    code = (
+        'device("n007_udmobile").command("Send Message", '
+        'params=[param(id="Sound", value="Clock Radio Alarm", uom=146, precision=0)])'
+    )
+    result = await execute_tool("create_or_update_routine", {"name": "Alarm Test", "code": code}, nucore_interface=backend)
+
+    assert result["status"] == "saved"
+    assert backend.created_trigger["then"][0]["p"][0]["val"]["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_command_param_two_anonymous_params_resolve_positionally_to_different_editors():
+    """The exact bug shape: two id="" params on one command, each with a
+    different editor -- id-only matching can't tell them apart (both have
+    the same empty id), so this must resolve positionally instead."""
+    backend = FakeBackend()
+    sound_editor = Editor(
+        id="I_SOUND", is_reference=False,
+        ranges=[EditorSubsetRange(id="I_SOUND", uom=UOM146, subset="0-3", names={"1": "Clock Radio Alarm"})],
+    )
+    content_editor = Editor(
+        id="I_CONTENT", is_reference=False,
+        ranges=[EditorSubsetRange(id="I_CONTENT", uom=UOM146, subset="0-15", names={"11": "General Notifications"})],
+    )
+    backend.nodes["n007_udmobile"] = _build_node("n007_udmobile", accepts=["GV10"])
+    backend.nodes["n007_udmobile"].node_def.cmds.accepts[0].name = "Send Message"
+    backend.nodes["n007_udmobile"].node_def.cmds.accepts[0].parameters = [
+        CommandParameter(id="", editor=sound_editor),
+        CommandParameter(id="", editor=content_editor),
+    ]
+
+    code = (
+        'device("n007_udmobile").command("Send Message", params=['
+        'param(id="", value="Clock Radio Alarm", uom=146, precision=0), '
+        'param(id="", value="General Notifications", uom=146, precision=0)])'
+    )
+    result = await execute_tool("create_or_update_routine", {"name": "Alarm Test", "code": code}, nucore_interface=backend)
+
+    assert result["status"] == "saved"
+    params = backend.created_trigger["then"][0]["p"]
+    assert params[0]["val"]["value"] == 1
+    assert params[1]["val"]["value"] == 11
+
+
+@pytest.mark.asyncio
+async def test_status_condition_enum_label_resolves_to_real_index_before_dispatch():
+    backend = FakeBackend()
+    mode_editor = Editor(
+        id="I_MODE", is_reference=False,
+        ranges=[EditorSubsetRange(id="I_MODE", uom=UOM25, subset="0-1", names={"0": "Off", "1": "On"})],
+    )
+    backend.nodes["25 80 3C 1"].node_def.properties["ST"] = NodeProperty(id="ST", editor=mode_editor, name="Status")
+
+    code = 'if device("25 80 3C 1").status("ST", uom=25, precision=0) == "On":\n    device("BAR1").command("DON")'
+    result = await execute_tool("create_or_update_routine", {"name": "Mode Test", "code": code}, nucore_interface=backend)
+
+    assert result["status"] == "saved"
+    assert backend.created_trigger["if"][0]["val"]["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_enum_label_returns_a_clear_error_not_a_silent_save():
+    backend = FakeBackend()
+    sound_editor = Editor(
+        id="I_SOUND", is_reference=False,
+        ranges=[EditorSubsetRange(id="I_SOUND", uom=UOM146, subset="0-3", names={"1": "Clock Radio Alarm"})],
+    )
+    backend.nodes["n007_udmobile"] = _build_node("n007_udmobile", accepts=["GV10"])
+    backend.nodes["n007_udmobile"].node_def.cmds.accepts[0].name = "Send Message"
+    backend.nodes["n007_udmobile"].node_def.cmds.accepts[0].parameters = [
+        CommandParameter(id="Sound", editor=sound_editor)
+    ]
+
+    code = (
+        'device("n007_udmobile").command("Send Message", '
+        'params=[param(id="Sound", value="Not A Real Sound", uom=146, precision=0)])'
+    )
+    result = await execute_tool("create_or_update_routine", {"name": "Bad Enum", "code": code}, nucore_interface=backend)
+
+    assert "error" in result
+    assert "Not A Real Sound" in result["error"]
+    assert backend.created_trigger is None
 
 
 @pytest.mark.asyncio

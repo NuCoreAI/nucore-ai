@@ -44,6 +44,24 @@ def test_command_param_uom_written_as_a_string_still_compiles_to_an_int():
     assert isinstance(param["val"]["uom"], int)
 
 
+def test_command_param_enum_label_string_compiles_unresolved_instead_of_raising():
+    # uom 146 is an enumeration uom -- a label string (what the model reads
+    # next to the real index in get_device_detail's {index: label} editor
+    # dict) must compile through unresolved, not raise "value must be a
+    # number." The actual label->index resolution happens server-side in
+    # routine_automation.py, where live device editor data is available
+    # (the compiler itself stays stateless).
+    then = _then('device("A").command("Send Message", params=[param(id="", value="Clock Radio Alarm", uom=146, precision=0)])')
+    assert then[0]["p"] == [{"type": "val", "id": "", "val": {"value": "Clock Radio Alarm", "prec": 0, "uom": 146}}]
+
+
+def test_command_param_non_enum_uom_still_rejects_a_string_value():
+    # Only enumeration uoms (25/146/148) get the label-passthrough above --
+    # a string value for an ordinary numeric uom is still a hard compile error.
+    with pytest.raises(TriggerCompileError, match="value must be a number"):
+        _then('device("A").command("DON", params=[param(id="OL", value="bright", uom=51, precision=0)])')
+
+
 def test_wait_duration_decomposes_to_named_fields():
     assert _then("wait(duration(minute=10))") == [{"type": "wait", "minutes": 10}]
     assert _then("wait(duration(hour=1, minute=2, second=3))") == [

@@ -61,8 +61,6 @@ def compile_status_condition(expr: ast.Compare) -> dict[str, Any] | None:
 
     rhs = expr.comparators[0]
     value = literal(rhs)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TriggerCompileError("Comparison value must be a number.")
     scaled = scale_value(value, uom, precision)
 
     # uom must be a schema-typed number (trigger-new.json) regardless of what
