@@ -1684,10 +1684,13 @@ class IoXWrapper(NuCoreInterface):
 
     _EISYUI_INSTANCE = "1"  # nucore-ai only ever targets a single hub/instance
 
-    def _family_api_path(self, suffix: str) -> str:
-        """Build an eisy-ui family-API path for an Insteon DeviceSpecific/
-        pairing operation (see server/routes/api/authenticated/family.ts)."""
-        return f"/api/family/{DEVICE_FAMILY_INSTEON}/{self._EISYUI_INSTANCE}/{suffix}"
+    def _family_api_path(self, suffix: str, family: str = DEVICE_FAMILY_INSTEON, instance: str = None) -> str:
+        """Build an eisy-ui family-API path for a DeviceSpecific/pairing
+        operation (see server/routes/api/authenticated/family.ts).
+        Defaults to the Insteon family/single hub instance; other protocols
+        pass their own family constant once wired up."""
+        instance = instance if instance is not None else self._EISYUI_INSTANCE
+        return f"/api/family/{family}/{instance}/{suffix}"
 
     async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> Any:
         body = {"flag": flag, "address": device_address}

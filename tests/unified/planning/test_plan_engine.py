@@ -83,7 +83,6 @@ async def test_start_plan_opens_a_real_session_for_new_installation():
     result = await engine.start_plan("new_installation", session_id="s1")
     assert result["status"] == "in_progress"
     assert result["plan_type"] == "new_installation"
-    assert "pair_device" in result["available_tools"]
     assert "apply_plan" in result["available_tools"]
     assert engine._plan_state is not None
 
@@ -155,9 +154,6 @@ async def test_conclude_ends_the_session():
 
 @pytest.mark.asyncio
 async def test_stop_ends_the_session():
-    # No pairing cleanup call expected -- pair_device only ever uses the
-    # self-contained add_device, never the discover/finish batch session, so
-    # there's nothing on the hub for stop to defensively clean up.
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
 
@@ -305,53 +301,6 @@ async def test_apply_plan_dispatches_scene_and_automation_ops_too(monkeypatch):
 
     assert result["result"]["summary"] == {"total": 2, "successful": 2, "failed": 0}
     assert len(scene_calls) == 1 and len(automation_calls) == 1
-
-
-# ---------------------------------------------------------------------------
-# pair_device -- protocol gating
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_pair_device_rejects_non_insteon_protocols():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(None, "pair_device", session_id="s1", protocol="zwave")
-
-    assert "not yet supported" in result["result"]
-
-
-@pytest.mark.asyncio
-async def test_pair_device_requires_a_device_address():
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(None, "pair_device", session_id="s1", protocol="insteon")
-
-    assert "error" in result["result"]
-
-
-@pytest.mark.asyncio
-async def test_pair_device_adds_the_device_by_address():
-    class FakeNucore:
-        def __init__(self):
-            self.calls = []
-
-        async def add_device(self, device_address):
-            self.calls.append(device_address)
-            return "added"
-
-    nucore = FakeNucore()
-    engine = _bare_engine()
-    await engine.start_plan("new_installation", session_id="s1")
-
-    result = await engine.run_plan_step(
-        nucore, "pair_device", session_id="s1", protocol="insteon", device_address="1A 2B 3C 1"
-    )
-
-    assert nucore.calls == ["1A 2B 3C 1"]
-    assert result["result"] == "added"
 
 
 # ---------------------------------------------------------------------------

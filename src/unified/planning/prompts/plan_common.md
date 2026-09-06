@@ -10,8 +10,8 @@ you how the tools work.
 
 ## Immediate vs staged changes
 
-Not every step commits right away. Cheap, easily-reversible changes (like creating a folder, or
-pairing a device) happen immediately when you call them. Anything bigger or harder to undo
+Not every step commits right away. Cheap, easily-reversible changes (like creating a folder)
+happen immediately when you call them. Anything bigger or harder to undo
 (creating a scene, an automation, a variable) is **staged** first, not committed immediately:
 
 1. Call the relevant `propose_*` step to add it to the staged plan. This does **not** touch the
@@ -31,10 +31,9 @@ only items still marked as staged get committed.
 
 ## One step at a time
 
-Call steps **one at a time, never several in the same turn** -- these steps can drive real hub
-hardware (pairing a device, for instance) that can only do one operation at a time, and staged
-items have real ordering dependencies (a device must exist before a scene references it, a scene
-must exist before an automation references it).
+Call steps **one at a time, never several in the same turn** -- staged items have real ordering
+dependencies (a device must exist before a scene references it, a scene must exist before an
+automation references it).
 
 ## Ending the session
 

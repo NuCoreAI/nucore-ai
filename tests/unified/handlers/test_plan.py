@@ -19,14 +19,10 @@ from unified.handlers import plan
 class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
-        self.pairing_calls: list[str] = []
 
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
 
-    async def add_device(self, device_address, **kwargs):
-        self.pairing_calls.append(device_address)
-        return {"status": "added"}
-
+    async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
     async def finish_device_discovery(self): raise NotImplementedError
 
@@ -76,7 +72,7 @@ async def test_start_plan_opens_new_installation():
         "start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1"
     )
     assert result["status"] == "in_progress"
-    assert "pair_device" in result["available_tools"]
+    assert "create_folder" in result["available_tools"]
 
 
 @pytest.mark.asyncio
@@ -103,13 +99,13 @@ async def test_run_plan_step_recovers_stringified_json_params():
 
     result = await execute_tool(
         "run_plan_step",
-        {"step": "pair_device", "params": '{"protocol": "insteon", "device_address": "1A 2B 3C 1"}'},
+        {"step": "propose_scene", "params": '{"group_name": "Test", "devices": []}'},
         nucore_interface=backend,
         session_id="s1",
     )
 
-    assert backend.pairing_calls == ["1A 2B 3C 1"]
-    assert result["step"] == "pair_device"
+    assert result["step"] == "propose_scene"
+    assert result["result"]["params"] == {"group_name": "Test", "devices": []}
 
 
 @pytest.mark.asyncio

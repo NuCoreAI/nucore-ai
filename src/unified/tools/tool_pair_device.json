@@ -1,0 +1,36 @@
+{
+  "name": "pair_device",
+  "description": "Add/pair a physical device -- callable any time, including mid-Plan-session. Ask the customer what protocol (insteon, z-wave, zigbee, matter, x10) if unclear. Only 'insteon' is wired up right now; other protocols return a not-yet-supported message -- walk the customer through manual pairing instead. Action depends on protocol: add_by_address (insteon/x10 only) is for a device whose own address the customer already knows or can read off the unit. start_inclusion/finish_inclusion (insteon/zwave/zigbee/matter) is for everything else -- start_inclusion puts the controller in pairing mode so the customer can activate one or more devices, finish_inclusion then commits everything included during that window (newly added devices won't have a name yet -- refresh the device list afterward to find and name them). For adding a marketplace plugin (not a physical device), use install_plugin/buy_plugin instead.",
+  "input_schema": {
+    "type": "object",
+    "required": ["protocol", "action"],
+    "properties": {
+      "protocol": {
+        "type": "string",
+        "enum": ["insteon", "zwave", "zigbee", "matter", "x10"],
+        "description": "The device's protocol family."
+      },
+      "action": {
+        "type": "string",
+        "enum": ["add_by_address", "start_inclusion", "finish_inclusion"],
+        "description": "add_by_address is insteon/x10 only (needs device_address). start_inclusion/finish_inclusion works for insteon/zwave/zigbee/matter (finish_inclusion optionally takes flag)."
+      },
+      "device_address": {
+        "type": ["string", "null"],
+        "description": "The device's own physical address -- required for action=add_by_address."
+      },
+      "name": {
+        "type": ["string", "null"],
+        "description": "Optional display name (add_by_address only)."
+      },
+      "device_type": {
+        "type": ["string", "null"],
+        "description": "Optional device-type hint (add_by_address/start_inclusion)."
+      },
+      "flag": {
+        "type": ["integer", "null"],
+        "description": "Optional numeric flag for finish_inclusion (defaults to 1)."
+      }
+    }
+  }
+}
