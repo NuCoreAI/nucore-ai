@@ -1300,9 +1300,11 @@ class IoXWrapper(NuCoreInterface):
     ):
         """Perform a lifecycle operation on an IoX routine.
 
-        For all operations except ``"delete"``, the routine ID is converted
-        to a zero-padded 4-digit hex string (e.g. ``"001a"``) because that is
-        the format expected by the ``/rest/programs`` endpoint.
+        For all operations except ``"delete"``, this hits
+        ``/api/programs/:id/:cmd`` with the plain integer routine id (a
+        hex-string id is parsed to an int first; see
+        ``7536b1f``, which moved this off the old zero-padded-hex
+        ``/rest/programs`` endpoint).
 
         Args:
             routine_id: Integer or hex-string routine ID.
@@ -1329,9 +1331,8 @@ class IoXWrapper(NuCoreInterface):
                 if isinstance(routine_id, str):
                     try:
                         routine_id = int(routine_id)
-                        #convert it to 4 digit hex string without 0x prefix since that's what the API expects
                     except ValueError:
-                        #already in hex
+                        # not a plain decimal string -- pass through as-is
                         pass
                 # The endpoint for routine operations follows the pattern /api/programs/:id/:cmd
                 response = self.get(f'/api/programs/{routine_id}/{operation}')
