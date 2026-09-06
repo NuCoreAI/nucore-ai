@@ -99,7 +99,11 @@ class ClaudeAdapter(LLMAdapter):
         if tools:
             kwargs["tools"] = tools
         if "temperature" in cfg:
-            kwargs["temperature"] = cfg["temperature"]
+            # The installed anthropic SDK (>=1.0) dropped `temperature` as a
+            # typed kwarg on create()/stream(); `extra_body` is the SDK's
+            # documented escape hatch for API params it no longer exposes
+            # directly.
+            kwargs["extra_body"] = {"temperature": cfg["temperature"]}
 
         stream_handler = cfg.get("stream_handler")
         callback = stream_handler if callable(stream_handler) else None

@@ -26,6 +26,7 @@ from utils import get_logger
 from xml.sax.saxutils import escape as xml_escape
 from .diagnostics.iox_diagnostics import IoXDiagnostics
 from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER
+from .unix_socket_adapter import UnixSocketAdapter
 
 logger = get_logger(__name__)
 
@@ -84,7 +85,10 @@ class IoXWrapper(NuCoreInterface):
     * *Polyglot mode*: pass a ``poly`` interface instance; the ISY connection
       details are fetched asynchronously via the ``ISY`` subscription event.
     * *Direct mode*: pass ``base_url``, ``username``, and ``password``
-      explicitly.
+      explicitly. ``base_url`` may be an ``http(s)://host:port`` URL, or a
+      ``unix:///path/to/socket`` URL to reach the hub over a Unix domain
+      socket instead of TCP (used for both the REST calls and the
+      event-subscription WebSocket).
 
     .. note::
         IoX direct access requires explicit customer permission — it bypasses
@@ -104,8 +108,10 @@ class IoXWrapper(NuCoreInterface):
                                 ``ISY`` subscription event instead of being
                                 passed directly.
             base_url:           Base URL of the ISY hub
-                                (e.g. ``"http://192.168.1.10:80"``).  Required
-                                in direct mode.
+                                (e.g. ``"http://192.168.1.10:80"``), or a
+                                ``"unix:///path/to/socket"`` URL to reach the
+                                hub over a Unix domain socket instead of TCP.
+                                Required in direct mode.
             username:           ISY username.  Required in direct mode.
             password:           ISY password.  Required in direct mode.
 
@@ -114,8 +120,10 @@ class IoXWrapper(NuCoreInterface):
                         ``username``, and ``password`` are supplied.
         """
         super().__init__(json_output, prompt_format_type)  # Initialize parent with no parameters
+        self.unix_socket = None
+        self._session = requests.Session()
         if poly:
-            # import only in case we are running in polglot context since 
+            # import only in case we are running in polglot context since
             # udi_interface redirects standard input/output to polyglot LOGGER
             from udi_interface import udi_interface, unload_interface
             from udi_interface import LOGGER
@@ -124,13 +132,22 @@ class IoXWrapper(NuCoreInterface):
             message = {'getIsyInfo': {}}
             self.poly.send(message, 'system')
         elif base_url and username and password:
-            self.base_url = base_url.rstrip('/')
+            if base_url.startswith("unix://"):
+                self.unix_socket = base_url[len("unix://"):]
+                # Placeholder -- never dialed over TCP; only used for
+                # f"{self.base_url}{path}" string-building and the
+                # WebSocket URI below. All traffic actually goes over
+                # self.unix_socket via UnixSocketAdapter.
+                self.base_url = "http://localhost"
+                self._session.mount("http://", UnixSocketAdapter(self.unix_socket))
+            else:
+                self.base_url = base_url.rstrip('/')
             self.username= username
             self.password= password
         else:
             logger.error("Either poly or base_url, username, and password must be provided")
             raise ValueError("Either poly or base_url, username, and password must be provided")
-        
+
         self.unauthorized = False
         self.diagnostics = IoXDiagnostics(self)
 
@@ -172,9 +189,9 @@ class IoXWrapper(NuCoreInterface):
         """
         try:
             path = path if path.startswith("/") else f"/{path}"
-            url=f"{self.base_url}{path}" 
+            url=f"{self.base_url}{path}"
             # Method 1a: Using auth parameter (simplest)
-            response = requests.delete(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            response = self._session.delete(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -193,9 +210,9 @@ class IoXWrapper(NuCoreInterface):
         """
         try:
             path = path if path.startswith("/") else f"/{path}"
-            url=f"{self.base_url}{path}" 
+            url=f"{self.base_url}{path}"
             # Method 1a: Using auth parameter (simplest)
-            response = requests.get(
+            response = self._session.get(
             url,
             auth=(self.username, self.password),
             verify=False
@@ -220,7 +237,7 @@ class IoXWrapper(NuCoreInterface):
         """
         try:
             url=f"{self.base_url}{path}"
-            response = requests.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            response = self._session.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -241,7 +258,7 @@ class IoXWrapper(NuCoreInterface):
         """
         try:
             url=f"{self.base_url}{path}"
-            response = requests.post(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            response = self._session.post(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -262,7 +279,7 @@ class IoXWrapper(NuCoreInterface):
         """
         try:
             url=f"{self.base_url}{path}"
-            response = requests.patch(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            response = self._session.patch(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -1722,14 +1739,6 @@ class IoXWrapper(NuCoreInterface):
 
         try:
             import ssl
-            if self.base_url.startswith("https"):
-                ws_url = self.base_url.replace("https", "wss") + "/rest/subscribe"
-                ssl_context= ssl.create_default_context()
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
-            else:
-                ws_url = self.base_url.replace("http", "ws") + "/rest/subscribe"
-                ssl_context=None
             #make base64 authorization header
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode()).decode()
@@ -1740,7 +1749,25 @@ class IoXWrapper(NuCoreInterface):
                 # Replace & not starting a valid XML entity.
                 return re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)', '&amp;', xml_text)
 
-            async with websockets.connect(ws_url, ssl=ssl_context, additional_headers=headers) as websocket:
+            if self.unix_socket:
+                from websockets.asyncio.client import unix_connect
+                ws_ctx = unix_connect(
+                    self.unix_socket,
+                    uri="ws://localhost/rest/subscribe",
+                    additional_headers=headers,
+                )
+            else:
+                if self.base_url.startswith("https"):
+                    ws_url = self.base_url.replace("https", "wss") + "/rest/subscribe"
+                    ssl_context= ssl.create_default_context()
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+                else:
+                    ws_url = self.base_url.replace("http", "ws") + "/rest/subscribe"
+                    ssl_context=None
+                ws_ctx = websockets.connect(ws_url, ssl=ssl_context, additional_headers=headers)
+
+            async with ws_ctx as websocket:
                 if on_connect_callback:
                     await on_connect_callback()
                 try:
@@ -1847,11 +1874,14 @@ class IoXWrapper(NuCoreInterface):
         if root == None:
             return None
 
-        glinks_root = self.__load_groups_links__(groups_path) 
-        self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root, glinks_root) 
+        try:
+            glinks_root = self.__load_groups_links__(groups_path) 
+            self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root, glinks_root) 
+            return self.nodes
+        except Exception as e:
+            logger.error(f"Failed to load group links: {str(e)}")
+            return None
 
-        return self.nodes
-        
     def __load_profile__(self, profile_path: str = None) -> bool:
         """Load the device/node profile from a file or the hub.
 

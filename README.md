@@ -211,7 +211,7 @@ logger.info("runtime started")
 | `--ssl-certfile` | PEM cert file; with `--ssl-keyfile`, serves `--websocket-port` over `wss://` |
 | `--ssl-keyfile` | PEM private key file; with `--ssl-certfile`, serves `--websocket-port` over `wss://` |
 | `--backend-api-classpath` | Python class path for backend API (e.g. `iox.IoXWrapper`) |
-| `--backend-api-base-url` | Base URL for backend API |
+| `--backend-api-base-url` | Base URL for backend API (`http(s)://host:port`, or `unix:///path/to/socket` for `iox.IoXWrapper` to connect over a Unix domain socket instead of TCP) |
 | `--backend-api-username` | Backend API username |
 | `--backend-api-password` | Backend API password |
 | `--json-output` | Enable JSON output mode for backend API |

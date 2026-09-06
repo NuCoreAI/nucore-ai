@@ -3,7 +3,7 @@
 
 requests
 openai
-anthropic
+anthropic>=1.2.0
 httpx
 udi_interface
 websockets
