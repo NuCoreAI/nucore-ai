@@ -1670,25 +1670,46 @@ class IoXWrapper(NuCoreInterface):
         return await self.diagnostics.run_diagnostic_step(step, **params)
 
     # ------------------------------------------------------------------
-    # Device pairing -- previously dead diagnostics-only SOAP calls (never
-    # wired into a diagnostic step), moved here rather than wiring up the
-    # untested, zero-call-site SetDeviceLinkMode action. Distinct from
-    # add_node above -- these drive the PLM's physical pairing/linking
-    # hardware workflow, not NuCore's own node database. INSTEON only for
-    # now -- no Z-Wave/Zigbee/Matter pairing primitives exist anywhere in
-    # this class yet.
+    # Device pairing -- drives the PLM's physical pairing/linking hardware
+    # workflow (distinct from add_node above, which creates a software node
+    # via the REST API). Calls eisy-ui's REST API
+    # (server/routes/api/authenticated/family.ts) rather than building raw
+    # SOAP envelopes directly, via the same IoXWrapper.post() used
+    # elsewhere -- no separate HTTP client. INSTEON only for now -- no
+    # Z-Wave/Zigbee/Matter pairing primitives exist anywhere in this class
+    # yet. set_device_linking_mode wires up what was previously a dead,
+    # zero-call-site SOAP action (SetDeviceLinkMode) now that it has a real
+    # eisy-ui route backing it.
     # ------------------------------------------------------------------
 
-    async def add_device(self, device_address: str, **kwargs) -> Any:
-        return await self._send_device_specific_with_option(
-            IoXSOAPAction.SOAP_TYPE_ADD_NODE, device_address, None, 0x01, None
-        )
+    _EISYUI_INSTANCE = "1"  # nucore-ai only ever targets a single hub/instance
 
-    async def discover_devices(self) -> Any:
-        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_DISCOVER_NODES, None, None, 0x01, None)
+    def _family_api_path(self, suffix: str) -> str:
+        """Build an eisy-ui family-API path for an Insteon DeviceSpecific/
+        pairing operation (see server/routes/api/authenticated/family.ts)."""
+        return f"/api/family/{DEVICE_FAMILY_INSTEON}/{self._EISYUI_INSTANCE}/{suffix}"
 
-    async def finish_device_discovery(self) -> Any:
-        return await self._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_CANCEL_NODES_DISCOVERY, None, None, 0x01, None)
+    async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> Any:
+        body = {"flag": flag, "address": device_address}
+        if name:
+            body["name"] = name
+        if device_type:
+            body["deviceType"] = device_type
+        response = self.post(self._family_api_path("add-node"), json.dumps(body), {"Content-Type": "application/json"})
+        return device_address if response is not None and response.status_code == 200 else None
+
+    async def discover_devices(self, device_type: str = None, **kwargs) -> Any:
+        body = {"deviceType": device_type} if device_type else {}
+        response = self.post(self._family_api_path("start-linking"), json.dumps(body), {"Content-Type": "application/json"})
+        return response is not None and response.status_code == 200
+
+    async def finish_device_discovery(self, flag: int = 1, **kwargs) -> Any:
+        response = self.post(self._family_api_path("stop-linking"), json.dumps({"flag": flag}), {"Content-Type": "application/json"})
+        return response is not None and response.status_code == 200
+
+    async def set_device_linking_mode(self, mode: str) -> Any:
+        response = self.post(self._family_api_path("set-linking-mode"), json.dumps({"mode": mode}), {"Content-Type": "application/json"})
+        return response is not None and response.status_code == 200
 
     # ------------------------------------------------------------------
     # WebSocket event subscription

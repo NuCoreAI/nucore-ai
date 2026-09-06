@@ -247,14 +247,30 @@ Only New installation, Room addition, and Move need this. Grounded in survey:
   only invoked from **private** diagnostics steps (`_add_node`/`_discover_nodes`/
   `_cancel_nodes_discovery`, `src/iox/diagnostics/iox_diagnostics.py:544-553`) -- not exposed as a
   unified tool.
-- **Decision**: build a `pair_device(protocol, ...)` step now. For INSTEON, it can genuinely put
-  the PLM into linking mode using the existing SOAP actions above and tell the customer to press
-  the device's set button -- that's real capability, not a fake stub. For Z-Wave/Zigbee/Matter, no
-  equivalent primitives exist anywhere in `iox_wrapper.py`; the step returns "not yet supported,"
-  and the relevant `plan_<type>.md` files instruct the LLM to fall back to walking the customer
-  through the vendor's manual pairing procedure conversationally instead. Either way, a device only
-  becomes eligible for `propose_scene`/`propose_automation` once `list_devices` confirms it exists
-  for real -- Plan never stages configuration for a device that hasn't actually been paired yet.
+- **Update (2026-09-06)**: `INSTEONDiagnostics` (`src/iox/diagnostics/insteon_diag.py`) has since
+  migrated its Insteon `DeviceSpecific` operations (link-table dumps, PLM info, stop) off raw SOAP
+  envelopes and onto eisy-ui's REST API instead -- the production-reference implementation at
+  `server/routes/api/authenticated/family.ts` -- reusing `IoXWrapper`'s existing `get`/`post`
+  helpers (same host, same Basic Auth as the hub) rather than a new HTTP client. See
+  `INSTEONDiagnostics._family_api_path()`, which builds `/api/family/{family}/{instance}/...`
+  paths (`family=DEVICE_FAMILY_INSTEON`, `instance="1"`, since nucore-ai only ever targets one hub
+  instance). `family.ts` exposes the same REST shape for every pairing primitive above too:
+  `POST .../start-linking` (SOAP `DiscoverNodes`; optional body `{deviceType}`),
+  `POST .../stop-linking` (SOAP `CancelNodesDiscovery`; body `{flag: 1|3|4}`),
+  `POST .../add-node` (SOAP `AddNode`; body `{flag: 1|3|4, address?, name?, deviceType?}`),
+  `POST .../set-linking-mode` (SOAP `SetDeviceLinkingMode`; body `{mode}`).
+- **Decision**: build `pair_device(protocol, ...)` against these eisy-ui REST routes, following the
+  same `IoXWrapper.post(...)` pattern `INSTEONDiagnostics` now uses, rather than building new raw
+  SOAP envelopes directly -- for consistency with the rest of the DeviceSpecific/pairing surface,
+  and so pairing doesn't reintroduce the SOAP-envelope duplication this round just removed
+  elsewhere. For INSTEON, it can genuinely put the PLM into linking mode via `start-linking`/
+  `set-linking-mode` and tell the customer to press the device's set button -- that's real
+  capability, not a fake stub. For Z-Wave/Zigbee/Matter, no equivalent primitives exist anywhere in
+  `iox_wrapper.py` or `family.ts`; the step returns "not yet supported," and the relevant
+  `plan_<type>.md` files instruct the LLM to fall back to walking the customer through the vendor's
+  manual pairing procedure conversationally instead. Either way, a device only becomes eligible for
+  `propose_scene`/`propose_automation` once `list_devices` confirms it exists for real -- Plan never
+  stages configuration for a device that hasn't actually been paired yet.
 
 ## Open risks / tradeoffs
 

@@ -88,10 +88,20 @@ async def test_get_all_plm_links_ignores_a_small_fresh_cache_file(tmp_path, monk
 
     fetch_calls = []
 
+    class FakeResponse:
+        status_code = 200
+        text = "ack"
+
+        def json(self):
+            return {"data": "ack"}
+
     class FakeWrapper:
-        async def _send_device_specific_with_option(self, command, node, option, flag, specs):
+        def _family_api_path(self, suffix):
+            return f"/api/family/1/1/{suffix}"
+
+        def post(self, path, body, headers=None):
             fetch_calls.append(1)
-            return "ack"
+            return FakeResponse()
 
     diag._iox_wrapper = FakeWrapper()
 
@@ -118,10 +128,20 @@ async def test_get_all_plm_links_serves_a_large_fresh_cache_file(tmp_path, monke
 
     fetch_calls = []
 
+    class FakeResponse:
+        status_code = 200
+        text = "ack"
+
+        def json(self):
+            return {"data": "ack"}
+
     class FakeWrapper:
-        async def _send_device_specific_with_option(self, command, node, option, flag, specs):
+        def _family_api_path(self, suffix):
+            return f"/api/family/1/1/{suffix}"
+
+        def post(self, path, body, headers=None):
             fetch_calls.append(1)
-            return "ack"
+            return FakeResponse()
 
     diag._iox_wrapper = FakeWrapper()
 
