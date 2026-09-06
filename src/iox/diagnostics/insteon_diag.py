@@ -75,7 +75,7 @@ import os
 import re
 import time
 from typing import TYPE_CHECKING, Literal
-from ..iox_definitions import IoXSOAPAction, DEVICE_FAMILIES
+from urllib.parse import quote
 
 
 from ..iox_wrapper import IoXWrapper
@@ -225,7 +225,10 @@ class INSTEONDiagnostics:
             self._is_running = False
             return "PLM not connected. Cannot retrieve device links table."
         #make it into a thread so it can be stopped if needed
-        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_DEV_LINKS_TABLE, device_id, None, 0x01, "0 -1")
+        response = self._iox_wrapper.post(
+            self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/device"), ""
+        )
+        rc = response is not None and response.status_code == 200
         await self._add_ending_to_file()
         if rc:
             rc = await self._read_from_file(self._file_path)
@@ -254,7 +257,10 @@ class INSTEONDiagnostics:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} using PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
         else:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} (PLM not connected)\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
-        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ISY_LINKS_TABLE, device_id, None, 0x01, None)
+        response = self._iox_wrapper.post(
+            self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/iox"), ""
+        )
+        rc = response is not None and response.status_code == 200
         await self._add_ending_to_file()
         if rc:
             rc = await self._read_from_file(self._file_path)
@@ -292,7 +298,8 @@ class INSTEONDiagnostics:
         self._file_path = cache_path
         await self._write_to_file(self._file_path, f"PLM Links Table for PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
 
-        rc = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_ALL_PLM_LINKS, None, None, 0x01, None)
+        response = self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-links"), "")
+        rc = response is not None and response.status_code == 200
         await self._add_ending_to_file()
         self._refresh_plm_links = False  # satisfied -- next call can use cache again
         if rc:
@@ -492,7 +499,7 @@ class INSTEONDiagnostics:
     async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:
             logger.warning("Stopping Insteon diagnostics...")
-            await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_STOP_DEVICE_SPECIFIC, None, None, 0x01, None)
+            self._iox_wrapper.post(self._iox_wrapper._family_api_path("links/stop"), "")
             if cleanup:
                 await self._add_ending_to_file()
                 self._is_running = False
@@ -597,14 +604,20 @@ class INSTEONDiagnostics:
             logger.warning(already_running_message)
             return None, already_running_message
 
-        plm_info = await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.DEVICE_SPECIFIC_GET_PLM_INFO, None, None, 0x01, None)
-        if plm_info is None: 
-            logger.error(f"Failed to get PLM info: {plm_info.status_code if plm_info else 'No response'}")
-            return None, plm_info.status_code if plm_info else 'No response'
-        
-        plm_info_parts = plm_info.split(" / ")
+        response = self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-info"), "")
+        if response is None or response.status_code != 200:
+            status = response.status_code if response else "No response"
+            logger.error(f"Failed to get PLM info: {status}")
+            return None, status
+
+        try:
+            plm_info = response.json().get("data")
+        except ValueError:
+            plm_info = response.text
+
+        plm_info_parts = plm_info.split(" / ") if plm_info else []
         if len(plm_info_parts) > 1:
-            return plm_info_parts[1].strip() == "Connected", plm_info_parts[0] 
+            return plm_info_parts[1].strip() == "Connected", plm_info_parts[0]
 
         return False, plm_info  # Default to disconnected if format is unexpected
 

@@ -12,6 +12,7 @@ from .handlers import (
     diagnostics,
     group_scene_ops,
     node_ops,
+    pair_device,
     plan,
     plugin_management,
     preferences,
@@ -24,20 +25,26 @@ from .handlers import (
 logger = get_logger(__name__)
 
 # Tools still allowed through while a plan session is running -- everything
-# else is refused (see execute_tool), for every session. Even these two are
-# only let through for the session_id that started the active plan -- a real
-# hub-level operation another conversation shouldn't be able to touch,
-# restart, or interrupt.
-_PLAN_EXEMPT_TOOLS = frozenset({"start_plan", "run_plan_step"})
+# else is refused (see execute_tool), for every session. start_plan/
+# run_plan_step are only let through for the session_id that started the
+# active plan -- a real hub-level operation another conversation shouldn't
+# be able to touch, restart, or interrupt. pair_device is exempt too since
+# Plan's new_installation workflow explicitly pairs devices mid-session,
+# but it's a plain always-available tool otherwise (see
+# _SESSION_SCOPED_TOOLS below -- it deliberately isn't in that set).
+_PLAN_EXEMPT_TOOLS = frozenset({"start_plan", "run_plan_step", "pair_device"})
 
-# Diagnostics has no session at all any more -- run_diagnostic_step/
-# get_diagnostics_prompt are ordinary, always-available tools, neither needs
-# session_id forwarded. The 4 steps that actually touch the shared PLM
-# connection (get_dev_links_table, compare_device_links, get_all_plm_links,
-# quick_plm_sanity_check) enforce their own narrow, atomic mutual exclusion
-# in IoXDiagnostics -- see _begin_plm_op/_end_plm_op -- independent of this
-# dispatcher entirely.
-_SESSION_SCOPED_TOOLS = _PLAN_EXEMPT_TOOLS
+# Which tools get session_id forwarded to their handler -- a different
+# concern from _PLAN_EXEMPT_TOOLS above (which merely happens to share two
+# members with it): only start_plan/run_plan_step's handlers accept a
+# session_id kwarg. Diagnostics has no session at all any more --
+# run_diagnostic_step/get_diagnostics_prompt are ordinary, always-available
+# tools, neither needs session_id forwarded. The 4 steps that actually
+# touch the shared PLM connection (get_dev_links_table, compare_device_links,
+# get_all_plm_links, quick_plm_sanity_check) enforce their own narrow, atomic
+# mutual exclusion in IoXDiagnostics -- see _begin_plm_op/_end_plm_op --
+# independent of this dispatcher entirely.
+_SESSION_SCOPED_TOOLS = frozenset({"start_plan", "run_plan_step"})
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
 
@@ -45,6 +52,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_property": command_control_status.get_property,
     "send_command": command_control_status.send_command,
     "node_op": node_ops.node_op,
+    "pair_device": pair_device.pair_device,
     "group_scene_op": group_scene_ops.group_scene_op,
     "get_group_detail": group_scene_ops.get_group_detail,
     "multi_device_scene": group_scene_ops.multi_device_scene,

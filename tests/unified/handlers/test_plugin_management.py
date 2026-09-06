@@ -195,7 +195,7 @@ async def test_list_installed_plugins_maps_profile_num_to_plugin_id():
     result = await execute_tool("list_installed_plugins", {}, nucore_interface=backend)
     assert result == {
         "plugins": [
-            {"plugin_id": 3, "name": "YouTube", "is_local": False},
+            {"plugin_id": 3, "name": "YouTube", "is_local": False, "ai_support": None},
         ]
     }
 

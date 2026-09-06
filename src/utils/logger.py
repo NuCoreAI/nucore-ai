@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -196,9 +197,15 @@ def configure_logging(
     formatter = _build_formatter(config.json_output)
 
     if config.console:
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        root.addHandler(stream_handler)
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(formatter)
+        stdout_handler.addFilter(lambda record: record.levelno < logging.WARNING)
+        root.addHandler(stdout_handler)
+
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        stderr_handler.setLevel(logging.WARNING)
+        root.addHandler(stderr_handler)
 
     if config.log_file:
         path = Path(config.log_file).expanduser().resolve()

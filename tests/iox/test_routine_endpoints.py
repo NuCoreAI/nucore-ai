@@ -1,8 +1,9 @@
 """Verifies the routine/trigger endpoint migration in IoXWrapper:
 /api/ai/trigger* -> /api/trigger, /api/triggers, /api/triggers/:id (hard
-cutover, per explicit scope decision), while the confirmed-unchanged
-lifecycle (/rest/programs/...) and lightweight-summary
-(/api/ai/programs, /api/ai/program/:id) endpoints stay untouched.
+cutover, per explicit scope decision), and the lifecycle
+(routine_ops, /api/programs/:id/:cmd) and lightweight-summary
+(/api/programs) endpoints, both since moved off their older
+/rest/programs and /api/ai/programs paths respectively.
 """
 
 from __future__ import annotations
@@ -161,14 +162,14 @@ async def test_routine_ops_delete_moves_with_the_crud_migration():
 
 
 @pytest.mark.asyncio
-async def test_routine_ops_other_operations_stay_on_rest_programs():
+async def test_routine_ops_other_operations_use_api_programs():
     wrapper = _bare_wrapper()
     calls = []
     wrapper.get = lambda path: (calls.append(("GET", path)), FakeResp())[1]
 
     await wrapper.routine_ops("2", "enable")
 
-    assert calls == [("GET", "/rest/programs/0002/enable")]
+    assert calls == [("GET", "/api/programs/2/enable")]
 
 
 @pytest.mark.asyncio

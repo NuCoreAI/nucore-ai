@@ -1,18 +1,14 @@
-"""IoXDiagnostics._send_device_specific/_send_device_specific_with_option --
+"""IoXWrapper._send_device_specific/_send_device_specific_with_option --
 Python port of the Java SDK's two sendDeviceSpecific() overloads, built on
 IoXWrapper.soap_post(). Covers: envelope/SOAPAction shape, XML-escaping of
 plain parameters vs. raw passthrough for the CDATA/specs document, and the
 None-on-failure paths.
-
-IoXDiagnostics is a plain class (not a singleton) constructed with an
-IoXWrapper instance.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from iox.diagnostics.iox_diagnostics import IoXDiagnostics
 from iox.iox_wrapper import IoXWrapper
 
 
@@ -34,9 +30,8 @@ async def test_send_device_specific_builds_expected_envelope_and_action():
         calls.append((path, body, soap_action)),
         FakeResp(text="<result/>"),
     )[1]
-    diagnostics = IoXDiagnostics(wrapper)
 
-    result = await diagnostics._send_device_specific("STATUS", "n001", "a", "b", "c", specs="<doc/>")
+    result = await wrapper._send_device_specific("STATUS", "n001", "a", "b", "c", specs="<doc/>")
 
     assert result == "<result/>"
     (path, body, action) = calls[0]
@@ -60,9 +55,8 @@ async def test_send_device_specific_escapes_plain_params_but_not_specs():
         calls.append(body),
         FakeResp(),
     )[1]
-    diagnostics = IoXDiagnostics(wrapper)
 
-    await diagnostics._send_device_specific("A & B", "n<1>", specs="<raw>&unescaped</raw>")
+    await wrapper._send_device_specific("A & B", "n<1>", specs="<raw>&unescaped</raw>")
 
     body = calls[0]
     assert "<command>A &amp; B</command>" in body
@@ -79,9 +73,8 @@ async def test_send_device_specific_omitted_params_become_empty_elements():
         calls.append(body),
         FakeResp(),
     )[1]
-    diagnostics = IoXDiagnostics(wrapper)
 
-    await diagnostics._send_device_specific("STATUS", "n001")
+    await wrapper._send_device_specific("STATUS", "n001")
 
     body = calls[0]
     assert "<p1></p1><p2></p2><p3></p3>" in body
@@ -92,18 +85,16 @@ async def test_send_device_specific_omitted_params_become_empty_elements():
 async def test_send_device_specific_returns_none_on_non_200():
     wrapper = _bare_wrapper()
     wrapper.soap_post = lambda *a, **kw: FakeResp(status_code=500)
-    diagnostics = IoXDiagnostics(wrapper)
 
-    assert await diagnostics._send_device_specific("STATUS", "n001") is None
+    assert await wrapper._send_device_specific("STATUS", "n001") is None
 
 
 @pytest.mark.asyncio
 async def test_send_device_specific_returns_none_on_connection_error():
     wrapper = _bare_wrapper()
     wrapper.soap_post = lambda *a, **kw: None
-    diagnostics = IoXDiagnostics(wrapper)
 
-    assert await diagnostics._send_device_specific("STATUS", "n001") is None
+    assert await wrapper._send_device_specific("STATUS", "n001") is None
 
 
 @pytest.mark.asyncio
@@ -114,9 +105,8 @@ async def test_send_device_specific_with_option_uses_option_tag():
         calls.append(body),
         FakeResp(),
     )[1]
-    diagnostics = IoXDiagnostics(wrapper)
 
-    await diagnostics._send_device_specific_with_option("STATUS", "n001", option="fast")
+    await wrapper._send_device_specific_with_option("STATUS", "n001", option="fast")
 
     body = calls[0]
     assert "<option>fast</option>" in body
@@ -131,9 +121,8 @@ async def test_send_device_specific_with_option_sends_flag_value_as_given():
         calls.append(body),
         FakeResp(),
     )[1]
-    diagnostics = IoXDiagnostics(wrapper)
 
-    await diagnostics._send_device_specific_with_option("STATUS", "n001", flag="200")
+    await wrapper._send_device_specific_with_option("STATUS", "n001", flag="200")
 
     assert "<flag>200</flag>" in calls[0]
 
@@ -146,8 +135,7 @@ async def test_send_device_specific_with_option_defaults_flag_to_zero():
         calls.append(body),
         FakeResp(),
     )[1]
-    diagnostics = IoXDiagnostics(wrapper)
 
-    await diagnostics._send_device_specific_with_option("STATUS", "n001")
+    await wrapper._send_device_specific_with_option("STATUS", "n001")
 
     assert "<flag>0</flag>" in calls[0]

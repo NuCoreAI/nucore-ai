@@ -14,8 +14,9 @@ survive between calls, unlike Diagnostics' plain reads. Plan lives here in
 ``unified`` rather than being delegated through ``NuCoreInterface`` the way
 Diagnostics is. Diagnostics needs that delegation because its steps are raw,
 protocol-specific SOAP calls that only make sense for an IoX/INSTEON backend.
-Plan's steps (aside from device pairing) already go through existing
-``NuCoreInterface``-level handler functions in ``unified.handlers`` -- putting
+Plan's steps already go through existing ``NuCoreInterface``-level handler
+functions in ``unified.handlers`` (device pairing is its own standalone
+global tool, ``unified.handlers.pair_device``, not a Plan step) -- putting
 Plan's state inside ``IoXWrapper`` would force ``iox`` to import from
 ``unified``, which is backwards (``unified`` depends on ``iox``, never the
 reverse).
@@ -232,10 +233,12 @@ class PlanEngine:
             return {"status": "completed", "summary": params.get("summary")}
 
         if step == "stop":
-            # No pairing session to defensively clean up: pair_device only
-            # ever calls add_device, a self-contained, one-shot operation --
-            # Plan never opens the discover_devices()/finish_device_discovery()
-            # batch session, so there's nothing left in flight on the hub.
+            # No hub-side session to defensively clean up here -- Plan's
+            # remaining steps are either immediate REST calls or purely
+            # in-memory staged ops, neither leaves anything in flight on
+            # the hub. (Device pairing, which does drive a real hub-side
+            # session for some protocols, is its own standalone tool now --
+            # see unified.handlers.pair_device -- not part of Plan.)
             self._plan_state = None
             return {"status": "stopped"}
 
@@ -259,22 +262,8 @@ class PlanEngine:
         return await variable_ops.list_variables(nucore_interface, params)
 
     # ------------------------------------------------------------------
-    # Pairing / immediate commit
+    # Immediate commit
     # ------------------------------------------------------------------
-
-    async def _pair_device(self, nucore_interface: Any, protocol: str, device_address: str | None = None, **kwargs) -> Any:
-        if protocol != "insteon":
-            return (
-                f"Pairing for '{protocol}' is not yet supported -- guide the customer "
-                "through the vendor's manual pairing procedure instead."
-            )
-        if not device_address:
-            return {"error": "device_address is required"}
-        # Only the targeted, self-contained add-by-address call -- never the
-        # discover_devices()/finish_device_discovery() batch session, which
-        # has no reliable way to map an anonymously-linked address back to
-        # which room/name the customer actually meant.
-        return await nucore_interface.add_device(device_address)
 
     async def _create_folder(self, nucore_interface: Any, new_name: str | None = None, **kwargs) -> Any:
         if not new_name:
