@@ -154,7 +154,11 @@ python -m unified.run_unified_runtime \
 
 ### Logging
 
-The runtime supports centralized, flexible logging for both development and production use.
+The runtime supports centralized, flexible logging for both development and production use. When
+console logging is on (the default), `DEBUG`/`INFO` records go to stdout and `WARNING`/`ERROR`
+records go to stderr -- so `2>/dev/null` silences errors/warnings while keeping normal output, and
+piping just stdout to a log aggregator won't miss error-level records mixed in. The optional log
+file (`--log-file`/`NUCORE_LOG_FILE`) always receives every level, regardless of the console split.
 
 #### Runtime Logging Flags
 

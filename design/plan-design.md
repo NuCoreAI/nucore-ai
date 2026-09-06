@@ -53,7 +53,7 @@ shared preamble every `plan_<type>.md` is concatenated with.
 
 From the original ask, brainstormed additions, and the three requested this round:
 
-| Plan type | One-line description | Needs `pair_device`? | Needs plugin/feature check? |
+| Plan type | One-line description | Needs device pairing (via the standalone `pair_device` tool)? | Needs plugin/feature check? |
 |---|---|---|---|
 | New installation | Customer describes devices, locations, desired scenes/automations from scratch (whether an existing house with no prior NuCore config, or a newly-built one); Plan adds devices, creates folders/scenes/automations. | Yes | Maybe (e.g. voice/media plugins) |
 | Room addition / expansion | Onboard new devices into an *already-configured* house without disturbing existing scenes/automations. | Yes | Maybe |
@@ -147,10 +147,11 @@ plugins implement the same three-command contract entirely on their own, outside
 - **Staging**: `propose_folder`, `propose_scene`, `propose_automation`, `propose_variable`,
   `review_plan` (renders the whole staged plan back in plain language), `revise_plan` (edit or
   remove a staged item).
-- **Commit** (hybrid tiers): immediate steps (`create_folder`, `add_device` for an
-  already-paired device) vs. `apply_plan` (executes every staged item, tier by tier, reporting
-  per-item success/failure -- not all-or-nothing, since the underlying calls have real server-side
-  validation that can fail per item, e.g. `group_scene_ops`' controller/responder role checks).
+- **Commit** (hybrid tiers): immediate steps (`create_folder`, plus the standalone `pair_device`
+  tool -- not a Plan step at all any more, see "Device pairing" below) vs. `apply_plan` (executes
+  every staged item, tier by tier, reporting per-item success/failure -- not all-or-nothing, since
+  the underlying calls have real server-side validation that can fail per item, e.g.
+  `group_scene_ops`' controller/responder role checks).
 - **Terminal**: `conclude`, `stop` -- same semantics as Diagnostics.
 
 ### Staged-plan data model
@@ -222,8 +223,9 @@ results and lets it reason over them directly, in this fixed order:
    plausibly already covers the needed capability, it's available -- nothing to stage.
 2. If nothing in installed matches, read `list_purchased_plugins` (`plugin_management.py:77`). If
    a match is found there, the customer already holds a license but hasn't installed it -- stage
-   an `install_plugin(nsid, name)` step. Unlike `pair_device`'s stub-awaiting-a-real-API framing,
-   this isn't temporary: `install_plugin` deliberately never installs anything itself -- for
+   an `install_plugin(nsid, name)` step. Unlike `pair_device`'s non-insteon protocols, which are
+   stubs awaiting real eisy-ui routes, this isn't a temporary stand-in: `install_plugin`
+   deliberately never installs anything itself -- for
    security reasons, installation always happens on the web, so it just returns an `install_url`
    for the customer to finish there.
 3. If still no match, read `list_store_plugins` (`plugin_management.py:35`, the full
@@ -237,40 +239,57 @@ Every plan type that leans on a plugin (Serenity, Security, Animal protection) s
 three-step order and land on the narrowest applicable outcome -- already available, install-stub,
 or recommend-purchase -- rather than assuming it can just make the capability appear.
 
-### Device pairing (explicitly stubbed, per this round's decision)
+### Device pairing (implemented, insteon-only, as a standalone global tool)
 
-Only New installation, Room addition, and Move need this. Grounded in survey:
+Only New installation, Room addition, and Move need this. Grounded in survey, updated as the
+implementation actually landed:
 
-- `IoXSOAPAction` (`src/iox/iox_definitions.py`) already defines `SOAP_TYPE_ADD_NODE` (line 30),
-  `SOAP_TYPE_DISCOVER_NODES` (line 31), `SOAP_TYPE_CANCEL_NODES_DISCOVERY` (line 42), and
-  `SOAP_TYPE_SET_DEVICE_LINKING_MODE` (line 43, currently never called anywhere). Today these are
-  only invoked from **private** diagnostics steps (`_add_node`/`_discover_nodes`/
-  `_cancel_nodes_discovery`, `src/iox/diagnostics/iox_diagnostics.py:544-553`) -- not exposed as a
-  unified tool.
-- **Update (2026-09-06)**: `INSTEONDiagnostics` (`src/iox/diagnostics/insteon_diag.py`) has since
-  migrated its Insteon `DeviceSpecific` operations (link-table dumps, PLM info, stop) off raw SOAP
-  envelopes and onto eisy-ui's REST API instead -- the production-reference implementation at
-  `server/routes/api/authenticated/family.ts` -- reusing `IoXWrapper`'s existing `get`/`post`
-  helpers (same host, same Basic Auth as the hub) rather than a new HTTP client. See
-  `INSTEONDiagnostics._family_api_path()`, which builds `/api/family/{family}/{instance}/...`
-  paths (`family=DEVICE_FAMILY_INSTEON`, `instance="1"`, since nucore-ai only ever targets one hub
-  instance). `family.ts` exposes the same REST shape for every pairing primitive above too:
-  `POST .../start-linking` (SOAP `DiscoverNodes`; optional body `{deviceType}`),
-  `POST .../stop-linking` (SOAP `CancelNodesDiscovery`; body `{flag: 1|3|4}`),
-  `POST .../add-node` (SOAP `AddNode`; body `{flag: 1|3|4, address?, name?, deviceType?}`),
-  `POST .../set-linking-mode` (SOAP `SetDeviceLinkingMode`; body `{mode}`).
-- **Decision**: build `pair_device(protocol, ...)` against these eisy-ui REST routes, following the
-  same `IoXWrapper.post(...)` pattern `INSTEONDiagnostics` now uses, rather than building new raw
-  SOAP envelopes directly -- for consistency with the rest of the DeviceSpecific/pairing surface,
-  and so pairing doesn't reintroduce the SOAP-envelope duplication this round just removed
-  elsewhere. For INSTEON, it can genuinely put the PLM into linking mode via `start-linking`/
-  `set-linking-mode` and tell the customer to press the device's set button -- that's real
-  capability, not a fake stub. For Z-Wave/Zigbee/Matter, no equivalent primitives exist anywhere in
-  `iox_wrapper.py` or `family.ts`; the step returns "not yet supported," and the relevant
-  `plan_<type>.md` files instruct the LLM to fall back to walking the customer through the vendor's
-  manual pairing procedure conversationally instead. Either way, a device only becomes eligible for
-  `propose_scene`/`propose_automation` once `list_devices` confirms it exists for real -- Plan never
-  stages configuration for a device that hasn't actually been paired yet.
+- `IoXSOAPAction` (`src/iox/iox_definitions.py`) defines `SOAP_TYPE_ADD_NODE`,
+  `SOAP_TYPE_DISCOVER_NODES`, `SOAP_TYPE_CANCEL_NODES_DISCOVERY`, and
+  `SOAP_TYPE_SET_DEVICE_LINKING_MODE`. The first three now go through eisy-ui's REST API instead of
+  raw SOAP (see next bullet); `SET_DEVICE_LINKING_MODE` remains unused anywhere in this codebase --
+  its semantics were never documented anywhere found (not in `family.ts`, not in
+  `iox_definitions.py`), so it was deliberately left out of `pair_device` rather than exposed as an
+  unverifiable opaque pass-through.
+- `INSTEONDiagnostics` (`src/iox/diagnostics/insteon_diag.py`) and `IoXWrapper`
+  (`src/iox/iox_wrapper.py`) call eisy-ui's REST routes
+  (`server/routes/api/authenticated/family.ts`) via `IoXWrapper`'s existing `get`/`post` helpers
+  (same host, same Basic Auth as the hub) rather than building SOAP envelopes directly or using a
+  new HTTP client. `IoXWrapper._family_api_path(suffix, family=DEVICE_FAMILY_INSTEON,
+  instance=None)` builds `/api/family/{family}/{instance}/...` paths (`instance` defaults to
+  `IoXWrapper._EISYUI_INSTANCE = "1"`, since nucore-ai only ever targets one hub instance; `family`
+  is parameterized so a future protocol can pass its own family constant, e.g.
+  `DEVICE_FAMILY_LEGACY_Z_WAVE`).
+- **`pair_device` is a standalone, always-available global tool** (`src/unified/handlers/
+  pair_device.py`, registered in `dispatch.py`'s `TOOL_HANDLERS`) -- **not** a Plan-session step.
+  It's exempt from Plan's "only start_plan/run_plan_step allowed while a session is running" gate
+  (`dispatch.py`'s `_PLAN_EXEMPT_TOOLS`) so it stays callable mid-session, since `plan_new_
+  installation.md`'s workflow pairs devices as it goes; it's equally callable outside any Plan
+  session.
+- **Shape: `protocol` + `action`, not just an address.** Two structurally different pairing
+  patterns exist, and which one applies depends on the protocol, not just its implementation
+  status:
+  - `add_by_address` -- the customer already knows/can read the device's own address. Only
+    `insteon` and `x10` ever support this (`IoXWrapper.add_device`, → eisy-ui's `add-node`).
+  - `start_inclusion`/`finish_inclusion` -- no address exists until the device is physically
+    activated during a pairing window; `start_inclusion` puts the controller in pairing mode,
+    `finish_inclusion` commits everything included during it (`IoXWrapper.discover_devices`/
+    `finish_device_discovery`, → eisy-ui's `start-linking`/`stop-linking`). The *only* shape
+    `zwave`/`zigbee`/`matter` will ever use -- their ecosystems call this "inclusion," which is why
+    the action names use that term rather than Insteon's own "linking" vocabulary.
+  - A `{protocol: {valid actions}}` table (`pair_device.py`'s `_PROTOCOL_ACTIONS`) rejects an
+    invalid protocol/action pairing (e.g. `zwave` + `add_by_address`) as a structural error,
+    independent of whether that protocol is implemented yet -- distinct from a valid-but-unbacked
+    combination (e.g. `zwave` + `start_inclusion`), which gets the softer "not yet supported, guide
+    the customer manually" response.
+- **Only `insteon` is backed by a real call today** (`_IMPLEMENTED_PROTOCOLS = {"insteon"}`).
+  `x10` shares `insteon`'s exact `add_device` mechanism (per `nucore_interface.py`'s own design
+  comment) but is deliberately left in the not-yet-supported bucket this round too, for scope
+  simplicity -- flipping it on later is a one-line change. Z-Wave Legacy's `include`/`exclude`/
+  `stop`/`learn-mode` routes already exist in `family.ts` but are deferred; ZMatter Z-Wave/Zigbee/
+  Matter have no inclusion-start routes found anywhere yet. Either way, a device only becomes
+  eligible for `propose_scene`/`propose_automation` once `list_devices` confirms it exists for real
+  -- Plan never stages configuration for a device that hasn't actually been paired yet.
 
 ## Open risks / tradeoffs
 
