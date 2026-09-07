@@ -9,7 +9,7 @@ backend.
 
 | File/dir | Purpose |
 |---|---|
-| `run_unified_runtime.py` | CLI entrypoint (`python -m unified.run_unified_runtime`) -- also runs as a native `wss://`-capable WebSocket server (`--websocket-port`, no HTTP framework involved), a lower-level alternative to the `eisy_ai` project's FastAPI-based chat server (sibling repo, depends on `nucore-ai`). |
+| `run_unified_runtime.py` | CLI entrypoint (`python -m unified.run_unified_runtime`) -- also runs as a native `wss://`-capable WebSocket server (`--websocket-port`/`--websocket-host`, TCP or a Unix domain socket, no HTTP framework involved), a lower-level alternative to the `eisy_ai` project's FastAPI-based chat server (sibling repo, depends on `nucore-ai`). In Unix socket mode, `--websocket-client-id` can require each connection's real peer UID (via `getpeereid()`) to match. |
 | `runtime.py` | `UnifiedRuntime` -- builds the system prompt, runs the agentic loop, records conversation history. |
 | `loop.py` | `AgenticLoop` -- the multi-turn tool-calling loop against an `LLMAdapter`. |
 | `dispatch.py` | Tool name → handler dispatch table (`execute_tool`). |
@@ -20,7 +20,7 @@ backend.
 | `adapters/` | Per-provider `LLMAdapter` implementations (Claude, OpenAI, Gemini, Grok, llama.cpp). |
 | `models.py` | `IntentHandlerResult` (the return type `handle_query` produces), `ConversationTurn`/`ConversationHistory`. |
 | `session_store.py` | In-memory `session_id → ConversationHistory` map. |
-| `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
+| `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port`/`--websocket-host` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
 | `dispatch_builder.py`, `provider_dispatch_adapter.py`, `provider_clients.py`, `runtime_config.py` | Runtime-profile JSON loading and per-provider `LLMAdapter` construction, shared by both process entrypoints. |
 | `history_compaction.py` | `maybe_compact_history` -- collapses the oldest half of a session's conversation history into one LLM-generated summary turn once its estimated token size exceeds `history_token_budget` (runtime config, default 20000); falls back to plain truncation if the summarization call itself fails. |
 | `runtime_config.example.json`, `runtime_config.openai.example.json`, `runtime_config.grok.example.json` | Example runtime profiles, one per provider (see below). |

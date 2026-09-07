@@ -87,6 +87,56 @@ This is a lower-level alternative to `eisy_ai`'s FastAPI-based chat server (a se
 sibling project) -- use this mode when a raw `ws://` endpoint is all you need, without
 serving a browser UI.
 
+By default the server binds TCP on `0.0.0.0` (all interfaces); pass `--websocket-host`
+to bind a specific interface instead, e.g. `--websocket-host 127.0.0.1`.
+
+#### Unix domain socket
+
+Give `--websocket-host` a `unix://<path>` URI instead of an IP address to serve over a
+Unix domain socket at `<path>` instead of TCP -- useful when a local reverse proxy or
+supervisor should reach this process without exposing a TCP port. For example,
+`--websocket-host unix:///tmp/ai-listener` serves on the socket file `/tmp/ai-listener`.
+Any value that is neither a valid IP address nor a `unix://`-prefixed path is rejected
+at startup -- there is no bare-path fallback, so a typo'd IP can't silently be treated
+as a socket path. The `unix://` form is sufficient on its own to enter WebSocket server
+mode -- `--websocket-port` is not required (and is ignored) in this mode. A stale socket
+file already at that path is removed before binding, so a restart after a crash doesn't
+fail with "address already in use".
+
+The socket file is always created (and forced, regardless of umask or the parent
+directory's group) owned by this process's own uid/primary gid with mode `0660`
+(`rw-rw----`) -- readable/writable only by that same user or group, never by anyone
+else.
+
+```shell
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --websocket-host unix:///var/run/nucore/unified.sock
+```
+
+Add `--websocket-client-id <uid>` to require that every connecting client's real
+effective UID match `<uid>`; connections from any other UID are closed immediately
+(WebSocket close code 1008), before any query is processed. The UID is read from the
+kernel via `getpeereid()` (BSD/POSIX; this project targets FreeBSD/eisy, not Linux, so
+`SO_PEERCRED` doesn't apply here) -- it can't be spoofed by the connecting client.
+`--websocket-client-id` only has an effect in Unix socket mode; it's silently ignored
+when `--websocket-host` is a TCP host/IP.
+
+```shell
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --websocket-host unix:///var/run/nucore/unified.sock \
+  --websocket-client-id 1002
+```
+
 #### TLS (wss://)
 
 Add `--ssl-certfile`/`--ssl-keyfile` (a PEM cert and private key, given together) to
@@ -211,7 +261,9 @@ logger.info("runtime started")
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
 | `--secrets-file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
-| `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode |
+| `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode. Ignored when `--websocket-host` is a Unix socket path |
+| `--websocket-host` | IP address to bind the WebSocket server to over TCP (default `0.0.0.0`), or a `unix://<path>` URI to serve over a Unix domain socket at `<path>` instead -- on its own (without `--websocket-port`) it's enough to enter WebSocket server mode. Any other value (including a bare filesystem path with no `unix://` prefix) is rejected |
+| `--websocket-client-id` | Unix socket mode only: required effective UID (checked via `getpeereid()`) of the connecting client; other UIDs are rejected. Ignored when `--websocket-host` is a TCP host/IP |
 | `--ssl-certfile` | PEM cert file; with `--ssl-keyfile`, serves `--websocket-port` over `wss://` |
 | `--ssl-keyfile` | PEM private key file; with `--ssl-certfile`, serves `--websocket-port` over `wss://` |
 | `--backend-api-classpath` | Python class path for backend API (e.g. `iox.IoXWrapper`) |

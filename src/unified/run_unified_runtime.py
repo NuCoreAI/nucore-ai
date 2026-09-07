@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse,os
 import asyncio
+import ctypes
+import ctypes.util
 import functools, json
+import ipaddress
 import ssl
 import uuid
 from pathlib import Path
@@ -124,7 +127,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Run as a WebSocket server on this port instead of --query/REPL mode; "
              "each connection gets its own session, every received message is treated "
-             "as a query, and responses stream back over the same connection.",
+             "as a query, and responses stream back over the same connection. Ignored "
+             "when --websocket-host is a Unix socket path.",
+    )
+    parser.add_argument(
+        "--websocket-host",
+        type=str,
+        default="0.0.0.0",
+        help="IP address to bind the WebSocket server to over TCP, or a "
+             "'unix://<path>' URI to serve over a Unix domain socket at <path> instead "
+             "(e.g. 'unix:///tmp/ai-listener'; sufficient on its own to enter WebSocket "
+             "server mode, without --websocket-port). Any other value is rejected.",
+    )
+    parser.add_argument(
+        "--websocket-client-id",
+        type=int,
+        default=None,
+        help="Unix socket mode only: required effective UID (checked via getpeereid()) of "
+             "the connecting client process. Connections from any other UID are rejected. "
+             "Ignored when --websocket-host is a TCP host/IP.",
     )
     parser.add_argument(
         "--ssl-certfile",
@@ -492,6 +513,50 @@ async def _run_loop(runtime: UnifiedRuntime) -> None:
             break
 
 
+_UNIX_SOCKET_PREFIX = "unix://"
+
+
+def _parse_websocket_host(value: str) -> tuple[bool, str]:
+    """Parse ``--websocket-host`` into ``(is_unix, host_or_path)``.
+
+    Accepts either a bare IP address (TCP) or a ``unix://<path>`` URI (Unix
+    domain socket at ``<path>``). Anything else -- including a bare
+    filesystem path with no ``unix://`` prefix -- is rejected, so a typo'd IP
+    can't silently fall through to being treated as a socket path.
+    """
+    if value.startswith(_UNIX_SOCKET_PREFIX):
+        path = value[len(_UNIX_SOCKET_PREFIX):]
+        if not path:
+            raise ValueError(f"--websocket-host {value!r} has no path after '{_UNIX_SOCKET_PREFIX}'")
+        return True, path
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        raise ValueError(
+            f"--websocket-host must be an IP address or a '{_UNIX_SOCKET_PREFIX}<path>' URI, got {value!r}"
+        )
+    return False, value
+
+
+_libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+
+
+def _get_unix_peer_uid(websocket) -> int | None:
+    """Effective UID of the process on the other end of a Unix domain socket
+    connection, via the BSD/POSIX ``getpeereid()`` libc call -- this runtime
+    targets FreeBSD (eisy), which has no Linux ``SO_PEERCRED``. Returns None
+    if the underlying socket isn't reachable (e.g. not actually a Unix
+    socket) or the call fails."""
+    sock = websocket.transport.get_extra_info("socket")
+    if sock is None:
+        return None
+    euid = ctypes.c_uint32()
+    egid = ctypes.c_uint32()
+    if _libc.getpeereid(sock.fileno(), ctypes.byref(euid), ctypes.byref(egid)) != 0:
+        return None
+    return euid.value
+
+
 class _RawWebSocketAdapter:
     """Adapts a ``websockets`` connection to the small surface
     :meth:`StreamHandler.send_chunk` expects -- ``.client_state.name`` /
@@ -522,7 +587,10 @@ async def _run_websocket_server(
     runtime_config_path: str,
     force_stream: bool | None,
     max_iterations: int,
-    port: int,
+    host: str,
+    port: int | None,
+    is_unix: bool,
+    client_uid: int | None = None,
     ssl_context: ssl.SSLContext | None = None,
 ) -> None:
     """Serve WebSocket connections directly, no HTTP framework involved.
@@ -548,8 +616,23 @@ async def _run_websocket_server(
     ``ssl_context``, when given, serves ``wss://`` instead of ``ws://`` --
     required for clients (e.g. the Eisy UI) that always connect over TLS, the
     way ``eisy_ai/chat.py`` did via its ``certs/`` files.
+
+    ``is_unix`` serves over a Unix domain socket at path ``host`` instead of
+    TCP (``port`` is unused in that case). ``client_uid``, when given (Unix
+    socket mode only), is checked against each connection's real peer UID via
+    ``getpeereid()`` -- connections from any other UID are closed immediately,
+    before any query is processed.
     """
     async def handler(websocket) -> None:
+        if client_uid is not None:
+            peer_uid = _get_unix_peer_uid(websocket)
+            if peer_uid != client_uid:
+                logger.warning(
+                    f"Rejecting WebSocket connection: peer uid {peer_uid!r} != expected {client_uid}"
+                )
+                await websocket.close(code=1008, reason="unauthorized")
+                return
+
         # Fallback only -- used until/unless this connection's own
         # EisyUIContext picks up a durable user_id from a context message.
         fallback_session_id = str(uuid.uuid4())
@@ -575,8 +658,28 @@ async def _run_websocket_server(
         except websockets.ConnectionClosed:
             pass
 
-    logger.info(f"WebSocket server listening on port {port} ({'wss' if ssl_context else 'ws'}://)")
-    async with websockets.serve(handler, "0.0.0.0", port, ssl=ssl_context):
+    if is_unix:
+        # Remove a stale socket file left behind by a prior crashed run --
+        # asyncio's create_unix_server otherwise fails with "address already
+        # in use" even though nothing is actually listening on it.
+        if os.path.exists(host):
+            os.remove(host)
+        logger.info(f"WebSocket server listening on unix socket {host} ({'wss' if ssl_context else 'ws'}://)")
+        server_cm = websockets.unix_serve(handler, path=host, ssl=None)# ssl_context)
+    else:
+        logger.info(f"WebSocket server listening on {host}:{port} ({'wss' if ssl_context else 'ws'}://)")
+        server_cm = websockets.serve(handler, host, port, ssl=ssl_context)
+
+    async with server_cm:
+        if is_unix:
+            # The socket file is created by the bind() above with a default
+            # mode governed by umask (often world-readable/writable), and on
+            # BSD (FreeBSD/eisy) its group is inherited from the containing
+            # directory rather than the process's own primary group. Force
+            # both explicitly so the socket ends up owned by, and readable/
+            # writable only by, this process's own uid/primary gid.
+            os.chown(host, os.getuid(), os.getgid())
+            os.chmod(host, 0o660)
         await asyncio.Future()  # run forever, until KeyboardInterrupt/CancelledError
 
 
@@ -677,7 +780,9 @@ def main(args:Any=None, poly=None) -> None:
         asyncio.run(_run_diagnostic_step_direct(nucore_interface, args.diagnostic_step, args.diagnostic_params))
         return
 
-    if args.websocket_port:
+    websocket_is_unix, websocket_host = _parse_websocket_host(args.websocket_host)
+
+    if args.websocket_port or websocket_is_unix:
         # Native WebSocket server mode: this process itself is the server --
         # no external HTTP framework, no caller-supplied connection object.
         # nucore_interface is shared across every connection for the life of
@@ -694,7 +799,9 @@ def main(args:Any=None, poly=None) -> None:
         try:
             asyncio.run(_run_websocket_server(
                 nucore_interface, llm_adapter, str(runtime_config_path), args.stream,
-                resolved_max_iterations, args.websocket_port,
+                resolved_max_iterations, websocket_host, args.websocket_port,
+                websocket_is_unix,
+                client_uid=args.websocket_client_id if websocket_is_unix else None,
                 ssl_context=ssl_context,
             ))
         except KeyboardInterrupt:
