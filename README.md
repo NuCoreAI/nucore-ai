@@ -322,7 +322,7 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
   DEVICE DATABASE/ROUTINES DATABASE, it never turns into a standing mode and doesn't carry over to
   a later, unrelated question in the same conversation. `run_diagnostic_step` then runs one
   diagnostic step directly against the backend (e.g. checking or starting/stopping/restarting core
-  or plugin services), and `run_shell_command` runs a shell command on the backend host (e.g. to
+  services), and `run_shell_command` runs a shell command on the backend host (e.g. to
   search the device activity log).
 - **Plan** -- `start_plan`/`run_plan_step` walk a customer through a structured multi-step task
   such as a new device installation, rather than a single command/response turn.
@@ -333,8 +333,9 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
   `call_plugin` let the model extend its own capabilities with a plugin's tools when no
   built-in tool covers a request. `install_plugin`/`buy_plugin`/`delete_plugin` don't complete
   anything themselves -- for security reasons, installing, purchasing, and deleting all happen on
-  the web -- each returns a link for the customer to finish there. Starting/stopping/restarting a
-  plugin's underlying service goes through the diagnostics flow above, not this one.
+  the web -- each returns a link for the customer to finish there. `plugin_ops` starts, stops, or
+  restarts an installed plugin's own service -- the only way to do that; core services go through
+  the diagnostics flow above instead.
 
 See `src/unified/prompt/definitions.md` for the exact tool-selection rules the model follows for
 each of these, and `src/unified/README.md` for the tool/handler layout.

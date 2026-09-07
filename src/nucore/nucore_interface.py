@@ -544,26 +544,17 @@ class NuCoreInterface(ABC):
         )
         return match.get("nsid") if match else None
 
-    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart", "purchase"]):
+    async def plugin_ops(self, plugin_id:str, operation:Literal["start", "stop", "restart"]):
         """
-        Perform an operation on a plugin.
-        :param plugin_id: The ID of the plugin to operate on -- profileNum
-                           from get_installed_plugins() for start/stop/restart
-                           (and, once implemented, install/uninstall/status);
-                           nsid for details/purchase.
+        Start, stop, or restart a plugin's service.
+        :param plugin_id: The plugin's profileNum, from get_installed_plugins().
         :param operation: The operation to perform.
         :return: response from the API or None if failure
 
-        Details API:
-        /api/plugins/store/prod/entry/:nsid
-
-        Start/Stop/Restart API:
+        API:
         /api/plugin/<profileNum>/start
         /api/plugin/<profileNum>/stop
         /api/plugin/<profileNum>/restart
-
-        Install/Purchase: no real API exists yet -- implementations stub these
-        with a simulated success so callers can be built/tested end-to-end.
         """
         raise NotImplementedError("Subclasses must implement the plugin_ops method.")
 

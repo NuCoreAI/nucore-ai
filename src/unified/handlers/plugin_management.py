@@ -26,6 +26,11 @@ per-plugin API (see ``NuCoreInterface``'s docstrings); that API may not
 exist in production yet either, in which case they fail gracefully
 (``successful: false``) rather than raising. See ``design/plan-design.md``'s
 "AI-capable plugin contract" for the target shape this implements.
+
+``plugin_ops`` -- starts/stops/restarts an installed plugin's own service
+(distinct from ``run_diagnostic_step``'s ``services_ops``, which is core
+services only). Needs the plugin's real ``plugin_id`` from
+``list_installed_plugins``, same id-resolution as ``delete_plugin``.
 """
 
 from __future__ import annotations
@@ -84,7 +89,8 @@ async def list_installed_plugins(nucore_interface: NuCoreInterface, args: dict[s
                 "plugin_id": p.get("profileNum"),
                 "name": p.get("name"),
                 "is_local": p.get("isLocal"),
-                "ai_support": p.get("aiSupport")
+                "ai_support": p.get("aiSupport"),
+                "state": p.get("state"),
             }
             for p in plugins 
         ]
@@ -248,3 +254,25 @@ async def call_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         return {"error": f"plugin '{plugin_id}' failed to run tool '{tool_name}'"}
 
     return data
+
+
+_VALID_PLUGIN_OPS = ("start", "stop", "restart")
+
+
+async def plugin_ops(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
+    operation = args.get("operation")
+    if not plugin_id:
+        return {"error": "plugin_id is required -- call list_installed_plugins for the real plugin_id"}
+    if operation not in _VALID_PLUGIN_OPS:
+        return {"error": f"operation must be one of {_VALID_PLUGIN_OPS}"}
+
+    response = await nucore_interface.plugin_ops(plugin_id, operation)
+    # Unlike _op_data's shape, the real start/stop/restart response isn't
+    # confirmed to carry a nested "data" object -- only require "successful"
+    # and fold in "data"'s fields when present.
+    if not isinstance(response, dict) or not response.get("successful"):
+        return {"error": f"failed to {operation} plugin '{plugin_id}'"}
+
+    data = response.get("data")
+    return {"plugin_id": plugin_id, "operation": operation, **(data if isinstance(data, dict) else {})}

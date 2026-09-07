@@ -480,8 +480,11 @@ class IoXDiagnostics:
 
     async def get_plugin_services_status(self) -> dict[str, Any]:
         """
-        Get the status of core services  (isy, udx, ...)
-        :return: Dictionary with the status of each core service
+        Get the status of plugin services. No longer in diagnose.md's step
+        catalog -- list_installed_plugins' `state` field is now the model-
+        facing way to check plugin status. Left callable in case something
+        else needs the raw per-service response.
+        :return: Dictionary with the status of each plugin service
         """
         try:
             # /rest/udx.sys.ops/services.ops/plugin_services_status
@@ -496,7 +499,8 @@ class IoXDiagnostics:
 
     async def services_ops(self, service:str, op: Literal["start", "stop", "restart"], **kwargs) -> dict[str, Any]:
         """
-        An operation on a core or plugin service (start, stop, restart)
+        An operation on a core service (start, stop, restart). Not for plugin
+        services -- use the ``plugin_ops`` tool for those.
         :param service_name: The name of the service to operate on
         :param op: The operation to perform (start, stop, restart)
         :return: Dictionary with the status of each core service or failure

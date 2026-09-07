@@ -50,7 +50,7 @@ LICENSES_RESPONSE = {
 INSTALLED_RESPONSE = {
     "successful": True,
     "data": [
-        {"profileNum": 3, "name": "YouTube", "isLocal": False},
+        {"profileNum": 3, "name": "YouTube", "isLocal": False, "state": "running"},
     ],
 }
 
@@ -195,7 +195,7 @@ async def test_list_installed_plugins_maps_profile_num_to_plugin_id():
     result = await execute_tool("list_installed_plugins", {}, nucore_interface=backend)
     assert result == {
         "plugins": [
-            {"plugin_id": 3, "name": "YouTube", "is_local": False, "ai_support": None},
+            {"plugin_id": 3, "name": "YouTube", "is_local": False, "ai_support": None, "state": "running"},
         ]
     }
 
@@ -469,3 +469,53 @@ async def test_call_plugin_strips_plugin_id_prefix_and_embeds_tool_name():
 
     assert captured["plugin_id"] == 3
     assert captured["args"] == {"foo": "bar", "tool_name": "get_status"}
+
+
+@pytest.mark.parametrize("operation", ["start", "stop", "restart"])
+@pytest.mark.asyncio
+async def test_plugin_ops_returns_result(operation):
+    backend = FakeBackend()
+    backend.plugin_ops_response = {"successful": True, "data": {"result": "ok"}}
+    result = await execute_tool("plugin_ops", {"plugin_id": "3", "operation": operation}, nucore_interface=backend)
+    assert result == {"plugin_id": 3, "operation": operation, "result": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_plugin_ops_succeeds_without_a_data_payload():
+    """The real start/stop/restart response isn't confirmed to carry a nested
+    "data" object -- a bare {"successful": true} must still count as success."""
+    backend = FakeBackend()
+    backend.plugin_ops_response = {"successful": True}
+    result = await execute_tool("plugin_ops", {"plugin_id": "3", "operation": "start"}, nucore_interface=backend)
+    assert result == {"plugin_id": 3, "operation": "start"}
+
+
+@pytest.mark.asyncio
+async def test_plugin_ops_requires_plugin_id():
+    backend = FakeBackend()
+    result = await execute_tool("plugin_ops", {"operation": "start"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_plugin_ops_rejects_an_invalid_operation():
+    backend = FakeBackend()
+    result = await execute_tool("plugin_ops", {"plugin_id": "3", "operation": "uninstall"}, nucore_interface=backend)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_plugin_ops_errors_when_plugin_id_unresolvable():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "plugin_ops", {"plugin_id": "not-a-real-plugin", "operation": "start"}, nucore_interface=backend
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_plugin_ops_errors_on_backend_failure():
+    backend = FakeBackend()
+    backend.plugin_ops_response = {"successful": False}
+    result = await execute_tool("plugin_ops", {"plugin_id": "3", "operation": "restart"}, nucore_interface=backend)
+    assert "error" in result

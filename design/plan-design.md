@@ -197,17 +197,18 @@ Grounded in a direct code survey of `src/unified/handlers/plugin_management.py`:
   license rows against the store list by `nsid` to resolve names) -- all read-only, all already
   exposed as unified tools.
 - **Gap**: none of these take a name/id filter (`input_schema` is `{}` for both list tools), so
-  "does plugin X exist" today means fetching the full list and matching client-side. There is also
-  **no install capability at all** -- `NuCoreInterface.plugin_ops(plugin_id, operation)`
-  (`nucore_interface.py:481`) declares `install`/`uninstall`/`status`/`details` in its signature,
-  but the concrete implementation (`iox_wrapper.py:1473-1502`) only implements `start`/`stop`/
-  `restart`; the rest fall through to `raise NotImplementedError` at line 1502. `configure_plugin()`
-  (`iox_wrapper.py:1504`) is likewise an unimplemented stub. Neither method is registered in
-  `TOOL_HANDLERS` (`src/unified/dispatch.py:32-50`), so no LLM tool can install, configure, or check
-  status of a plugin today. (A previous plugin-management bug noted in `design/design.md` --
-  wrong tool-name check, missing manager method -- is now moot: that whole handler was deleted in
-  commit `037a700` along with the retired `intent_handler_directory` tree; the current read-only
-  replacement never reintroduced install/configure.)
+  "does plugin X exist" today means fetching the full list and matching client-side. `start`/
+  `stop`/`restart` are now implemented and exposed as their own `plugin_ops` tool (registered in
+  `TOOL_HANDLERS`, `src/unified/dispatch.py`), the only way to control a plugin's service --
+  `services_ops`/diagnostics is scoped to core services only. `install`/`uninstall`/`status`/
+  `details` remain unimplemented on `NuCoreInterface.plugin_ops(plugin_id, operation)`, and
+  `configure_plugin()` is likewise still an unimplemented stub -- neither is registered in
+  `TOOL_HANDLERS`, so no LLM tool can install, configure, or fetch a raw status blob for a plugin
+  today (`list_installed_plugins`' `state` field already covers ad hoc status checks). (A previous
+  plugin-management bug noted in `design/design.md` -- wrong tool-name check, missing manager
+  method -- is now moot: that whole handler was deleted in commit `037a700` along with the retired
+  `intent_handler_directory` tree; the current read-only replacement never reintroduced
+  install/configure.)
 
 **Design for Plan**: no new search/filter tool. Matching a customer's desired capability (e.g.
 "calming music," "camera-based detection") against a plugin's name/description is a natural-

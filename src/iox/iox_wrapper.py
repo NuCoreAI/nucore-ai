@@ -1512,48 +1512,27 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error performing get installed plugins operation: {ex}")
             return None
     
-    async def plugin_ops(self, plugin_id:str, operation:Literal["details", "install", "uninstall", "status", "start", "stop", "restart", "purchase"]):
+    async def plugin_ops(self, plugin_id:str, operation:Literal["start", "stop", "restart"]):
         """
-        Perform an operation on a plugin.
-        :param plugin_id: The ID of the plugin to operate on -- profileNum
-                           from get_installed_plugins() for start/stop/restart
-                           (and, once implemented, install/uninstall/status);
-                           nsid for details/purchase.
+        Start, stop, or restart a plugin's service.
+        :param plugin_id: The plugin's profileNum, from get_installed_plugins().
         :param operation: The operation to perform.
         :return: response from the API or None if failure
 
-        Details API:
-        /api/plugins/store/prod/entry/:nsid
-
-        Start/Stop/Restart API:
+        API:
         /api/plugin/<profileNum>/start
         /api/plugin/<profileNum>/stop
         /api/plugin/<profileNum>/restart
-
-        Install/Purchase: no real API exists yet -- stubbed with a simulated
-        success so callers can be built/tested end-to-end.
         """
-        if operation in ("start", "stop", "restart"):
-            try:
-                headers = {"Content-Type": "application/json"}
-                response = self.post(f'/api/plugin/{plugin_id}/{operation}', body="{}", headers=headers)
-                if response == None or response.status_code != 200:
-                    return response if response else None
-                return response.json()
-            except Exception as ex:
-                logger.error(f"Error performing plugin {operation} operation: {ex}")
-                return None
-
-        if operation in ("install", "purchase"):
-            # STUB: no real install/purchase API exists yet -- simulate
-            # success so the calling flow can be built/tested end-to-end.
-            # Replace with a real HTTP call once NuCore ships one.
-            return {
-                "successful": True,
-                "data": {"plugin_id": plugin_id, "operation": operation, "stub": True},
-            }
-
-        raise NotImplementedError(f"plugin_ops operation '{operation}' is not yet implemented.")
+        try:
+            headers = {"Content-Type": "application/json"}
+            response = self.post(f'/api/plugin/{plugin_id}/{operation}', body="{}", headers=headers)
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error performing plugin {operation} operation: {ex}")
+            return None
 
     async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
         """

@@ -14,7 +14,7 @@ from iox.diagnostics.iox_diagnostics import IoXDiagnostics
 from iox.iox_wrapper import IoXWrapper
 
 STEP_NAMES = {
-    "get_full_system_config", "get_core_services_status", "get_plugin_services_status",
+    "get_full_system_config", "get_core_services_status",
     "services_ops", "get_device_family", "get_dev_links_table", "get_iox_links_table",
     "compare_device_links", "get_all_plm_links", "quick_plm_sanity_check",
 }

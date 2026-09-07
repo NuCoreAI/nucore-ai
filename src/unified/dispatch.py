@@ -70,6 +70,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "delete_plugin": plugin_management.delete_plugin,
     "get_plugin_capabilities": plugin_management.get_plugin_capabilities,
     "call_plugin": plugin_management.call_plugin,
+    "plugin_ops": plugin_management.plugin_ops,
     "run_diagnostic_step": diagnostics.run_diagnostic_step,
     "get_diagnostics_prompt": diagnostics.get_diagnostics_prompt,
     "start_plan": plan.start_plan,

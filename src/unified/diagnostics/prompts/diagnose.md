@@ -198,11 +198,8 @@ Don't generalize a single device's data into a system-wide conclusion. Checking 
   "get_core_services_status": {
     "description": "Returns the status (running/stopped/failed) of NuCore core services: isy, udx, eisyui, mosquitto.ud, etc."
   },
-  "get_plugin_services_status": {
-    "description": "Returns the status (running/stopped/failed) of NuCore plugin services: there's one service for each plugin"
-  },
   "services_ops": {
-    "description": "start/stop/restart a known service. Params: op (\"start\"|\"stop\"|\"restart\"), service: service name (str)"
+    "description": "start/stop/restart a known core service (isy, udx, eisyui, mosquitto.ud, etc.) -- not plugin services, use the plugin_ops tool for those. Params: op (\"start\"|\"stop\"|\"restart\"), service: service name (str)"
   },
   "get_device_family": {
     "description": "Returns insteon, z-wave, zigbee, matter, plugin, or unknown. Params: device_id. You need this information before you can do any device-specific diagnostics."

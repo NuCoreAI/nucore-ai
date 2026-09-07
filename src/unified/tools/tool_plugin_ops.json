@@ -1,0 +1,19 @@
+{
+  "name": "plugin_ops",
+  "description": "Start, stop, or restart an installed plugin's service. Only call this after the customer has explicitly agreed to the action -- never speculatively, since stopping/restarting interrupts the plugin while it's down. This is the only way to start/stop/restart a plugin's service -- do not use run_diagnostic_step/services_ops for plugins, that's for core services (isy, udx, etc.) only. This tool has no status operation -- to check a plugin's current status, read the `state` field from list_installed_plugins instead.",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id", "operation"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The `plugin_id`, from list_installed_plugins."
+      },
+      "operation": {
+        "type": "string",
+        "enum": ["start", "stop", "restart"],
+        "description": "The operation to perform on the plugin's service."
+      }
+    }
+  }
+}
