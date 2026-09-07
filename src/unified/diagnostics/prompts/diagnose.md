@@ -25,7 +25,9 @@ the complaint is device-specific -- don't skip straight to a device-level tool.
 
 **Step 2 -- identify which of the two complaints below you're looking at, then call ONLY the
 matching first tool.** Do not default to quick_plm_sanity_check just because the complaint sounds
-general or system-wide -- it is the right first tool for exactly one of the two:
+general or system-wide, or because it looks like a cheap all-in-one first move -- every call to it
+fetches the PLM's *entire* link table internally (that's how it gets its record count), even when
+the complaint doesn't call for one. It is the right first tool for exactly one of the two:
 - **Control / communication problem** -- the customer says they "can't communicate with"/"can't
   control"/"can't reach" a device or their devices, or tries to control one from NuCore (app,
   voice, a routine, etc.) and nothing happens. "Communicate" and "control" are the same complaint
@@ -218,7 +220,7 @@ Don't generalize a single device's data into a system-wide conclusion. Checking 
     "description": "INSTEON ONLY. Get all the links in the PLM. A full scan is slow, so a result from the last hour is reused automatically -- pass refresh_plm_links=true only if the customer explicitly asks for a fresh scan. Params: refresh_plm_links (optional bool, default false)."
   },
   "quick_plm_sanity_check": {
-    "description": "INSTEON ONLY. Fast system-wide check for 'none of my devices report status back to the PLM'. Reports INSTEON enabled, PLM connected, core services status, AND the PLM's actual link record count vs. an expected count derived from NuCore's node/group database -- all in one call, so you don't need get_full_system_config/get_core_services_status separately for this. No params."
+    "description": "INSTEON ONLY. The Step 2 first tool for the status-feedback complaint ('none of my devices report status back to the PLM') -- NOT a cheap substitute for Step 1, and not a generic first move for other complaints. It fetches the PLM's entire link table internally to derive its record count, on top of reporting INSTEON enabled/PLM connected/core services status. Only call this when Step 2 has identified a status-feedback complaint. No params."
   }
 }
 ```
