@@ -17,7 +17,13 @@ because there's no backend resolution step for DSL code the way there is for `se
 **Groups and scenes** — A group is any set of devices that act together. Membership has a role:
 `controller` (issues commands) or `responder` (reacts). A scene is the specific case where
 NuCore itself is the controller and every member is a responder — "activate this scene" just
-means "NuCore sends On to every member." DEVICE DATABASE only tells you a group/scene *exists* —
+means "NuCore sends On to every member." **Cross-linking** is a different case: two or more real
+devices are *all* made `controller` members of the same group (no plain-responder-only member
+needed) — each one gets a real link controlling every other member directly, not mediated through
+NuCore. A customer's "crosslink A and B" (or "crosslink A, B, and C") means every device they
+named gets `role: "controller"` in one `multi_device_scene`/`group_scene_op` call — never just one
+controller with the rest as responders, which is an ordinary scene, not a crosslink. DEVICE
+DATABASE only tells you a group/scene *exists* —
 for what activating it actually does (per-controller targets, link type, parameters, cross-links),
 or any "explain/describe this scene" or link-behavior diagnostic question, call `get_group_detail`
 — never guess this from the name alone. Use `group_scene_op` for a single membership/link change;
