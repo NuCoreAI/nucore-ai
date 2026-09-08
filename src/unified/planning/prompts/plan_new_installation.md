@@ -19,25 +19,43 @@ configuration) -- they'll describe devices, where they are, and how they want th
    nothing else to confirm afterward. `start_inclusion`/`finish_inclusion` (insteon, and eventually
    z-wave/zigbee/matter) when there's no known address -- `start_inclusion` puts the controller in
    pairing mode so the customer can activate one or more devices, `finish_inclusion` then commits
-   everything included during that window (newly added devices won't have a name yet -- check the
-   standing device information afterward to find and name them). Only INSTEON is actually wired up
-   right now -- for any other protocol, `pair_device` will tell you it's not supported yet even
-   though the action shape is valid; in that case, walk the customer through their device's own
-   manufacturer pairing procedure conversationally instead of trying to do it for them. A device
-   only really exists once it shows up in the system's standing device information -- don't stage a
-   scene/automation referencing a device until you've confirmed it's actually there.
+   everything included during that window and returns whatever was newly discovered directly in its
+   own result's `new_devices` list (address + whatever name the hub assigned, usually blank -- rename
+   via `node_op` using that address, no separate lookup needed). Both actions already wait for the
+   device to actually become usable before returning, so use the address from `pair_device`'s own
+   result right away for any following step (staging a scene/routine, renaming) -- the standing
+   device information shown elsewhere in this conversation won't reflect a device paired this turn
+   until the next one, so don't wait on it to "find" something `pair_device` already gave you. Only
+   INSTEON is actually wired up right now -- for any other protocol, `pair_device` will tell you it's
+   not supported yet even though the action shape is valid; in that case, walk the customer through
+   their device's own manufacturer pairing procedure conversationally instead of trying to do it for
+   them. Feel free to call `send_command` to test a device right after pairing/wiring it -- that's
+   immediate too, not staged, so the customer sees the result right away.
 
-3. **Create rooms as folders.** Use `create_folder` for each room the customer mentions, if it
-   doesn't already exist. This commits immediately -- no need to stage it.
+3. **Create/organize rooms with `node_op`.** Call it directly (`add_folder` for each room the
+   customer mentions, `rename`/`move` as needed) -- it's a standalone always-available tool, not a
+   `run_plan_step` call, and it commits immediately, no staging needed.
 
-4. **Stage scenes, automations, and variables** for what the customer described, using
-   `propose_scene`/`propose_automation`/`propose_variable` (see `plan_common.md` for how staging
-   works). Reference devices by the real ids you've confirmed exist (from pairing or from the
-   standing device information), never a name you're guessing at.
+4. **Stage scenes, automations, and variables for what the customer described by calling the real
+   tools directly** -- `create_or_update_routine`, `variable_op`, `multi_device_scene`,
+   `group_scene_op` -- exactly as you would in a normal conversation, using their full grammar/
+   parameter docs. While this plan session is open, calling any of them automatically **stages**
+   the change instead of committing it to the hub: you'll get back
+   `{"status": "staged", "staged_id": ..., "summary": "..."}` rather than a real result, and nothing
+   changes on the hub until `apply_plan`. `get_device_detail`/`get_routine_detail`/`list_variables`
+   stay live during the plan too, for the same fresh lookups those tools always require -- call them
+   freely. Reference devices by the real ids you've confirmed exist (from pairing or the standing
+   device information), never a name you're guessing at.
 
-5. **Review with the customer, then apply.** Once you've staged what they asked for, use
-   `review_plan` to walk them through it in plain language, revise anything they push back on,
-   then `apply_plan` once they're happy. Report back honestly if anything failed to apply.
+   Stage items in dependency order: a device must exist (really paired, not staged) before a scene
+   or routine references it. A **staged** variable has no real id yet -- if a routine needs to
+   reference one, apply that variable for real first (e.g. call `apply_plan` for just that one item,
+   or as part of an incremental apply), then continue staging the rest with its now-real id.
+
+5. **Review with the customer, then apply.** Use `review_plan` (via `run_plan_step`) to walk them
+   through everything staged so far in plain language -- it returns a short human-readable summary
+   per item, not raw parameters. Revise anything they push back on with `revise_plan`, then
+   `apply_plan` once they're happy. Report back honestly if anything failed to apply.
 
 6. **Conclude** once everything's applied and the customer is satisfied, or if they want to
    continue later, `stop`.
@@ -46,29 +64,14 @@ configuration) -- they'll describe devices, where they are, and how they want th
 
 ```json
 {
-  "list_variables": {
-    "description": "List existing variables (optionally filtered by type: 1=integer, 2=state). Devices/folders/scenes/automations are already visible in the standing system information -- this is only for variables. Params: type (optional, 1 or 2)."
-  },
-  "create_folder": {
-    "description": "Create a folder (room) immediately -- not staged. Params: new_name."
-  },
-  "propose_scene": {
-    "description": "Stage a new scene/group. Params: group_name (optional), devices (list of {link_address, role: \"controller\"|\"responder\", name?})."
-  },
-  "propose_automation": {
-    "description": "Stage a new automation/routine. Params: name, comment (optional), code (the routine DSL source)."
-  },
-  "propose_variable": {
-    "description": "Stage a new variable. Params: type (1=integer, 2=state), name, prec (optional), value (optional), init (optional)."
-  },
   "review_plan": {
-    "description": "Show everything currently staged (id/op/params/status), so you can explain it to the customer in plain language. No params."
+    "description": "Show everything currently staged (id/tool/status/human-readable summary), so you can explain it to the customer in plain language. No params."
   },
   "revise_plan": {
-    "description": "Edit or remove a staged item. Params: id (the staged item's id), params (optional, replaces the item's params entirely), remove (optional bool -- if true, deletes the item and params is ignored)."
+    "description": "Edit or remove a staged item. Params: id (the staged item's id), args (optional, replaces the item's tool arguments entirely), remove (optional bool -- if true, deletes the item and args is ignored)."
   },
   "apply_plan": {
-    "description": "Commit every currently-staged item. Reports success/failure per item, not all-or-nothing. No params."
+    "description": "Commit every staged item that hasn't been applied yet. Reports success/failure per item, not all-or-nothing. Can be called more than once -- already-applied items are left alone. No params."
   },
   "conclude": {
     "description": "Call once the customer is satisfied with what's been applied. Ends the session normally. Params: summary (optional but preferred)."

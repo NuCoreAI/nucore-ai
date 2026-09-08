@@ -1,10 +1,10 @@
 """End-to-end: start_plan/run_plan_step dispatched through execute_tool --
 confirms the handler's string-params recovery, the lazy per-instance
-PlanEngine attachment, the session-ownership gate, and that a running Plan
-session still blocks Diagnostics tools (Plan's own blanket lock refuses
-every other tool). This is one-directional now, not mutual: Diagnostics has
-no session/blanket lock of its own any more, so a Diagnostics tool never
-blocks Plan.
+PlanEngine attachment, the session-ownership gate, and the three-way tool
+classification while a plan is running: a stageable tool (e.g.
+create_or_update_routine) auto-stages instead of executing, a read-only
+tool (e.g. get_device_detail) stays live, and everything else (e.g.
+Diagnostics tools) is still refused outright.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ async def test_start_plan_opens_new_installation():
         "start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1"
     )
     assert result["status"] == "in_progress"
-    assert "create_folder" in result["available_tools"]
+    assert "apply_plan" in result["available_tools"]
 
 
 @pytest.mark.asyncio
@@ -99,13 +99,12 @@ async def test_run_plan_step_recovers_stringified_json_params():
 
     result = await execute_tool(
         "run_plan_step",
-        {"step": "propose_scene", "params": '{"group_name": "Test", "devices": []}'},
+        {"step": "conclude", "params": '{"summary": "All done"}'},
         nucore_interface=backend,
         session_id="s1",
     )
 
-    assert result["step"] == "propose_scene"
-    assert result["result"]["params"] == {"group_name": "Test", "devices": []}
+    assert result == {"status": "completed", "summary": "All done"}
 
 
 @pytest.mark.asyncio
@@ -121,7 +120,25 @@ async def test_run_plan_step_rejects_a_non_json_string_params():
 
 
 @pytest.mark.asyncio
-async def test_other_tools_are_blocked_while_a_plan_is_running():
+async def test_stageable_tool_auto_stages_instead_of_executing():
+    backend = FakeBackend()
+    await execute_tool("start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1")
+
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Sunset Lights", "code": "pass"},
+        nucore_interface=backend,
+        session_id="s1",
+    )
+
+    # Staged, not actually run -- if it had reached the real handler, FakeBackend's
+    # NotImplementedError stubs would have surfaced as an "error" result instead.
+    assert result["status"] == "staged"
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_read_only_tool_stays_live_while_a_plan_is_running():
     backend = FakeBackend()
     await execute_tool("start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1")
 
@@ -129,7 +146,21 @@ async def test_other_tools_are_blocked_while_a_plan_is_running():
         "get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend, session_id="s1"
     )
 
-    assert "error" in result
+    # Reached the real handler (and failed for an unrelated FakeBackend-stub reason,
+    # not because a plan is running).
+    assert "isn't available while a plan session is in progress" not in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_unclassified_tool_is_still_blocked_while_a_plan_is_running():
+    backend = FakeBackend()
+    await execute_tool("start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1")
+
+    result = await execute_tool(
+        "run_shell_command", {"command": "echo hi"}, nucore_interface=backend, session_id="s1"
+    )
+
+    assert "isn't available while a plan session is in progress" in result.get("error", "")
 
 
 @pytest.mark.asyncio
@@ -146,9 +177,10 @@ async def test_a_different_session_is_refused_even_for_the_plan_tools():
 
 @pytest.mark.asyncio
 async def test_a_running_plan_blocks_a_diagnostics_tool():
-    # Plan's own blanket lock refuses every other tool, including
-    # Diagnostics' -- Diagnostics has no equivalent lock of its own (no
-    # session left to gate), so this is one-directional.
+    # run_diagnostic_step is in none of the staged/always-immediate/read-only
+    # sets, so it's still refused outright while a plan is running --
+    # Diagnostics has no equivalent lock of its own (no session left to
+    # gate), so this is one-directional.
     backend = FakeBackend()
     await execute_tool("start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1")
 

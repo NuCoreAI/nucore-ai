@@ -36,13 +36,51 @@ import time
 from pathlib import Path
 from typing import Any
 
-from unified.handlers import group_scene_ops, node_ops, routine_automation, variable_ops
+from unified.handlers import group_scene_ops, routine_automation, routine_status_ops, variable_ops
 from utils import get_logger
 
 logger = get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
+
+# (module, attr_name) for every tool in dispatch._PLAN_STAGEABLE_TOOLS -- kept
+# as a local mirror rather than importing dispatch.TOOL_HANDLERS directly,
+# since dispatch.py -> handlers.plan -> planning.plan_engine already, and
+# importing back from dispatch here would be circular. Keep in sync by hand
+# with that set. Resolved via getattr at call time (not stored as a direct
+# function reference) so monkeypatching the module attribute -- in tests, or
+# otherwise -- still takes effect, same as the plain `module.func(...)` calls
+# this replaces.
+_STAGEABLE_HANDLERS = {
+    "create_or_update_routine": (routine_automation, "create_or_update_routine"),
+    "variable_op": (variable_ops, "variable_op"),
+    "multi_device_scene": (group_scene_ops, "multi_device_scene"),
+    "group_scene_op": (group_scene_ops, "group_scene_op"),
+    "routine_status_op": (routine_status_ops, "routine_status_op"),
+}
+
+
+def _describe_staged(tool: str, args: dict[str, Any]) -> str:
+    """Short, human-readable label for one staged tool call, for review_plan
+    and the response a staging call itself returns."""
+    if tool == "create_or_update_routine":
+        name = args.get("name", "?")
+        comment = args.get("comment") or "(no description given)"
+        return f'Routine "{name}": {comment}'
+    if tool == "variable_op":
+        kind = "integer" if args.get("type") == 1 else "state"
+        return f'Variable "{args.get("name", "?")}" ({kind})'
+    if tool == "multi_device_scene":
+        devices = args.get("devices") or []
+        return f'Scene "{args.get("group_name") or "(unnamed)"}" with {len(devices)} device(s)'
+    if tool == "group_scene_op":
+        target = args.get("group") or args.get("controller") or "?"
+        return f'Scene adjustment on "{target}"'
+    if tool == "routine_status_op":
+        return f'Routine status change: {args.get("operation", "?")} on routine {args.get("id", "?")}'
+    return f"{tool}({args})"
+
 
 # The only two steps with no backend function -- ended by run_plan_step's own
 # dispatch logic, by literal name, before any getattr lookup.
@@ -141,7 +179,7 @@ class PlanEngine:
 
     # ------------------------------------------------------------------
     # Session management -- Plan's staged-ops flow needs real cross-call
-    # state (propose_* -> apply_plan), unlike Diagnostics, which has no
+    # state (stage_tool_call -> apply_plan), unlike Diagnostics, which has no
     # session at all any more.
     # ------------------------------------------------------------------
 
@@ -255,47 +293,40 @@ class PlanEngine:
         return {"step": step, "result": result}
 
     # ------------------------------------------------------------------
-    # Gather
+    # Staging -- called from dispatch.execute_tool (via handlers.plan.
+    # stage_tool_call), not a run_plan_step step itself. Any call to a tool in
+    # dispatch._PLAN_STAGEABLE_TOOLS made while this plan is open lands here
+    # instead of hitting the real handler.
     # ------------------------------------------------------------------
 
-    async def _list_variables(self, nucore_interface: Any, **params) -> Any:
-        return await variable_ops.list_variables(nucore_interface, params)
-
-    # ------------------------------------------------------------------
-    # Immediate commit
-    # ------------------------------------------------------------------
-
-    async def _create_folder(self, nucore_interface: Any, new_name: str | None = None, **kwargs) -> Any:
-        if not new_name:
-            return {"error": "new_name is required"}
-        return await node_ops.node_op(nucore_interface, {"operation": "add_folder", "new_name": new_name})
-
-    # ------------------------------------------------------------------
-    # Staging
-    # ------------------------------------------------------------------
-
-    def _stage_op(self, op: str, params: dict[str, Any]) -> dict[str, Any]:
+    def stage_tool_call(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         state = self._plan_state
         op_id = state["next_op_id"]
         state["next_op_id"] += 1
-        entry = {"id": op_id, "op": op, "params": params, "status": "proposed"}
+        entry = {"id": op_id, "tool": tool, "args": args, "status": "proposed"}
         state["staged_ops"].append(entry)
-        return entry
-
-    async def _propose_scene(self, nucore_interface: Any, **params) -> Any:
-        return self._stage_op("scene", params)
-
-    async def _propose_automation(self, nucore_interface: Any, **params) -> Any:
-        return self._stage_op("automation", params)
-
-    async def _propose_variable(self, nucore_interface: Any, **params) -> Any:
-        return self._stage_op("variable", params)
+        return {
+            "status": "staged",
+            "staged_id": op_id,
+            "summary": _describe_staged(tool, args),
+            "message": "Staged -- nothing has been created on the hub yet. Call apply_plan to commit, or revise_plan to change it.",
+        }
 
     async def _review_plan(self, nucore_interface: Any, **kwargs) -> Any:
-        return {"staged_ops": self._plan_state["staged_ops"]}
+        return {
+            "staged_ops": [
+                {
+                    "id": e["id"],
+                    "tool": e["tool"],
+                    "status": e["status"],
+                    "summary": _describe_staged(e["tool"], e["args"]),
+                }
+                for e in self._plan_state["staged_ops"]
+            ]
+        }
 
     async def _revise_plan(
-        self, nucore_interface: Any, id: int | None = None, params: dict[str, Any] | None = None, remove: bool = False, **kwargs
+        self, nucore_interface: Any, id: int | None = None, args: dict[str, Any] | None = None, remove: bool = False, **kwargs
     ) -> Any:
         if id is None:
             return {"error": "id is required"}
@@ -306,9 +337,14 @@ class PlanEngine:
         if remove:
             staged_ops.remove(entry)
             return {"id": id, "status": "removed"}
-        if params is not None:
-            entry["params"] = params
-        return entry
+        if args is not None:
+            entry["args"] = args
+        return {
+            "id": entry["id"],
+            "tool": entry["tool"],
+            "status": entry["status"],
+            "summary": _describe_staged(entry["tool"], entry["args"]),
+        }
 
     # ------------------------------------------------------------------
     # Commit
@@ -320,23 +356,20 @@ class PlanEngine:
             if entry["status"] != "proposed":
                 continue
 
-            op = entry["op"]
-            params = entry["params"]
+            tool = entry["tool"]
+            module_attr = _STAGEABLE_HANDLERS.get(tool)
             try:
-                if op == "scene":
-                    result = await group_scene_ops.multi_device_scene(nucore_interface, params)
-                elif op == "automation":
-                    result = await routine_automation.create_or_update_routine(nucore_interface, params)
-                elif op == "variable":
-                    result = await variable_ops.variable_op(nucore_interface, {**params, "operation": "create"})
+                if module_attr is None:
+                    result = {"error": f"unknown staged tool '{tool}'"}
                 else:
-                    result = {"error": f"unknown staged op '{op}'"}
+                    module, attr = module_attr
+                    result = await getattr(module, attr)(nucore_interface, entry["args"])
             except Exception as ex:
                 result = {"error": str(ex)}
 
             ok = isinstance(result, dict) and "error" not in result
             entry["status"] = "applied" if ok else f"failed: {result.get('error') if isinstance(result, dict) else result}"
-            results.append({"id": entry["id"], "op": op, "successful": ok, "result": result})
+            results.append({"id": entry["id"], "tool": tool, "successful": ok, "result": result})
 
         successful = sum(1 for r in results if r["successful"])
         return {

@@ -140,6 +140,12 @@ engine (`propose_*`/`review_plan`/`apply_plan`) and each plan type's privileged 
 `get_prompt()`/`handle_llm_result()` implementation from the plugin contract above; third-party
 plugins implement the same three-command contract entirely on their own, outside this codebase.
 
+> **Superseded (2026-09-07).** "Common step catalog" and "Staged-plan data model" below describe
+> the original `propose_folder`/`propose_scene`/`propose_automation`/`propose_variable` step design
+> and the `{op, params, status}` staged-item shape. That's no longer how staging works -- see
+> "Update (2026-09-07): staging via direct tool-call interception, not propose_* steps" further
+> down for what actually shipped.
+
 ### Common step catalog (implemented once, shared by every plan type)
 
 - **Gather**: `list_devices`, `list_folders`, `list_scenes`, `list_automations`, `list_variables`,
@@ -263,10 +269,9 @@ implementation actually landed:
   `DEVICE_FAMILY_LEGACY_Z_WAVE`).
 - **`pair_device` is a standalone, always-available global tool** (`src/unified/handlers/
   pair_device.py`, registered in `dispatch.py`'s `TOOL_HANDLERS`) -- **not** a Plan-session step.
-  It's exempt from Plan's "only start_plan/run_plan_step allowed while a session is running" gate
-  (`dispatch.py`'s `_PLAN_EXEMPT_TOOLS`) so it stays callable mid-session, since `plan_new_
-  installation.md`'s workflow pairs devices as it goes; it's equally callable outside any Plan
-  session.
+  It's in `dispatch.py`'s `_PLAN_ALWAYS_IMMEDIATE_TOOLS` (see "Update (2026-09-07)" below) so it
+  stays callable mid-session, since `plan_new_installation.md`'s workflow pairs devices as it goes;
+  it's equally callable outside any Plan session.
 - **Shape: `protocol` + `action`, not just an address.** Two structurally different pairing
   patterns exist, and which one applies depends on the protocol, not just its implementation
   status:
@@ -289,8 +294,8 @@ implementation actually landed:
   simplicity -- flipping it on later is a one-line change. Z-Wave Legacy's `include`/`exclude`/
   `stop`/`learn-mode` routes already exist in `family.ts` but are deferred; ZMatter Z-Wave/Zigbee/
   Matter have no inclusion-start routes found anywhere yet. Either way, a device only becomes
-  eligible for `propose_scene`/`propose_automation` once `list_devices` confirms it exists for real
-  -- Plan never stages configuration for a device that hasn't actually been paired yet.
+  eligible for a staged scene/automation once the standing device information confirms it exists
+  for real -- Plan never stages configuration for a device that hasn't actually been paired yet.
 
 ## Open risks / tradeoffs
 
@@ -309,16 +314,65 @@ implementation actually landed:
 - **No plugin install path** means Plan can detect and recommend but never execute a plugin
   install; every plan type that leans on a plugin (Serenity, Security, Animal protection) must
   degrade gracefully to "here's what you'd need to add" rather than assuming it can just do it.
-- **Testing story**: Diagnostics is read-only and safe to test directly against a live system (see
-  `--diagnostic-step`/`--diagnostic-params` CLI flags added for that purpose). Plan's write
-  operations need an equivalent that doesn't risk real damage -- recommend `apply_plan` support a
-  `dry_run` flag that runs the existence/role/link-type validation (`get_node_roles`/
-  `get_link_types` already exist for this) without actually committing, so the same
-  direct-CLI-testing pattern Diagnostics established can extend to Plan safely.
+- ~~**Testing story**: ... recommend `apply_plan` support a `dry_run` flag...~~ **Moot as of
+  2026-09-07** -- see "Update" below. Calling a real tool (`create_or_update_routine`, `variable_op`,
+  etc.) during an active plan session already *is* a safe non-committing dry run: it stages instead
+  of executing. The direct-CLI-testing pattern Diagnostics established extends to Plan for free,
+  without a separate flag.
 - **Scope not yet decided**: whether all 17 plan types ship at once or in some order is deferred --
   per this round's direction, all get designed and stubbed now; sequencing which ones get built out
   first is a separate decision.
 
+## Update (2026-09-07): staging via direct tool-call interception, not propose_* steps
+
+`new_installation` shipped first with the `propose_folder`/`propose_scene`/`propose_automation`/
+`propose_variable` step design described above -- thin wrapper steps that staged raw params
+separately from the real `create_or_update_routine`/`variable_op`/`multi_device_scene` tools that
+`apply_plan` eventually called. That design was reworked once those real tools were already
+always-available, always-registered top-level tools in their own right (`dispatch.py`'s
+`TOOL_HANDLERS`): the wrapper layer was pure duplication (a second, thinner schema for the same
+DSL/params `create_or_update_routine` etc. already fully documented), gave zero validation until
+`apply_plan`, and its blanket "only start_plan/run_plan_step/pair_device allowed" lock blocked even
+read-only lookups (`get_device_detail`, `get_routine_detail`) that those tools' own descriptions
+require calling first.
+
+What shipped instead: `dispatch.execute_tool` classifies every tool call by what it actually does
+while a plan is open, rather than gating on an explicit `propose_*` indirection --
+
+- **`_PLAN_STAGEABLE_TOOLS`** (`create_or_update_routine`, `variable_op`, `multi_device_scene`,
+  `group_scene_op`, `routine_status_op`): calling one of these directly, with its normal arguments,
+  auto-stages it (`unified.handlers.plan.stage_tool_call` -> `PlanEngine.stage_tool_call`) instead
+  of executing. The model calls the *same* tool it already knows from normal chat -- no separate
+  `propose_*` schema to keep in sync.
+- **`_PLAN_ALWAYS_IMMEDIATE_TOOLS`** (`pair_device`, `node_op`, `send_command`, `start_plan`,
+  `run_plan_step`): never staged, never blocked, even mid-plan.
+- **`_PLAN_READONLY_PASSTHROUGH_TOOLS`** (`get_property`, `get_device_detail`, `get_routine_detail`,
+  `get_group_detail`, `list_variables`, `list_preferences`, the plugin list/capability reads):
+  always allowed live -- this is what closes the read-tool-blocked-mid-plan gap above.
+- Anything in none of the three sets stays blocked during an active plan, same blanket-refusal
+  behavior as before (default-deny, so a new tool added to `TOOL_HANDLERS` doesn't silently become
+  staged/passthrough without a deliberate classification).
+
+The staged-item shape is now generic: `{"id": int, "tool": str, "args": dict, "status": str}`
+(`tool`/`args` being literally the intercepted call's own name and arguments) instead of the
+`{op, params, status}` shape above. `apply_plan` replays each staged item by looking up its real
+handler and calling it with its stored `args` -- one small dispatch table, no per-op-type
+branching. `review_plan` renders a short human-readable summary per item (reusing fields the tool
+already required, e.g. `create_or_update_routine`'s own `comment`) rather than raw params.
+`list_devices`/`list_folders`/`list_scenes`/`list_automations`/`list_variables` and
+`propose_folder`/`create_folder` are gone as *steps* entirely -- reads were already redundant with
+the standing device/routine information (see "What you don't need to ask for" in
+`plan_common.md`), and `node_op`/`list_variables` are just called directly now, immediate or
+read-only respectively. What's left in `run_plan_step`'s catalog: `review_plan`, `revise_plan`,
+`apply_plan`, `conclude`, `stop`.
+
+This only landed for `new_installation` -- the mechanism (`dispatch.py`'s three-way classification,
+`PlanEngine.stage_tool_call`/`_apply_plan`) is generic and plan-type-agnostic, so every other stub
+plan type in the catalog above inherits it for free whenever it's implemented; their prompt files
+just need writing, not a new staging mechanism.
+
 ## Status
 
-Design only. No code, tools, or prompts have been written yet.
+`new_installation` is implemented (device pairing, room folders, and staged scenes/automations/
+variables via direct tool-call interception -- see "Update (2026-09-07)" above); every other plan
+type in the catalog above remains design-only, stubbed in `_PLAN_TYPES` but with no prompt file.

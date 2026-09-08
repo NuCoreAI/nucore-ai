@@ -1,6 +1,7 @@
 """PlanEngine -- the write-heavy counterpart to IoXDiagnostics: session
 lifecycle (start/stub-type/step-dispatch/ownership/timeout), staging
-(propose/review/revise), and apply_plan's per-item success/failure
+(stage_tool_call/review/revise -- called the way dispatch.execute_tool calls
+it, not via run_plan_step), and apply_plan's per-item success/failure
 aggregation. apply_plan is tested with the real handler functions
 monkeypatched (same FakeWrapper-style pattern as
 tests/iox/test_plm_links_cache.py) rather than a full live hub round-trip.
@@ -123,7 +124,7 @@ async def test_start_plan_clears_a_stale_session_past_timeout(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_plan_step_requires_a_started_session():
     engine = _bare_engine()
-    result = await engine.run_plan_step(None, "create_folder", session_id="s1")
+    result = await engine.run_plan_step(None, "review_plan", session_id="s1")
     assert "error" in result
 
 
@@ -164,53 +165,55 @@ async def test_stop_ends_the_session():
 
 
 # ---------------------------------------------------------------------------
-# Staging: propose / review / revise
+# Staging: stage_tool_call / review / revise -- stage_tool_call is called
+# directly here, the way dispatch.execute_tool calls it (via
+# handlers.plan.stage_tool_call), never as a run_plan_step step itself.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_propose_scene_stages_without_touching_the_live_system():
+async def test_stage_tool_call_stages_without_touching_the_live_system():
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
 
-    result = await engine.run_plan_step(
-        None, "propose_scene", session_id="s1", group_name="Movie Night", devices=[]
-    )
+    result = engine.stage_tool_call("multi_device_scene", {"group_name": "Movie Night", "devices": []})
 
-    assert result["result"]["status"] == "proposed"
-    assert engine._plan_state["staged_ops"][0]["op"] == "scene"
+    assert result["status"] == "staged"
+    assert engine._plan_state["staged_ops"][0]["tool"] == "multi_device_scene"
+    assert engine._plan_state["staged_ops"][0]["status"] == "proposed"
 
 
 @pytest.mark.asyncio
 async def test_review_plan_lists_everything_staged():
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Counter")
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Counter", "operation": "create"})
 
     result = await engine.run_plan_step(None, "review_plan", session_id="s1")
 
     assert len(result["result"]["staged_ops"]) == 1
-    assert result["result"]["staged_ops"][0]["params"]["name"] == "Counter"
+    assert "Counter" in result["result"]["staged_ops"][0]["summary"]
 
 
 @pytest.mark.asyncio
-async def test_revise_plan_replaces_params():
+async def test_revise_plan_replaces_args():
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Counter")
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Counter", "operation": "create"})
 
     result = await engine.run_plan_step(
-        None, "revise_plan", session_id="s1", id=1, params={"type": 1, "name": "Renamed"}
+        None, "revise_plan", session_id="s1", id=1, args={"type": 1, "name": "Renamed", "operation": "create"}
     )
 
-    assert result["result"]["params"]["name"] == "Renamed"
+    assert "Renamed" in result["result"]["summary"]
+    assert engine._plan_state["staged_ops"][0]["args"]["name"] == "Renamed"
 
 
 @pytest.mark.asyncio
 async def test_revise_plan_removes_an_item():
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Counter")
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Counter", "operation": "create"})
 
     result = await engine.run_plan_step(None, "revise_plan", session_id="s1", id=1, remove=True)
 
@@ -244,8 +247,8 @@ async def test_apply_plan_reports_itemized_success_and_failure(monkeypatch):
 
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Good")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Bad")
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Good", "operation": "create"})
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Bad", "operation": "create"})
 
     result = await engine.run_plan_step(None, "apply_plan", session_id="s1")
 
@@ -268,7 +271,7 @@ async def test_apply_plan_skips_already_applied_items_on_a_second_call(monkeypat
 
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_variable", session_id="s1", type=1, name="Once")
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Once", "operation": "create"})
 
     await engine.run_plan_step(None, "apply_plan", session_id="s1")
     await engine.run_plan_step(None, "apply_plan", session_id="s1")
@@ -294,8 +297,8 @@ async def test_apply_plan_dispatches_scene_and_automation_ops_too(monkeypatch):
 
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
-    await engine.run_plan_step(None, "propose_scene", session_id="s1", group_name="Test", devices=[])
-    await engine.run_plan_step(None, "propose_automation", session_id="s1", name="Sunset Lights", code="pass")
+    engine.stage_tool_call("multi_device_scene", {"group_name": "Test", "devices": []})
+    engine.stage_tool_call("create_or_update_routine", {"name": "Sunset Lights", "code": "pass"})
 
     result = await engine.run_plan_step(None, "apply_plan", session_id="s1")
 

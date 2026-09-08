@@ -38,6 +38,14 @@ def get_running_plan(nucore_interface: NuCoreInterface) -> dict[str, Any] | None
     return _get_engine(nucore_interface).get_running_plan()
 
 
+async def stage_tool_call(nucore_interface: NuCoreInterface, tool: str, args: dict[str, Any]) -> Any:
+    """Called by ``dispatch.execute_tool`` in place of actually running *tool*
+    while a plan session owns this call -- holds it for ``apply_plan`` instead
+    of touching the live system. Session ownership is already verified by the
+    caller before this is reached."""
+    return _get_engine(nucore_interface).stage_tool_call(tool, args)
+
+
 async def start_plan(
     nucore_interface: NuCoreInterface, args: dict[str, Any], *, session_id: str | None = None
 ) -> Any:
