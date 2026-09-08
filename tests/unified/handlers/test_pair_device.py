@@ -2,18 +2,42 @@
 session. Covers: the protocol/action validity table (structural rejection
 vs. not-yet-supported), each of insteon's 3 real actions, and that the tool
 stays callable via dispatch.execute_tool while a plan session is running
-for the owning session_id (confirms dispatch.py's _PLAN_EXEMPT_TOOLS/
+for the owning session_id (confirms dispatch.py's _PLAN_ALWAYS_IMMEDIATE_TOOLS/
 _SESSION_SCOPED_TOOLS split doesn't crash on an unexpected session_id
 kwarg).
+
+Also covers the post-pairing refresh-and-verify polling in pair_device.py's
+_refresh_until: add_device()/finish_device_discovery() are plain REST calls
+that don't themselves update the local node list, so pair_device polls
+_refresh_device_structure() until the newly-added device (or, for
+finish_inclusion, any newly-discovered device) actually shows up locally,
+rather than assuming one refresh call is enough.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import pytest
 
 from nucore.nucore_interface import NuCoreInterface
 from unified.dispatch import execute_tool
-from unified.handlers.pair_device import pair_device
+from unified.handlers import pair_device as pair_device_module
+from unified.handlers.pair_device import normalize_address, pair_device
+
+
+async def _instant_sleep(_seconds):
+    """Replaces asyncio.sleep so a test whose condition never becomes true
+    doesn't actually block for real seconds -- _refresh_until checks its
+    condition on every poll regardless of whether _refresh_device_structure()
+    itself reports a reload, so any test where nothing ever changes runs the
+    full poll budget's worth of iterations, just without a real wait."""
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleeps(monkeypatch):
+    monkeypatch.setattr(pair_device_module.asyncio, "sleep", _instant_sleep)
 
 
 class FakeBackend(NuCoreInterface):
@@ -25,9 +49,19 @@ class FakeBackend(NuCoreInterface):
         self.add_device_result: object = "1A 2B 3C 1"
         self.discover_result: bool = True
         self.finish_result: bool = True
+        self.refresh_calls = 0
+        # add_device stages the address here, and the default
+        # _refresh_device_structure below merges it into self.nodes on its
+        # first call -- simulates a real hub reload finding what was just
+        # added, without needing every existing test to script the refresh
+        # itself. Tests that need to exercise the polling/retry/timeout
+        # logic directly override backend._refresh_device_structure instead.
+        self._pending_nodes: dict[str, str] = {}
 
     async def add_device(self, device_address, name=None, device_type=None, **kwargs):
         self.add_device_calls.append((device_address, name, device_type))
+        if self.add_device_result is not None:
+            self._pending_nodes[device_address] = name or device_address
         return self.add_device_result
 
     async def discover_devices(self, device_type=None, **kwargs):
@@ -37,6 +71,18 @@ class FakeBackend(NuCoreInterface):
     async def finish_device_discovery(self, flag=1, **kwargs):
         self.finish_calls.append((flag,))
         return self.finish_result
+
+    async def _refresh_device_structure(self):
+        # Always reports a successful (instant) reload -- merges in whatever
+        # add_device staged, if anything. Returning True unconditionally
+        # (rather than only when something changed) keeps tests that don't
+        # care about the refresh mechanics (e.g. finish_inclusion with
+        # nothing staged) from blocking on _refresh_until's real sleep loop.
+        self.refresh_calls += 1
+        for address, name in self._pending_nodes.items():
+            self.nodes[address] = SimpleNamespace(name=name)
+        self._pending_nodes = {}
+        return True
 
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
 
@@ -63,6 +109,35 @@ class FakeBackend(NuCoreInterface):
     def group_scene_get_node_roles(self, *a, **kw): raise NotImplementedError
     def group_scene_get_link_types(self, *a, **kw): raise NotImplementedError
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# normalize_address
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("protocol", ["insteon", "x10"])
+def test_normalize_address_appends_default_group_to_a_bare_triple(protocol):
+    assert normalize_address("1A 2B 3C", protocol) == "1A 2B 3C 1"
+
+
+@pytest.mark.parametrize("protocol", ["insteon", "x10"])
+def test_normalize_address_leaves_an_existing_quad_unchanged(protocol):
+    assert normalize_address("1A 2B 3C 2", protocol) == "1A 2B 3C 2"
+
+
+@pytest.mark.parametrize("protocol", ["insteon", "x10"])
+def test_normalize_address_leaves_an_unrecognized_shape_unchanged_and_logs(protocol, caplog):
+    with caplog.at_level("ERROR"):
+        result = normalize_address("not-an-address", protocol)
+    assert result == "not-an-address"
+    assert "not a recognized" in caplog.text
+
+
+@pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
+def test_normalize_address_is_a_no_op_for_other_protocols(protocol):
+    assert normalize_address("1A 2B 3C", protocol) == "1A 2B 3C"
+    assert normalize_address("anything at all", protocol) == "anything at all"
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +197,120 @@ async def test_finish_inclusion_passes_through_flag():
     backend = FakeBackend()
     await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion", "flag": 3})
     assert backend.finish_calls == [(3,)]
+
+
+# ---------------------------------------------------------------------------
+# Post-pairing refresh-and-verify polling (_refresh_until)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_matches_the_hub_reported_address_case_insensitively():
+    # The hub's own XML report can come back in a different case than
+    # whatever the customer/model typed -- the presence check must not
+    # treat that as "not found yet".
+    backend = FakeBackend()
+
+    async def reports_lowercase_address():
+        backend.nodes["1a 2b 3c 1"] = SimpleNamespace(name="1a 2b 3c 1")
+        return True
+
+    backend._refresh_device_structure = reports_lowercase_address
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert result["status"] == "added"
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_waits_for_refresh_before_succeeding():
+    backend = FakeBackend()
+    calls = {"n": 0}
+
+    async def flaky_refresh():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return False
+        backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1")
+        return True
+
+    backend._refresh_device_structure = flaky_refresh
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert result["status"] == "added"
+    assert calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_errors_if_never_refreshed():
+    backend = FakeBackend()
+
+    async def never_refreshes():
+        return False
+
+    backend._refresh_device_structure = never_refreshes
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_errors_if_refreshed_but_device_still_missing():
+    backend = FakeBackend()
+
+    async def refreshes_but_finds_nothing():
+        # Reload "succeeds" each time, but the target address never actually
+        # appears in backend.nodes -- exhausts _REFRESH_MAX_ATTEMPTS.
+        return True
+
+    backend._refresh_device_structure = refreshes_but_finds_nothing
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_finish_inclusion_returns_newly_discovered_addresses():
+    backend = FakeBackend()
+
+    async def discovers_two_devices():
+        backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1")
+        backend.nodes["22 22 22 1"] = SimpleNamespace(name="22 22 22 1")
+        return True
+
+    backend._refresh_device_structure = discovers_two_devices
+
+    result = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
+
+    assert result["status"] == "inclusion_committed"
+    assert {d["address"] for d in result["new_devices"]} == {"11 11 11 1", "22 22 22 1"}
+
+
+@pytest.mark.asyncio
+async def test_finish_inclusion_reports_nothing_new_without_erroring():
+    backend = FakeBackend()
+
+    async def refreshes_but_nothing_new():
+        return True
+
+    backend._refresh_device_structure = refreshes_but_nothing_new
+
+    result = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
+
+    assert result["status"] == "inclusion_committed"
+    assert result["new_devices"] == []
+    assert "error" not in result
 
 
 # ---------------------------------------------------------------------------
