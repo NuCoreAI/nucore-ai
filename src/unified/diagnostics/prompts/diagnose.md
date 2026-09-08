@@ -115,7 +115,10 @@ happened, not diagnosing a broken link (that's the sections above). Read the log
    being issued.
 3. `value` -- the property's new value, or the command's parameter (often `0` for a plain command
    with no parameter).
-4. `timestamp`.
+4. `timestamp` -- 12-hour clock with an AM/PM suffix, e.g. `Mon 2026/08/24 02:10:34 PM`
+   (day-of-week, date, time, meridiem, space-separated). Always read the actual AM/PM suffix
+   off the log line itself -- never assume or infer it (from a customer-stated time, or from a
+   routine's separate 24-hour schedule format, which has no AM/PM at all) without checking.
 5. `actor` -- who/what caused this line (see below).
 6. type of log entry -- its code values aren't documented here; ignore it for now.
 
