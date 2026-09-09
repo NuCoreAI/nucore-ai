@@ -1,22 +1,28 @@
-"""``pair_device`` -- add/pair one physical device, as a standalone global
-tool (not gated behind a Plan session -- see ``dispatch.py``'s
-``_PLAN_ALWAYS_IMMEDIATE_TOOLS``, which lets this run even while a plan
-session is in progress).
+"""``pair_device`` -- add/pair or remove one physical device, as a
+standalone global tool (not gated behind a Plan session -- see
+``dispatch.py``'s ``_PLAN_ALWAYS_IMMEDIATE_TOOLS``, which lets this run even
+while a plan session is in progress).
 
-Two structurally different pairing shapes, not one:
+Three structurally different shapes, not one:
 - ``add_by_address`` -- the customer already has/reads the device's own
   address (insteon/x10 only; z-wave/zigbee/matter devices have no usable
   address until physically activated during an inclusion window).
 - ``start_inclusion``/``finish_inclusion`` -- put the controller in pairing
-  mode, the customer activates one or more devices, then a separate call
-  commits everything included during that window. The only shape
-  z-wave/zigbee/matter will ever use.
+  (add) mode, the customer activates one or more devices, then a separate
+  call commits everything included during that window. Available for
+  insteon/zwave/zigbee/matter.
+- ``start_exclusion``/``finish_exclusion`` -- the same shape, but for
+  removing a device instead of adding one. zwave/zigbee/matter only --
+  insteon has no distinct hardware "exclude" mode in this codebase.
 
-Only insteon has a real backend today; every other protocol/action
+insteon/zwave/zigbee/matter have real backends today (x10's only action,
+add_by_address, is not implemented for it); every other protocol/action
 combination that is nonetheless structurally valid (see
 ``_PROTOCOL_ACTIONS``) returns a "not yet supported" message rather than an
 error, so the model falls back to walking the customer through manual
-pairing.
+pairing. Z-Wave specifically only supports the Z-Matter hardware generation
+-- a Legacy Z-Wave controller surfaces a clear error (raised by the backend
+as ``NuCoreError``) instead of silently no-op'ing.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ import asyncio
 import re
 from typing import Any, Callable
 
-from nucore import NuCoreInterface
+from nucore import NuCoreInterface, NuCoreError
 from utils import get_logger
 
 logger = get_logger(__name__)
@@ -65,17 +71,26 @@ def normalize_address(original_address: str, protocol: str) -> str:
     return original_address
 
 
+_INCLUSION_EXCLUSION_ACTIONS = frozenset(
+    {"start_inclusion", "finish_inclusion", "start_exclusion", "finish_exclusion"}
+)
+
 _PROTOCOL_ACTIONS: dict[str, frozenset[str]] = {
     "insteon": frozenset({"add_by_address", "start_inclusion", "finish_inclusion"}),
     "x10": frozenset({"add_by_address"}),
-    "zwave": frozenset({"start_inclusion", "finish_inclusion"}),
-    "zigbee": frozenset({"start_inclusion", "finish_inclusion"}),
-    "matter": frozenset({"start_inclusion", "finish_inclusion"}),
+    "zwave": _INCLUSION_EXCLUSION_ACTIONS,
+    "zigbee": _INCLUSION_EXCLUSION_ACTIONS,
+    "matter": _INCLUSION_EXCLUSION_ACTIONS,
 }
 
 # Everything else in _PROTOCOL_ACTIONS is a real, valid protocol/action
 # shape that just isn't backed by a real call yet.
-_IMPLEMENTED_PROTOCOLS = frozenset({"insteon"})
+_IMPLEMENTED_PROTOCOLS = frozenset({"insteon", "zwave", "zigbee", "matter"})
+
+# start_inclusion/start_exclusion both map to discover_devices(); which
+# "mode" they pass through determines whether the hub opens an add or a
+# remove window (insteon ignores mode -- it has no exclude concept here).
+_ACTION_TO_MODE = {"start_inclusion": "include", "start_exclusion": "exclude"}
 
 # add_device()/finish_device_discovery() are plain REST POSTs -- neither sets
 # device_structure_changed itself. That only flips once the websocket's
@@ -141,7 +156,9 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             "through the vendor's manual pairing procedure instead."
         )
 
-    # protocol == "insteon" from here on.
+    # protocol is one of _IMPLEMENTED_PROTOCOLS from here on. Only insteon
+    # reaches add_by_address (it's the only implemented protocol with that
+    # action in _PROTOCOL_ACTIONS).
     if action == "add_by_address":
         device_address = args.get("device_address")
         if not device_address:
@@ -163,30 +180,59 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             }
         return {"protocol": protocol, "action": action, "device_address": result, "status": "added"}
 
-    if action == "start_inclusion":
-        ok = await nucore_interface.discover_devices(device_type=args.get("device_type"))
+    if action in ("start_inclusion", "start_exclusion"):
+        mode = _ACTION_TO_MODE[action]
+        try:
+            ok = await nucore_interface.discover_devices(
+                device_type=args.get("device_type"), protocol=protocol, mode=mode,
+            )
+        except NuCoreError as e:
+            return {"error": str(e)}
         if not ok:
-            return {"error": "failed to start inclusion mode"}
+            return {"error": f"failed to start {mode} mode"}
+        if action == "start_inclusion":
+            return {
+                "protocol": protocol, "action": action, "status": "inclusion_started",
+                "note": "The hub is now in pairing mode -- tell the customer to activate each device "
+                        "they want to add, then call finish_inclusion to commit.",
+            }
         return {
-            "protocol": protocol, "action": action, "status": "inclusion_started",
-            "note": "The hub is now in pairing mode -- tell the customer to activate each device "
-                    "they want to add, then call finish_inclusion to commit.",
+            "protocol": protocol, "action": action, "status": "exclusion_started",
+            "note": "The hub is now in removal mode -- tell the customer to activate the device "
+                    "they want to remove, then call finish_exclusion to commit.",
         }
 
-    # action == "finish_inclusion"
+    # action in ("finish_inclusion", "finish_exclusion")
+    is_inclusion = action == "finish_inclusion"
     flag = args.get("flag", 1)
-    before = set(nucore_interface.nodes.keys())
-    ok = await nucore_interface.finish_device_discovery(flag=flag)
+    # Snapshot names up front -- an excluded device's name is unavailable
+    # once it's actually gone from nucore_interface.nodes.
+    before = {address: node.name for address, node in nucore_interface.nodes.items()}
+    try:
+        ok = await nucore_interface.finish_device_discovery(flag=flag, protocol=protocol)
+    except NuCoreError as e:
+        return {"error": str(e)}
     if not ok:
-        return {"error": "failed to commit inclusion session"}
+        return {"error": f"failed to commit {'inclusion' if is_inclusion else 'exclusion'} session"}
 
-    found_new = await _refresh_until(nucore_interface, lambda: set(nucore_interface.nodes.keys()) != before)
-    new_addresses = sorted(set(nucore_interface.nodes.keys()) - before) if found_new else []
+    changed = await _refresh_until(nucore_interface, lambda: set(nucore_interface.nodes.keys()) != set(before))
+    if is_inclusion:
+        changed_addresses = sorted(set(nucore_interface.nodes.keys()) - set(before)) if changed else []
+        devices = [
+            {"address": address, "name": nucore_interface.nodes[address].name} for address in changed_addresses
+        ]
+        return {
+            "protocol": protocol, "action": action, "status": "inclusion_committed",
+            "new_devices": devices,
+            "note": "No new devices appeared during the inclusion window." if not devices else
+                    "Rename/assign these as needed using the addresses above.",
+        }
+
+    changed_addresses = sorted(set(before) - set(nucore_interface.nodes.keys())) if changed else []
+    devices = [{"address": address, "name": before[address]} for address in changed_addresses]
     return {
-        "protocol": protocol, "action": action, "status": "inclusion_committed",
-        "new_devices": [
-            {"address": address, "name": nucore_interface.nodes[address].name} for address in new_addresses
-        ],
-        "note": "No new devices appeared during the inclusion window." if not new_addresses else
-                "Rename/assign these as needed using the addresses above.",
+        "protocol": protocol, "action": action, "status": "exclusion_committed",
+        "removed_devices": devices,
+        "note": "No devices were removed during the removal window." if not devices else
+                "These addresses are no longer on the hub.",
     }

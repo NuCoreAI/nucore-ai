@@ -669,27 +669,48 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the add_device method.")
 
     @abstractmethod
-    async def discover_devices(self):
+    async def discover_devices(self, protocol: str = None, mode: str = "include", **kwargs):
         """
         Put the hub into linking mode for a batch pairing session -- the
-        customer can press the set button on as many devices as they want
-        while this is active, with no addresses needed upfront. Must be
-        followed by finish_device_discovery() to actually program the
-        devices that were linked; there's no address-to-name mapping
-        provided by this call, which is why Plan doesn't use it (see above).
+        customer can press the set button on (or otherwise activate) as many
+        devices as they want while this is active, with no addresses needed
+        upfront. Must be followed by finish_device_discovery() to actually
+        program the devices that were linked; there's no address-to-name
+        mapping provided by this call, which is why Plan doesn't use it (see
+        above).
+
+        :param protocol: Which protocol's linking mode to start (e.g.
+            "insteon", "zwave", "zigbee", "matter"). A backend may ignore
+            this if it only ever speaks one protocol.
+        :param mode: For protocols with a real hardware distinction between
+            adding and removing (e.g. Z-Wave's include vs exclude), which
+            direction to start. Ignored by protocols without one (e.g.
+            Insteon's linking mode is add-only in this codebase).
+        :param kwargs: Reserved for additional protocol-specific parameters.
+        :raises NuCoreError: A backend may raise this for a structurally
+            valid protocol it nonetheless cannot service right now (e.g. a
+            hardware generation it doesn't support) -- callers should
+            surface the message rather than treating it as a bare failure.
         :return: response from the hub, or None/error info on failure.
         """
         raise NotImplementedError("Subclasses must implement the discover_devices method.")
 
     @abstractmethod
-    async def finish_device_discovery(self):
+    async def finish_device_discovery(self, protocol: str = None, **kwargs):
         """
         End the batch pairing session started by discover_devices() and
-        program every device that was linked during it. This COMMITS the
-        session -- it is not a cancel/abort, despite the underlying SOAP
-        action being named "CancelNodesDiscovery". discover_devices()
-        requires this call to actually take effect; add_device() requires
-        neither this nor discover_devices() at all.
+        program every device that was linked (or removed, for an exclusion
+        session) during it. This COMMITS the session -- it is not a
+        cancel/abort, despite the underlying SOAP action being named
+        "CancelNodesDiscovery". discover_devices() requires this call to
+        actually take effect; add_device() requires neither this nor
+        discover_devices() at all.
+
+        :param protocol: Which protocol's session to end -- must match what
+            was passed to the corresponding discover_devices() call.
+        :param kwargs: Reserved for additional protocol-specific parameters
+            (e.g. Insteon's ``flag``).
+        :raises NuCoreError: See discover_devices().
         :return: response from the hub, or None/error info on failure.
         """
         raise NotImplementedError("Subclasses must implement the finish_device_discovery method.")

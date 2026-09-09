@@ -1,6 +1,6 @@
 {
   "name": "pair_device",
-  "description": "Add/pair a physical device -- callable any time, including mid-Plan-session. Ask the customer what protocol (insteon, z-wave, zigbee, matter, x10) if unclear. Only 'insteon' is wired up right now; other protocols return a not-yet-supported message -- walk the customer through manual pairing instead. Action depends on protocol: add_by_address (insteon/x10 only) is for a device whose own address the customer already knows or can read off the unit -- this call itself waits (up to ~80s) for the new device to actually become usable before returning, so it's safe to reference the returned device_address in the very next tool call. start_inclusion/finish_inclusion (insteon/zwave/zigbee/matter) is for everything else -- start_inclusion puts the controller in pairing mode so the customer can activate one or more devices, finish_inclusion then commits everything included during that window and waits the same way, returning whatever was newly discovered directly in its own result's new_devices list (address + whatever name the hub assigned, usually blank -- no separate lookup needed to find or name them). For adding a marketplace plugin (not a physical device), use install_plugin/buy_plugin instead.",
+  "description": "Add/pair or remove a physical device -- callable any time, including mid-Plan-session. Ask the customer what protocol (insteon, z-wave, zigbee, matter, x10) if unclear. insteon/zwave/zigbee/matter are wired up; x10 returns a not-yet-supported message -- walk the customer through manual pairing instead. A Z-Wave controller still running the Legacy (pre-Z-Matter) generation returns a clear error for any zwave action -- tell the customer to use the ISY administrative console for that controller. Action depends on protocol: add_by_address (insteon/x10 only) is for a device whose own address the customer already knows or can read off the unit -- this call itself waits (up to ~80s) for the new device to actually become usable before returning, so it's safe to reference the returned device_address in the very next tool call. start_inclusion/finish_inclusion (insteon/zwave/zigbee/matter) is for adding everything else -- start_inclusion puts the controller in pairing mode so the customer can activate one or more devices, finish_inclusion then commits everything included during that window and waits the same way, returning whatever was newly discovered directly in its own result's new_devices list (address + whatever name the hub assigned, usually blank -- no separate lookup needed to find or name them). start_exclusion/finish_exclusion (zwave/zigbee/matter only -- insteon has no distinct hardware remove mode here) mirrors start_inclusion/finish_inclusion but for removing a device: start_exclusion puts the controller in removal mode so the customer can activate the device to remove, finish_exclusion commits and returns the removed address(es) in removed_devices. For adding a marketplace plugin (not a physical device), use install_plugin/buy_plugin instead.",
   "input_schema": {
     "type": "object",
     "required": ["protocol", "action"],
@@ -12,8 +12,8 @@
       },
       "action": {
         "type": "string",
-        "enum": ["add_by_address", "start_inclusion", "finish_inclusion"],
-        "description": "add_by_address is insteon/x10 only (needs device_address). start_inclusion/finish_inclusion works for insteon/zwave/zigbee/matter (finish_inclusion optionally takes flag)."
+        "enum": ["add_by_address", "start_inclusion", "finish_inclusion", "start_exclusion", "finish_exclusion"],
+        "description": "add_by_address is insteon/x10 only (needs device_address). start_inclusion/finish_inclusion (add) and start_exclusion/finish_exclusion (remove) work for insteon (inclusion only)/zwave/zigbee/matter (both) (finish_inclusion/finish_exclusion optionally take flag)."
       },
       "device_address": {
         "type": ["string", "null"],
@@ -29,7 +29,7 @@
       },
       "flag": {
         "type": ["integer", "null"],
-        "description": "Optional numeric flag for finish_inclusion (defaults to 1)."
+        "description": "Optional numeric flag for finish_inclusion/finish_exclusion (defaults to 1). Insteon-specific -- ignored for zwave/zigbee/matter."
       }
     }
   }

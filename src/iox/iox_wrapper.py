@@ -25,7 +25,7 @@ from typing import Literal, Any
 from utils import get_logger
 from xml.sax.saxutils import escape as xml_escape
 from .diagnostics.iox_diagnostics import IoXDiagnostics
-from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER
+from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER, ZMATTER_BASE_PATHS, PROTOCOL_TO_ZMATTER_FAMILY
 from .unix_socket_adapter import UnixSocketAdapter
 
 logger = get_logger(__name__)
@@ -1655,11 +1655,18 @@ class IoXWrapper(NuCoreInterface):
     # via the REST API). Calls eisy-ui's REST API
     # (server/routes/api/authenticated/family.ts) rather than building raw
     # SOAP envelopes directly, via the same IoXWrapper.post() used
-    # elsewhere -- no separate HTTP client. INSTEON only for now -- no
-    # Z-Wave/Zigbee/Matter pairing primitives exist anywhere in this class
-    # yet. set_device_linking_mode wires up what was previously a dead,
-    # zero-call-site SOAP action (SetDeviceLinkMode) now that it has a real
-    # eisy-ui route backing it.
+    # elsewhere -- no separate HTTP client. set_device_linking_mode wires up
+    # what was previously a dead, zero-call-site SOAP action
+    # (SetDeviceLinkMode) now that it has a real eisy-ui route backing it.
+    #
+    # Z-Matter-generation Z-Wave/Zigbee/Matter (families 12/14/15) are a
+    # different shape entirely: bare REST GETs straight to the ISY firmware
+    # under ZMATTER_BASE_PATHS (no SOAP translation, no request body, no
+    # address) -- see discover_devices/finish_device_discovery below. Legacy
+    # Z-Wave (family 4) uses yet another SOAP-backed shape
+    # (/api/family/4/1/{include,exclude,stop}) that is intentionally NOT
+    # wired up here; _is_legacy_zwave() detects it so callers get a clear
+    # error instead of a silent no-op.
     # ------------------------------------------------------------------
 
     _EISYUI_INSTANCE = "1"  # nucore-ai only ever targets a single hub/instance
@@ -1672,6 +1679,15 @@ class IoXWrapper(NuCoreInterface):
         instance = instance if instance is not None else self._EISYUI_INSTANCE
         return f"/api/family/{family}/{instance}/{suffix}"
 
+    async def _is_legacy_zwave(self) -> bool:
+        """True when the controller is still running Legacy Z-Wave (family
+        4) rather than the Z-Matter generation (family 12) -- mirrors
+        eisy-ui's ZWaveHardware.tsx routing shim, which makes the same
+        decision from the same system option to pick which family's page to
+        show."""
+        options = await self.diagnostics._get_system_options()
+        return not options.get("ZMatterZWave", False)
+
     async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> Any:
         body = {"flag": flag, "address": device_address}
         if name:
@@ -1681,12 +1697,30 @@ class IoXWrapper(NuCoreInterface):
         response = self.post(self._family_api_path("add-node"), json.dumps(body), {"Content-Type": "application/json"})
         return device_address if response is not None and response.status_code == 200 else None
 
-    async def discover_devices(self, device_type: str = None, **kwargs) -> Any:
+    async def discover_devices(self, device_type: str = None, protocol: str = None, mode: str = "include", **kwargs) -> Any:
+        family = PROTOCOL_TO_ZMATTER_FAMILY.get(protocol)
+        if family is not None:
+            if protocol == "zwave" and await self._is_legacy_zwave():
+                raise NuCoreError(
+                    "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
+                )
+            response = self.get(f"{ZMATTER_BASE_PATHS[family]}node/{mode}")
+            return response is not None and response.status_code == 200
+
         body = {"deviceType": device_type} if device_type else {}
         response = self.post(self._family_api_path("start-linking"), json.dumps(body), {"Content-Type": "application/json"})
         return response is not None and response.status_code == 200
 
-    async def finish_device_discovery(self, flag: int = 1, **kwargs) -> Any:
+    async def finish_device_discovery(self, flag: int = 1, protocol: str = None, **kwargs) -> Any:
+        family = PROTOCOL_TO_ZMATTER_FAMILY.get(protocol)
+        if family is not None:
+            if protocol == "zwave" and await self._is_legacy_zwave():
+                raise NuCoreError(
+                    "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
+                )
+            response = self.get(f"{ZMATTER_BASE_PATHS[family]}node/cancel")
+            return response is not None and response.status_code == 200
+
         response = self.post(self._family_api_path("stop-linking"), json.dumps({"flag": flag}), {"Content-Type": "application/json"})
         return response is not None and response.status_code == 200
 

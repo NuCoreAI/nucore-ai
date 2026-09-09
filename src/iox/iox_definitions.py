@@ -88,3 +88,19 @@ DEVICE_FAMILIES: dict[str, str] = {
     DEVICE_FAMILY_ZIGBEE: "Zigbee",
     DEVICE_FAMILY_MATTER: "Matter",
 }
+
+# Z-Matter-generation families expose pairing (include/exclude/cancel) as
+# bare REST GETs under these prefixes -- no SOAP translation, unlike Legacy
+# Z-Wave (family 4). Mirrors eisy-ui's ZMATTER_BASE_PATHS
+# (ui/src/utils/nodesUtils.ts).
+ZMATTER_BASE_PATHS: dict[str, str] = {
+    DEVICE_FAMILY_Z_WAVE: "/rest/zmatter/zwave/",
+    DEVICE_FAMILY_ZIGBEE: "/rest/zmatter/zigbee/",
+    DEVICE_FAMILY_MATTER: "/rest/zmatter/matter/",
+}
+
+PROTOCOL_TO_ZMATTER_FAMILY: dict[str, str] = {
+    "zwave": DEVICE_FAMILY_Z_WAVE,
+    "zigbee": DEVICE_FAMILY_ZIGBEE,
+    "matter": DEVICE_FAMILY_MATTER,
+}
