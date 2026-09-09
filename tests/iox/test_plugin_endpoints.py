@@ -30,7 +30,12 @@ async def test_get_installed_plugins_hits_get_endpoint():
     wrapper = _bare_wrapper()
     calls = []
     payload = {"successful": True, "data": [{"profileNum": 3, "name": "YouTube", "isLocal": False}]}
-    wrapper.get = lambda path: (calls.append(path), FakeResp(data=payload))[1]
+
+    async def fake_get(path):
+        calls.append(path)
+        return FakeResp(data=payload)
+
+    wrapper.get = fake_get
 
     result = await wrapper.get_installed_plugins()
 
@@ -41,7 +46,11 @@ async def test_get_installed_plugins_hits_get_endpoint():
 @pytest.mark.asyncio
 async def test_get_installed_plugins_returns_none_on_connection_error():
     wrapper = _bare_wrapper()
-    wrapper.get = lambda path: None
+
+    async def fake_get(path):
+        return None
+
+    wrapper.get = fake_get
 
     assert await wrapper.get_installed_plugins() is None
 
@@ -51,7 +60,12 @@ async def test_get_installed_plugins_returns_none_on_connection_error():
 async def test_plugin_ops_hits_the_right_endpoint(operation):
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.post = lambda path, body=None, headers=None: (calls.append(path), FakeResp(data={"successful": True}))[1]
+
+    async def fake_post(path, body=None, headers=None):
+        calls.append(path)
+        return FakeResp(data={"successful": True})
+
+    wrapper.post = fake_post
 
     result = await wrapper.plugin_ops("3", operation)
 
@@ -62,7 +76,11 @@ async def test_plugin_ops_hits_the_right_endpoint(operation):
 @pytest.mark.asyncio
 async def test_plugin_ops_returns_response_on_non_200():
     wrapper = _bare_wrapper()
-    wrapper.post = lambda path, body=None, headers=None: FakeResp(status_code=500)
+
+    async def fake_post(path, body=None, headers=None):
+        return FakeResp(status_code=500)
+
+    wrapper.post = fake_post
 
     result = await wrapper.plugin_ops("3", "start")
 

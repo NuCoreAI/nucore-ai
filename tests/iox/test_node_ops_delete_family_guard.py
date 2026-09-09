@@ -29,7 +29,7 @@ def _bare_wrapper(node) -> IoXWrapper:
     wrapper.nodes = {"n1": node} if node is not None else {}
     wrapper.delete_calls: list[tuple] = []
 
-    def fake_delete(path, body=None, headers=None):
+    async def fake_delete(path, body=None, headers=None):
         wrapper.delete_calls.append((path, body, headers))
         return SimpleNamespace(status_code=200)
 

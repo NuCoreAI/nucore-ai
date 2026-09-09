@@ -393,7 +393,7 @@ class NuCoreInterface(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def group_scene_add_member(
+    async def group_scene_add_member(
         self,
         group_address: str,
         link_address: str,
@@ -404,12 +404,12 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement group_scene_add_member.")
 
     @abstractmethod
-    def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
+    async def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
         """Remove a node member from a group."""
         raise NotImplementedError("Subclasses must implement group_scene_remove_member.")
 
     @abstractmethod
-    def group_scene_update_link(
+    async def group_scene_update_link(
         self,
         group_address: str,
         controller_address: str,
@@ -419,12 +419,12 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement group_scene_update_link.")
 
     @abstractmethod
-    def group_scene_get_node_roles(self, node_address: str) -> dict[str, Any] | None:
+    async def group_scene_get_node_roles(self, node_address: str) -> dict[str, Any] | None:
         """Fetch node role capability details for a group member candidate."""
         raise NotImplementedError("Subclasses must implement group_scene_get_node_roles.")
 
     @abstractmethod
-    def group_scene_get_link_types(self, controller_address: str, link_address: str) -> dict[str, Any] | None:
+    async def group_scene_get_link_types(self, controller_address: str, link_address: str) -> dict[str, Any] | None:
         """Fetch supported link types for a controller/responder pair."""
         raise NotImplementedError("Subclasses must implement group_scene_get_link_types.")
 

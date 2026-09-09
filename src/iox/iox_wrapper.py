@@ -7,11 +7,9 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
-import requests
-from requests import api
+import httpx
 import websockets
-import urllib3
-import re 
+import re
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from nucore.nucore_interface import NuCoreInterface, PromptFormatTypes
@@ -26,12 +24,8 @@ from utils import get_logger
 from xml.sax.saxutils import escape as xml_escape
 from .diagnostics.iox_diagnostics import IoXDiagnostics
 from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER, ZMATTER_BASE_PATHS, PROTOCOL_TO_ZMATTER_FAMILY
-from .unix_socket_adapter import UnixSocketAdapter
-
 logger = get_logger(__name__)
 
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def xml_elem_to_obj(elem):
     if elem is None:
@@ -121,7 +115,7 @@ class IoXWrapper(NuCoreInterface):
         """
         super().__init__(json_output, prompt_format_type)  # Initialize parent with no parameters
         self.unix_socket = None
-        self._session = requests.Session()
+        self._client: httpx.AsyncClient | None = None
         if poly:
             # import only in case we are running in polglot context since
             # udi_interface redirects standard input/output to polyglot LOGGER
@@ -137,9 +131,9 @@ class IoXWrapper(NuCoreInterface):
                 # Placeholder -- never dialed over TCP; only used for
                 # f"{self.base_url}{path}" string-building and the
                 # WebSocket URI below. All traffic actually goes over
-                # self.unix_socket via UnixSocketAdapter.
+                # self.unix_socket via the AsyncClient's UDS transport
+                # (see _get_client).
                 self.base_url = "http://localhost"
-                self._session.mount("http://", UnixSocketAdapter(self.unix_socket))
             else:
                 self.base_url = base_url.rstrip('/')
             self.username= username
@@ -175,8 +169,21 @@ class IoXWrapper(NuCoreInterface):
             self.password = info['isy_password']
         else:
             self.unauthorized = True
-    
-    def delete(self, path: str, body: str = None, headers: dict = None):
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Lazily build the shared :class:`httpx.AsyncClient`.
+
+        Built on first use rather than in ``__init__`` so it's always
+        constructed inside a running event loop. ``timeout=20.0`` bounds
+        every request/connect phase; ``requests`` (the previous client) had
+        no timeout at all, so a hung device used to block indefinitely.
+        """
+        if self._client is None:
+            transport = httpx.AsyncHTTPTransport(uds=self.unix_socket) if self.unix_socket else None
+            self._client = httpx.AsyncClient(transport=transport, verify=False, timeout=20.0)
+        return self._client
+
+    async def delete(self, path: str, body: str = None, headers: dict = None):
         """Send an authenticated HTTP DELETE request to the ISY hub.
 
         Args:
@@ -185,13 +192,13 @@ class IoXWrapper(NuCoreInterface):
             headers: HTTP headers dict (e.g. ``{"Content-Type": "application/json"}``).
 
         Returns:
-            :class:`requests.Response`, or ``None`` on connection error.
+            :class:`httpx.Response`, or ``None`` on connection error.
         """
         try:
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}"
-            # Method 1a: Using auth parameter (simplest)
-            response = self._session.delete(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            client = await self._get_client()
+            response = await client.delete(url, auth=(self.username, self.password), content=body, headers=headers)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -199,23 +206,22 @@ class IoXWrapper(NuCoreInterface):
             logger.error (f"failed connection {ex}")
             return None
 
-    def get(self, path: str):
+    async def get(self, path: str):
         """Send an authenticated HTTP GET request to the ISY hub.
 
         Args:
             path: API path (with or without a leading ``/``).
 
         Returns:
-            :class:`requests.Response`, or ``None`` on connection error.
+            :class:`httpx.Response`, or ``None`` on connection error.
         """
         try:
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}"
-            # Method 1a: Using auth parameter (simplest)
-            response = self._session.get(
+            client = await self._get_client()
+            response = await client.get(
             url,
             auth=(self.username, self.password),
-            verify=False
             )
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
@@ -223,8 +229,8 @@ class IoXWrapper(NuCoreInterface):
         except Exception as ex:
             logger.error(f"failed connection {ex}")
             return None
-    
-    def put(self, path: str, body: str, headers: dict):
+
+    async def put(self, path: str, body: str, headers: dict):
         """Send an authenticated HTTP PUT request to the ISY hub.
 
         Args:
@@ -233,11 +239,12 @@ class IoXWrapper(NuCoreInterface):
             headers: HTTP headers dict (e.g. ``{"Content-Type": "application/json"}``).
 
         Returns:
-            :class:`requests.Response`, or ``None`` on connection error.
+            :class:`httpx.Response`, or ``None`` on connection error.
         """
         try:
             url=f"{self.base_url}{path}"
-            response = self._session.put(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            client = await self._get_client()
+            response = await client.put(url, auth=(self.username, self.password), content=body, headers=headers)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -245,7 +252,7 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed put: {ex}")
             return None
 
-    def post(self, path: str, body: str, headers: dict=None):
+    async def post(self, path: str, body: str, headers: dict=None):
         """Send an authenticated HTTP POST request to the ISY hub.
 
         Args:
@@ -254,11 +261,12 @@ class IoXWrapper(NuCoreInterface):
             headers: HTTP headers dict.
 
         Returns:
-            :class:`requests.Response`, or ``None`` on connection error.
+            :class:`httpx.Response`, or ``None`` on connection error.
         """
         try:
             url=f"{self.base_url}{path}"
-            response = self._session.post(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            client = await self._get_client()
+            response = await client.post(url, auth=(self.username, self.password), content=body, headers=headers)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -266,7 +274,7 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed post: {ex}")
             return None
 
-    def patch(self, path: str, body: str, headers: dict):
+    async def patch(self, path: str, body: str, headers: dict):
         """Send an authenticated HTTP PATCH request to the ISY hub.
 
         Args:
@@ -275,11 +283,12 @@ class IoXWrapper(NuCoreInterface):
             headers: HTTP headers dict.
 
         Returns:
-            :class:`requests.Response`, or ``None`` on connection error.
+            :class:`httpx.Response`, or ``None`` on connection error.
         """
         try:
             url=f"{self.base_url}{path}"
-            response = self._session.patch(url, auth=(self.username, self.password), data=body, headers=headers,  verify=False)
+            client = await self._get_client()
+            response = await client.patch(url, auth=(self.username, self.password), content=body, headers=headers)
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -287,7 +296,7 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"failed patch: {ex}")
             return None
 
-    def soap_post(self, path: str, body: str, soap_action: str = None, headers: dict = None):
+    async def soap_post(self, path: str, body: str, soap_action: str = None, headers: dict = None):
         """Send an authenticated SOAP POST request to the ISY hub.
 
         Thin wrapper over :meth:`post` that fills in the SOAP-specific
@@ -304,14 +313,14 @@ class IoXWrapper(NuCoreInterface):
                          non-default charset).
 
         Returns:
-            :class:`requests.Response`, or ``None`` on connection error.
+            :class:`httpx.Response`, or ``None`` on connection error.
         """
         soap_headers = {"Content-Type": "text/xml; charset=utf-8"}
         if soap_action is not None:
             soap_headers["SOAPAction"] = soap_action
         if headers:
             soap_headers.update(headers)
-        return self.post(path, body, soap_headers)
+        return await self.post(path, body, soap_headers)
 
     def _get_soap_envelope(self, soap_action: str, inner: str) -> str:
         """Wrap *inner* (the already-built ``<command>``/``<node>``/... element
@@ -332,7 +341,7 @@ class IoXWrapper(NuCoreInterface):
         or non-200 response (mirrors the Java method returning ``null`` when
         ``resp == null`` or ``!resp.opStat``)."""
         envelope = self._get_soap_envelope(soap_action, inner_body)
-        response = self.soap_post("/services", envelope, soap_action=soap_action)
+        response = await self.soap_post("/services", envelope, soap_action=soap_action)
         if response is None or response.status_code != 200:
             return None
         return response.text
@@ -425,35 +434,35 @@ class IoXWrapper(NuCoreInterface):
     # IoX REST helpers
     # ------------------------------------------------------------------
 
-    def get_profiles(self):
+    async def get_profiles(self):
         """Fetch all device/node profiles from the IoX hub.
 
         Returns:
             Parsed JSON response dict, or ``None`` on failure.
         """
-        response = self.get("/rest/profiles")
+        response = await self.get("/rest/profiles")
         if response == None or response.status_code != 200:
             return None
         return response.json()
 
-    def get_nodes(self):
+    async def get_nodes(self):
         """Fetch the full node list from the IoX hub as raw XML.
 
         Returns:
             XML response text string, or ``None`` on failure.
         """
-        response = self.get("/rest/nodes")
+        response = await self.get("/rest/nodes")
         if response == None or response.status_code != 200:
             return None
         return response.text
 
-    def get_group_links(self):
+    async def get_group_links(self):
         """Fetch all groups, links, and scenes from the IoX hub.
 
         Returns:
             Parsed JSON response dict, or ``None`` on failure or parse error.
         """
-        response = self.get("/api/groups/links")
+        response = await self.get("/api/groups/links")
         if response == None or response.status_code != 200:
             return None
         try:
@@ -462,20 +471,20 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error parsing JSON response for group links: {e}")
             return None
 
-    def _group_scene_response(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _group_scene_response(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """Execute and normalize a group-scene backend request response."""
         headers = {"Content-Type": "application/json"}
         payload = json.dumps(body) if body is not None else None
 
         try:
             if method == "GET":
-                response = self.get(path)
+                response = await self.get(path)
             elif method == "POST":
-                response = self.post(path, payload or "{}", headers)
+                response = await self.post(path, payload or "{}", headers)
             elif method == "PATCH":
-                response = self.patch(path, payload or "{}", headers)
+                response = await self.patch(path, payload or "{}", headers)
             elif method == "DELETE":
-                response = self.delete(path, payload, headers)
+                response = await self.delete(path, payload, headers)
             else:
                 return {
                     "successful": False,
@@ -514,7 +523,7 @@ class IoXWrapper(NuCoreInterface):
             out["data"] = getattr(response, "text", "")
         return out
 
-    def group_scene_add_member(
+    async def group_scene_add_member(
         self,
         group_address: str,
         link_address: str,
@@ -528,21 +537,21 @@ class IoXWrapper(NuCoreInterface):
         }
         if name is not None:
             payload["name"] = name
-        return self._group_scene_response(
+        return await self._group_scene_response(
             method="POST",
             path=f"/api/groups/members/{quote(group_address, safe='')}",
             body=payload,
         )
 
-    def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
+    async def group_scene_remove_member(self, group_address: str, link_address: str) -> dict[str, Any]:
         """Remove a member node from a group."""
-        return self._group_scene_response(
+        return await self._group_scene_response(
             method="DELETE",
             path=f"/api/groups/members/{quote(group_address, safe='')}",
             body={"nodeAddress": link_address},
         )
 
-    def group_scene_update_link(
+    async def group_scene_update_link(
         self,
         group_address: str,
         controller_address: str,
@@ -553,16 +562,16 @@ class IoXWrapper(NuCoreInterface):
             "controllerAddress": controller_address,
             "link": link,
         }
-        return self._group_scene_response(
+        return await self._group_scene_response(
             method="PATCH",
             path=f"/api/groups/links/{quote(group_address, safe='')}",
             body=payload,
         )
 
-    def group_scene_get_node_roles(self, node_address: str) -> dict[str, Any] | None:
+    async def group_scene_get_node_roles(self, node_address: str) -> dict[str, Any] | None:
         """Get node role capabilities for group membership decisions."""
         path = f"/api/groups/nodeRoles/{quote(node_address, safe='')}"
-        response = self.get(path)
+        response = await self.get(path)
         if response is None or response.status_code != 200:
             return None
         try:
@@ -571,13 +580,13 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error parsing JSON response for group node roles: {exc}")
             return None
 
-    def group_scene_get_link_types(self, controller_address: str, responder_address: str) -> dict[str, Any] | None:
+    async def group_scene_get_link_types(self, controller_address: str, responder_address: str) -> dict[str, Any] | None:
         """Get available link types for a controller/responder pair."""
         path = (
             f"/api/groups/linkTypes?controller={quote(controller_address, safe='')}&"
             f"responder={quote(responder_address, safe='')}"
         )
-        response = self.get(path)
+        response = await self.get(path)
         if response is None or response.status_code != 200:
             return None
         try:
@@ -607,7 +616,7 @@ class IoXWrapper(NuCoreInterface):
             raise ValueError("Device ID is empty.")
         
         device_id = ProfileRagFormatter.decode_id(device_id)
-        response = self.get(f"/rest/nodes/{device_id}")
+        response = await self.get(f"/rest/nodes/{device_id}")
         if response == None:
             return None
         try:
@@ -761,7 +770,7 @@ class IoXWrapper(NuCoreInterface):
                       key (Base-64 encoded) and a ``"command"`` key.
 
         Returns:
-            List of :class:`requests.Response` objects from the hub.
+            List of :class:`httpx.Response` objects from the hub.
 
         Raises:
             :class:`~nucore.nucore_error.NuCoreError`: When the underlying call
@@ -847,7 +856,7 @@ class IoXWrapper(NuCoreInterface):
                       ``{"id", "value", "uom"}`` dicts.
 
         Returns:
-            List of :class:`requests.Response` objects (one per command), or
+            List of :class:`httpx.Response` objects (one per command), or
             ``None`` when the input list is empty.
         """
         responses = []
@@ -935,7 +944,7 @@ class IoXWrapper(NuCoreInterface):
                         the_rest_of_the_url += f"={value}"
                         url += the_rest_of_the_url
                         i += 1
-            responses.append(self.get(url))
+            responses.append(await self.get(url))
         return responses
     
     async def create_automation_routine(self, trigger: dict):
@@ -959,7 +968,7 @@ class IoXWrapper(NuCoreInterface):
                      optional).
 
         Returns:
-            :class:`requests.Response` from :meth:`_create_routine`, or
+            :class:`httpx.Response` from :meth:`_create_routine`, or
             ``None`` on failure.
 
         Raises:
@@ -968,16 +977,16 @@ class IoXWrapper(NuCoreInterface):
         """
         if not trigger:
             raise NuCoreError("No valid trigger provided.")
-        return self._create_routine(trigger)
+        return await self._create_routine(trigger)
 
-    def _create_routine(self, trigger: dict):
+    async def _create_routine(self, trigger: dict):
         """Submit a ``NewTrigger``-shaped dict to the IoX hub via PUT.
 
         Args:
             trigger: ``NewTrigger``-shaped dict (see ``create_automation_routine``).
 
         Returns:
-            :class:`requests.Response`, or ``None`` on failure.
+            :class:`httpx.Response`, or ``None`` on failure.
         """
         response = None
         try:
@@ -988,7 +997,7 @@ class IoXWrapper(NuCoreInterface):
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.put(f'/api/trigger', body=json.dumps(body), headers=headers)
+            response = await self.put(f'/api/trigger', body=json.dumps(body), headers=headers)
         except Exception as ex:
             logger.error(f"Error creating trigger: {ex}")
 
@@ -1010,7 +1019,7 @@ class IoXWrapper(NuCoreInterface):
         Returns:
             List of runtime summary dicts, or ``None`` on failure.
         """
-        response = self.get("/api/programs")
+        response = await self.get("/api/programs")
         if response is None or response.status_code != 200:
             return None
         try:
@@ -1051,7 +1060,7 @@ class IoXWrapper(NuCoreInterface):
                             logger.error(f"Invalid program ID format: {program_id}. It should be an integer or a hex string.")
                             return None
 
-        response = self.get(f"/api/ai/program/{program_id}")
+        response = await self.get(f"/api/ai/program/{program_id}")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -1071,7 +1080,7 @@ class IoXWrapper(NuCoreInterface):
             List of full routine dicts, or the raw response / ``None`` on
             failure.
         """
-        response = self.get("/api/triggers")
+        response = await self.get("/api/triggers")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -1091,11 +1100,7 @@ class IoXWrapper(NuCoreInterface):
             ``data`` value from the API response (a ``Trigger``/
             ``InvalidTrigger``-shaped dict), or ``None`` on failure.
         """
-        # NOTE: self.get is synchronous (line ~143) -- the `await` here was
-        # a pre-existing bug (present before this endpoint migration) that
-        # would have made this method crash unconditionally; fixed in
-        # passing since this exact line was already being touched.
-        response = self.get(f"/api/triggers/{program_id}")
+        response = await self.get(f"/api/triggers/{program_id}")
         if response == None or response.status_code != 200:
             return response if response else None
         try:
@@ -1113,7 +1118,7 @@ class IoXWrapper(NuCoreInterface):
             program: ``UpdatedTrigger``-shaped dict.
 
         Returns:
-            :class:`requests.Response`, or ``False`` when ``program`` is empty.
+            :class:`httpx.Response`, or ``False`` when ``program`` is empty.
         """
         if not program:
             return False
@@ -1125,7 +1130,7 @@ class IoXWrapper(NuCoreInterface):
                 "Content-Type": "application/json"
             }
             body=json.dumps(program_content)
-            response = self.post(f'/api/trigger', body=body, headers=headers)
+            response = await self.post(f'/api/trigger', body=body, headers=headers)
         except Exception as ex:
             logger.error(f"Error updating routine: {ex}")
 
@@ -1138,15 +1143,13 @@ class IoXWrapper(NuCoreInterface):
             program_id: Routine ID string.
 
         Returns:
-            :class:`requests.Response`, or ``None`` when ``program_id`` is
+            :class:`httpx.Response`, or ``None`` when ``program_id`` is
             falsy or on error.
         """
         if not program_id:
             return None
         try:
-            # self.delete is synchronous -- same pre-existing await-on-sync
-            # bug as get_routine, fixed in passing.
-            response = self.delete(f'/api/trigger/{program_id}')
+            response = await self.delete(f'/api/trigger/{program_id}')
         except Exception as ex:
             logger.error(f"Error deleting routine: {ex}")
 
@@ -1187,7 +1190,7 @@ class IoXWrapper(NuCoreInterface):
             headers = {
                 "Content-Type": "application/json"
             }
-            response = self.post(f'/api/nodes', body=json.dumps(body), headers=headers)
+            response = await self.post(f'/api/nodes', body=json.dumps(body), headers=headers)
         except Exception as ex:
             out = f"Error adding node: {ex}"
             logger.error(out)
@@ -1221,7 +1224,7 @@ class IoXWrapper(NuCoreInterface):
                 headers = {
                     "Content-Type": "application/json"
                 }
-                response = self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+                response = await self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
             except Exception as ex:
                 out = f"Error performing node {operation} operation: {ex}"
                 logger.error(out)
@@ -1280,7 +1283,7 @@ class IoXWrapper(NuCoreInterface):
                 headers = {
                     "Content-Type": "application/json"
                 }
-                response = self.delete(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+                response = await self.delete(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
             except Exception as ex:
                 out = f"Error performing delete node operation: {ex}"
                 logger.error(out)
@@ -1303,7 +1306,7 @@ class IoXWrapper(NuCoreInterface):
                 headers = {
                     "Content-Type": "application/json"
                 }
-                response = self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+                response = await self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
             except Exception as ex:
                 out = f"Error performing rename node operation: {ex}"
                 logger.error(out)
@@ -1326,7 +1329,7 @@ class IoXWrapper(NuCoreInterface):
                 headers = {
                     "Content-Type": "application/json"
                 }
-                response = self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
+                response = await self.patch(f'/api/nodes/{node_id}/', body=json.dumps(body), headers=headers)
             except Exception as ex:
                 out = f"Error performing move node operation: {ex}"
                 logger.error(out)
@@ -1351,7 +1354,7 @@ class IoXWrapper(NuCoreInterface):
             operation:  One of the valid IoX program operations.
 
         Returns:
-            :class:`requests.Response` from the hub, or ``None`` when the
+            :class:`httpx.Response` from the hub, or ``None`` when the
             routine ID is falsy or the operation is unrecognised.
         """
         if not routine_id:
@@ -1366,7 +1369,7 @@ class IoXWrapper(NuCoreInterface):
                 # content endpoint rather than /rest/programs -- moves with
                 # the rest of the CRUD migration, unlike every other
                 # operation below (confirmed unchanged).
-                response = self.delete(f'/api/trigger/{routine_id}')
+                response = await self.delete(f'/api/trigger/{routine_id}')
             else:
                 if isinstance(routine_id, str):
                     try:
@@ -1375,7 +1378,7 @@ class IoXWrapper(NuCoreInterface):
                         # not a plain decimal string -- pass through as-is
                         pass
                 # The endpoint for routine operations follows the pattern /api/programs/:id/:cmd
-                response = self.get(f'/api/programs/{routine_id}/{operation}')
+                response = await self.get(f'/api/programs/{routine_id}/{operation}')
         except Exception as ex:
             logger.error(f"Error performing routine operation: {ex}")
 
@@ -1397,7 +1400,7 @@ class IoXWrapper(NuCoreInterface):
             kwargs: For "create"/"update": name, prec, value, init (all optional).
 
         Returns:
-            :class:`requests.Response`, or ``None`` when the operation is
+            :class:`httpx.Response`, or ``None`` when the operation is
             unrecognised or a required id is missing.
         """
         if operation not in ("create", "update", "delete"):
@@ -1412,12 +1415,12 @@ class IoXWrapper(NuCoreInterface):
         try:
             if operation == "create":
                 body = {k: kwargs[k] for k in ("name", "prec") if k in kwargs}
-                response = self.put(f'/api/variables/{var_type}', body=json.dumps(body), headers=headers)
+                response = await self.put(f'/api/variables/{var_type}', body=json.dumps(body), headers=headers)
             elif operation == "update":
                 body = {k: kwargs[k] for k in ("value", "init", "prec", "name") if k in kwargs}
-                response = self.post(f'/api/variables/{var_type}/{var_id}', body=json.dumps(body), headers=headers)
+                response = await self.post(f'/api/variables/{var_type}/{var_id}', body=json.dumps(body), headers=headers)
             else:  # delete
-                response = self.delete(f'/api/variables/{var_type}/{var_id}')
+                response = await self.delete(f'/api/variables/{var_type}/{var_id}')
         except Exception as ex:
             logger.error(f"Error performing variable operation: {ex}")
 
@@ -1438,7 +1441,7 @@ class IoXWrapper(NuCoreInterface):
         /rest/time
         """
         try:
-            response = self.get(f'/rest/time')
+            response = await self.get(f'/rest/time')
             if response == None or response.status_code != 200:
                 return response if response else None
 
@@ -1503,7 +1506,7 @@ class IoXWrapper(NuCoreInterface):
         /api/plugins/store/prod/list/active
         """
         try:
-            response = self.get(f'/api/plugins/store/prod/list/active')
+            response = await self.get(f'/api/plugins/store/prod/list/active')
             if response == None or response.status_code != 200:
                 return response if response else None
             return response.json()
@@ -1520,7 +1523,7 @@ class IoXWrapper(NuCoreInterface):
         /api/plugins/licenses
         """
         try:
-            response = self.get(f'/api/plugins/licenses')
+            response = await self.get(f'/api/plugins/licenses')
             if response == None or response.status_code != 200:
                 return response if response else None
             return response.json()
@@ -1543,7 +1546,7 @@ class IoXWrapper(NuCoreInterface):
         subsequent plugin_ops()/configure_plugin() calls.
         """
         try:
-            response = self.get(f'/api/plugins')
+            response = await self.get(f'/api/plugins')
             if response == None or response.status_code != 200:
                 return response if response else None
             # now go through the list and rename profileNum to plugin_id for consistency with other plugin APIs
@@ -1566,7 +1569,7 @@ class IoXWrapper(NuCoreInterface):
         """
         try:
             headers = {"Content-Type": "application/json"}
-            response = self.post(f'/api/plugin/{plugin_id}/{operation}', body="{}", headers=headers)
+            response = await self.post(f'/api/plugin/{plugin_id}/{operation}', body="{}", headers=headers)
             if response == None or response.status_code != 200:
                 return response if response else None
             return response.json()
@@ -1588,7 +1591,7 @@ class IoXWrapper(NuCoreInterface):
         Returns usage guidance deterministic from plugin_id alone. 
         """
         try:
-            response = self.get(f'/api/plugin/{plugin_id}/prompt')
+            response = await self.get(f'/api/plugin/{plugin_id}/prompt')
             if response == None or response.status_code != 200:
                 return {
                     "successful": False,
@@ -1614,7 +1617,7 @@ class IoXWrapper(NuCoreInterface):
         installed instances of the same plugin type. 
         """
         try:
-            response = self.get(f'/api/plugin/{plugin_id}/tools')
+            response = await self.get(f'/api/plugin/{plugin_id}/tools')
             if response == None or response.status_code != 200:
                 return {
                     "successful": False,
@@ -1657,7 +1660,7 @@ class IoXWrapper(NuCoreInterface):
         timeout=60000
 
         try:
-            response = self.post(f'/api/plugin/{plugin_id}/request',
+            response = await self.post(f'/api/plugin/{plugin_id}/request',
                                  body=json.dumps({"timeout": timeout, "payload": args}), headers={"Content-Type": "application/json"})
             if response == None or response.status_code != 200:
                 return {
@@ -1734,7 +1737,7 @@ class IoXWrapper(NuCoreInterface):
             body["name"] = name
         if device_type:
             body["deviceType"] = device_type
-        response = self.post(self._family_api_path("add-node"), json.dumps(body), {"Content-Type": "application/json"})
+        response = await self.post(self._family_api_path("add-node"), json.dumps(body), {"Content-Type": "application/json"})
         return device_address if response is not None and response.status_code == 200 else None
 
     async def discover_devices(self, device_type: str = None, protocol: str = None, mode: str = "include", **kwargs) -> Any:
@@ -1744,11 +1747,11 @@ class IoXWrapper(NuCoreInterface):
                 raise NuCoreError(
                     "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
                 )
-            response = self.get(f"{ZMATTER_BASE_PATHS[family]}node/{mode}")
+            response = await self.get(f"{ZMATTER_BASE_PATHS[family]}node/{mode}")
             return response is not None and response.status_code == 200
 
         body = {"deviceType": device_type} if device_type else {}
-        response = self.post(self._family_api_path("start-linking"), json.dumps(body), {"Content-Type": "application/json"})
+        response = await self.post(self._family_api_path("start-linking"), json.dumps(body), {"Content-Type": "application/json"})
         return response is not None and response.status_code == 200
 
     async def finish_device_discovery(self, flag: int = 1, protocol: str = None, **kwargs) -> Any:
@@ -1758,14 +1761,14 @@ class IoXWrapper(NuCoreInterface):
                 raise NuCoreError(
                     "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
                 )
-            response = self.get(f"{ZMATTER_BASE_PATHS[family]}node/cancel")
+            response = await self.get(f"{ZMATTER_BASE_PATHS[family]}node/cancel")
             return response is not None and response.status_code == 200
 
-        response = self.post(self._family_api_path("stop-linking"), json.dumps({"flag": flag}), {"Content-Type": "application/json"})
+        response = await self.post(self._family_api_path("stop-linking"), json.dumps({"flag": flag}), {"Content-Type": "application/json"})
         return response is not None and response.status_code == 200
 
     async def set_device_linking_mode(self, mode: str) -> Any:
-        response = self.post(self._family_api_path("set-linking-mode"), json.dumps({"mode": mode}), {"Content-Type": "application/json"})
+        response = await self.post(self._family_api_path("set-linking-mode"), json.dumps({"mode": mode}), {"Content-Type": "application/json"})
         return response is not None and response.status_code == 200
 
     async def remove_device(self, device_address: str, protocol: str = None, **kwargs) -> Any:
@@ -1781,7 +1784,7 @@ class IoXWrapper(NuCoreInterface):
         family = PROTOCOL_TO_ZMATTER_FAMILY.get(protocol)
         if family is None or protocol == "zwave":
             raise NuCoreError(f"remove_device is not supported for protocol '{protocol}'")
-        response = self.get(f"{ZMATTER_BASE_PATHS[family]}node/{device_address}/remove")
+        response = await self.get(f"{ZMATTER_BASE_PATHS[family]}node/{device_address}/remove")
         return response is not None and response.status_code == 200
 
     # ------------------------------------------------------------------
@@ -1933,15 +1936,15 @@ class IoXWrapper(NuCoreInterface):
         """
         include_profiles = kwargs.get("include_profiles", True)
 
-        self._load_devices(include_profiles=include_profiles, profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
-        self.rags= self._format_nodes() 
+        await self._load_devices(include_profiles=include_profiles, profile_path=kwargs.get("profile_path"), nodes_path=kwargs.get("nodes_path"))
+        self.rags= self._format_nodes()
         if not self.rags:
             logger.warning(f"No RAG documents found for node {self.nuCore.url}. Skipping.")
         self.summary_rags = self.format_nodes_summary(False)
         return True
 
     # Load only devices to get the latest live state.
-    def _load_devices(
+    async def _load_devices(
         self,
         include_profiles: bool = True,
         profile_path: str = None,
@@ -1961,22 +1964,22 @@ class IoXWrapper(NuCoreInterface):
             The loaded nodes dict, or ``None`` when loading fails.
         """
         if include_profiles:
-            if not self.__load_profile__(profile_path):
+            if not await self.__load_profile__(profile_path):
                 return None
-        
-        root = self.__load_nodes__(nodes_path)
+
+        root = await self.__load_nodes__(nodes_path)
         if root == None:
             return None
 
         try:
-            glinks_root = self.__load_groups_links__(groups_path) 
-            self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root, glinks_root) 
+            glinks_root = await self.__load_groups_links__(groups_path)
+            self.runtime_profiles, self.nodes, self.groups, self.folders = self.profile.map_nodes(root, glinks_root)
             return self.nodes
         except Exception as e:
             logger.error(f"Failed to load group links: {str(e)}")
             return None
 
-    def __load_profile__(self, profile_path: str = None) -> bool:
+    async def __load_profile__(self, profile_path: str = None) -> bool:
         """Load the device/node profile from a file or the hub.
 
         Args:
@@ -1994,7 +1997,7 @@ class IoXWrapper(NuCoreInterface):
             if profile_path:
                 self.profile.load_from_file(profile_path)
             else:
-                response = self.get_profiles()
+                response = await self.get_profiles()
                 if response is None:
                     raise NuCoreError("Failed to fetch profile from URL.")
                 self.profile.load_from_json(response)
@@ -2002,9 +2005,9 @@ class IoXWrapper(NuCoreInterface):
         except Exception as e:
             raise NuCoreError(f"Failed to load profile: {str(e)}")
 
-        return False 
-        
-    def __load_nodes__(self, nodes_path: str = None):
+        return False
+
+    async def __load_nodes__(self, nodes_path: str = None):
         """Load the node list from a file or the hub.
 
         Args:
@@ -2020,14 +2023,14 @@ class IoXWrapper(NuCoreInterface):
         """
         if nodes_path:
             return Node.load_from_file(nodes_path)
-        
-        response = self.get_nodes()
+
+        response = await self.get_nodes()
         if response is None:
             raise NuCoreError("Failed to fetch nodes from URL.")
         return Node.load_from_xml(response)
-        
 
-    def __load_groups_links__(self, groups_path: str = None):
+
+    async def __load_groups_links__(self, groups_path: str = None):
         """Load group/scene link definitions from a file or the hub.
 
         Args:
@@ -2044,8 +2047,8 @@ class IoXWrapper(NuCoreInterface):
         """
         if groups_path:
             return Node.load_from_json(groups_path)
-        
-        response = self.get_group_links()
+
+        response = await self.get_group_links()
         if response is None:
             raise NuCoreError("Failed to fetch group links from URL.")
         return Node.load_from_json(response)
@@ -2164,7 +2167,7 @@ class IoXWrapper(NuCoreInterface):
             variables: dict[str, Any] = {}
             condensed: list = []
             for var_type in (1, 2):
-                response = self.get(f'/api/variables/{var_type}')
+                response = await self.get(f'/api/variables/{var_type}')
                 if response is None or response.status_code != 200:
                     continue
                 try:

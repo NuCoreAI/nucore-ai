@@ -16,13 +16,18 @@ def _bare_wrapper() -> IoXWrapper:
     return object.__new__(IoXWrapper)
 
 
-def test_soap_post_sets_xml_content_type_and_soap_action():
+async def test_soap_post_sets_xml_content_type_and_soap_action():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.post = lambda path, body, headers: (calls.append((path, body, headers)), FakeResp())[1]
+
+    async def fake_post(path, body, headers):
+        calls.append((path, body, headers))
+        return FakeResp()
+
+    wrapper.post = fake_post
 
     envelope = "<soap:Envelope>...</soap:Envelope>"
-    result = wrapper.soap_post("/services", envelope, soap_action="urn:udi.com:service:X#Method")
+    result = await wrapper.soap_post("/services", envelope, soap_action="urn:udi.com:service:X#Method")
 
     assert calls == [
         (
@@ -34,24 +39,34 @@ def test_soap_post_sets_xml_content_type_and_soap_action():
     assert result.status_code == 200
 
 
-def test_soap_post_omits_soap_action_header_when_not_given():
+async def test_soap_post_omits_soap_action_header_when_not_given():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.post = lambda path, body, headers: (calls.append((path, body, headers)), FakeResp())[1]
 
-    wrapper.soap_post("/services", "<soap:Envelope/>")
+    async def fake_post(path, body, headers):
+        calls.append((path, body, headers))
+        return FakeResp()
+
+    wrapper.post = fake_post
+
+    await wrapper.soap_post("/services", "<soap:Envelope/>")
 
     (call,) = calls
     assert "SOAPAction" not in call[2]
     assert call[2] == {"Content-Type": "text/xml; charset=utf-8"}
 
 
-def test_soap_post_caller_headers_override_defaults():
+async def test_soap_post_caller_headers_override_defaults():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.post = lambda path, body, headers: (calls.append((path, body, headers)), FakeResp())[1]
 
-    wrapper.soap_post(
+    async def fake_post(path, body, headers):
+        calls.append((path, body, headers))
+        return FakeResp()
+
+    wrapper.post = fake_post
+
+    await wrapper.soap_post(
         "/services",
         "<soap:Envelope/>",
         soap_action="urn:udi.com:service:X#Method",

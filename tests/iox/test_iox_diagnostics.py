@@ -26,10 +26,12 @@ def _bare_wrapper() -> IoXWrapper:
 async def test_send_device_specific_builds_expected_envelope_and_action():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.soap_post = lambda path, body, soap_action=None, headers=None: (
-        calls.append((path, body, soap_action)),
-        FakeResp(text="<result/>"),
-    )[1]
+
+    async def fake_soap_post(path, body, soap_action=None, headers=None):
+        calls.append((path, body, soap_action))
+        return FakeResp(text="<result/>")
+
+    wrapper.soap_post = fake_soap_post
 
     result = await wrapper._send_device_specific("STATUS", "n001", "a", "b", "c", specs="<doc/>")
 
@@ -51,10 +53,12 @@ async def test_send_device_specific_builds_expected_envelope_and_action():
 async def test_send_device_specific_escapes_plain_params_but_not_specs():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.soap_post = lambda path, body, soap_action=None, headers=None: (
-        calls.append(body),
-        FakeResp(),
-    )[1]
+
+    async def fake_soap_post(path, body, soap_action=None, headers=None):
+        calls.append(body)
+        return FakeResp()
+
+    wrapper.soap_post = fake_soap_post
 
     await wrapper._send_device_specific("A & B", "n<1>", specs="<raw>&unescaped</raw>")
 
@@ -69,10 +73,12 @@ async def test_send_device_specific_escapes_plain_params_but_not_specs():
 async def test_send_device_specific_omitted_params_become_empty_elements():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.soap_post = lambda path, body, soap_action=None, headers=None: (
-        calls.append(body),
-        FakeResp(),
-    )[1]
+
+    async def fake_soap_post(path, body, soap_action=None, headers=None):
+        calls.append(body)
+        return FakeResp()
+
+    wrapper.soap_post = fake_soap_post
 
     await wrapper._send_device_specific("STATUS", "n001")
 
@@ -84,7 +90,11 @@ async def test_send_device_specific_omitted_params_become_empty_elements():
 @pytest.mark.asyncio
 async def test_send_device_specific_returns_none_on_non_200():
     wrapper = _bare_wrapper()
-    wrapper.soap_post = lambda *a, **kw: FakeResp(status_code=500)
+
+    async def fake_soap_post(*a, **kw):
+        return FakeResp(status_code=500)
+
+    wrapper.soap_post = fake_soap_post
 
     assert await wrapper._send_device_specific("STATUS", "n001") is None
 
@@ -92,7 +102,11 @@ async def test_send_device_specific_returns_none_on_non_200():
 @pytest.mark.asyncio
 async def test_send_device_specific_returns_none_on_connection_error():
     wrapper = _bare_wrapper()
-    wrapper.soap_post = lambda *a, **kw: None
+
+    async def fake_soap_post(*a, **kw):
+        return None
+
+    wrapper.soap_post = fake_soap_post
 
     assert await wrapper._send_device_specific("STATUS", "n001") is None
 
@@ -101,10 +115,12 @@ async def test_send_device_specific_returns_none_on_connection_error():
 async def test_send_device_specific_with_option_uses_option_tag():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.soap_post = lambda path, body, soap_action=None, headers=None: (
-        calls.append(body),
-        FakeResp(),
-    )[1]
+
+    async def fake_soap_post(path, body, soap_action=None, headers=None):
+        calls.append(body)
+        return FakeResp()
+
+    wrapper.soap_post = fake_soap_post
 
     await wrapper._send_device_specific_with_option("STATUS", "n001", option="fast")
 
@@ -117,10 +133,12 @@ async def test_send_device_specific_with_option_uses_option_tag():
 async def test_send_device_specific_with_option_sends_flag_value_as_given():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.soap_post = lambda path, body, soap_action=None, headers=None: (
-        calls.append(body),
-        FakeResp(),
-    )[1]
+
+    async def fake_soap_post(path, body, soap_action=None, headers=None):
+        calls.append(body)
+        return FakeResp()
+
+    wrapper.soap_post = fake_soap_post
 
     await wrapper._send_device_specific_with_option("STATUS", "n001", flag="200")
 
@@ -131,10 +149,12 @@ async def test_send_device_specific_with_option_sends_flag_value_as_given():
 async def test_send_device_specific_with_option_defaults_flag_to_zero():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.soap_post = lambda path, body, soap_action=None, headers=None: (
-        calls.append(body),
-        FakeResp(),
-    )[1]
+
+    async def fake_soap_post(path, body, soap_action=None, headers=None):
+        calls.append(body)
+        return FakeResp()
+
+    wrapper.soap_post = fake_soap_post
 
     await wrapper._send_device_specific_with_option("STATUS", "n001")
 

@@ -35,7 +35,12 @@ def _bare_wrapper() -> IoXWrapper:
 async def test_create_automation_routine_hits_new_put_endpoint():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.put = lambda path, body=None, headers=None: (calls.append(("PUT", path)), FakeResp())[1]
+
+    async def fake_put(path, body=None, headers=None):
+        calls.append(("PUT", path))
+        return FakeResp()
+
+    wrapper.put = fake_put
 
     await wrapper.create_automation_routine({"name": "X", "if": [], "then": [], "else": []})
 
@@ -49,7 +54,12 @@ async def test_create_automation_routine_body_is_not_wrapped_in_routine_key():
     no {"routine": ...} envelope."""
     wrapper = _bare_wrapper()
     sent_body = {}
-    wrapper.put = lambda path, body=None, headers=None: (sent_body.update(json.loads(body)), FakeResp())[1]
+
+    async def fake_put(path, body=None, headers=None):
+        sent_body.update(json.loads(body))
+        return FakeResp()
+
+    wrapper.put = fake_put
 
     trigger = {"name": "X", "if": [], "then": [], "else": []}
     await wrapper.create_automation_routine(trigger)
@@ -71,7 +81,12 @@ async def test_create_automation_routine_rejects_empty():
 async def test_update_routine_hits_new_post_endpoint():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.post = lambda path, body=None, headers=None: (calls.append(("POST", path)), FakeResp())[1]
+
+    async def fake_post(path, body=None, headers=None):
+        calls.append(("POST", path))
+        return FakeResp()
+
+    wrapper.post = fake_post
 
     await wrapper.update_routine({"id": 1, "name": "X"})
 
@@ -82,7 +97,12 @@ async def test_update_routine_hits_new_post_endpoint():
 async def test_update_routine_body_is_not_wrapped_in_routine_key():
     wrapper = _bare_wrapper()
     sent_body = {}
-    wrapper.post = lambda path, body=None, headers=None: (sent_body.update(json.loads(body)), FakeResp())[1]
+
+    async def fake_post(path, body=None, headers=None):
+        sent_body.update(json.loads(body))
+        return FakeResp()
+
+    wrapper.post = fake_post
 
     program = {"id": 1, "name": "X", "if": [], "then": [], "else": []}
     await wrapper.update_routine(program)
@@ -95,7 +115,12 @@ async def test_update_routine_body_is_not_wrapped_in_routine_key():
 async def test_delete_routine_hits_new_delete_endpoint():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.delete = lambda path, body=None, headers=None: (calls.append(("DELETE", path)), FakeResp())[1]
+
+    async def fake_delete(path, body=None, headers=None):
+        calls.append(("DELETE", path))
+        return FakeResp()
+
+    wrapper.delete = fake_delete
 
     await wrapper.delete_routine("1")
 
@@ -105,7 +130,11 @@ async def test_delete_routine_hits_new_delete_endpoint():
 @pytest.mark.asyncio
 async def test_get_all_routines_hits_new_plural_endpoint():
     wrapper = _bare_wrapper()
-    wrapper.get = lambda path: FakeResp(data=[])
+
+    async def fake_get(path):
+        return FakeResp(data=[])
+
+    wrapper.get = fake_get
 
     result = await wrapper.get_all_routines()
 
@@ -117,7 +146,7 @@ async def test_get_routine_hits_new_singular_id_endpoint():
     wrapper = _bare_wrapper()
     calls = []
 
-    def fake_get(path):
+    async def fake_get(path):
         calls.append(path)
         return FakeResp(data={"id": 1})
 
@@ -136,7 +165,7 @@ async def test_get_all_routines_summary_hits_api_programs():
     wrapper = _bare_wrapper()
     calls = []
 
-    def fake_get(path):
+    async def fake_get(path):
         calls.append(path)
         return FakeResp(data=[{"id": 1, "enabled": True}])
 
@@ -154,7 +183,12 @@ async def test_routine_ops_delete_moves_with_the_crud_migration():
     see test below)."""
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.delete = lambda path, body=None, headers=None: (calls.append(("DELETE", path)), FakeResp())[1]
+
+    async def fake_delete(path, body=None, headers=None):
+        calls.append(("DELETE", path))
+        return FakeResp()
+
+    wrapper.delete = fake_delete
 
     await wrapper.routine_ops(1, "delete")
 
@@ -165,7 +199,12 @@ async def test_routine_ops_delete_moves_with_the_crud_migration():
 async def test_routine_ops_other_operations_use_api_programs():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.get = lambda path: (calls.append(("GET", path)), FakeResp())[1]
+
+    async def fake_get(path):
+        calls.append(("GET", path))
+        return FakeResp()
+
+    wrapper.get = fake_get
 
     await wrapper.routine_ops("2", "enable")
 
@@ -176,10 +215,27 @@ async def test_routine_ops_other_operations_use_api_programs():
 async def test_no_stray_old_trigger_endpoints_remain():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.put = lambda path, body=None, headers=None: (calls.append(path), FakeResp())[1]
-    wrapper.post = lambda path, body=None, headers=None: (calls.append(path), FakeResp())[1]
-    wrapper.delete = lambda path, body=None, headers=None: (calls.append(path), FakeResp())[1]
-    wrapper.get = lambda path: (calls.append(path), FakeResp(data=[]))[1]
+
+    async def fake_put(path, body=None, headers=None):
+        calls.append(path)
+        return FakeResp()
+
+    async def fake_post(path, body=None, headers=None):
+        calls.append(path)
+        return FakeResp()
+
+    async def fake_delete(path, body=None, headers=None):
+        calls.append(path)
+        return FakeResp()
+
+    async def fake_get(path):
+        calls.append(path)
+        return FakeResp(data=[])
+
+    wrapper.put = fake_put
+    wrapper.post = fake_post
+    wrapper.delete = fake_delete
+    wrapper.get = fake_get
 
     await wrapper.create_automation_routine({"name": "X", "if": [], "then": [], "else": []})
     await wrapper.update_routine({"id": 1, "name": "X"})

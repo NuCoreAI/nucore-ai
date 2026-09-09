@@ -99,7 +99,7 @@ async def test_get_all_plm_links_ignores_a_small_fresh_cache_file(tmp_path, monk
         def _family_api_path(self, suffix):
             return f"/api/family/1/1/{suffix}"
 
-        def post(self, path, body, headers=None):
+        async def post(self, path, body, headers=None):
             fetch_calls.append(1)
             return FakeResponse()
 
@@ -139,7 +139,7 @@ async def test_get_all_plm_links_serves_a_large_fresh_cache_file(tmp_path, monke
         def _family_api_path(self, suffix):
             return f"/api/family/1/1/{suffix}"
 
-        def post(self, path, body, headers=None):
+        async def post(self, path, body, headers=None):
             fetch_calls.append(1)
             return FakeResponse()
 

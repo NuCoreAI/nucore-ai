@@ -12,7 +12,6 @@ authors = [
  { name="Michel Kohanim", email="michel@universal-devices.com" },
 ]
 dependencies = [
- "requests",
  "openai",
  "anthropic",
  "httpx",

@@ -37,7 +37,12 @@ def _bare_wrapper_for_load_variables() -> IoXWrapper:
 async def test_variable_ops_create_hits_put_endpoint_with_name_and_prec():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.put = lambda path, body=None, headers=None: (calls.append((path, json.loads(body))), FakeResp())[1]
+
+    async def fake_put(path, body=None, headers=None):
+        calls.append((path, json.loads(body)))
+        return FakeResp()
+
+    wrapper.put = fake_put
 
     await wrapper.variable_ops(1, None, "create", name="Irrigation_Mode", prec=0)
 
@@ -48,7 +53,12 @@ async def test_variable_ops_create_hits_put_endpoint_with_name_and_prec():
 async def test_variable_ops_update_hits_post_endpoint_with_id():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.post = lambda path, body=None, headers=None: (calls.append((path, json.loads(body))), FakeResp())[1]
+
+    async def fake_post(path, body=None, headers=None):
+        calls.append((path, json.loads(body)))
+        return FakeResp()
+
+    wrapper.post = fake_post
 
     await wrapper.variable_ops(2, "3", "update", value=1, init=0)
 
@@ -59,7 +69,12 @@ async def test_variable_ops_update_hits_post_endpoint_with_id():
 async def test_variable_ops_delete_hits_delete_endpoint():
     wrapper = _bare_wrapper()
     calls = []
-    wrapper.delete = lambda path: (calls.append(path), FakeResp())[1]
+
+    async def fake_delete(path):
+        calls.append(path)
+        return FakeResp()
+
+    wrapper.delete = fake_delete
 
     await wrapper.variable_ops(1, "3", "delete")
 
@@ -83,7 +98,7 @@ async def test_variable_ops_rejects_unknown_operation():
 async def test_load_variables_merges_both_types_keyed_by_type_and_id():
     wrapper = _bare_wrapper_for_load_variables()
 
-    def fake_get(path):
+    async def fake_get(path):
         if path == "/api/variables/1":
             return FakeResp(data=[{"id": "1", "val": 0, "init": 0, "prec": 0, "name": "Watering_the_plants", "ts": "t1"}])
         if path == "/api/variables/2":
@@ -107,7 +122,11 @@ async def test_load_variables_rebuilds_from_scratch_each_call():
     wrapper = _bare_wrapper_for_load_variables()
     wrapper.variables = {"1:99": {"id": "99", "name": "Stale", "type": 1}}
     wrapper.condensed_variables = [{"id": "99", "name": "Stale"}]
-    wrapper.get = lambda path: FakeResp(data=[])
+
+    async def fake_get(path):
+        return FakeResp(data=[])
+
+    wrapper.get = fake_get
 
     await wrapper._load_variables()
 
@@ -119,7 +138,7 @@ async def test_load_variables_rebuilds_from_scratch_each_call():
 async def test_load_variables_tolerates_a_failed_type():
     wrapper = _bare_wrapper_for_load_variables()
 
-    def fake_get(path):
+    async def fake_get(path):
         if path == "/api/variables/1":
             return FakeResp(status_code=500)
         return FakeResp(data=[{"id": "3", "name": "Irrigation_Mode", "prec": 0}])

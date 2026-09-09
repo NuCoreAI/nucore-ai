@@ -225,7 +225,7 @@ class INSTEONDiagnostics:
             self._is_running = False
             return "PLM not connected. Cannot retrieve device links table."
         #make it into a thread so it can be stopped if needed
-        response = self._iox_wrapper.post(
+        response = await self._iox_wrapper.post(
             self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/device"), ""
         )
         rc = response is not None and response.status_code == 200
@@ -257,7 +257,7 @@ class INSTEONDiagnostics:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} using PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
         else:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} (PLM not connected)\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
-        response = self._iox_wrapper.post(
+        response = await self._iox_wrapper.post(
             self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/iox"), ""
         )
         rc = response is not None and response.status_code == 200
@@ -298,7 +298,7 @@ class INSTEONDiagnostics:
         self._file_path = cache_path
         await self._write_to_file(self._file_path, f"PLM Links Table for PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
 
-        response = self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-links"), "")
+        response = await self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-links"), "")
         rc = response is not None and response.status_code == 200
         await self._add_ending_to_file()
         self._refresh_plm_links = False  # satisfied -- next call can use cache again
@@ -499,7 +499,7 @@ class INSTEONDiagnostics:
     async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:
             logger.warning("Stopping Insteon diagnostics...")
-            self._iox_wrapper.post(self._iox_wrapper._family_api_path("links/stop"), "")
+            await self._iox_wrapper.post(self._iox_wrapper._family_api_path("links/stop"), "")
             if cleanup:
                 await self._add_ending_to_file()
                 self._is_running = False
@@ -604,7 +604,7 @@ class INSTEONDiagnostics:
             logger.warning(already_running_message)
             return None, already_running_message
 
-        response = self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-info"), "")
+        response = await self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-info"), "")
         if response is None or response.status_code != 200:
             status = response.status_code if response else "No response"
             logger.error(f"Failed to get PLM info: {status}")

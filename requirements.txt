@@ -1,7 +1,6 @@
 # Production requirements for the NuCore AI project.
 # For development/test dependencies, see requirements-dev.txt.
 
-requests
 openai
 anthropic>=1.2.0
 httpx

@@ -44,11 +44,11 @@ def _bare_wrapper(zmatter_zwave: bool = True) -> IoXWrapper:
     wrapper.get_calls: list[str] = []
     wrapper.post_calls: list[tuple] = []
 
-    def fake_get(path):
+    async def fake_get(path):
         wrapper.get_calls.append(path)
         return SimpleNamespace(status_code=200)
 
-    def fake_post(path, body, headers=None):
+    async def fake_post(path, body, headers=None):
         wrapper.post_calls.append((path, body, headers))
         return SimpleNamespace(status_code=200)
 

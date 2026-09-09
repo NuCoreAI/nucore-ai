@@ -9,7 +9,6 @@ surface every backend needs.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from pathlib import Path
@@ -146,15 +145,6 @@ class IoXDiagnostics:
 
         return text, steps
 
-    def _run_diagnostic_step_sync(self, function, params: dict[str, Any]) -> Any:
-        """Runs one step's backend call synchronously. This class's methods
-        are ``async def`` in name only -- the SOAP/HTTP calls underneath are
-        blocking ``requests`` calls, nothing is actually awaited -- so this is
-        safe to invoke via asyncio.to_thread in run_diagnostic_step to keep a
-        slow step (e.g. get_full_system_config's several sequential HTTP
-        calls) off the real event loop."""
-        return asyncio.run(function(**params))
-
     async def run_diagnostic_step(self, step: str, **params) -> Any:
         """
         Run one diagnostic step directly against the backend -- no session,
@@ -175,7 +165,7 @@ class IoXDiagnostics:
             return {"error": f"diagnostic step '{step}' is not yet implemented"}
 
         try:
-            result = await asyncio.to_thread(self._run_diagnostic_step_sync, function, params)
+            result = await function(**params)
         except NotImplementedError as ex:
             return {"error": str(ex)}
         except Exception as ex:
@@ -231,7 +221,7 @@ class IoXDiagnostics:
         iot_provisioned = False
 
         # now get web configuration
-        web_config = self._iox_wrapper.get("/WEB/sysconfig.txt")
+        web_config = await self._iox_wrapper.get("/WEB/sysconfig.txt")
         if web_config is None or web_config.status_code != 200:
             logger.error(f"Failed to get web configuration: {web_config.status_code if web_config else 'No response'}")
         else:
@@ -291,7 +281,7 @@ class IoXDiagnostics:
                     break
 
         # now get system about
-        memory_usage = self._iox_wrapper.get("/api/system/about")
+        memory_usage = await self._iox_wrapper.get("/api/system/about")
         if memory_usage is None or memory_usage.status_code != 200:
             logger.error(f"Failed to get system about: {memory_usage.status_code if memory_usage else 'No response'}")
         else:
@@ -304,7 +294,7 @@ class IoXDiagnostics:
 
 
         # the system description from /desc and parse it into a dict
-        desc = self._iox_wrapper.get("/desc")
+        desc = await self._iox_wrapper.get("/desc")
         if desc is None or desc.status_code != 200:
             logger.error(f"Failed to get system description: {desc.status_code if desc else 'No response'}")
         else:
@@ -333,7 +323,7 @@ class IoXDiagnostics:
                 logger.error(f"Failed to parse system options XML: {e}")
 
         # now system software/packages
-        upgrades  = self._iox_wrapper.get("/api/system/packages")
+        upgrades  = await self._iox_wrapper.get("/api/system/packages")
         if upgrades is None or upgrades.status_code != 200:
             logger.error(f"Failed to get available upgrades: {upgrades.status_code if upgrades else 'No response'}")
         else:
@@ -469,7 +459,7 @@ class IoXDiagnostics:
         """
         try:
             # /rest/udx.sys.ops/services.ops/services_status
-            response = self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/services_status", "e=mc2")
+            response = await self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/services_status", "e=mc2")
             if response is None or response.status_code != 200:
                 logger.error(f"Failed to get core services status: {response.status_code if response else 'No response'}")
                 return {"error": f"Failed to get core services status: {response.status_code if response else 'No response'}"}
@@ -488,7 +478,7 @@ class IoXDiagnostics:
         """
         try:
             # /rest/udx.sys.ops/services.ops/plugin_services_status
-            response = self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/plugin_services_status", "e=mc2")
+            response = await self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/services.ops/plugin_services_status", "e=mc2")
             if response is None or response.status_code != 200:
                 logger.error(f"Failed to get plugin services status: {response.status_code if response else 'No response'}")
                 return {"error": f"Failed to get plugin services status: {response.status_code if response else 'No response'}"}
@@ -507,7 +497,7 @@ class IoXDiagnostics:
         """
         try:
             # /rest/udx.sys.ops/services.ops/$op
-            response = self._iox_wrapper.post(f"/api/udx/rest/udx.sys.ops/services.ops/{op}_service/{service}", "e=mc2")
+            response = await self._iox_wrapper.post(f"/api/udx/rest/udx.sys.ops/services.ops/{op}_service/{service}", "e=mc2")
             if response is None or response.status_code != 200:
                 logger.error(f"Failed to {op} service {service}: {response.status_code if response else 'No response'}")
                 return {"error": f"Failed to {op} service {service}: {response.status_code if response else 'No response'}"}

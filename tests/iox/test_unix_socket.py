@@ -1,6 +1,7 @@
-"""Unix domain socket support: UnixSocketAdapter (REST transport),
-IoXWrapper.__init__'s "unix://" base_url parsing, and _subscribe_events
-routing over a Unix socket via websockets.asyncio.client.unix_connect.
+"""Unix domain socket support: IoXWrapper.__init__'s "unix://" base_url
+parsing, the AsyncClient's native UDS transport (httpx.AsyncHTTPTransport),
+and _subscribe_events routing over a Unix socket via
+websockets.asyncio.client.unix_connect.
 """
 
 from __future__ import annotations
@@ -11,19 +12,20 @@ import socketserver
 import tempfile
 import threading
 
-import pytest
-import requests
-
 from iox.iox_wrapper import IoXWrapper
-from iox.unix_socket_adapter import UnixSocketAdapter
 
 
 def _bare_wrapper() -> IoXWrapper:
-    return object.__new__(IoXWrapper)
+    wrapper = object.__new__(IoXWrapper)
+    wrapper._client = None
+    return wrapper
 
 
 # ----------------------------------------------------------------------
-# UnixSocketAdapter
+# AsyncClient's native Unix-domain-socket transport -- exercised through
+# the real IoXWrapper.get() call path, not the transport in isolation
+# (there's no adapter class of our own anymore to test directly; httpx's
+# AsyncHTTPTransport(uds=...) handles this natively).
 # ----------------------------------------------------------------------
 
 class _UnixHTTPServer(socketserver.UnixStreamServer):
@@ -43,21 +45,26 @@ class _EchoHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def test_unix_socket_adapter_round_trips_a_real_request():
+async def test_get_over_unix_socket_round_trips_a_real_request():
     with tempfile.TemporaryDirectory() as tmpdir:
         socket_path = os.path.join(tmpdir, "test.sock")
         server = _UnixHTTPServer(socket_path, _EchoHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        wrapper = _bare_wrapper()
+        wrapper.unix_socket = socket_path
+        wrapper.base_url = "http://localhost"
+        wrapper.username = "admin"
+        wrapper.password = "secret"
         try:
-            session = requests.Session()
-            session.mount("http://", UnixSocketAdapter(socket_path))
-            response = session.get("http://localhost/anything")
+            response = await wrapper.get("/anything")
             assert response.status_code == 200
             assert response.text == "hello from unix socket"
         finally:
             server.shutdown()
             thread.join(timeout=5)
+            if wrapper._client is not None:
+                await wrapper._client.aclose()
 
 
 # ----------------------------------------------------------------------
@@ -74,7 +81,7 @@ def test_init_with_unix_scheme_base_url_sets_unix_socket_and_placeholder_base_ur
     )
     assert wrapper.unix_socket == "/var/run/iox.sock"
     assert wrapper.base_url == "http://localhost"
-    assert wrapper._session.get_adapter("http://localhost/rest/nodes").__class__ is UnixSocketAdapter
+    assert wrapper._client is None
 
 
 def test_init_with_http_base_url_leaves_unix_socket_none():

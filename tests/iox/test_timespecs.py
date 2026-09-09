@@ -40,7 +40,11 @@ def _bare_wrapper() -> IoXWrapper:
 @pytest.mark.asyncio
 async def test_get_timespecs_parses_timezone_lat_long():
     wrapper = _bare_wrapper()
-    wrapper.get = lambda path: FakeResp(text=_SAMPLE_XML)
+
+    async def fake_get(path):
+        return FakeResp(text=_SAMPLE_XML)
+
+    wrapper.get = fake_get
 
     result = await wrapper.get_timespecs()
 
@@ -52,7 +56,11 @@ async def test_get_timespecs_parses_timezone_lat_long():
 @pytest.mark.asyncio
 async def test_get_timespecs_localizes_current_time_sunrise_sunset():
     wrapper = _bare_wrapper()
-    wrapper.get = lambda path: FakeResp(text=_SAMPLE_XML)
+
+    async def fake_get(path):
+        return FakeResp(text=_SAMPLE_XML)
+
+    wrapper.get = fake_get
 
     result = await wrapper.get_timespecs()
 
@@ -67,7 +75,11 @@ async def test_get_timespecs_localizes_current_time_sunrise_sunset():
 @pytest.mark.asyncio
 async def test_get_timespecs_returns_none_on_non_200():
     wrapper = _bare_wrapper()
-    wrapper.get = lambda path: FakeResp(status_code=500, text="")
+
+    async def fake_get(path):
+        return FakeResp(status_code=500, text="")
+
+    wrapper.get = fake_get
 
     result = await wrapper.get_timespecs()
 
@@ -77,6 +89,10 @@ async def test_get_timespecs_returns_none_on_non_200():
 @pytest.mark.asyncio
 async def test_get_timespecs_returns_none_on_connection_error():
     wrapper = _bare_wrapper()
-    wrapper.get = lambda path: None
+
+    async def fake_get(path):
+        return None
+
+    wrapper.get = fake_get
 
     assert await wrapper.get_timespecs() is None

@@ -26,11 +26,11 @@ def _result_ok(result: dict[str, Any] | None) -> bool:
     return bool(result) and result.get("successful", False)
 
 
-def _check_role_precheck(nucore_interface: NuCoreInterface, link_address: str, is_controller: bool) -> str | None:
+async def _check_role_precheck(nucore_interface: NuCoreInterface, link_address: str, is_controller: bool) -> str | None:
     """Return an error string if *link_address* can't serve the requested
     role, else ``None`` -- checked per member add via
     ``group_scene_get_node_roles``."""
-    payload = nucore_interface.group_scene_get_node_roles(node_address=link_address)
+    payload = await nucore_interface.group_scene_get_node_roles(node_address=link_address)
     if payload is None:
         return f"failed to fetch node roles for '{link_address}'"
     data = payload.get("data", {}) if isinstance(payload, dict) else {}
@@ -49,21 +49,21 @@ async def group_scene_op(nucore_interface: NuCoreInterface, args: dict[str, Any]
         return {"error": "group_address and link_address are both required"}
 
     if operation == "add_member":
-        result = nucore_interface.group_scene_add_member(
+        result = await nucore_interface.group_scene_add_member(
             group_address=group_address,
             link_address=link_address,
             is_controller=bool(args.get("is_controller", False)),
             name=args.get("name"),
         )
     elif operation == "remove_member":
-        result = nucore_interface.group_scene_remove_member(
+        result = await nucore_interface.group_scene_remove_member(
             group_address=group_address, link_address=link_address
         )
     elif operation == "update_link":
         link = args.get("link")
         if not isinstance(link, dict):
             return {"error": "update_link requires a 'link' object describing the new behavior"}
-        result = nucore_interface.group_scene_update_link(
+        result = await nucore_interface.group_scene_update_link(
             group_address=group_address, controller_address=link_address, link=link
         )
     else:
@@ -133,14 +133,14 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
         role = str(device["role"]).strip().lower()
         is_controller = role == "controller"
 
-        precheck_error = _check_role_precheck(nucore_interface, link_address, is_controller)
+        precheck_error = await _check_role_precheck(nucore_interface, link_address, is_controller)
         if precheck_error:
             results.append(
                 {"index": idx, "link_address": link_address, "role": role, "successful": False, "error": precheck_error}
             )
             continue
 
-        result = nucore_interface.group_scene_add_member(
+        result = await nucore_interface.group_scene_add_member(
             group_address=group_address, link_address=link_address, is_controller=is_controller, name=device.get("name")
         )
         ok = _result_ok(result)
