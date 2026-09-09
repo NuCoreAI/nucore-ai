@@ -49,17 +49,33 @@ async def test_delete_insteon_device_still_issues_real_delete():
     assert getattr(result, "status_code", None) == 200
 
 
-@pytest.mark.parametrize(
-    "family,protocol",
-    [
-        (DEVICE_FAMILY_LEGACY_Z_WAVE, "zwave"),
-        (DEVICE_FAMILY_Z_WAVE, "zwave"),
-        (DEVICE_FAMILY_ZIGBEE, "zigbee"),
-        (DEVICE_FAMILY_MATTER, "matter"),
-    ],
-)
+@pytest.mark.parametrize("family", [DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_Z_WAVE])
 @pytest.mark.asyncio
-async def test_delete_zwave_zigbee_matter_device_is_rejected(family, protocol):
+async def test_delete_zwave_device_is_rejected_with_activation_window_language(family):
+    # zwave removal is a real two-step activation window -- the redirect
+    # must tell the model to have the customer activate the device and
+    # commit with finish_exclusion, not claim the removal is already done.
+    wrapper = _bare_wrapper(_fake_node(family))
+    result = await wrapper.node_ops("n1", "delete")
+    assert not wrapper.delete_calls
+    assert isinstance(result, str)
+    assert "pair_device" in result
+    assert "zwave" in result
+    assert "start_exclusion" in result
+    assert "activate" in result
+    assert "finish_exclusion" in result
+
+
+@pytest.mark.parametrize("family,protocol", [(DEVICE_FAMILY_ZIGBEE, "zigbee"), (DEVICE_FAMILY_MATTER, "matter")])
+@pytest.mark.asyncio
+async def test_delete_zigbee_matter_device_is_rejected_without_activation_window_language(family, protocol):
+    # zigbee/matter removal is one direct call -- the redirect must NOT tell
+    # the model to put the hub in "removal mode" or have the customer
+    # activate anything, and must not mention finish_exclusion as a
+    # required follow-up (that was the actual bug: this message used to say
+    # "removal mode"/"activate"/"finish_exclusion to commit" for every
+    # protocol alike, so the model parroted zwave's two-step language for
+    # zigbee/matter too).
     wrapper = _bare_wrapper(_fake_node(family))
     result = await wrapper.node_ops("n1", "delete")
     assert not wrapper.delete_calls
@@ -67,6 +83,11 @@ async def test_delete_zwave_zigbee_matter_device_is_rejected(family, protocol):
     assert "pair_device" in result
     assert protocol in result
     assert "start_exclusion" in result
+    assert "removal mode" not in result
+    assert "activate" not in result
+    assert "finish_exclusion to commit" not in result
+    assert "no finish_exclusion" in result
+    assert "immediately" in result
 
 
 @pytest.mark.asyncio

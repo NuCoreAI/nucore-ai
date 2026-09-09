@@ -5,7 +5,10 @@ Z-Wave carve-out: _is_legacy_zwave() makes the backend raise NuCoreError
 instead of silently hitting the wrong endpoint shape for a controller that
 hasn't been upgraded to Z-Matter yet. Also confirms the pre-existing Insteon
 POST path (start-linking/stop-linking) is unaffected when no protocol (or
-protocol="insteon") is passed.
+protocol="insteon") is passed. Also covers remove_device -- Zigbee/Matter's
+direct per-address removal endpoint, which has no Z-Wave equivalent here
+(Z-Wave only removes via the discover_devices/finish_device_discovery
+exclude-mode window).
 """
 
 from __future__ import annotations
@@ -130,3 +133,40 @@ async def test_legacy_zwave_check_does_not_apply_to_zigbee_or_matter(protocol, b
     ok = await wrapper.discover_devices(protocol=protocol, mode="include")
     assert ok is True
     assert wrapper.get_calls == [f"{base}node/include"]
+
+
+# ---------------------------------------------------------------------------
+# remove_device -- Zigbee/Matter's direct per-address removal (mirrors
+# eisy-ui's ZIGBEE_REMOVE/MATTER_REMOVE, `node/:address/remove`). Z-Wave has
+# no such endpoint wired up here -- it only removes via discover_devices'/
+# finish_device_discovery's exclude-mode window.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol,base", [("zigbee", "/rest/zmatter/zigbee/"), ("matter", "/rest/zmatter/matter/")])
+async def test_remove_device_hits_the_right_zmatter_url(protocol, base):
+    wrapper = _bare_wrapper()
+    ok = await wrapper.remove_device("ZB001", protocol=protocol)
+    assert ok is True
+    assert wrapper.get_calls == [f"{base}node/ZB001/remove"]
+    assert wrapper.post_calls == []
+
+
+@pytest.mark.asyncio
+async def test_remove_device_raises_for_zwave():
+    # Z-Wave removes via discover_devices'/finish_device_discovery's
+    # exclude-mode window, not this direct endpoint -- eisy-ui defines no
+    # per-address remove URL for zwave the way it does for zigbee/matter.
+    wrapper = _bare_wrapper()
+    with pytest.raises(NuCoreError, match="not supported"):
+        await wrapper.remove_device("ZW001", protocol="zwave")
+    assert wrapper.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_remove_device_raises_for_unknown_protocol():
+    wrapper = _bare_wrapper()
+    with pytest.raises(NuCoreError, match="not supported"):
+        await wrapper.remove_device("X", protocol="insteon")
+    assert wrapper.get_calls == []

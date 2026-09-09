@@ -66,11 +66,14 @@ class FakeBackend(NuCoreInterface):
         self.add_device_calls: list[tuple] = []
         self.discover_calls: list[tuple] = []
         self.finish_calls: list[tuple] = []
+        self.remove_device_calls: list[tuple] = []
         self.add_device_result: object = "1A 2B 3C 1"
         self.discover_result: bool = True
         self.finish_result: bool = True
+        self.remove_device_result: bool = True
         self.discover_error: Exception | None = None
         self.finish_error: Exception | None = None
+        self.remove_device_error: Exception | None = None
         self.refresh_calls = 0
         # add_device stages the address here, and the default
         # _refresh_device_structure below merges it into self.nodes on its
@@ -79,6 +82,10 @@ class FakeBackend(NuCoreInterface):
         # itself. Tests that need to exercise the polling/retry/timeout
         # logic directly override backend._refresh_device_structure instead.
         self._pending_nodes: dict[str, str] = {}
+        # remove_device stages the address here, consumed by
+        # _refresh_device_structure the same way -- simulates the hub
+        # reflecting a direct zigbee/matter removal on its next reload.
+        self._pending_removals: set[str] = set()
 
     async def add_device(self, device_address, name=None, device_type=None, **kwargs):
         self.add_device_calls.append((device_address, name, device_type))
@@ -98,6 +105,14 @@ class FakeBackend(NuCoreInterface):
         self.finish_calls.append((flag, protocol))
         return self.finish_result
 
+    async def remove_device(self, device_address, protocol=None, **kwargs):
+        if self.remove_device_error is not None:
+            raise self.remove_device_error
+        self.remove_device_calls.append((device_address, protocol))
+        if self.remove_device_result:
+            self._pending_removals.add(device_address)
+        return self.remove_device_result
+
     async def _refresh_device_structure(self):
         # Always reports a successful (instant) reload -- merges in whatever
         # add_device staged, if anything. Returning True unconditionally
@@ -108,6 +123,9 @@ class FakeBackend(NuCoreInterface):
         for address, name in self._pending_nodes.items():
             self.nodes[address] = SimpleNamespace(name=name)
         self._pending_nodes = {}
+        for address in self._pending_removals:
+            self.nodes.pop(address, None)
+        self._pending_removals = set()
         return True
 
     async def run_diagnostic_step(self, step, **params): raise NotImplementedError
@@ -427,16 +445,82 @@ async def test_start_inclusion_succeeds_for_zmatter_protocols(protocol):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
-async def test_start_exclusion_succeeds_for_zmatter_protocols(protocol):
+async def test_start_exclusion_opens_an_activation_window_for_zwave():
+    # zwave is the only protocol with a real hardware exclude-mode window --
+    # see zigbee/matter's direct-removal tests below.
     backend = FakeBackend()
     backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
     result = await pair_device(
-        backend, {"protocol": protocol, "action": "start_exclusion", "device_address": "ZW001"}
+        backend, {"protocol": "zwave", "action": "start_exclusion", "device_address": "ZW001"}
     )
     assert result["status"] == "exclusion_started"
     assert result["device_address"] == "ZW001"
-    assert backend.discover_calls == [(None, protocol, "exclude")]
+    assert backend.discover_calls == [(None, "zwave", "exclude")]
+    assert backend.remove_device_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["zigbee", "matter"])
+@pytest.mark.parametrize("action", ["start_exclusion", "finish_exclusion"])
+async def test_exclusion_removes_directly_for_zigbee_and_matter(protocol, action):
+    # Neither zigbee nor matter has an activation-window concept -- eisy-ui
+    # only ever exposes a direct per-address remove endpoint for these two
+    # (see remove_device()/_remove_zmatter_device) -- so either action name
+    # performs the whole removal by itself, in one call.
+    backend = FakeBackend()
+    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+
+    result = await pair_device(
+        backend, {"protocol": protocol, "action": action, "device_address": "ZB001"}
+    )
+
+    assert result["status"] == "exclusion_committed"
+    assert result["removed_devices"] == [{"address": "ZB001", "name": "Front Door Sensor"}]
+    assert backend.remove_device_calls == [("ZB001", protocol)]
+    assert "ZB001" not in backend.nodes
+    # Neither the zwave-only activation-window calls nor the other
+    # exclusion action should ever be reached for these protocols.
+    assert backend.discover_calls == []
+    assert backend.finish_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["zigbee", "matter"])
+async def test_calling_both_exclusion_actions_for_zigbee_matter_is_harmless(protocol):
+    # A model that (out of habit, matching zwave's two-step shape) calls
+    # start_exclusion then finish_exclusion for zigbee/matter must not error
+    # on the second call just because the device is already gone.
+    backend = FakeBackend()
+    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+
+    first = await pair_device(
+        backend, {"protocol": protocol, "action": "start_exclusion", "device_address": "ZB001"}
+    )
+    second = await pair_device(
+        backend, {"protocol": protocol, "action": "finish_exclusion", "device_address": "ZB001"}
+    )
+
+    assert first["status"] == "exclusion_committed"
+    assert second["status"] == "exclusion_committed"
+    # The device is already gone by the second call, so its name is no
+    # longer available -- _remove_zmatter_device falls back to the address,
+    # same convention as add_by_address's own not-found fallback.
+    assert second["removed_devices"] == [{"address": "ZB001", "name": "ZB001"}]
+    assert len(backend.remove_device_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_zigbee_removal_error_surfaces_from_remove_device():
+    backend = FakeBackend()
+    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+    backend.remove_device_error = NuCoreError("remove_device is not supported for protocol 'zigbee'")
+
+    result = await pair_device(
+        backend, {"protocol": "zigbee", "action": "start_exclusion", "device_address": "ZB001"}
+    )
+
+    assert "error" in result
+    assert "not supported" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -477,8 +561,7 @@ async def test_finish_inclusion_returns_newly_discovered_addresses_for_zmatter_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
-async def test_finish_exclusion_returns_removed_address_for_zmatter_protocols(protocol):
+async def test_finish_exclusion_commits_the_activation_window_for_zwave():
     backend = FakeBackend()
     backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
 
@@ -489,13 +572,14 @@ async def test_finish_exclusion_returns_removed_address_for_zmatter_protocols(pr
     backend._refresh_device_structure = excludes_the_device
 
     result = await pair_device(
-        backend, {"protocol": protocol, "action": "finish_exclusion", "device_address": "ZW001"}
+        backend, {"protocol": "zwave", "action": "finish_exclusion", "device_address": "ZW001"}
     )
 
     assert result["status"] == "exclusion_committed"
-    assert backend.finish_calls == [(1, protocol)]
+    assert backend.finish_calls == [(1, "zwave")]
     assert result["removed_devices"] == [{"address": "ZW001", "name": "Front Door Lock"}]
     assert "ZW001" not in backend.nodes
+    assert backend.remove_device_calls == []
 
 
 @pytest.mark.asyncio

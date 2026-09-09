@@ -17,16 +17,23 @@ Three structurally different shapes, not one:
   the customer says "done" and ``finish_inclusion`` actually runs, so the
   diff has to be against that early snapshot, not one taken at
   ``finish_inclusion`` time.
-- ``start_exclusion``/``finish_exclusion`` -- the same shape, but for
-  removing a device instead of adding one. zwave/zigbee/matter only --
-  insteon has no distinct hardware "exclude" mode in this codebase. Unlike
-  inclusion (the new device's address is unknown until it shows up),
-  exclusion always targets an already-known, already-paired device, so both
-  calls require ``device_address`` (the exact address from DEVICE DATABASE)
-  and ``finish_exclusion`` polls for that specific address to *disappear*
-  from ``nucore_interface.nodes`` -- the mirror image of ``add_by_address``
-  polling for its address to *appear* (see ``_has_address``/``_refresh_until``
-  below).
+- ``start_exclusion``/``finish_exclusion`` -- for removing a device instead
+  of adding one. zwave/zigbee/matter only -- insteon has no distinct
+  hardware "exclude" mode in this codebase. Unlike inclusion (the new
+  device's address is unknown until it shows up), exclusion always targets
+  an already-known, already-paired device, so both actions require
+  ``device_address`` (the exact address from DEVICE DATABASE). Two different
+  shapes hide behind these same two action names, per protocol:
+  - zwave: a real two-step activation window, same shape as
+    inclusion -- ``start_exclusion`` opens it, the customer physically
+    activates the device, ``finish_exclusion`` commits and polls for that
+    specific address to *disappear* from ``nucore_interface.nodes`` -- the
+    mirror image of ``add_by_address`` polling for its address to *appear*
+    (see ``_has_address``/``_refresh_until`` below).
+  - zigbee/matter: no activation window exists at all -- either call
+    directly and immediately removes the device via ``remove_device()``
+    (mirrors eisy-ui's ``node/:address/remove``), so a single call (either
+    one) is enough; see ``_remove_zmatter_device``.
 
 insteon/zwave/zigbee/matter have real backends today (x10's only action,
 add_by_address, is not implemented for it); every other protocol/action
@@ -96,6 +103,12 @@ _PROTOCOL_ACTIONS: dict[str, frozenset[str]] = {
     "matter": _INCLUSION_EXCLUSION_ACTIONS,
 }
 
+# zigbee/matter removal has no activation-window concept at all (unlike
+# zwave) -- eisy-ui only ever calls a direct per-address remove endpoint
+# for these two (ZIGBEE_REMOVE/MATTER_REMOVE, both `node/:address/remove`);
+# there is no `node/exclude` for either. See _remove_zmatter_device.
+_DIRECT_REMOVE_PROTOCOLS = frozenset({"zigbee", "matter"})
+
 # Everything else in _PROTOCOL_ACTIONS is a real, valid protocol/action
 # shape that just isn't backed by a real call yet.
 _IMPLEMENTED_PROTOCOLS = frozenset({"insteon", "zwave", "zigbee", "matter"})
@@ -159,6 +172,47 @@ async def _refresh_until(nucore_interface: NuCoreInterface, condition: Callable[
             return False
         await asyncio.sleep(_REFRESH_POLL_INTERVAL_S)
         elapsed += _REFRESH_POLL_INTERVAL_S
+
+
+async def _remove_zmatter_device(
+    nucore_interface: NuCoreInterface, protocol: str, action: str, device_address: str
+) -> Any:
+    """Zigbee/Matter device removal is one direct call, no activation
+    window (unlike zwave's exclude mode -- see remove_device()). Shared by
+    both start_exclusion and finish_exclusion so either one works by
+    itself; calling both (out of habit, matching zwave's two-step shape) is
+    harmless -- the second call just re-issues the same removal against an
+    address that's typically already gone, and _refresh_until's condition
+    is satisfied immediately.
+    """
+    # Snapshot the name up front -- it's unavailable once the device is
+    # actually gone from nucore_interface.nodes.
+    removed_name = next(
+        (node.name for key, node in nucore_interface.nodes.items() if key.casefold() == device_address.casefold()),
+        device_address,
+    )
+    try:
+        ok = await nucore_interface.remove_device(device_address, protocol=protocol)
+    except NuCoreError as e:
+        return {"error": str(e)}
+    if not ok:
+        return {"error": f"failed to remove '{device_address}'"}
+
+    removed = await _refresh_until(nucore_interface, lambda: not _has_address(nucore_interface, device_address))
+    if not removed:
+        return {
+            "error": (
+                f"'{device_address}' was still present after "
+                f"{_REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S}s of waiting -- try again shortly."
+            )
+        }
+    return {
+        "protocol": protocol, "action": action, "status": "exclusion_committed",
+        "removed_devices": [{"address": device_address, "name": removed_name}],
+        "note": "Removed directly -- zigbee/matter devices don't need a pairing window or physical "
+                "activation to be removed (unlike zwave); this one call was enough, no follow-up "
+                "call needed.",
+    }
 
 
 async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
@@ -226,6 +280,8 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
                 "error": f"'{device_address}' is not a known device address -- check DEVICE "
                          "DATABASE for the real address rather than guessing"
             }
+        if protocol in _DIRECT_REMOVE_PROTOCOLS:
+            return await _remove_zmatter_device(nucore_interface, protocol, action, device_address)
         try:
             ok = await nucore_interface.discover_devices(
                 device_type=args.get("device_type"), protocol=protocol, mode="exclude",
@@ -276,6 +332,8 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
     device_address = args.get("device_address")
     if not device_address:
         return {"error": "device_address is required for finish_exclusion"}
+    if protocol in _DIRECT_REMOVE_PROTOCOLS:
+        return await _remove_zmatter_device(nucore_interface, protocol, action, device_address)
     # Snapshot the name up front -- it's unavailable once the device is
     # actually gone from nucore_interface.nodes.
     removed_name = next(

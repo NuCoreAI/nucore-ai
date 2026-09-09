@@ -1242,12 +1242,23 @@ class IoXWrapper(NuCoreInterface):
                     protocol = "matter"
                 else:
                     protocol = None
-                if protocol:
+                if protocol == "zwave":
                     out = (
-                        f"Cannot delete a {protocol} device via node_op -- the hub must be put "
-                        "into removal mode instead. Use pair_device(protocol="
-                        f"\"{protocol}\", action=\"start_exclusion\"), have the customer activate "
-                        "the device to remove, then call finish_exclusion to commit."
+                        "Cannot delete a zwave device via node_op -- the hub must be put into "
+                        "removal mode instead. Use pair_device(protocol=\"zwave\", "
+                        "action=\"start_exclusion\"), have the customer activate the device to "
+                        "remove, then call finish_exclusion to commit."
+                    )
+                    logger.error(out)
+                    return out
+                if protocol in ("zigbee", "matter"):
+                    out = (
+                        f"Cannot delete a {protocol} device via node_op -- call "
+                        f"pair_device(protocol=\"{protocol}\", action=\"start_exclusion\", "
+                        f"device_address=<this device's address>) instead. Unlike zwave, this "
+                        "removes the device immediately in that one call -- no activation window, "
+                        "nothing for the customer to press, and no finish_exclusion follow-up call "
+                        "needed or expected."
                     )
                     logger.error(out)
                     return out
@@ -1755,6 +1766,22 @@ class IoXWrapper(NuCoreInterface):
 
     async def set_device_linking_mode(self, mode: str) -> Any:
         response = self.post(self._family_api_path("set-linking-mode"), json.dumps({"mode": mode}), {"Content-Type": "application/json"})
+        return response is not None and response.status_code == 200
+
+    async def remove_device(self, device_address: str, protocol: str = None, **kwargs) -> Any:
+        # Zigbee/Matter can remove one already-joined device directly, no
+        # activation window needed -- mirrors eisy-ui's ZIGBEE_REMOVE/
+        # MATTER_REMOVE (`node/:address/remove`, GET, bare REST under
+        # ZMATTER_BASE_PATHS, same shape as discover_devices/
+        # finish_device_discovery above). Z-Wave has no such per-device
+        # removal wired up here -- it only supports removal via
+        # discover_devices'/finish_device_discovery's exclusion-window mode
+        # (node/exclude), which is a real endpoint for zwave but does not
+        # exist for zigbee/matter.
+        family = PROTOCOL_TO_ZMATTER_FAMILY.get(protocol)
+        if family is None or protocol == "zwave":
+            raise NuCoreError(f"remove_device is not supported for protocol '{protocol}'")
+        response = self.get(f"{ZMATTER_BASE_PATHS[family]}node/{device_address}/remove")
         return response is not None and response.status_code == 200
 
     # ------------------------------------------------------------------

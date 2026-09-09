@@ -715,6 +715,30 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the finish_device_discovery method.")
 
+    @abstractmethod
+    async def remove_device(self, device_address: str, protocol: str = None, **kwargs):
+        """
+        Directly remove one already-known, already-paired physical device by
+        its own address. Self-contained -- unlike discover_devices()/
+        finish_device_discovery()'s exclusion-window shape, this needs no
+        activation window and no follow-up call: some protocols (e.g.
+        Zigbee/Matter) can just tell the device to leave its network
+        directly, with no physical activation step required from the
+        customer. Not every protocol supports this -- one that doesn't
+        (e.g. Z-Wave, which only exposes removal via discover_devices'
+        exclusion-window mode in this codebase) should raise NuCoreError or
+        return a clear error rather than silently no-op'ing.
+
+        :param device_address: The device's own address, exactly as shown in
+            DEVICE DATABASE.
+        :param protocol: Which protocol this device belongs to.
+        :param kwargs: Reserved for additional protocol-specific parameters.
+        :raises NuCoreError: A backend may raise this for a structurally
+            valid protocol it nonetheless cannot service this way.
+        :return: response from the hub, or None/error info on failure.
+        """
+        raise NotImplementedError("Subclasses must implement the remove_device method.")
+
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None):
         """
         Subscribe to device events using the nucore API.

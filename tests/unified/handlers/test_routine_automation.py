@@ -112,6 +112,7 @@ class FakeBackend(NuCoreInterface):
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
     async def finish_device_discovery(self): raise NotImplementedError
+    async def remove_device(self, device_address, protocol=None, **kwargs): raise NotImplementedError
 
 
 CODE = 'if device("25 80 3C 1").status("ST", uom=17, precision=1) > 72:\n    device("BAR1").command("DON")'

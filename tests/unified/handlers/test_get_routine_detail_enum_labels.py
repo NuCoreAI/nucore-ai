@@ -96,6 +96,7 @@ class FakeBackend(NuCoreInterface):
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
     async def finish_device_discovery(self): raise NotImplementedError
+    async def remove_device(self, device_address, protocol=None, **kwargs): raise NotImplementedError
 
 
 @pytest.mark.asyncio
