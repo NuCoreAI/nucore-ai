@@ -10,9 +10,15 @@ unexpected session_id kwarg).
 Also covers the post-pairing refresh-and-verify polling in pair_device.py's
 _refresh_until: add_device()/finish_device_discovery() are plain REST calls
 that don't themselves update the local node list, so pair_device polls
-_refresh_device_structure() until the newly-added (or newly-removed) device
-actually shows up (or disappears) locally, rather than assuming one refresh
-call is enough.
+_refresh_device_structure() until the newly-added device actually shows up
+locally (add_by_address), or -- the mirror image -- until an already-known
+device_address disappears (finish_exclusion), rather than assuming one
+refresh call is enough. Also covers start_inclusion/finish_inclusion's
+_inclusion_baselines: the "before" node-address snapshot is taken when
+start_inclusion opens the pairing window, not when finish_inclusion is
+later called, since a device activated mid-window can already be reflected
+in nucore_interface.nodes (via the routine per-turn refresh) by the time
+finish_inclusion runs.
 """
 
 from __future__ import annotations
@@ -40,6 +46,18 @@ async def _instant_sleep(_seconds):
 @pytest.fixture(autouse=True)
 def _no_real_sleeps(monkeypatch):
     monkeypatch.setattr(pair_device_module.asyncio, "sleep", _instant_sleep)
+
+
+@pytest.fixture(autouse=True)
+def _clean_inclusion_baselines():
+    # _inclusion_baselines is module-level, shared-instance state (mirrors
+    # the real hub, which can only run one inclusion window per protocol at
+    # a time) -- clear it around every test so a start_inclusion left
+    # dangling by one test (no matching finish_inclusion) can't leak into a
+    # later, unrelated test that happens to use the same protocol.
+    pair_device_module._inclusion_baselines.clear()
+    yield
+    pair_device_module._inclusion_baselines.clear()
 
 
 class FakeBackend(NuCoreInterface):
@@ -291,6 +309,7 @@ async def test_add_by_address_errors_if_refreshed_but_device_still_missing():
 @pytest.mark.asyncio
 async def test_finish_inclusion_returns_newly_discovered_addresses():
     backend = FakeBackend()
+    await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
 
     async def discovers_two_devices():
         backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1")
@@ -308,6 +327,7 @@ async def test_finish_inclusion_returns_newly_discovered_addresses():
 @pytest.mark.asyncio
 async def test_finish_inclusion_reports_nothing_new_without_erroring():
     backend = FakeBackend()
+    await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
 
     async def refreshes_but_nothing_new():
         return True
@@ -319,6 +339,63 @@ async def test_finish_inclusion_reports_nothing_new_without_erroring():
     assert result["status"] == "inclusion_committed"
     assert result["new_devices"] == []
     assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_finish_inclusion_finds_a_device_that_appeared_before_finish_was_called():
+    # Regression test: the customer activates the device mid-window, and the
+    # routine per-turn refresh (build_system_prompt -> _refresh_device_structure)
+    # can pick it up well before the customer says "done" and finish_inclusion
+    # actually runs. If "before" were snapshotted at finish_inclusion time
+    # (the old bug), this device would already be in that snapshot and never
+    # get reported.
+    backend = FakeBackend()
+    await pair_device(backend, {"protocol": "zwave", "action": "start_inclusion"})
+
+    # Simulates the routine per-turn refresh landing the new node before
+    # finish_inclusion is ever called.
+    backend.nodes["ZW099"] = SimpleNamespace(name="New Sensor")
+
+    result = await pair_device(backend, {"protocol": "zwave", "action": "finish_inclusion"})
+
+    assert result["status"] == "inclusion_committed"
+    assert [d["address"] for d in result["new_devices"]] == ["ZW099"]
+
+
+@pytest.mark.asyncio
+async def test_start_inclusion_baselines_are_independent_per_protocol():
+    # Starting zigbee's inclusion window must not clobber zwave's
+    # already-recorded baseline (each protocol gets its own dict entry).
+    backend = FakeBackend()
+    backend.nodes["EXISTING"] = SimpleNamespace(name="Existing Device")
+
+    await pair_device(backend, {"protocol": "zwave", "action": "start_inclusion"})
+    await pair_device(backend, {"protocol": "zigbee", "action": "start_inclusion"})
+    # A zigbee device is committed (and its window closed) before the zwave
+    # device shows up, so there's no ambiguity about which window it belongs
+    # to when zwave's own finish_inclusion runs afterward.
+    backend.nodes["ZB001"] = SimpleNamespace(name="Zigbee Device")
+    zigbee_result = await pair_device(backend, {"protocol": "zigbee", "action": "finish_inclusion"})
+    backend.nodes["ZW001"] = SimpleNamespace(name="Zwave Device")
+    zwave_result = await pair_device(backend, {"protocol": "zwave", "action": "finish_inclusion"})
+
+    assert [d["address"] for d in zigbee_result["new_devices"]] == ["ZB001"]
+    assert [d["address"] for d in zwave_result["new_devices"]] == ["ZB001", "ZW001"]
+
+
+@pytest.mark.asyncio
+async def test_finish_inclusion_baseline_is_not_reused_after_being_consumed():
+    backend = FakeBackend()
+    await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
+    backend.nodes["11 11 11 1"] = SimpleNamespace(name="First Device")
+    first = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
+    assert [d["address"] for d in first["new_devices"]] == ["11 11 11 1"]
+
+    # No new start_inclusion call -- the baseline was already popped, so this
+    # falls back to a same-call snapshot and must not re-report the device
+    # that was already committed above.
+    second = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
+    assert second["new_devices"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -353,15 +430,38 @@ async def test_start_inclusion_succeeds_for_zmatter_protocols(protocol):
 @pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
 async def test_start_exclusion_succeeds_for_zmatter_protocols(protocol):
     backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": protocol, "action": "start_exclusion"})
+    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+    result = await pair_device(
+        backend, {"protocol": protocol, "action": "start_exclusion", "device_address": "ZW001"}
+    )
     assert result["status"] == "exclusion_started"
+    assert result["device_address"] == "ZW001"
     assert backend.discover_calls == [(None, protocol, "exclude")]
+
+
+@pytest.mark.asyncio
+async def test_start_exclusion_requires_device_address():
+    backend = FakeBackend()
+    result = await pair_device(backend, {"protocol": "zwave", "action": "start_exclusion"})
+    assert "error" in result
+    assert backend.discover_calls == []
+
+
+@pytest.mark.asyncio
+async def test_start_exclusion_rejects_an_unknown_device_address():
+    backend = FakeBackend()
+    result = await pair_device(
+        backend, {"protocol": "zwave", "action": "start_exclusion", "device_address": "nope"}
+    )
+    assert "error" in result
+    assert backend.discover_calls == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
 async def test_finish_inclusion_returns_newly_discovered_addresses_for_zmatter_protocols(protocol):
     backend = FakeBackend()
+    await pair_device(backend, {"protocol": protocol, "action": "start_inclusion"})
 
     async def discovers_one_device():
         backend.nodes["ZW001"] = SimpleNamespace(name="ZW001")
@@ -378,7 +478,7 @@ async def test_finish_inclusion_returns_newly_discovered_addresses_for_zmatter_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
-async def test_finish_exclusion_returns_removed_addresses_for_zmatter_protocols(protocol):
+async def test_finish_exclusion_returns_removed_address_for_zmatter_protocols(protocol):
     backend = FakeBackend()
     backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
 
@@ -388,7 +488,9 @@ async def test_finish_exclusion_returns_removed_addresses_for_zmatter_protocols(
 
     backend._refresh_device_structure = excludes_the_device
 
-    result = await pair_device(backend, {"protocol": protocol, "action": "finish_exclusion"})
+    result = await pair_device(
+        backend, {"protocol": protocol, "action": "finish_exclusion", "device_address": "ZW001"}
+    )
 
     assert result["status"] == "exclusion_committed"
     assert backend.finish_calls == [(1, protocol)]
@@ -397,19 +499,29 @@ async def test_finish_exclusion_returns_removed_addresses_for_zmatter_protocols(
 
 
 @pytest.mark.asyncio
-async def test_finish_exclusion_reports_nothing_removed_without_erroring():
+async def test_finish_exclusion_requires_device_address():
     backend = FakeBackend()
+    result = await pair_device(backend, {"protocol": "zwave", "action": "finish_exclusion"})
+    assert "error" in result
+    assert backend.finish_calls == []
 
-    async def refreshes_but_nothing_changes():
+
+@pytest.mark.asyncio
+async def test_finish_exclusion_errors_if_the_address_never_disappears():
+    backend = FakeBackend()
+    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+
+    async def refreshes_but_device_still_there():
         return True
 
-    backend._refresh_device_structure = refreshes_but_nothing_changes
+    backend._refresh_device_structure = refreshes_but_device_still_there
 
-    result = await pair_device(backend, {"protocol": "zwave", "action": "finish_exclusion"})
+    result = await pair_device(
+        backend, {"protocol": "zwave", "action": "finish_exclusion", "device_address": "ZW001"}
+    )
 
-    assert result["status"] == "exclusion_committed"
-    assert result["removed_devices"] == []
-    assert "error" not in result
+    assert "error" in result
+    assert "ZW001" in backend.nodes
 
 
 @pytest.mark.asyncio
@@ -419,7 +531,11 @@ async def test_legacy_zwave_returns_a_clear_error_instead_of_pairing(action):
     backend.discover_error = NuCoreError(
         "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
     )
-    result = await pair_device(backend, {"protocol": "zwave", "action": action})
+    args = {"protocol": "zwave", "action": action}
+    if action == "start_exclusion":
+        backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+        args["device_address"] = "ZW001"
+    result = await pair_device(backend, args)
     assert "Legacy Z-Wave" in result["error"]
     assert backend.discover_calls == []
 
@@ -431,7 +547,11 @@ async def test_legacy_zwave_finish_returns_a_clear_error_instead_of_pairing(acti
     backend.finish_error = NuCoreError(
         "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
     )
-    result = await pair_device(backend, {"protocol": "zwave", "action": action})
+    args = {"protocol": "zwave", "action": action}
+    if action == "finish_exclusion":
+        backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+        args["device_address"] = "ZW001"
+    result = await pair_device(backend, args)
     assert "Legacy Z-Wave" in result["error"]
     assert backend.finish_calls == []
 

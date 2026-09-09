@@ -1233,6 +1233,35 @@ class IoXWrapper(NuCoreInterface):
             return out
         node = out 
         if operation == "delete":
+            if type == "node":
+                if self._is_z_wave_family(node_id):
+                    protocol = "zwave"
+                elif self._is_zigbee_family(node_id):
+                    protocol = "zigbee"
+                elif self._is_matter_family(node_id):
+                    protocol = "matter"
+                else:
+                    protocol = None
+                if protocol:
+                    out = (
+                        f"Cannot delete a {protocol} device via node_op -- the hub must be put "
+                        "into removal mode instead. Use pair_device(protocol="
+                        f"\"{protocol}\", action=\"start_exclusion\"), have the customer activate "
+                        "the device to remove, then call finish_exclusion to commit."
+                    )
+                    logger.error(out)
+                    return out
+                if self._is_plug_in_family(node_id):
+                    out = (
+                        f"'{node.name}' is a device created by an installed plugin, not a "
+                        "directly-removable device -- it can only be removed by uninstalling that "
+                        "plugin. Tell the customer this and ask them to confirm before proceeding. "
+                        "Once confirmed, call list_installed_plugins to find the matching plugin's "
+                        "real plugin_id/name, then call delete_plugin with those exact values -- "
+                        "never node_op(delete) for this node."
+                    )
+                    logger.error(out)
+                    return out
             try:
                 body = { 'nodeType': type }
                 if type == "node":

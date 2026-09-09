@@ -10,10 +10,23 @@ Three structurally different shapes, not one:
 - ``start_inclusion``/``finish_inclusion`` -- put the controller in pairing
   (add) mode, the customer activates one or more devices, then a separate
   call commits everything included during that window. Available for
-  insteon/zwave/zigbee/matter.
+  insteon/zwave/zigbee/matter. ``start_inclusion`` snapshots the current node
+  addresses *before* the pairing window opens (``_inclusion_baselines``) --
+  a device the customer activates mid-window can already be reflected in
+  ``nucore_interface.nodes`` (via the routine per-turn refresh) by the time
+  the customer says "done" and ``finish_inclusion`` actually runs, so the
+  diff has to be against that early snapshot, not one taken at
+  ``finish_inclusion`` time.
 - ``start_exclusion``/``finish_exclusion`` -- the same shape, but for
   removing a device instead of adding one. zwave/zigbee/matter only --
-  insteon has no distinct hardware "exclude" mode in this codebase.
+  insteon has no distinct hardware "exclude" mode in this codebase. Unlike
+  inclusion (the new device's address is unknown until it shows up),
+  exclusion always targets an already-known, already-paired device, so both
+  calls require ``device_address`` (the exact address from DEVICE DATABASE)
+  and ``finish_exclusion`` polls for that specific address to *disappear*
+  from ``nucore_interface.nodes`` -- the mirror image of ``add_by_address``
+  polling for its address to *appear* (see ``_has_address``/``_refresh_until``
+  below).
 
 insteon/zwave/zigbee/matter have real backends today (x10's only action,
 add_by_address, is not implemented for it); every other protocol/action
@@ -87,10 +100,18 @@ _PROTOCOL_ACTIONS: dict[str, frozenset[str]] = {
 # shape that just isn't backed by a real call yet.
 _IMPLEMENTED_PROTOCOLS = frozenset({"insteon", "zwave", "zigbee", "matter"})
 
-# start_inclusion/start_exclusion both map to discover_devices(); which
-# "mode" they pass through determines whether the hub opens an add or a
-# remove window (insteon ignores mode -- it has no exclude concept here).
-_ACTION_TO_MODE = {"start_inclusion": "include", "start_exclusion": "exclude"}
+# Baseline node-address sets captured at start_inclusion time, keyed by
+# protocol -- see finish_inclusion below. A device activated during the
+# pairing window can already be reflected in nucore_interface.nodes (via the
+# routine per-turn _refresh_device_structure() call made at the start of
+# every conversation turn) well before the customer says "done" and
+# finish_inclusion actually runs, so the before/after diff has to be against
+# a snapshot taken before the window opened, not one taken at
+# finish_inclusion time. A single shared cache keyed by protocol (not by
+# conversation) matches the real hardware constraint -- the hub can only run
+# one inclusion window per protocol at a time -- and nucore-ai only ever
+# targets a single hub instance (see IoXWrapper._EISYUI_INSTANCE).
+_inclusion_baselines: dict[str, set[str]] = {}
 
 # add_device()/finish_device_discovery() are plain REST POSTs -- neither sets
 # device_structure_changed itself. That only flips once the websocket's
@@ -180,44 +201,67 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             }
         return {"protocol": protocol, "action": action, "device_address": result, "status": "added"}
 
-    if action in ("start_inclusion", "start_exclusion"):
-        mode = _ACTION_TO_MODE[action]
+    if action == "start_inclusion":
         try:
             ok = await nucore_interface.discover_devices(
-                device_type=args.get("device_type"), protocol=protocol, mode=mode,
+                device_type=args.get("device_type"), protocol=protocol, mode="include",
             )
         except NuCoreError as e:
             return {"error": str(e)}
         if not ok:
-            return {"error": f"failed to start {mode} mode"}
-        if action == "start_inclusion":
-            return {
-                "protocol": protocol, "action": action, "status": "inclusion_started",
-                "note": "The hub is now in pairing mode -- tell the customer to activate each device "
-                        "they want to add, then call finish_inclusion to commit.",
-            }
+            return {"error": "failed to start include mode"}
+        _inclusion_baselines[protocol] = set(nucore_interface.nodes.keys())
         return {
-            "protocol": protocol, "action": action, "status": "exclusion_started",
-            "note": "The hub is now in removal mode -- tell the customer to activate the device "
-                    "they want to remove, then call finish_exclusion to commit.",
+            "protocol": protocol, "action": action, "status": "inclusion_started",
+            "note": "The hub is now in pairing mode -- tell the customer to activate each device "
+                    "they want to add, then call finish_inclusion to commit.",
         }
 
-    # action in ("finish_inclusion", "finish_exclusion")
-    is_inclusion = action == "finish_inclusion"
-    flag = args.get("flag", 1)
-    # Snapshot names up front -- an excluded device's name is unavailable
-    # once it's actually gone from nucore_interface.nodes.
-    before = {address: node.name for address, node in nucore_interface.nodes.items()}
-    try:
-        ok = await nucore_interface.finish_device_discovery(flag=flag, protocol=protocol)
-    except NuCoreError as e:
-        return {"error": str(e)}
-    if not ok:
-        return {"error": f"failed to commit {'inclusion' if is_inclusion else 'exclusion'} session"}
+    if action == "start_exclusion":
+        device_address = args.get("device_address")
+        if not device_address:
+            return {"error": "device_address is required for start_exclusion"}
+        if not _has_address(nucore_interface, device_address):
+            return {
+                "error": f"'{device_address}' is not a known device address -- check DEVICE "
+                         "DATABASE for the real address rather than guessing"
+            }
+        try:
+            ok = await nucore_interface.discover_devices(
+                device_type=args.get("device_type"), protocol=protocol, mode="exclude",
+            )
+        except NuCoreError as e:
+            return {"error": str(e)}
+        if not ok:
+            return {"error": "failed to start exclude mode"}
+        return {
+            "protocol": protocol, "action": action, "device_address": device_address,
+            "status": "exclusion_started",
+            "note": f"The hub is now in removal mode -- tell the customer to activate the device "
+                    f"at '{device_address}' now, then call finish_exclusion with this same "
+                    f"device_address to commit.",
+        }
 
-    changed = await _refresh_until(nucore_interface, lambda: set(nucore_interface.nodes.keys()) != set(before))
-    if is_inclusion:
-        changed_addresses = sorted(set(nucore_interface.nodes.keys()) - set(before)) if changed else []
+    if action == "finish_inclusion":
+        flag = args.get("flag", 1)
+        # Pop the baseline captured at start_inclusion time -- see
+        # _inclusion_baselines above. Falls back to a same-call snapshot only
+        # if start_inclusion was never recorded for this protocol (e.g. a
+        # process restart mid-session); that degrades to the old, racy
+        # behavior rather than crashing, but is otherwise never hit in
+        # normal use.
+        before = _inclusion_baselines.pop(protocol, None)
+        if before is None:
+            before = set(nucore_interface.nodes.keys())
+        try:
+            ok = await nucore_interface.finish_device_discovery(flag=flag, protocol=protocol)
+        except NuCoreError as e:
+            return {"error": str(e)}
+        if not ok:
+            return {"error": "failed to commit inclusion session"}
+
+        changed = await _refresh_until(nucore_interface, lambda: set(nucore_interface.nodes.keys()) != before)
+        changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before) if changed else []
         devices = [
             {"address": address, "name": nucore_interface.nodes[address].name} for address in changed_addresses
         ]
@@ -228,11 +272,33 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
                     "Rename/assign these as needed using the addresses above.",
         }
 
-    changed_addresses = sorted(set(before) - set(nucore_interface.nodes.keys())) if changed else []
-    devices = [{"address": address, "name": before[address]} for address in changed_addresses]
+    # action == "finish_exclusion"
+    device_address = args.get("device_address")
+    if not device_address:
+        return {"error": "device_address is required for finish_exclusion"}
+    # Snapshot the name up front -- it's unavailable once the device is
+    # actually gone from nucore_interface.nodes.
+    removed_name = next(
+        (node.name for key, node in nucore_interface.nodes.items() if key.casefold() == device_address.casefold()),
+        device_address,
+    )
+    flag = args.get("flag", 1)
+    try:
+        ok = await nucore_interface.finish_device_discovery(flag=flag, protocol=protocol)
+    except NuCoreError as e:
+        return {"error": str(e)}
+    if not ok:
+        return {"error": "failed to commit exclusion session"}
+
+    removed = await _refresh_until(nucore_interface, lambda: not _has_address(nucore_interface, device_address))
+    if not removed:
+        return {
+            "error": (
+                f"'{device_address}' was still present after "
+                f"{_REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S}s of waiting -- try again shortly."
+            )
+        }
     return {
         "protocol": protocol, "action": action, "status": "exclusion_committed",
-        "removed_devices": devices,
-        "note": "No devices were removed during the removal window." if not devices else
-                "These addresses are no longer on the hub.",
+        "removed_devices": [{"address": device_address, "name": removed_name}],
     }

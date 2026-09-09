@@ -11,5 +11,5 @@
 
 ## UI LINK FORMATS
 
-- Device, group/scene, or folder: `[device name](/nodes/{node_id})` -- `node_id` is the real id exactly as shown in DEVICE DATABASE, used as-is.
+- Device, group/scene, or folder: `[device name](/nodes/{node_id})` -- `node_id` is the real id exactly as shown in DEVICE DATABASE, used as-is. This applies to every device regardless of protocol (insteon/zwave/zigbee/matter) or how it was added (already existed, add_by_address, or a pair_device inclusion result's new_devices[].address) -- a device is always a `/nodes/...` link, never `/plugins/...`, even a device that happens to have been created by an installed plugin (its underlying node still links via `/nodes/{node_id}`). `/plugins/...` links (`/plugins/dashboard`, `/plugins/dashboard/{plugin_id}`, `/plugins/store/{nsid}`, `/plugins/store/licenses`) are a completely different entity -- the plugin/marketplace listing itself, per the plugin management tools -- never substitute one link space for the other.
 - Routine/program: `[routine name](/programs/{program_id})` -- `program_id` is the routine's real id exactly as shown in ROUTINES DATABASE, used as-is (no hex conversion, no padding).
