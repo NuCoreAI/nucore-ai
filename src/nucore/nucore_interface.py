@@ -13,6 +13,7 @@ import threading
 import asyncio
 import uuid
 
+from .device_event_listener import DeviceEventListener
 from .profile import Profile
 from .group import Group, GroupMemberType
 from .node import Node
@@ -60,6 +61,8 @@ class NuCoreInterface(ABC):
         self.json_output = json_output
         self._subscribe_thread: threading.Thread | None = None
         self._subscribe_lock = threading.Lock()
+        self._event_listeners: dict[tuple[str, str, str | None], DeviceEventListener] = {}
+        self._event_listeners_lock = threading.Lock()
 
     def get_groups_for_device(self, device_address: str, controller_only: bool = False) -> list[Group]:
         """Return all groups that contain the given device address.
@@ -798,6 +801,59 @@ class NuCoreInterface(ABC):
         :param event: The event data received.
         """
         raise NotImplementedError("Subclasses must implement the subscribe_events method.")
+
+    def register_listener(
+        self,
+        listener_id: str,
+        control: str,
+        action: str | None,
+        listener: DeviceEventListener,
+    ) -> None:
+        """Register *listener* to receive events matching *control*/*action*
+        (``action=None`` is a wildcard, matching any action for that
+        control). *listener_id* is the caller's own handle, not a device id
+        -- it exists so several independent listeners can register on the
+        same *(control, action)* at once, and each can later be removed by
+        its own id. Called by ``DeviceEventListener.__init__`` -- not
+        normally called directly.
+
+        Raises:
+            TypeError: *listener* is not a ``DeviceEventListener``.
+            ValueError: *(listener_id, control, action)* is already registered.
+        """
+        if not isinstance(listener, DeviceEventListener):
+            raise TypeError("listener must be a DeviceEventListener instance")
+        key = (listener_id, control, action)
+        with self._event_listeners_lock:
+            if key in self._event_listeners:
+                raise ValueError(f"listener already registered for {key}")
+            self._event_listeners[key] = listener
+
+    def unregister_listener(self, listener_id: str, control: str, action: str | None) -> None:
+        """Remove a listener registered under *(listener_id, control,
+        action)*. Idempotent -- a key that isn't present is a no-op."""
+        key = (listener_id, control, action)
+        with self._event_listeners_lock:
+            self._event_listeners.pop(key, None)
+
+    def _dispatch_event_listeners(self, control, action, node, eventInfo) -> None:
+        """Called from ``_on_device_event`` (the subscriber thread's own
+        loop) for every incoming event -- fans out to every registered
+        listener whose *control* matches exactly and whose *action* is a
+        wildcard (``None``) or matches exactly. Each ``notify()`` call is
+        wrapped so a broken listener can't stop dispatch to the others or
+        crash the subscriber's message loop."""
+        with self._event_listeners_lock:
+            matches = [
+                listener
+                for (_listener_id, c, a), listener in self._event_listeners.items()
+                if c == control and (a is None or a == action)
+            ]
+        for listener in matches:
+            try:
+                listener.notify(node, control, action, eventInfo)
+            except Exception as ex:
+                logger.error(f"device event listener notify failed: {ex}")
 
     async def _on_connect_callback(self):
         """

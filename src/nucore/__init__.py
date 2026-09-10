@@ -6,6 +6,7 @@ Re-exports the most commonly used classes and helpers so consumers can write::
 """
 
 from .nucore_interface import NuCoreInterface, PromptFormatTypes
+from .device_event_listener import DeviceEventListener
 from .cmd import Command, CommandParameter
 from .editor import Editor, EditorMinMaxRange, EditorSubsetRange
 from .linkdef import LinkDef, LinkParameter
@@ -22,4 +23,5 @@ from .nucore_error import NuCoreError
 __all__ = ["NuCoreError", "EditorMinMaxRange", "TypeInfo", "LinkParameter", "Property", "EditorSubsetRange", "NuCoreError", "Node", "NuCoreInterface", 
            "Command", "CommandParameter", "Editor", "LinkDef", "RuntimeProfile",
            "NodeDef", "NodeProperty", "NodeCommands", "NodeLinks", "Profile", "Family", "Instance", "UOMEntry", get_uom_by_id, is_enumeration_uom,
-           "NodeBase", "NodeHierarchy", "NodeTypes", "Group", "GroupMember", "GroupMemberType", "Folder", "PromptFormatTypes"]
+           "NodeBase", "NodeHierarchy", "NodeTypes", "Group", "GroupMember", "GroupMemberType", "Folder", "PromptFormatTypes",
+           "DeviceEventListener"]

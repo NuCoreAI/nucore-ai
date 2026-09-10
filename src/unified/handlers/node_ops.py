@@ -5,13 +5,15 @@ Dispatch calling directly into ``NuCoreInterface.add_node``/``node_ops``.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from nucore import NuCoreInterface
 
+from ._event_wait import wait_until
+
 _CREATE_OPS = {"add_group", "add_folder"}
 _SIMPLE_OPS = {"enable", "disable", "delete"}
+_CREATE_WAIT_TIMEOUT_S = 15
 
 
 def _op_ok(result: Any) -> bool:
@@ -47,12 +49,18 @@ async def node_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> An
             return {"error": f"failed to create {node_type} '{new_name}': {_op_error(result)}"}
 
         # add_node's response doesn't carry the new node's id -- look it up
-        # by name after a refresh, same pattern as multi_device_scene's
-        # newly-created-group lookup.
-        await asyncio.sleep(2)
-        await nucore_interface._refresh_device_structure()
-        registry = nucore_interface.groups if node_type == "group" else nucore_interface.folders
-        new_id = next((address for address, node in registry.items() if node.name == new_name), None)
+        # by name after the new node's added-event arrives, same pattern as
+        # multi_device_scene's newly-created-group lookup.
+        def _registry():
+            return nucore_interface.groups if node_type == "group" else nucore_interface.folders
+
+        await wait_until(
+            nucore_interface, "_3", None,
+            lambda: any(node.name == new_name for node in _registry().values()),
+            nucore_interface._refresh_device_structure,
+            _CREATE_WAIT_TIMEOUT_S,
+        )
+        new_id = next((address for address, node in _registry().items() if node.name == new_name), None)
         if new_id is None:
             return {"error": f"created {node_type} '{new_name}' but could not find its id afterward"}
         return {"operation": operation, "new_name": new_name, "node_id": new_id, "status": "ok"}

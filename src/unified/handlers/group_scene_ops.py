@@ -16,10 +16,13 @@ shape is well-specified (unlike the general step-sequencing case).
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from nucore import Group, NuCoreInterface
+
+from ._event_wait import wait_until
+
+_GROUP_CREATE_WAIT_TIMEOUT_S = 15
 
 
 def _result_ok(result: dict[str, Any] | None) -> bool:
@@ -118,8 +121,12 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
         response = await nucore_interface.add_node(node_name=group_name, type="group")
         if getattr(response, "status_code", None) != 200:
             return {"error": f"failed to create group/scene '{group_name}': {response}"}
-        await asyncio.sleep(2)
-        await nucore_interface._refresh_device_structure()
+        await wait_until(
+            nucore_interface, "_3", None,
+            lambda: any(group.name == group_name for group in nucore_interface.groups.values()),
+            nucore_interface._refresh_device_structure,
+            _GROUP_CREATE_WAIT_TIMEOUT_S,
+        )
         group_address = next(
             (address for address, group in nucore_interface.groups.items() if group.name == group_name),
             None,

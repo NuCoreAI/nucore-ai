@@ -57,7 +57,6 @@ ambiguity instead of a raw index.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from nucore import NuCoreInterface
@@ -65,6 +64,10 @@ from nucore.uom import is_enumeration_uom
 from nucore.value_resolution import ValueResolutionError, resolve_value
 from rag.profile_rag_formatter import ProfileRagFormatter
 from unified.routine_compiler import TriggerCompileError, compile_trigger_source
+
+from ._event_wait import wait_until
+
+_ROUTINE_CREATE_WAIT_TIMEOUT_S = 15
 
 
 def _op_ok(result: Any) -> bool:
@@ -113,18 +116,31 @@ def _op_error(result: Any) -> str:
     return f"HTTP {status_code}" if status_code is not None else str(result)
 
 
-async def _find_routine_id_by_name(nucore_interface: NuCoreInterface, name: str) -> int | None:
-    """Look up a routine's real id by name after a forced refresh. Never
-    trust an id echoed back from a create call -- the create response isn't
-    guaranteed to carry the hub-assigned id, so this is the only path,
-    not a fallback. Searches most-recently-loaded entries first in case a
+async def _wait_for_routine_id_by_name(nucore_interface: NuCoreInterface, name: str) -> int | None:
+    """Wait for a newly created routine to appear, then return its real id.
+    Never trust an id echoed back from a create call -- the create response
+    isn't guaranteed to carry the hub-assigned id, so this is the only path,
+    not a fallback. Programs/triggers have no documented "added" action code
+    (unlike nodes' _3/ND) -- so any _1 event (programs/triggers category,
+    regardless of action) triggers a refresh-and-check, event-driven instead
+    of a fixed delay. Searches most-recently-loaded entries first in case a
     stale duplicate from an earlier refresh shares the same name."""
-    nucore_interface.routines_changed = True
-    await nucore_interface._refresh_routines_database()
-    for routine in reversed(nucore_interface.condensed_routines):
-        if routine.get("name") == name:
-            return routine.get("id")
-    return None
+    found_id: int | None = None
+
+    def _condition() -> bool:
+        nonlocal found_id
+        for routine in reversed(nucore_interface.condensed_routines):
+            if routine.get("name") == name:
+                found_id = routine.get("id")
+                return True
+        return False
+
+    async def _refresh() -> None:
+        nucore_interface.routines_changed = True
+        await nucore_interface._refresh_routines_database()
+
+    await wait_until(nucore_interface, "_1", None, _condition, _refresh, _ROUTINE_CREATE_WAIT_TIMEOUT_S)
+    return found_id
 
 
 async def get_device_detail(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
@@ -532,8 +548,7 @@ async def create_or_update_routine(nucore_interface: NuCoreInterface, args: dict
         return {"error": f"failed to save routine '{name}': {_op_error(result)}"}
 
     if not routine_id:
-        await asyncio.sleep(2)
-        routine_id = await _find_routine_id_by_name(nucore_interface, name)
+        routine_id = await _wait_for_routine_id_by_name(nucore_interface, name)
         if routine_id is None:
             return {
                 "name": name,

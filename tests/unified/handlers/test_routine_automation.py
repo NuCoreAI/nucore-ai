@@ -16,9 +16,23 @@ from nucore.nodedef import NodeCommands, NodeDef, NodeProperty
 from nucore.nucore_interface import NuCoreInterface
 from nucore.uom import UOMEntry
 from unified.dispatch import execute_tool
+from unified.handlers import routine_automation as routine_automation_module
 
 UOM25 = UOMEntry(id="25", description="Enum", label="Enum", name="Enum")
 UOM146 = UOMEntry(id="146", description="Short Notification ID", label="Notification ID", name="Notification ID")
+
+
+@pytest.fixture(autouse=True)
+def _fast_routine_wait_timeout(monkeypatch):
+    # A created routine's id lookup (_wait_for_routine_id_by_name) waits --
+    # event-driven, via wait_until -- for a real _1 event or for the given
+    # name to show up in condensed_routines. FakeBackend's
+    # _refresh_routines_database always appends a fixed "Evening Routine"
+    # entry, so any test creating a routine under a different name would
+    # otherwise block for the real default budget with no event ever
+    # arriving and the name never matching -- shrink it so those tests (and
+    # any real timeout tests) stay fast.
+    monkeypatch.setattr(routine_automation_module, "_ROUTINE_CREATE_WAIT_TIMEOUT_S", 0.05)
 
 
 def _build_node(address: str, *, properties=None, accepts=None, sends=None) -> Node:
