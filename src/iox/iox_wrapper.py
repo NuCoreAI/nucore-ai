@@ -1738,14 +1738,14 @@ class IoXWrapper(NuCoreInterface):
         options = await self.diagnostics._get_system_options()
         return not options.get("ZMatterZWave", False)
 
-    async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> Any:
+    async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> bool:
         body = {"flag": flag, "address": device_address}
         if name:
             body["name"] = name
         if device_type:
             body["deviceType"] = device_type
         response = await self.post(self._family_api_path("add-node"), json.dumps(body), {"Content-Type": "application/json"})
-        return device_address if response is not None and response.status_code == 200 else None
+        return response is not None and response.status_code == 200
 
     async def discover_devices(self, device_type: str = None, protocol: str = None, mode: str = "include", **kwargs) -> Any:
         family = PROTOCOL_TO_ZMATTER_FAMILY.get(protocol)

@@ -642,10 +642,10 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
 
     # ------------------------------------------------------------------
-    # Device pairing (used by the Plan feature's "new_installation" flow).
-    # Distinct from add_node -- add_node creates a software node (folder/
-    # group) via the REST API; these drive the physical hub's actual
-    # pairing/linking hardware workflow instead.
+    # Device pairing (used by pair_device). Distinct from add_node --
+    # add_node creates a software node (folder/group) via the REST API;
+    # these drive the physical hub's actual pairing/linking hardware
+    # workflow instead.
     #
     # Two genuinely different, mutually exclusive ways to add a physical
     # device (INSTEON/X10):
@@ -659,13 +659,14 @@ class NuCoreInterface(ABC):
     #    during the session (it commits, it does not cancel/abort despite
     #    the underlying SOAP action's name).
     #
-    # Plan only ever uses add_device -- the batch workflow has no reliable
-    # way to map an anonymously-discovered address back to which room/name
-    # the customer actually meant, so it's deliberately not exposed there.
+    # pair_device's add_by_address action only ever uses add_device -- the
+    # batch workflow has no reliable way to map an anonymously-discovered
+    # address back to which room/name the customer actually meant, so it's
+    # deliberately not exposed there.
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def add_device(self, device_address: str, **kwargs):
+    async def add_device(self, device_address: str, **kwargs) -> bool:
         """
         Add one specific physical device by its own address. Self-contained
         -- no discover/finish follow-up call needed. Protocol-specific under
@@ -674,7 +675,11 @@ class NuCoreInterface(ABC):
         silently no-op.
         :param device_address: The physical device's own address.
         :param kwargs: Reserved for additional protocol-specific parameters.
-        :return: response from the hub, or None/error info on failure.
+        :return: True if the hub accepted the add request, False otherwise.
+            This says nothing about the device's real address -- only the
+            hub's own `_3`/`"ND"` (node added) event is authoritative about
+            that, since the hub's canonical case/shape for the address may
+            differ from whatever was passed in here.
         """
         raise NotImplementedError("Subclasses must implement the add_device method.")
 
@@ -686,8 +691,8 @@ class NuCoreInterface(ABC):
         devices as they want while this is active, with no addresses needed
         upfront. Must be followed by finish_device_discovery() to actually
         program the devices that were linked; there's no address-to-name
-        mapping provided by this call, which is why Plan doesn't use it (see
-        above).
+        mapping provided by this call, which is why pair_device doesn't use
+        it (see above).
 
         :param protocol: Which protocol's linking mode to start (e.g.
             "insteon", "zwave", "zigbee", "matter"). A backend may ignore
