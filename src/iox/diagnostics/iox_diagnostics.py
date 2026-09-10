@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 import xml.etree.ElementTree as ET
+from nucore import DeviceEventListener
 from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name
 from .diag_utils import _element_to_dict_excluding
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     # hint below -- `from __future__ import annotations` already defers
     # evaluation of the annotation itself.
     from ..iox_wrapper import IoXWrapper
+    from nucore import NuCoreInterface
 
 from utils import get_logger
 logger = get_logger(__name__)
@@ -55,6 +57,45 @@ logger = get_logger(__name__)
 # run freely, any time, including while one of the four is in flight.
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "unified" / "diagnostics" / "prompts"
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
+
+
+class _SubsystemStatusListener(DeviceEventListener):
+    """Persistent notify() target for non-INSTEON subsystem connectivity
+    events (control "_21"/"_25"/"_27"/"_28" -- generic Z-Wave/Z-Wave/
+    Zigbee/Matter, per ``Subsystems``). Unlike insteon_diag.py's
+    ``_LinksTableWaiter`` (scoped to a single operation, unregistered when
+    it's done), this listener is constructed and started exactly once and
+    ``process()`` never returns -- it's meant to live for the whole
+    process's lifetime, same as the hardcoded dispatch branch it replaces
+    in ``IoXWrapper._on_device_event``. Being a daemon thread (see the base
+    class), it never blocks interpreter shutdown even though it never
+    exits on its own.
+
+    Registers for all four controls up front (the constructor only
+    registers the first; the other three are added directly via
+    ``register_listener``, reusing the same ``listener_id`` -- see
+    ``NuCoreInterface.register_listener``'s note that several independent
+    *(control, action)* keys can share one caller-chosen id), with
+    ``action=None`` (wildcard) since ``_apply_subsystem_status_event``
+    itself further filters on the action's own encoded status field.
+    """
+
+    def __init__(self, nucore_interface: "NuCoreInterface", diagnostics: "IoXDiagnostics") -> None:
+        self._diagnostics = diagnostics
+        super().__init__(nucore_interface, Subsystems.GENERIC_ZWAVE.value, None)
+        for control in (Subsystems.ZWAVE.value, Subsystems.ZIGBEE.value, Subsystems.MATTER.value):
+            nucore_interface.register_listener(self._listener_id, control, None, self)
+
+    def process(self) -> None:
+        while True:
+            node, control, action, eventInfo = self._queue.get()
+            try:
+                self._diagnostics._apply_subsystem_status_event(node, control, action, eventInfo)
+            except Exception as ex:
+                # A single bad event must never silently end this listener
+                # -- there'd be nothing left to report future subsystem
+                # status changes for the remainder of the process's life.
+                logger.error(f"subsystem status listener failed to process event: {ex}")
 
 
 class IoXDiagnostics:
@@ -107,6 +148,25 @@ class IoXDiagnostics:
             }
         }
         self._insteon_diag = None
+        # Not started here -- see start_subsystem_status_listener. Some
+        # callers construct IoXDiagnostics around a not-yet-fully-initialized
+        # NuCoreInterface (e.g. tests using object.__new__(IoXWrapper) to
+        # exercise diagnose.md parsing without a real hub connection), which
+        # has no register_listener machinery yet.
+        self._subsystem_listener: _SubsystemStatusListener | None = None
+
+    def start_subsystem_status_listener(self) -> None:
+        """Start the persistent listener that turns non-INSTEON subsystem
+        connectivity events (see _SubsystemStatusListener) into updates to
+        self._subsystem_state. Idempotent -- a second call is a no-op.
+        Called explicitly by IoXWrapper.__init__ right after constructing
+        this instance, once self._iox_wrapper is a fully-initialized
+        NuCoreInterface.
+        """
+        if self._subsystem_listener is not None:
+            return
+        self._subsystem_listener = _SubsystemStatusListener(self._iox_wrapper, self)
+        self._subsystem_listener.start()
 
     def _load_diagnostic_config(self) -> tuple[str, dict[str, dict[str, Any]]]:
         """Read diagnose.md and parse/validate it -- see
@@ -413,7 +473,11 @@ class IoXDiagnostics:
         return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_STARTUP_TIME, None, None, 0x01, None)
 
 
-    async def on_device_event(self, node, control, action, eventInfo):
+    def _apply_subsystem_status_event(self, node, control, action, eventInfo):
+        """Handler behind _SubsystemStatusListener.process() -- runs on that
+        listener's own persistent thread, not the asyncio event loop, so
+        this is plain sync code (nothing here ever awaited anything).
+        """
         if action == None or control == None:
             logger.error(f"Missing action or control: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, eventInfo={eventInfo if eventInfo else 'Unknown'}")
             return
