@@ -391,6 +391,27 @@ Runtime profile for llama.cpp (`--runtime-config` target):
 }
 ```
 
+### Connect to Ollama (or any other OpenAI-compatible local server)
+
+The `llama.cpp` provider is a generic OpenAI-compatible client, so it also works against Ollama, LM Studio, vLLM, or any other server exposing a `/v1/chat/completions` endpoint — just point `url` at that server instead:
+
+```json
+{
+  "nucore_runtime": {
+    "default": {
+      "provider": "llama.cpp",
+      "model": "llama3.1",
+      "url": "http://localhost:11434/v1",
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 32000
+    }
+  }
+}
+```
+
+No API key is required for local servers; the adapter falls back to a placeholder key if one isn't configured.
+
 ## Capabilities
 
 Beyond device/group/routine/variable command-and-control, the unified runtime supports:
