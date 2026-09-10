@@ -339,6 +339,16 @@ class PlanEngine:
             return {"id": id, "status": "removed"}
         if args is not None:
             entry["args"] = args
+            # A previously-applied or previously-failed item just got new
+            # args -- it must be retried on the next apply_plan, not skipped
+            # forever. _apply_plan only processes entries whose status is
+            # still "proposed" (see below), so an edit that doesn't reset
+            # this leaves the correction permanently stuck: the customer's
+            # fix never actually gets applied, and the tool's own response
+            # still reports the item as failed/applied from before the edit,
+            # which reads as "the fix didn't work" even though it was never
+            # retried at all.
+            entry["status"] = "proposed"
         return {
             "id": entry["id"],
             "tool": entry["tool"],
@@ -366,6 +376,22 @@ class PlanEngine:
                     result = await getattr(module, attr)(nucore_interface, entry["args"])
             except Exception as ex:
                 result = {"error": str(ex)}
+
+            if (
+                tool == "multi_device_scene"
+                and isinstance(result, dict)
+                and result.get("group_address")
+                and not entry["args"].get("group_address")
+            ):
+                # multi_device_scene isn't atomic -- it can create a real
+                # group and add some members successfully while others fail
+                # (see its own per-member "results"), which still counts as
+                # an overall failure. Capture the now-real group_address into
+                # the staged args so a retry (after revise_plan fixes the
+                # failed member's role, or just a second apply_plan) adds to
+                # the group that already exists instead of blindly creating
+                # a duplicate "NuCore_Scene_N"/same-named group every time.
+                entry["args"] = {**entry["args"], "group_address": result["group_address"]}
 
             ok = isinstance(result, dict) and "error" not in result
             entry["status"] = "applied" if ok else f"failed: {result.get('error') if isinstance(result, dict) else result}"

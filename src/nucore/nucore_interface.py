@@ -40,7 +40,14 @@ class NuCoreInterface(ABC):
 
     def __init__(self, json_output:bool, formatter_type:str):
         self.device_structure_changed = True # flag to track if device structure has changed and needs refreshing
-        self.routines_changed = True # flag to track if programs have changed so that we can refresh them 
+        self.routines_changed = True # flag to track if programs have changed so that we can refresh them
+        # Tracks the hub's own _5 (System Busy Events) reports -- defaults to
+        # not-busy since this only ever flips True on an actual observed
+        # _5/"1" (DEVINTIX_SYSTEM_IS_BUSY_ACTION); a hub that never emits _5
+        # at all (most of the time -- it's transient, not a heartbeat) should
+        # never be treated as permanently busy for want of a signal. See
+        # IoXWrapper._on_device_event for where this is actually set.
+        self.system_busy = False
         self.is_subscribed = False
         self.formatter_type = formatter_type
         self.json_output = json_output

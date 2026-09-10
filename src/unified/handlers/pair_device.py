@@ -191,6 +191,40 @@ def _has_address(nucore_interface: NuCoreInterface, address: str) -> bool:
     return any(key.casefold() == target for key in nucore_interface.nodes)
 
 
+def _get_node_case_insensitive(nucore_interface: NuCoreInterface, address: str):
+    target = address.casefold()
+    return next((node for key, node in nucore_interface.nodes.items() if key.casefold() == target), None)
+
+
+def _is_device_usable(nucore_interface: NuCoreInterface, address: str) -> bool:
+    """True once *address* exists locally AND its device profile has been
+    resolved -- ``node.node_def`` is not ``None``.
+
+    The hub can register a bare node -- firing ``_3``/``"ND"`` -- well
+    before it finishes the Insteon engine-version/product-data handshake
+    that determines its nodedef (``_3``/``"NI"``, a separate, later event --
+    see subscription_events.md's "Key Event: `_3/NI`" section). Until that
+    lands, ``node.node_def`` stays ``None`` and ``Profile.map_nodes()``
+    (nucore/profile.py) never populated it with any commands/properties --
+    exactly what ``create_or_update_routine``'s resolver ("has no device
+    profile to resolve...") and ``multi_device_scene``'s role precheck
+    ("not available as a controller/responder") both reject. Mere presence
+    (what ``_has_address`` checks) is not the same as usable by either of
+    those, even though the address already "exists".
+
+    Also requires ``nucore_interface.system_busy`` to be ``False`` --
+    according to subscription_events.md, ``_5`` (System Busy Events) action
+    ``"0"``/``"1"`` is the hub's own not-busy/busy signal, set by
+    ``IoXWrapper._on_device_event``. The same hardware handshake that
+    resolves a new node's profile can leave the whole system reporting busy
+    a moment longer -- referencing the device in a scene/routine call while
+    that's still true is the same kind of premature "usable" claim as
+    ``node_def`` still being unresolved.
+    """
+    node = _get_node_case_insensitive(nucore_interface, address)
+    return node is not None and node.node_def is not None and not nucore_interface.system_busy
+
+
 def _is_zigbee_disabled_event(node: str, control: str, action: str, event_info: object) -> bool:
     """Zigbee removal can fail at the network layer without the REST call
     itself reporting it -- instead of actually removing the node, the hub
@@ -313,17 +347,22 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             return {"error": f"failed to add device '{device_address}'"}
 
         device_address = normalize_address(device_address, protocol)
+        # Wildcard, not just "ND" -- becoming usable takes two separate
+        # events (_3/ND for bare presence, then a later _3/NI once its
+        # device profile resolves -- see _is_device_usable), and narrowing
+        # to one action risks never waking for the other.
         found = await wait_until(
             nucore_interface, "_3", None,
-            lambda: _has_address(nucore_interface, device_address),
+            lambda: _is_device_usable(nucore_interface, device_address),
             nucore_interface._refresh_device_structure,
             _WAIT_TOTAL_TIMEOUT_S,
         )
         if not found:
             return {
                 "error": (
-                    f"'{device_address}' was added on the hub but never appeared locally after "
-                    f"{_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
+                    f"'{device_address}' was added on the hub but never became fully usable "
+                    f"(address present and device profile resolved) after {_WAIT_TOTAL_TIMEOUT_S}s "
+                    "of waiting -- try again shortly."
                 )
             }
         return {"protocol": protocol, "action": action, "device_address": result, "status": "added"}
@@ -354,6 +393,17 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         await nucore_interface._refresh_device_structure()
 
         changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before)
+        if changed_addresses:
+            # A newly-added node's own device profile (node_def) can resolve
+            # after this point -- see _is_device_usable -- so give that a
+            # further grace period too before handing addresses back as
+            # ready to reference in the very next tool call.
+            await wait_until(
+                nucore_interface, "_3", None,
+                lambda: all(_is_device_usable(nucore_interface, a) for a in changed_addresses),
+                nucore_interface._refresh_device_structure,
+                _NODE_ADDED_GRACE_TIMEOUT_S,
+            )
         devices = [
             {"address": address, "name": nucore_interface.nodes[address].name} for address in changed_addresses
         ]

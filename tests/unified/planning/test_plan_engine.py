@@ -210,6 +210,43 @@ async def test_revise_plan_replaces_args():
 
 
 @pytest.mark.asyncio
+async def test_revise_plan_resets_status_so_a_correction_actually_gets_retried(monkeypatch):
+    # Regression: revise_plan used to update args but leave a failed item's
+    # status untouched -- apply_plan only retries entries still "proposed",
+    # so a customer's fix (via revise_plan) was silently never re-applied,
+    # and revise_plan's own response kept reporting the stale pre-fix
+    # failure, reading as "the fix didn't work" when it was never even
+    # attempted.
+    calls = []
+
+    async def fake_variable_op(nucore_interface, args):
+        calls.append(args["name"])
+        if args["name"] == "Bad":
+            return {"error": "hub rejected it"}
+        return {"type": 1, "id": "7", "status": "saved"}
+
+    monkeypatch.setattr(plan_engine_module.variable_ops, "variable_op", fake_variable_op)
+
+    engine = _bare_engine()
+    await engine.start_plan("new_installation", session_id="s1")
+    engine.stage_tool_call("variable_op", {"type": 1, "name": "Bad", "operation": "create"})
+    await engine.run_plan_step(None, "apply_plan", session_id="s1")
+    assert engine._plan_state["staged_ops"][0]["status"] == "failed: hub rejected it"
+
+    revise_result = await engine.run_plan_step(
+        None, "revise_plan", session_id="s1", id=1, args={"type": 1, "name": "Fixed", "operation": "create"}
+    )
+    assert revise_result["result"]["status"] == "proposed"
+    assert engine._plan_state["staged_ops"][0]["status"] == "proposed"
+
+    apply_result = await engine.run_plan_step(None, "apply_plan", session_id="s1")
+
+    assert calls == ["Bad", "Fixed"]
+    assert apply_result["result"]["summary"] == {"total": 1, "successful": 1, "failed": 0}
+    assert engine._plan_state["staged_ops"][0]["status"] == "applied"
+
+
+@pytest.mark.asyncio
 async def test_revise_plan_removes_an_item():
     engine = _bare_engine()
     await engine.start_plan("new_installation", session_id="s1")
@@ -277,6 +314,57 @@ async def test_apply_plan_skips_already_applied_items_on_a_second_call(monkeypat
     await engine.run_plan_step(None, "apply_plan", session_id="s1")
 
     assert calls == ["Once"]  # not re-applied the second time
+
+
+@pytest.mark.asyncio
+async def test_apply_plan_captures_the_real_group_address_from_a_partial_scene_failure(monkeypatch):
+    # Regression: multi_device_scene isn't atomic -- it can create a real
+    # group and add some members successfully while a sibling member fails
+    # (still an overall failure, since our own top-level "error" convention
+    # treats any per-member failure as not fully successful). Retrying the
+    # original staged args (which never had group_address, since the scene
+    # didn't exist yet when first staged) used to create ANOTHER new,
+    # duplicate group every time instead of finishing the one that already
+    # exists.
+    scene_calls = []
+
+    async def fake_multi_device_scene(nucore_interface, args):
+        scene_calls.append(dict(args))
+        return {
+            "group_address": "61070",
+            "group_name": "Guest Bathroom Crosslink",
+            "summary": {"total": 2, "successful": 1, "failed": 1},
+            "results": [
+                {"index": 0, "link_address": "KPL-D", "role": "controller", "successful": True},
+                {"index": 1, "link_address": "GB", "role": "controller", "successful": False, "error": "not available"},
+            ],
+            "error": "1 of 2 member(s) failed to be added: GB -- see 'results' for per-member detail",
+        }
+
+    monkeypatch.setattr(plan_engine_module.group_scene_ops, "multi_device_scene", fake_multi_device_scene)
+
+    engine = _bare_engine()
+    await engine.start_plan("new_installation", session_id="s1")
+    engine.stage_tool_call("multi_device_scene", {
+        "group_name": "Guest Bathroom Crosslink",
+        "devices": [
+            {"link_address": "KPL-D", "role": "controller"},
+            {"link_address": "GB", "role": "controller"},
+        ],
+    })
+
+    await engine.run_plan_step(None, "apply_plan", session_id="s1")
+    entry = engine._plan_state["staged_ops"][0]
+    assert entry["status"].startswith("failed:")
+    assert entry["args"]["group_address"] == "61070"
+
+    await engine.run_plan_step(
+        None, "revise_plan", session_id="s1", id=1,
+        args={**entry["args"], "devices": [{"link_address": "GB", "role": "responder"}]},
+    )
+    await engine.run_plan_step(None, "apply_plan", session_id="s1")
+
+    assert scene_calls[1]["group_address"] == "61070"
 
 
 @pytest.mark.asyncio

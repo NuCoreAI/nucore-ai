@@ -198,7 +198,12 @@ class IoXWrapper(NuCoreInterface):
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}"
             client = await self._get_client()
-            response = await client.delete(url, auth=(self.username, self.password), content=body, headers=headers)
+            # httpx's AsyncClient.delete() shorthand doesn't accept a body at
+            # all (unlike post/put/patch) -- request() is the only way to
+            # send DELETE with content, which /api/nodes/{id}/ requires.
+            response = await client.request(
+                "DELETE", url, auth=(self.username, self.password), content=body, headers=headers
+            )
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -2434,6 +2439,11 @@ class IoXWrapper(NuCoreInterface):
             await self.diagnostics.on_device_event(node, control, action, eventInfo)
         elif control == "_2": # variable write pending
             await self.diagnostics.update_links_table(node, control, action, eventInfo)
+        elif control == "_5": # system busy events -- see subscription_events.md
+            if action == "0": # DEVINTIX_SYSTEM_IS_NOT_BUSY_ACTION
+                self.system_busy = False
+            elif action == "1": # DEVINTIX_SYSTEM_IS_BUSY_ACTION
+                self.system_busy = True
 
     def _get_node_family(self, device_id) -> str | None:
         node = self._get_node(device_id)

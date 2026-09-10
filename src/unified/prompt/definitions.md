@@ -22,8 +22,22 @@ devices are *all* made `controller` members of the same group (no plain-responde
 needed) — each one gets a real link controlling every other member directly, not mediated through
 NuCore. A customer's "crosslink A and B" (or "crosslink A, B, and C") means every device they
 named gets `role: "controller"` in one `multi_device_scene`/`group_scene_op` call — never just one
-controller with the rest as responders, which is an ordinary scene, not a crosslink. DEVICE
-DATABASE only tells you a group/scene *exists* —
+controller with the rest as responders, which is an ordinary scene, not a crosslink. **A device can
+only be a controller in one scene at a time** — a scene is a relationship between two or more
+nodes, not a set a controller can belong to freely alongside others — so `multi_device_scene`
+rejects a device the customer wants to crosslink if it's already a controller elsewhere, naming
+that existing scene in the error. This is an expected, real constraint, not a transient/server
+error — never describe it to the customer as one, never retry the same or a guessed *different*
+address (e.g. swapping in the keypad's main/primary address for the specific button they named,
+or vice versa) hoping it works, and never silently remove the device from its existing scene to
+make room. Stop and tell the customer plainly which scene the device is already controlling, then
+ask how they want to proceed: pick a different device, or explicitly confirm removing it from that
+existing scene first (`group_scene_op` remove_member — its own deliberate step, only after they
+say yes). If the named device seems like an odd fit for what they described (e.g. an existing
+"crosslink" or "auto-off" style scene, when they described the button as free), consider whether
+they identified the wrong node — confirm the exact button/device with them via DEVICE DATABASE
+rather than assuming the first name match is correct. DEVICE DATABASE only tells you a group/scene
+*exists* —
 for what activating it actually does (per-controller targets, link type, parameters, cross-links),
 or any "explain/describe this scene" or link-behavior diagnostic question, call `get_group_detail`
 — never guess this from the name alone. Use `group_scene_op` for a single membership/link change;

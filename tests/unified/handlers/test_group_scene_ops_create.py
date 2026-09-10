@@ -112,6 +112,93 @@ async def test_waits_for_a_real_event_before_the_group_address_appears():
 
 
 @pytest.mark.asyncio
+async def test_a_device_already_a_controller_elsewhere_is_rejected_up_front():
+    # A device can only be a controller in ONE scene -- a scene is a
+    # relationship between two or more nodes, not a set a controller can
+    # join freely alongside others. Reject before touching the group/hub at
+    # all, rather than letting the hub's own add-member call fail later.
+    backend = _FakeBackend()
+
+    class _FakeExistingGroup:
+        name = "Some Other Scene"
+        address = "g_other"
+
+    backend.get_groups_for_device = lambda link_address, controller_only=False: [_FakeExistingGroup()]
+
+    result = await multi_device_scene(backend, {
+        "group_name": "Crosslink",
+        "devices": [
+            {"link_address": "KPL-D", "role": "controller"},
+            {"link_address": "D2", "role": "controller"},
+        ],
+    })
+
+    assert "error" in result
+    assert "KPL-D" in result["error"] and "Some Other Scene" in result["error"]
+    assert backend.add_node_calls == []
+    assert backend.add_member_calls == []
+
+
+@pytest.mark.asyncio
+async def test_partial_member_failure_surfaces_a_top_level_error():
+    # Regression: a scene where one of several requested members fails to be
+    # added (e.g. a just-paired device not yet reporting itself available as
+    # a controller/responder) used to come back with no top-level "error" at
+    # all -- only summary.failed/results[].successful, which neither
+    # _apply_plan's own "error" not in result check nor the model's
+    # mandatory-tool-use self-check inspect. That let a scene silently
+    # missing one of its intended members get reported all the way up as a
+    # full success.
+    backend = _FakeBackend()
+
+    async def flaky_roles(node_address):
+        if node_address == "D2":
+            return {"data": {"availableAsController": False, "availableAsResponder": False}}
+        return {"data": {"availableAsController": True, "availableAsResponder": True}}
+
+    backend.group_scene_get_node_roles = flaky_roles
+
+    result = await multi_device_scene(backend, {
+        "group_name": "Crosslink",
+        "devices": [
+            {"link_address": "D1", "role": "controller"},
+            {"link_address": "D2", "role": "controller"},
+        ],
+    })
+
+    assert result["summary"] == {"total": 2, "successful": 1, "failed": 1}
+    assert "error" in result
+    assert "D2" in result["error"]
+    assert backend.add_member_calls == [("g_Crosslink", "D1", True, None)]
+
+
+@pytest.mark.asyncio
+async def test_node_roles_with_an_explicit_null_data_does_not_crash():
+    # Regression: the hub's own /api/groups/nodeRoles/{address} can return
+    # {"data": null, ...} rather than omitting "data" entirely -- observed
+    # for a keypad button sub-node. payload.get("data", {}) only substitutes
+    # {} when the key is missing, not when it's present as None, so the very
+    # next data.get(...) call used to raise a bare
+    # AttributeError('NoneType' object has no attribute 'get') instead of
+    # the normal "not available as a controller/responder" per-member error.
+    backend = _FakeBackend()
+
+    async def null_data_roles(node_address):
+        return {"data": None}
+
+    backend.group_scene_get_node_roles = null_data_roles
+
+    result = await multi_device_scene(backend, {
+        "group_name": "Crosslink",
+        "devices": [{"link_address": "D1", "role": "controller"}],
+    })
+
+    assert "error" in result
+    assert "D1" in result["error"]
+    assert backend.add_member_calls == []
+
+
+@pytest.mark.asyncio
 async def test_errors_if_the_group_address_never_appears(monkeypatch):
     monkeypatch.setattr(group_scene_ops_module, "_GROUP_CREATE_WAIT_TIMEOUT_S", 0.05)
     backend = _FakeBackend()
