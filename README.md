@@ -254,6 +254,31 @@ logger = get_logger(__name__)
 logger.info("runtime started")
 ```
 
+### Prompt/Tool-Call Debug Log
+
+Separate from the logging above: every LLM turn (system prompt + every tool call/result) is
+written to a JSONL debug log by `PromptLogManager` (`src/utils/prompt_log.py`) -- on by default,
+one JSON object per line, one line per message content block rather than one line per whole
+message, so a single `grep '"tool_use_id":"..."'` finds a tool call and its result together
+instead of hand-pairing lines. The system prompt is written once per unique content (hash-deduped)
+rather than re-embedded on every agentic-loop iteration.
+
+```shell
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
+  --prompt-log-dir /var/log/nucore \
+  --query "Turn on the patio lights"
+```
+
+- Default location: `<cwd>/logs/nucore.prompt.jsonl` (override with `--prompt-log-dir` or runtime
+  config's `prompt_log_dir`).
+- Disable entirely with `--no-prompt-log` or runtime config's `prompt_log_enabled: false` --
+  `--prompt-log-dir` only ever controls *where*, never *whether*.
+- Size-managed: once the active file crosses 10MB, the oldest lines are peeled off into a dated
+  `nucore.prompt.<timestamp>.jsonl.gz` archive alongside it (never just discarded), and the
+  compress-and-rewrite runs off the event loop so it can't stall an in-flight request. Nothing is
+  deleted on process startup -- a restart just keeps appending to whatever active file exists.
+
 ### Full CLI Reference
 
 | Flag | Description |
@@ -279,6 +304,8 @@ logger.info("runtime started")
 | `--stream` / `--no-stream` | Force LLM token streaming on/off for every `nucore_runtime` profile, overriding each profile's own `stream` setting |
 | `--max-iterations` | Override the agentic loop's max tool-call iterations per query (defaults to runtime config's `max_iterations`, or 8) |
 | `--preferences-dir` | Directory for this installation's customer preferences (aliases/events); overrides runtime config's `preferences_dir` -- no default, preferences are unavailable without one |
+| `--prompt-log-dir` | Directory for the debug prompt/tool-call log (`nucore.prompt.jsonl`); overrides runtime config's `prompt_log_dir`. Defaults to `<cwd>/logs` |
+| `--no-prompt-log` | Disable the debug prompt/tool-call log entirely. On by default (see "Prompt/Tool-Call Debug Log" below) |
 | `--diagnostic-step` | Bypass the LLM/agentic loop and call one diagnostic tool directly against a live backend (e.g. `get_full_system_config`); prints the raw result and exits. Pairs with `--diagnostic-params`. Manual testing only |
 | `--diagnostic-params` | JSON object of keyword params for `--diagnostic-step` |
 

@@ -10,12 +10,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-# When True, the fully-assembled prompt is written to /tmp/nucore.prompt.md
-# after every call to build_messages — useful during development and debugging.
-prompt_debug_output = True
-prompt_debug_output = "/tmp/nucore.prompt.md"
-
-
 @dataclass(frozen=True)
 class LoggingConfig:
     level: str = "INFO"
@@ -29,19 +23,7 @@ class LoggingConfig:
 _DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _DEFAULT_TEXT_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 _ROOT_CONFIGURED = False
-    
-async def _write_debug_prompt(intent_name:str, messages: list[dict[str, str]]) -> None:
-    """Write the assembled prompt to a temp file for inspection (debug only)."""
-    if not prompt_debug_output:
-        return
-    global prompt_writer_started
-    with open(prompt_debug_output, "a") as f:
-        f.write(f"\n\n----\nIntent: {intent_name} \n\n")
-        for msg in messages:
-            content = msg.get('content')
-            if content is None:
-                content = msg.get('gemini_parts', msg)
-            f.write(f"[{msg.get('role', '?')}]\n{content}\n\n")
+
 
 def _to_bool(value: str | bool | None, default: bool) -> bool:
     if value is None:
@@ -221,12 +203,6 @@ def configure_logging(
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 
-    # delete the prompt file on startup to avoid confusion with stale data
-    if prompt_debug_output:
-        try:
-            os.remove(prompt_debug_output)
-        except FileNotFoundError:
-            pass
     _ROOT_CONFIGURED = True
     return config
 

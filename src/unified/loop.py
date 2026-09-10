@@ -14,8 +14,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from .adapters import LLMAdapter, ToolCall, ToolSpec
-from utils import get_logger
-from utils.logger import _write_debug_prompt
+from utils import get_logger, get_prompt_log_manager
 
 logger = get_logger(__name__)
 
@@ -76,10 +75,7 @@ class AgenticLoop:
         new_messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
 
         for iteration in range(self.max_iterations):
-            # Mirrors router.py/base.py's own _write_debug_prompt call before
-            # their LLM calls -- same /tmp/nucore.prompt.md file, so the
-            # unified path shows up there too instead of being silent.
-            await _write_debug_prompt(f"unified (round {iteration + 1})", messages)
+            await get_prompt_log_manager().write(f"unified (round {iteration + 1})", messages)
             raw_response = await self.llm_client.generate(
                 messages=messages,
                 config=llm_config,

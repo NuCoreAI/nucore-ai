@@ -20,7 +20,7 @@ from unified.runtime_config import _load_runtime_config
 from unified.dispatch_builder import build_default_dispatch_adapter
 from unified.stream_handler import StreamHandler
 from nucore import NuCoreInterface, PromptFormatTypes
-from utils import configure_logging, get_logger
+from utils import configure_logging, configure_prompt_logging, get_logger
 
 
 logger = get_logger(__name__)
@@ -252,6 +252,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "overrides runtime config's 'preferences_dir'. There is no default: preferences are "
             "unavailable for an installation that hasn't set either."
         ),
+    )
+    parser.add_argument(
+        "--prompt-log-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory to write the debug prompt/tool-call log into -- overrides runtime config's "
+            "'prompt_log_dir'. Defaults to '<cwd>/logs'."
+        ),
+    )
+    parser.add_argument(
+        "--no-prompt-log",
+        action="store_true",
+        help="Disable the debug prompt/tool-call log entirely. On by default.",
     )
     parser.add_argument(
         "--diagnostic-step",
@@ -738,6 +752,17 @@ def main(args:Any=None, poly=None) -> None:
         stream_handler=stream_handler,
         force_stream=args.stream,
     )
+
+    # --prompt-log-dir wins over runtime config's 'prompt_log_dir', same
+    # CLI-overrides-config precedence already used for --preferences-dir;
+    # unlike that one, this always has a real default ('<cwd>/logs') rather
+    # than being left unconfigured. --no-prompt-log/'prompt_log_enabled'
+    # is a separate on/off switch -- the directory never doubles as one.
+    prompt_log_dir = args.prompt_log_dir if args.prompt_log_dir is not None else runtime_config.get("prompt_log_dir")
+    if not prompt_log_dir:
+        prompt_log_dir = str(Path.cwd() / "logs")
+    prompt_log_enabled = not args.no_prompt_log and runtime_config.get("prompt_log_enabled", True)
+    configure_prompt_logging(prompt_log_dir, enabled=prompt_log_enabled)
 
     # Build the LLM dispatch adapter from the resolved config.
     llm_adapter = build_default_dispatch_adapter(runtime_config, env=secrets_env)
