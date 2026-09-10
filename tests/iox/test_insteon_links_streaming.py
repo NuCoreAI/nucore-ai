@@ -18,10 +18,10 @@ source of truth for both timing and success/failure.
 
 Covers:
 - ``_stream_links_into_file`` stopping early on a real ``end_of_table``
-  record, timing out with zero/partial records, exact-action isolation,
-  not giving up while events keep arriving within the gap window, and
-  trigger's own result/exceptions/pending-ness having zero effect on any of
-  that.
+  record or a "system no longer busy" (control "_5", action "0") event,
+  timing out with zero/partial records, exact-action isolation, not giving
+  up while events keep arriving within the gap window, and trigger's own
+  result/exceptions/pending-ness having zero effect on any of that.
 - The three fetch methods: registering before the triggering POST (catching
   even a synchronously-dispatched event), surviving a trigger that raises,
   and degrading gracefully (no exception, valid fenced output) when the
@@ -249,6 +249,64 @@ async def test_stream_does_not_give_up_while_events_keep_arriving_within_the_gap
     lines = [line for line in open(file_path).read().splitlines() if line]
     assert len(lines) == 4
     assert lines[-1].split(",")[1] == "end_of_table"
+
+
+@pytest.mark.asyncio
+async def test_stream_stops_early_on_system_no_longer_busy(tmp_path):
+    # Some scans (e.g. an empty table) never emit an end_of_table row at
+    # all -- the hub's own "system no longer busy" signal (control "_5",
+    # action "0") is a second, independent completion signal.
+    wrapper = FakeIoXWrapper()
+    diag = INSTEONDiagnostics(wrapper)
+    file_path = str(tmp_path / "device.txt")
+
+    async def trigger():
+        return None
+
+    async def fire_not_busy():
+        await asyncio.sleep(0.01)
+        wrapper._dispatch_event_listeners("_2", "2", "dev1", _responder_event())
+        await asyncio.sleep(0.01)
+        wrapper._dispatch_event_listeners("_5", "0", "dev1", {})
+
+    asyncio.create_task(fire_not_busy())
+
+    start = time.monotonic()
+    completed = await diag._stream_links_into_file("2", file_path, "device", trigger, max_gap_timeout=5)
+    elapsed = time.monotonic() - start
+
+    assert completed is True
+    assert elapsed < 1.0  # ended on the not-busy signal, not the 5s gap ceiling
+    lines = [line for line in open(file_path).read().splitlines() if line]
+    assert len(lines) == 1  # only the responder record -- "_5" isn't a links-table row
+    assert wrapper._event_listeners == {}
+
+
+@pytest.mark.asyncio
+async def test_stream_ignores_system_busy_action(tmp_path):
+    # Only action "0" (DEVINTIX_SYSTEM_IS_NOT_BUSY_ACTION) is a stop
+    # condition -- action "1" (system became busy) must not end the drain.
+    wrapper = FakeIoXWrapper()
+    diag = INSTEONDiagnostics(wrapper)
+    file_path = str(tmp_path / "device.txt")
+
+    async def trigger():
+        return None
+
+    async def fire_busy_then_end():
+        await asyncio.sleep(0.01)
+        wrapper._dispatch_event_listeners("_5", "1", "dev1", {})
+        await asyncio.sleep(0.01)
+        wrapper._dispatch_event_listeners("_2", "2", "dev1", _end_of_table_event())
+
+    asyncio.create_task(fire_busy_then_end())
+
+    completed = await diag._stream_links_into_file("2", file_path, "device", trigger, max_gap_timeout=1)
+
+    assert completed is True
+    lines = [line for line in open(file_path).read().splitlines() if line]
+    assert len(lines) == 1
+    assert lines[0].split(",")[1] == "end_of_table"
 
 
 @pytest.mark.asyncio

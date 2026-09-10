@@ -161,9 +161,10 @@ _PLM_LINKS_CACHE_MIN_SIZE_BYTES = 5000
 # streams slowly but steadily (e.g. one record every 20-30s on a large
 # table -- older devices can take ~30s just for the first record) is never
 # cut off just because the whole scan runs long. Only a genuine stall -- no
-# record at all for a full _LINKS_STREAM_MAX_GAP_TIMEOUT_S seconds, with no
-# end_of_table seen -- ends the drain.
-_LINKS_STREAM_MAX_GAP_TIMEOUT_S = 60.0
+# record at all for a full _LINKS_STREAM_MAX_GAP_TIMEOUT_S seconds, with
+# neither end_of_table nor a "system no longer busy" signal seen -- ends
+# the drain.
+_LINKS_STREAM_MAX_GAP_TIMEOUT_S = 35.0
 
 
 def _is_cache_fresh(
@@ -214,7 +215,12 @@ class _LinksTableWaiter(DeviceEventListener):
     never actually invoked (``.start()``/``.run()`` are never called). Only
     ever constructed inside ``INSTEONDiagnostics._stream_links_into_file`` --
     nothing else touches it directly, same as ``_RegisteredWaiter`` is
-    private to ``_event_wait.py``."""
+    private to ``_event_wait.py``.
+
+    ``_stream_links_into_file`` additionally registers this same instance a
+    second time, directly via ``register_listener`` (bypassing
+    ``__init__``), for ("_5", "0") -- the hub's "system no longer busy"
+    signal -- so both event streams land on the one shared ``_queue``."""
 
     def process(self):
         return None
@@ -564,19 +570,29 @@ class INSTEONDiagnostics:
         matters, whether it ever returns or not.
 
         Drains streamed records into *file_path* (via the existing
-        format_links_event/_write_to_file) until a record's role is
-        "end_of_table" (real completion signal -- see _decode_role's "00"
-        mapping), or *max_gap_timeout* elapses since the last record (or
-        since draining started, for the first) with nothing new arriving --
-        a rolling/inactivity timeout, not an overall ceiling, so a
-        slow-but-steady scan is never cut off just because it runs long.
+        format_links_event/_write_to_file) until one of three stop
+        conditions is hit:
+          1. a record's role is "end_of_table" (real completion signal --
+             see _decode_role's "00" mapping);
+          2. the hub reports it's no longer busy (control "_5", action
+             "0" -- DEVINTIX_SYSTEM_IS_NOT_BUSY_ACTION, see
+             IoXWrapper._on_device_event) -- some scans (e.g. an empty
+             table) never emit an end_of_table row at all, so this is
+             also treated as a real completion signal, not a timeout;
+          3. *max_gap_timeout* elapses since the last record (or since
+             draining started, for the first) with nothing new arriving --
+             a rolling/inactivity timeout, not an overall ceiling, so a
+             slow-but-steady scan is never cut off just because it runs
+             long.
         This is the sole timing mechanism; trigger is never awaited,
         raced, or otherwise consulted.
 
-        Returns whether a real end_of_table sentinel was seen. Always
-        unregisters the listener before returning, on every exit path.
+        Returns whether the drain ended via (1) or (2) above, as opposed to
+        giving up on the gap timeout. Always unregisters the listener
+        before returning, on every exit path.
         """
         waiter = _LinksTableWaiter(self._iox_wrapper, "_2", action)
+        self._iox_wrapper.register_listener(waiter._listener_id, "_5", "0", waiter)
         trigger_task = asyncio.ensure_future(trigger())
         # Fire-and-forget: consume whatever this eventually resolves to
         # (result or exception) so it never produces an "exception was
@@ -586,10 +602,16 @@ class INSTEONDiagnostics:
             completed = False
             while True:
                 try:
-                    _node, _control, _action, eventInfo = await asyncio.to_thread(
+                    _node, control, _action, eventInfo = await asyncio.to_thread(
                         waiter._queue.get, timeout=max_gap_timeout
                     )
                 except queue.Empty:
+                    break
+                if control == "_5":
+                    # "System no longer busy" -- the hub itself says the
+                    # scan is done. Not a links-table row, so nothing to
+                    # write to the file.
+                    completed = True
                     break
                 formatted_event = await self.format_links_event(eventInfo, type_)
                 await self._write_to_file(file_path, formatted_event + "\n", mode="a")
@@ -604,6 +626,7 @@ class INSTEONDiagnostics:
             return completed
         finally:
             self._iox_wrapper.unregister_listener(waiter._listener_id, "_2", action)
+            self._iox_wrapper.unregister_listener(waiter._listener_id, "_5", "0")
 
     async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:
