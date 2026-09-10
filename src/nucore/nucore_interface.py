@@ -371,8 +371,9 @@ class NuCoreInterface(ABC):
         :param operation: The operation to perform (e.g., "delete", "enable", "disable", "rename", "move").
         :param kwargs: Additional parameters for the operation:
           new_name for rename
-          new_parent_id for move
-        :return: response from the API or None if failure 
+          new_parent_id for move -- empty/omitted means move to the top
+            level/root, not an invalid call
+        :return: response from the API or None if failure
         """
         raise NotImplementedError("Subclasses must implement the node_ops method.")
 

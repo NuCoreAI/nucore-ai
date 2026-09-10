@@ -76,10 +76,10 @@ async def node_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> An
             return {"error": "rename requires new_name"}
         kwargs["new_name"] = new_name
     elif operation == "move":
-        new_parent_id = args.get("new_parent_id")
-        if not new_parent_id:
-            return {"error": "move requires new_parent_id"}
-        kwargs["new_parent_id"] = new_parent_id
+        # An empty/omitted new_parent_id is not an invalid call -- it means
+        # "move to the top level/root", not "no destination given". See
+        # IoxWrapper.node_ops's move branch for how that's actually sent.
+        kwargs["new_parent_id"] = args.get("new_parent_id") or ""
     elif operation not in _SIMPLE_OPS:
         return {"error": f"unknown node_op operation '{operation}'"}
 

@@ -1322,17 +1322,22 @@ class IoXWrapper(NuCoreInterface):
 
         if operation == "move":
             new_parent_id = kwargs.get("new_parent_id", None)
-            if not new_parent_id:
-                out = "New parent ID must be provided for move operation."
-                logger.error(out)
-                return out
-
-            parent_type, out = self._get_node_type(new_parent_id)
-            if not parent_type:
-                return out
+            if new_parent_id:
+                parent_type, out = self._get_node_type(new_parent_id)
+                if not parent_type:
+                    return out
+                body = { 'nodeType': type, 'parentAddress': new_parent_id, 'parentNodeType': parent_type }
+            else:
+                # Move to the top level/root: the hub's real "clear the
+                # parent" signal is an empty parentAddress with
+                # parentNodeType omitted entirely (not null -- absent) --
+                # confirmed against eisy-ui's own "Remove From Folder"
+                # action (NodeRemoveFromFolder.tsx / useNodesSetParent),
+                # which sends this exact shape. There is no node to resolve
+                # a type for, so _get_node_type is skipped.
+                body = { 'nodeType': type, 'parentAddress': '' }
 
             try:
-                body = { 'nodeType': type, 'parentAddress': new_parent_id, 'parentNodeType': parent_type } 
                 headers = {
                     "Content-Type": "application/json"
                 }
@@ -1341,12 +1346,12 @@ class IoXWrapper(NuCoreInterface):
                 out = f"Error performing move node operation: {ex}"
                 logger.error(out)
                 response = out
-            return response      
+            return response
 
     async def routine_ops(
         self,
         routine_id: int,
-        operation: Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"],
+        operation: Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup", "delete"],
     ):
         """Perform a lifecycle operation on an IoX routine.
 

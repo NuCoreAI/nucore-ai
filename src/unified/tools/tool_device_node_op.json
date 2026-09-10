@@ -19,7 +19,7 @@
       },
       "new_parent_id": {
         "type": ["string", "null"],
-        "description": "Real id of the new parent folder/group. Required for move."
+        "description": "Real id of the new parent folder/group, exactly as shown in DEVICE DATABASE. For move: omit (or pass an empty string) to move the node to the top level/root instead of into another folder/group -- never invent a placeholder id like 'none' or 'root' for this, there isn't one."
       }
     }
   }
