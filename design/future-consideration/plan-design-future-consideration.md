@@ -1,0 +1,426 @@
+# PLAN FEATURE (PROPOSAL, 2026-07-30)
+
+> **FOR FUTURE CONSIDERATION ONLY -- NOT IN USE.** A staged-tool-call implementation of this
+> proposal was built and then removed (2026-09-10): the staging/session/apply model it describes
+> was the direct or indirect source of most of the pairing/crosslink bugs debugged around that
+> time, and the agentic loop now executes tools directly with no Plan session, staging, or
+> `start_plan`/`run_plan_step` tools. This document is kept only as historical reference for a
+> possible future redesign -- nothing here reflects the current system, and none of it should be
+> assumed implemented or relied upon.
+
+## Purpose
+
+This document captures the design for a new **Plan** feature: an LLM-driven session, structurally
+parallel to the existing INSTEON/Z-Wave/Zigbee/Matter **Diagnostics** feature
+(`src/iox/diagnostics/`), but for *configuring* a system instead of investigating one. Where
+Diagnostics reads live/replica state and converges on a text conclusion, Plan proposes and then
+commits real changes to a customer's NuCore installation: devices, folders (rooms), scenes,
+automations, and variables.
+
+No implementation exists yet. This document exists to align on architecture before any code is
+written.
+
+## Relationship to Diagnostics
+
+Reuses the same session shape:
+
+- `start_plan(plan_type)` -- analogous to `start_diagnostics()`. Loads a shared mechanics preamble
+  (how staging/tiered-commit/review/revise works -- written once) concatenated with the chosen
+  `plan_<type>.md` file's own guidance and step catalog.
+- `run_plan_step(step, params)` -- analogous to `run_diagnostic_step`. Same "one step at a time,
+  never several in the same turn" rule Diagnostics already enforces, for the same reason: staged
+  operations have real ordering dependencies (a device must exist before a scene references it; a
+  scene must exist before an automation references it), and some steps drive real hub/PLM
+  hardware that can't run two operations at once.
+
+## Why Plan is architecturally different from Diagnostics: commit risk
+
+Diagnostics is read-only -- every step is a safe, repeatable query, and the only thing that
+"changes" is a text conclusion. Plan's steps create and modify live configuration, which is a
+different risk profile: harder to reverse, and directly touching a system the customer already
+depends on for their home.
+
+**Decision: hybrid commit tiering.**
+- Low-risk, easily-reversible operations (creating a folder, adding an already-paired device to a
+  room) execute immediately when the step is called, the same way Diagnostics steps run
+  immediately.
+- Higher-risk or bulk operations (creating scenes, creating automations, anything that could
+  touch an existing working configuration) are **staged** first: the LLM builds a proposed
+  change list via `propose_*` steps, renders it back to the customer in plain language via
+  `review_plan`, revises it on feedback via `revise_plan`, and only commits via an explicit
+  `apply_plan` step.
+
+**Decision: separate prompt/step-catalog file per plan type**, not one shared `plan.md`. Unlike
+Diagnostics' four subsystems (which all share one reasoning model -- link tables, controller/
+responder roles), Plan's scenarios share almost no domain reasoning with each other (irrigation
+zones vs. holiday dates vs. moving devices), so one shared file would just staple unrelated topics
+together. The *mechanics* (staging/tiering/review/revise) are still written exactly once, in a
+shared preamble every `plan_<type>.md` is concatenated with.
+
+## Plan type catalog
+
+From the original ask, brainstormed additions, and the three requested this round:
+
+| Plan type | One-line description | Needs device pairing (via the standalone `pair_device` tool)? | Needs plugin/feature check? |
+|---|---|---|---|
+| New installation | Customer describes devices, locations, desired scenes/automations from scratch (whether an existing house with no prior NuCore config, or a newly-built one); Plan adds devices, creates folders/scenes/automations. | Yes | Maybe (e.g. voice/media plugins) |
+| Room addition / expansion | Onboard new devices into an *already-configured* house without disturbing existing scenes/automations. | Yes | Maybe |
+| Vacation | Creates a "lived-in" look while the customer is away (randomized lighting, staggered schedules). | No | No |
+| Holidays | Finds localized holiday dates and creates routines for them. | No | Maybe (calendar/date lookup) |
+| Remodel | Devices/scenes/automations change or move as rooms are physically reconfigured. | Sometimes (new devices) | No |
+| Move | Migrate a configuration from one house to another. | Yes | Maybe |
+| Irrigation | Zone-based watering schedules, seasonal adjustment. | No | No |
+| Rental/Airbnb turnover | Reset scenes/automations to a recurring "guest-ready" default between guests. | No | No |
+| Aging-in-place / accessibility | Simplified scenes, motion-activated lighting, fewer manual steps. | No | No |
+| Storm/outage prep | Generator-transfer awareness, safe-mode fallback scenes. | No | Maybe (generator/monitoring plugin) |
+| Party/event mode | Temporary, auto-expiring scene set for a one-off gathering. | No | No |
+| Downsizing/decommission | Cleanly retire a wing or whole house, archiving devices/scenes without orphaning automation references. | No | No |
+| Nursery/new baby | Night-light routines, quiet/do-not-disturb windows. | No | No |
+| Animal protection | Automations/scenes that respond to pet/animal presence or safety needs (e.g. temperature-triggered alerts, pet-safe lighting). | No | Maybe (sensor/camera plugin) |
+| Safety and security | Motion/door/window-sensor scenes, alerting, camera-integration awareness. | No | Likely (e.g. Camect) |
+| Serenity | Calming music/video with complementary lighting, on demand or scheduled. | No | Likely (e.g. YouTube for media) |
+
+## AI-capable plugin contract (`get_tool(s)` / `get_prompt()` / `handle_llm_result()`)
+
+Any plugin that wants to be usable by an LLM session -- a third-party marketplace plugin (Camect,
+a hebcal-style calendar source, YouTube) or Plan itself (see "Should Plan types be plugins?" below)
+-- implements the same three standard commands, modeled the same way a device already exposes
+accepts/sends commands:
+
+- **`get_tool(s)`** -- returns the tool.json-shaped schema(s) for whatever this plugin can do
+  (name, params, description). A plugin can expose more than one capability; each capability's
+  name is uniquified with the plugin's installation id (e.g. `{plugin_installation_id}_
+  get_holidays`), which is what makes name collisions across multiple installed instances of the
+  same plugin type immaterial -- no central naming registry needed.
+- **`get_prompt()`** -- returns the full natural-language usage guidance for this plugin's
+  capabilities, lazily loaded only once the plugin becomes relevant to the conversation (never
+  preloaded for every installed plugin on every turn -- same rationale as `get_device_detail`'s
+  lazy full-fidelity fetch, applied to plugins instead of devices).
+- **`handle_llm_result(tool_result)`** -- the actual execution hook. Whatever the LLM produced
+  when "calling" one of this plugin's declared tools (name + arguments) is forwarded here
+  verbatim; the plugin's own implementation does the real work and returns whatever should go back
+  to the LLM as that turn's tool result.
+
+**No changes to the model-facing tool surface or to `AgenticLoop`/`loop.py` are needed.** This
+reuses exactly the pattern Diagnostics already established with `run_diagnostic_step`: one fixed
+dispatcher tool, a text-only catalog of what's callable (here, assembled from installed plugins'
+`get_tool(s)`/`get_prompt()` output instead of a static prompt file), and application-level routing
+(the equivalent of `_parse_diagnostic_config`/`getattr(self, f"_{step}")`) rather than a
+dynamically-changing tool list. The dispatcher's only job is a naming-convention check: if a call's
+tool name matches an installed plugin's id prefix, strip it and forward the whole `{name, args}`
+payload to that plugin device's `handle_llm_result` command via the same generic device-command
+path (`send_command`) every other device command already uses -- zero plugin-specific code in
+core, for any plugin.
+
+## Should Plan types be plugins?
+
+**Decision: yes for the mechanism, no for the trust model.**
+
+Plan types already share no more domain reasoning with each other than arbitrary third-party
+plugins do (that's exactly why "separate file per plan type" was decided above), so reusing the
+`get_tool(s)`/`get_prompt()`/`handle_llm_result` contract for plan types avoids building two
+parallel lazy-loading/dispatch systems -- one for `plan_<type>.md` files, one for plugins. Under
+this contract, a plan type's `get_prompt()` returns what would otherwise have been its
+`plan_<type>.md` content; its `get_tool(s)` declares its `propose_*`/gather/commit steps; its
+`handle_llm_result` executes them.
+
+But a plan type's `handle_llm_result` needs privileged write access to core NuCore APIs --
+`add_node`, `multi_device_scene`, `create_or_update_routine` -- that an arbitrary third-party
+marketplace plugin (a buggy or compromised "YouTube" plugin, say) must never get just by
+implementing the same three commands. So plan types are a **first-party, privileged tier** using
+the identical discovery/loading contract, while ordinary third-party plugins stay sandboxed to
+whatever narrow API surface they themselves declare and call back through. Concretely: plan
+types' `handle_llm_result` implementations live in trusted core code with direct access to the
+write APIs mapped below, whereas a third-party plugin's `handle_llm_result` runs in its own
+process/sandbox and can only reach whatever its own backend chooses to expose.
+
+## Architecture
+
+### Where the backend lives
+
+Plan's backend lives in `src/unified/planning/`, not `src/iox/`. Diagnostics lives under `src/iox/`
+because it's fundamentally about hub/protocol state (link tables, PLM connectivity). Plan's core
+operations -- folders, scenes, automations, variables -- are already `NuCoreInterface`-level and
+protocol-agnostic (see mapping below); the one protocol-specific piece is device pairing, which
+gets its own small per-protocol dispatch module underneath, the same way `insteon_diag.py` sits
+under `iox_diagnostics.py` today. `src/unified/planning/` hosts both the shared staging/commit
+engine (`propose_*`/`review_plan`/`apply_plan`) and each plan type's privileged `get_tool(s)`/
+`get_prompt()`/`handle_llm_result()` implementation from the plugin contract above; third-party
+plugins implement the same three-command contract entirely on their own, outside this codebase.
+
+> **Superseded (2026-09-07).** "Common step catalog" and "Staged-plan data model" below describe
+> the original `propose_folder`/`propose_scene`/`propose_automation`/`propose_variable` step design
+> and the `{op, params, status}` staged-item shape. That's no longer how staging works -- see
+> "Update (2026-09-07): staging via direct tool-call interception, not propose_* steps" further
+> down for what actually shipped.
+
+### Common step catalog (implemented once, shared by every plan type)
+
+- **Gather**: `list_devices`, `list_folders`, `list_scenes`, `list_automations`, `list_variables`,
+  plus the plugin/feature-capability steps described below.
+- **Staging**: `propose_folder`, `propose_scene`, `propose_automation`, `propose_variable`,
+  `review_plan` (renders the whole staged plan back in plain language), `revise_plan` (edit or
+  remove a staged item).
+- **Commit** (hybrid tiers): immediate steps (`create_folder`, plus the standalone `pair_device`
+  tool -- not a Plan step at all any more, see "Device pairing" below) vs. `apply_plan` (executes
+  every staged item, tier by tier, reporting per-item success/failure -- not all-or-nothing, since
+  the underlying calls have real server-side validation that can fail per item, e.g.
+  `group_scene_ops`' controller/responder role checks).
+- **Terminal**: `conclude`, `stop` -- same semantics as Diagnostics.
+
+### Staged-plan data model
+
+A staged plan is a list of `{op, params, status}` entries held in session state:
+`status` starts `"proposed"`, moves to `"applied"` or `"failed: <reason>"` once `apply_plan` runs.
+`review_plan` renders this list in plain language for the customer; `revise_plan` mutates entries
+in place (edit params, remove an entry) before commit. This mirrors the `_compare_links_files`-style
+principle from Diagnostics of doing structural comparison/bookkeeping in Python, not asking the LLM
+to track state across turns by re-reading its own prior messages.
+
+### Mapping Plan operations to existing capabilities (grounded in code survey)
+
+Most of Plan's execution layer already exists and just needs orchestrating:
+
+- **Folders**: `NuCoreInterface.add_node(node_name, type="folder")` --
+  `src/nucore/nucore_interface.py:342`, impl `src/iox/iox_wrapper.py:1135` (`POST /api/nodes`).
+- **Rename/move/enable/disable/delete any node**: `node_ops(node_id, operation)` --
+  `nucore_interface.py:352`, impl `iox_wrapper.py:1174`. Already exposed via
+  `tool_node_op.json`/`src/unified/handlers/node_ops.py:37`.
+- **Scenes/groups**: `multi_device_scene` (`src/unified/handlers/group_scene_ops.py:91`) already
+  creates a new group *and* populates membership with controller/responder role prechecks in one
+  call -- this is the step Plan's `apply_plan` should call for `propose_scene` entries.
+  `group_scene_add_member`/`remove_member`/`update_link` (`group_scene_ops.py:44`) cover adjusting
+  an *existing* scene (relevant to Remodel, Rental turnover).
+- **Automations**: `create_or_update_routine` (`src/unified/handlers/routine_automation.py:431`),
+  which already compiles a restricted-Python DSL via `routine_compiler.py` into the hub's
+  trigger/condition/action schema, with name-to-id resolution and hub-error surfacing. Plan's
+  automation-authoring steps (Holidays, Irrigation, Serenity, Security, Animal protection all need
+  these) should reuse this DSL as-is.
+- **Variables**: `variable_op` (`src/unified/handlers/variable_ops.py:80`).
+
+Per `design/design.md`'s own "What stays semi-isolated" note about `routine_automation`'s DSL: its
+~300-line grammar/spec should stay attached to that step's own tool description, not folded into
+the shared Plan mechanics preamble -- same isolation rationale applies here unchanged.
+
+### Plugin/feature-capability check (for Serenity, Security, Animal protection, etc.)
+
+Grounded in a direct code survey of `src/unified/handlers/plugin_management.py`:
+
+- **Already exists and is safe to call today**: `list_installed_plugins()` (line 56),
+  `list_store_plugins()` (line 35), `list_purchased_plugins()` (line 77, which joins purchased
+  license rows against the store list by `nsid` to resolve names) -- all read-only, all already
+  exposed as unified tools.
+- **Gap**: none of these take a name/id filter (`input_schema` is `{}` for both list tools), so
+  "does plugin X exist" today means fetching the full list and matching client-side. `start`/
+  `stop`/`restart` are now implemented and exposed as their own `plugin_ops` tool (registered in
+  `TOOL_HANDLERS`, `src/unified/dispatch.py`), the only way to control a plugin's service --
+  `services_ops`/diagnostics is scoped to core services only. `install`/`uninstall`/`status`/
+  `details` remain unimplemented on `NuCoreInterface.plugin_ops(plugin_id, operation)`, and
+  `configure_plugin()` is likewise still an unimplemented stub -- neither is registered in
+  `TOOL_HANDLERS`, so no LLM tool can install, configure, or fetch a raw status blob for a plugin
+  today (`list_installed_plugins`' `state` field already covers ad hoc status checks). (A previous
+  plugin-management bug noted in `design/design.md` -- wrong tool-name check, missing manager
+  method -- is now moot: that whole handler was deleted in commit `037a700` along with the retired
+  `intent_handler_directory` tree; the current read-only replacement never reintroduced
+  install/configure.)
+
+**Design for Plan**: no new search/filter tool. Matching a customer's desired capability (e.g.
+"calming music," "camera-based detection") against a plugin's name/description is a natural-
+language judgment call, not a string match -- there's no canonical capability vocabulary to search
+by, and a customer's phrasing will rarely equal a plugin's literal name. Building a "search" step
+would either find nothing (no query term matches) or have to be a fuzzy matcher over free text,
+which is exactly the unreliable resolution pattern the rest of this codebase already rejects for
+command/property-name resolution (see `design/design.md`'s "exact match ... never a fuzzy/
+similarity fallback" rule). Instead, Plan's step catalog feeds the LLM the existing tools' full
+results and lets it reason over them directly, in this fixed order:
+
+1. Read `list_installed_plugins` (`plugin_management.py:56`). If a plugin's name/description
+   plausibly already covers the needed capability, it's available -- nothing to stage.
+2. If nothing in installed matches, read `list_purchased_plugins` (`plugin_management.py:77`). If
+   a match is found there, the customer already holds a license but hasn't installed it -- stage
+   an `install_plugin(nsid, name)` step. Unlike `pair_device`'s non-insteon protocols, which are
+   stubs awaiting real eisy-ui routes, this isn't a temporary stand-in: `install_plugin`
+   deliberately never installs anything itself -- for
+   security reasons, installation always happens on the web, so it just returns an `install_url`
+   for the customer to finish there.
+3. If still no match, read `list_store_plugins` (`plugin_management.py:35`, the full
+   marketplace). A match here means the customer doesn't own it at all -- there is no purchase API
+   anywhere in the surveyed code, so this case can only ever be a customer-facing recommendation
+   ("you'd need to purchase X from the marketplace"), never a stub call, unlike case 2. This is now
+   concretely implemented by `buy_plugin`, which returns a `purchase_url` for the customer to
+   complete the purchase on the web rather than simulating one.
+
+Every plan type that leans on a plugin (Serenity, Security, Animal protection) should follow this
+three-step order and land on the narrowest applicable outcome -- already available, install-stub,
+or recommend-purchase -- rather than assuming it can just make the capability appear.
+
+### Device pairing (implemented, insteon-only, as a standalone global tool)
+
+Only New installation, Room addition, and Move need this. Grounded in survey, updated as the
+implementation actually landed:
+
+- `IoXSOAPAction` (`src/iox/iox_definitions.py`) defines `SOAP_TYPE_ADD_NODE`,
+  `SOAP_TYPE_DISCOVER_NODES`, `SOAP_TYPE_CANCEL_NODES_DISCOVERY`, and
+  `SOAP_TYPE_SET_DEVICE_LINKING_MODE`. The first three now go through eisy-ui's REST API instead of
+  raw SOAP (see next bullet); `SET_DEVICE_LINKING_MODE` remains unused anywhere in this codebase --
+  its semantics were never documented anywhere found (not in `family.ts`, not in
+  `iox_definitions.py`), so it was deliberately left out of `pair_device` rather than exposed as an
+  unverifiable opaque pass-through.
+- `INSTEONDiagnostics` (`src/iox/diagnostics/insteon_diag.py`) and `IoXWrapper`
+  (`src/iox/iox_wrapper.py`) call eisy-ui's REST routes
+  (`server/routes/api/authenticated/family.ts`) via `IoXWrapper`'s existing `get`/`post` helpers
+  (same host, same Basic Auth as the hub) rather than building SOAP envelopes directly or using a
+  new HTTP client. `IoXWrapper._family_api_path(suffix, family=DEVICE_FAMILY_INSTEON,
+  instance=None)` builds `/api/family/{family}/{instance}/...` paths (`instance` defaults to
+  `IoXWrapper._EISYUI_INSTANCE = "1"`, since nucore-ai only ever targets one hub instance; `family`
+  is parameterized so a future protocol can pass its own family constant, e.g.
+  `DEVICE_FAMILY_LEGACY_Z_WAVE`).
+- **`pair_device` is a standalone, always-available global tool** (`src/unified/handlers/
+  pair_device.py`, registered in `dispatch.py`'s `TOOL_HANDLERS`) -- **not** a Plan-session step.
+  It's in `dispatch.py`'s `_PLAN_ALWAYS_IMMEDIATE_TOOLS` (see "Update (2026-09-07)" below) so it
+  stays callable mid-session, since `plan_new_installation.md`'s workflow pairs devices as it goes;
+  it's equally callable outside any Plan session.
+- **Shape: `protocol` + `action`, not just an address.** Two structurally different pairing
+  patterns exist, and which one applies depends on the protocol, not just its implementation
+  status:
+  - `add_by_address` -- the customer already knows/can read the device's own address. Only
+    `insteon` and `x10` ever support this (`IoXWrapper.add_device`, → eisy-ui's `add-node`).
+  - `start_inclusion`/`finish_inclusion` -- no address exists until the device is physically
+    activated during a pairing window; `start_inclusion` puts the controller in pairing mode,
+    `finish_inclusion` commits everything included during it (`IoXWrapper.discover_devices`/
+    `finish_device_discovery`, → eisy-ui's `start-linking`/`stop-linking`). The *only* shape
+    `zwave`/`zigbee`/`matter` will ever use -- their ecosystems call this "inclusion," which is why
+    the action names use that term rather than Insteon's own "linking" vocabulary.
+    **(Superseded -- see "Update (2026-09-09)" below: this two-turn shape was later collapsed into
+    a single blocking `include` call, for every protocol.)**
+  - A `{protocol: {valid actions}}` table (`pair_device.py`'s `_PROTOCOL_ACTIONS`) rejects an
+    invalid protocol/action pairing (e.g. `zwave` + `add_by_address`) as a structural error,
+    independent of whether that protocol is implemented yet -- distinct from a valid-but-unbacked
+    combination (e.g. `zwave` + `start_inclusion`), which gets the softer "not yet supported, guide
+    the customer manually" response.
+- **Only `insteon` is backed by a real call today** (`_IMPLEMENTED_PROTOCOLS = {"insteon"}`).
+  `x10` shares `insteon`'s exact `add_device` mechanism (per `nucore_interface.py`'s own design
+  comment) but is deliberately left in the not-yet-supported bucket this round too, for scope
+  simplicity -- flipping it on later is a one-line change. Z-Wave Legacy's `include`/`exclude`/
+  `stop`/`learn-mode` routes already exist in `family.ts` but are deferred; ZMatter Z-Wave/Zigbee/
+  Matter have no inclusion-start routes found anywhere yet. Either way, a device only becomes
+  eligible for a staged scene/automation once the standing device information confirms it exists
+  for real -- Plan never stages configuration for a device that hasn't actually been paired yet.
+  **(Superseded -- see "Update (2026-09-09)" below: all four protocols are implemented now.)**
+
+## Open risks / tradeoffs
+
+- **The plugin contract itself doesn't exist in code yet.** `get_tool(s)`/`get_prompt()`/
+  `handle_llm_result()` and the naming-convention dispatcher (prefix-match on tool name, forward to
+  `send_command(plugin_device_id, ...)`) are a prerequisite piece of infrastructure, not something
+  any single plan type can build incidentally. Every plugin-dependent plan type (Serenity,
+  Security, Animal protection, and Holidays if backed by a calendar plugin) -- and Plan itself, if
+  plan types are implemented as the privileged plugin tier described above -- depends on this
+  landing first.
+- **`apply_plan` partial-failure UX** is undecided: default to itemized per-op status (matches
+  `_compare_links_files`' precedent of precise, structured reporting over a vague pass/fail), but
+  this needs real testing against how verbose customers actually want that readback to be.
+- **New installation / Move remain only partially automatable** until non-INSTEON pairing exists --
+  this should be surfaced honestly to the customer/support, not glossed over by the LLM.
+- **No plugin install path** means Plan can detect and recommend but never execute a plugin
+  install; every plan type that leans on a plugin (Serenity, Security, Animal protection) must
+  degrade gracefully to "here's what you'd need to add" rather than assuming it can just do it.
+- ~~**Testing story**: ... recommend `apply_plan` support a `dry_run` flag...~~ **Moot as of
+  2026-09-07** -- see "Update" below. Calling a real tool (`create_or_update_routine`, `variable_op`,
+  etc.) during an active plan session already *is* a safe non-committing dry run: it stages instead
+  of executing. The direct-CLI-testing pattern Diagnostics established extends to Plan for free,
+  without a separate flag.
+- **Scope not yet decided**: whether all 17 plan types ship at once or in some order is deferred --
+  per this round's direction, all get designed and stubbed now; sequencing which ones get built out
+  first is a separate decision.
+
+## Update (2026-09-07): staging via direct tool-call interception, not propose_* steps
+
+`new_installation` shipped first with the `propose_folder`/`propose_scene`/`propose_automation`/
+`propose_variable` step design described above -- thin wrapper steps that staged raw params
+separately from the real `create_or_update_routine`/`variable_op`/`multi_device_scene` tools that
+`apply_plan` eventually called. That design was reworked once those real tools were already
+always-available, always-registered top-level tools in their own right (`dispatch.py`'s
+`TOOL_HANDLERS`): the wrapper layer was pure duplication (a second, thinner schema for the same
+DSL/params `create_or_update_routine` etc. already fully documented), gave zero validation until
+`apply_plan`, and its blanket "only start_plan/run_plan_step/pair_device allowed" lock blocked even
+read-only lookups (`get_device_detail`, `get_routine_detail`) that those tools' own descriptions
+require calling first.
+
+What shipped instead: `dispatch.execute_tool` classifies every tool call by what it actually does
+while a plan is open, rather than gating on an explicit `propose_*` indirection --
+
+- **`_PLAN_STAGEABLE_TOOLS`** (`create_or_update_routine`, `variable_op`, `multi_device_scene`,
+  `group_scene_op`, `routine_status_op`): calling one of these directly, with its normal arguments,
+  auto-stages it (`unified.handlers.plan.stage_tool_call` -> `PlanEngine.stage_tool_call`) instead
+  of executing. The model calls the *same* tool it already knows from normal chat -- no separate
+  `propose_*` schema to keep in sync.
+- **`_PLAN_ALWAYS_IMMEDIATE_TOOLS`** (`pair_device`, `node_op`, `send_command`, `start_plan`,
+  `run_plan_step`): never staged, never blocked, even mid-plan.
+- **`_PLAN_READONLY_PASSTHROUGH_TOOLS`** (`get_property`, `get_device_detail`, `get_routine_detail`,
+  `get_group_detail`, `list_variables`, `list_preferences`, the plugin list/capability reads):
+  always allowed live -- this is what closes the read-tool-blocked-mid-plan gap above.
+- Anything in none of the three sets stays blocked during an active plan, same blanket-refusal
+  behavior as before (default-deny, so a new tool added to `TOOL_HANDLERS` doesn't silently become
+  staged/passthrough without a deliberate classification).
+
+The staged-item shape is now generic: `{"id": int, "tool": str, "args": dict, "status": str}`
+(`tool`/`args` being literally the intercepted call's own name and arguments) instead of the
+`{op, params, status}` shape above. `apply_plan` replays each staged item by looking up its real
+handler and calling it with its stored `args` -- one small dispatch table, no per-op-type
+branching. `review_plan` renders a short human-readable summary per item (reusing fields the tool
+already required, e.g. `create_or_update_routine`'s own `comment`) rather than raw params.
+`list_devices`/`list_folders`/`list_scenes`/`list_automations`/`list_variables` and
+`propose_folder`/`create_folder` are gone as *steps* entirely -- reads were already redundant with
+the standing device/routine information (see "What you don't need to ask for" in
+`plan_common.md`), and `node_op`/`list_variables` are just called directly now, immediate or
+read-only respectively. What's left in `run_plan_step`'s catalog: `review_plan`, `revise_plan`,
+`apply_plan`, `conclude`, `stop`.
+
+This only landed for `new_installation` -- the mechanism (`dispatch.py`'s three-way classification,
+`PlanEngine.stage_tool_call`/`_apply_plan`) is generic and plan-type-agnostic, so every other stub
+plan type in the catalog above inherits it for free whenever it's implemented; their prompt files
+just need writing, not a new staging mechanism.
+
+## Update (2026-09-09): `pair_device` collapsed to `add_by_address`/`include`/`exclude`, all protocols implemented
+
+The `start_inclusion`/`finish_inclusion` shape described above (and its `start_exclusion`/
+`finish_exclusion` mirror added when Z-Wave/Zigbee/Matter were implemented) is gone. A real bug
+report -- removing a Z-Wave device, the assistant lost track of which device it was mid-removal,
+because conversation history only stores flat text, not structured tool-call arguments -- led to
+collapsing the two-turn "start, customer replies, finish" shape entirely, for every protocol
+including Insteon. This was viable because the turn loop already streams the model's own text live
+to the customer *before* a blocking tool call executes, so a single call that says instructions
+then blocks behaves exactly like `add_by_address` always did.
+
+`pair_device` now has exactly three actions:
+- `add_by_address` -- unchanged (Insteon/x10 only).
+- `include` -- opens pairing mode, then blocks (event-driven, via `_event_wait.py`'s
+  `wait_for_event`/`wait_for_node_event`) until that protocol's own real "pairing session ended"
+  signal fires: Insteon's own on-screen "Finish" dialog (`_20`/`"2"`), or Z-Wave/Zigbee's
+  hub-driven auto-transition to inactive (`_25`/`_27`, `"2.1"`) -- confirmed against the real
+  eisy-ui frontend source, not assumed from backend docs alone. `finish_device_discovery` is never
+  called by any of these flows (confirmed not part of the real success path for any protocol).
+  Matter `include` is out of scope -- real Matter commissioning needs a pairing code/QR code this
+  tool has no field for, so it just redirects the customer to the eisy-ui interface.
+- `exclude` -- protocol-specific, not one shape: Z-Wave opens removal mode and waits directly for
+  the node-removed event (`_3`/`"NR"`), reading the removed address straight off that event
+  (no polling/diffing) -- `device_address` is therefore *optional* for Z-Wave, since the customer
+  identifies the device physically (pressing its own button) rather than naming it in chat.
+  Zigbee/Matter have no activation window at all (confirmed no `node/exclude` route exists for
+  either) -- one direct per-address `remove_device()` call is the whole operation, so
+  `device_address` is required for those two. Zigbee can additionally fail silently at the network
+  layer (the hub disables the node locally instead of removing it, firing `_3`/`"EN"` with
+  `eventInfo == {"enabled": "false"}` rather than `_3`/`"NR"`) -- detected and surfaced as an error
+  telling the customer to remove it manually via eisy-ui, instead of reporting a false "success".
+
+All four protocols (`insteon`, `zwave`, `zigbee`, `matter`) are implemented now, not just Insteon
+-- `_IMPLEMENTED_PROTOCOLS` covers all of them; only `x10` remains in the not-yet-supported bucket.
+See `src/unified/handlers/pair_device.py`'s module docstring for the full per-protocol event
+mapping and the eisy-ui research behind it.
+
+## Status
+
+`new_installation` is implemented (device pairing, room folders, and staged scenes/automations/
+variables via direct tool-call interception -- see "Update (2026-09-07)" above); every other plan
+type in the catalog above remains design-only, stubbed in `_PLAN_TYPES` but with no prompt file.

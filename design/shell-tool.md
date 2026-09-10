@@ -1,6 +1,8 @@
-> **For future consideration.** This is a design proposal, not an approved or scheduled
-> change. Nothing here has been implemented. Keep this note until a decision is made to build
-> it, shelve it permanently, or revisit its risk trade-offs.
+> **Implemented.** This started as a design proposal; `run_shell_command` now exists for real --
+> see `src/unified/handlers/shell.py` (handler), `dispatch.py`'s `TOOL_HANDLERS` (wiring), and
+> `tests/unified/handlers/test_shell.py` (tests). The design/risk reasoning below is kept as the
+> record of the decisions actually shipped, not a pending proposal -- treat any place it still
+> reads as forward-looking ("would", "this design assumes") as describing what was built.
 
 # Add a built-in shell-execution tool
 
