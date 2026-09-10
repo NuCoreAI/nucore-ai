@@ -598,7 +598,3 @@ class IoXDiagnostics:
             return "\n".join(lines) + "\n" + insteon_report
         finally:
             self._end_plm_op()
-
-    async def update_links_table(self, node, control, action, eventInfo):
-        if self._insteon_diag is not None:
-            await self._insteon_diag.update_links_table(node, control, action, eventInfo)

@@ -70,13 +70,16 @@
 # the other device/group acts as controller/master for that relationship.
 
 
+import asyncio
 from collections import Counter
 import os
+import queue
 import re
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import Any, Awaitable, Callable, TYPE_CHECKING, Literal
 from urllib.parse import quote
 
+from nucore import DeviceEventListener
 
 from ..iox_wrapper import IoXWrapper
 from utils import get_logger
@@ -151,6 +154,17 @@ _PLM_LINKS_CACHE_MAX_AGE_S = 3600  # 1 hour
 # otherwise corrupted partial write as a valid, usable cache.
 _PLM_LINKS_CACHE_MIN_SIZE_BYTES = 5000
 
+# See _stream_links_into_file -- max time to wait for the NEXT streamed
+# link-table record (or the first one, right after the triggering POST)
+# before giving up. This is a rolling/inactivity timeout, not a fixed
+# overall ceiling: it resets on every record received, so a device that
+# streams slowly but steadily (e.g. one record every 20-30s on a large
+# table -- older devices can take ~30s just for the first record) is never
+# cut off just because the whole scan runs long. Only a genuine stall -- no
+# record at all for a full _LINKS_STREAM_MAX_GAP_TIMEOUT_S seconds, with no
+# end_of_table seen -- ends the drain.
+_LINKS_STREAM_MAX_GAP_TIMEOUT_S = 60.0
+
 
 def _is_cache_fresh(
     file_path: str,
@@ -192,6 +206,20 @@ def _parse_links_csv(text: str) -> list[dict[str, str]]:
     return rows
 
 
+class _LinksTableWaiter(DeviceEventListener):
+    """Passive notify() target, scoped to one links-streaming operation's
+    expected action ("1"=plm, "2"=device, "3"=iox). Mirrors
+    ``src/unified/handlers/_event_wait.py``'s ``_RegisteredWaiter``: never
+    started as a Thread -- ``process()`` is required by the base class but
+    never actually invoked (``.start()``/``.run()`` are never called). Only
+    ever constructed inside ``INSTEONDiagnostics._stream_links_into_file`` --
+    nothing else touches it directly, same as ``_RegisteredWaiter`` is
+    private to ``_event_wait.py``."""
+
+    def process(self):
+        return None
+
+
 class INSTEONDiagnostics:
     """Class for Insteon diagnostics and link management."""
 
@@ -224,16 +252,26 @@ class INSTEONDiagnostics:
         else:
             self._is_running = False
             return "PLM not connected. Cannot retrieve device links table."
-        #make it into a thread so it can be stopped if needed
-        response = await self._iox_wrapper.post(
-            self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/device"), ""
-        )
-        rc = response is not None and response.status_code == 200
-        await self._add_ending_to_file()
-        if rc:
+
+        async def _trigger() -> None:
+            # Fire-and-forget -- this backend's response to this POST is
+            # immaterial (see _stream_links_into_file); the event stream is
+            # the only thing that matters.
+            await self._iox_wrapper.post(
+                self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/device"), ""
+            )
+
+        try:
+            completed = await self._stream_links_into_file("2", self._file_path, "device", _trigger)
+            if not completed:
+                logger.warning(
+                    f"get_dev_links_table for {device_id}: timed out waiting for end_of_table -- table may be incomplete."
+                )
+            await self._add_ending_to_file()
             rc = await self._read_from_file(self._file_path)
-        self._is_running = False
-        self._file_path = None
+        finally:
+            self._is_running = False
+            self._file_path = None
         return rc
 
     async def _get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
@@ -257,15 +295,23 @@ class INSTEONDiagnostics:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} using PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
         else:
             await self._write_to_file(self._file_path, f"IoX Links Table for {device_id} (PLM not connected)\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
-        response = await self._iox_wrapper.post(
-            self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/iox"), ""
-        )
-        rc = response is not None and response.status_code == 200
-        await self._add_ending_to_file()
-        if rc:
+
+        async def _trigger() -> None:
+            await self._iox_wrapper.post(
+                self._iox_wrapper._family_api_path(f"node/{quote(device_id, safe='')}/links/iox"), ""
+            )
+
+        try:
+            completed = await self._stream_links_into_file("3", self._file_path, "iox", _trigger)
+            if not completed:
+                logger.warning(
+                    f"get_iox_links_table for {device_id}: timed out waiting for end_of_table -- table may be incomplete."
+                )
+            await self._add_ending_to_file()
             rc = await self._read_from_file(self._file_path)
-        self._is_running = False
-        self._file_path = None
+        finally:
+            self._is_running = False
+            self._file_path = None
         return rc
 
     async def _get_all_plm_links(self, refresh_plm_links: bool = False, **kwargs) -> str | None:
@@ -298,14 +344,19 @@ class INSTEONDiagnostics:
         self._file_path = cache_path
         await self._write_to_file(self._file_path, f"PLM Links Table for PLM address {self._plm_address}\n{LINKS_TABLE_NOTE}{LINKS_TABLE_FENCE_OPEN}{LINKS_TABLE_HEADER}", mode="w")
 
-        response = await self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-links"), "")
-        rc = response is not None and response.status_code == 200
-        await self._add_ending_to_file()
-        self._refresh_plm_links = False  # satisfied -- next call can use cache again
-        if rc:
+        async def _trigger() -> None:
+            await self._iox_wrapper.post(self._iox_wrapper._family_api_path("plm-links"), "")
+
+        try:
+            completed = await self._stream_links_into_file("1", self._file_path, "plm", _trigger)
+            if not completed:
+                logger.warning("get_all_plm_links: timed out waiting for end_of_table -- table may be incomplete.")
+            await self._add_ending_to_file()
+            self._refresh_plm_links = False  # satisfied -- next call can use cache again
             rc = await self._read_from_file(self._file_path)
-        self._is_running = False
-        self._file_path = None
+        finally:
+            self._is_running = False
+            self._file_path = None
         return rc
 
     def _compare_links_files(self, device_file_path: str, iox_file_path: str) -> str:
@@ -496,6 +547,64 @@ class INSTEONDiagnostics:
             )
         return "\n".join(lines)
 
+    async def _stream_links_into_file(
+        self,
+        action: str,
+        file_path: str,
+        type_: Literal["iox", "device", "plm"],
+        trigger: Callable[[], Awaitable[Any]],
+        max_gap_timeout: float = _LINKS_STREAM_MAX_GAP_TIMEOUT_S,
+    ) -> bool:
+        """Register a scoped listener for ("_2", *action*), fire *trigger*
+        (the POST that starts the hub's link-table stream) as a background
+        task, and ignore its result entirely -- on this backend that POST
+        blocks until the *entire* scan completes (as long as the scan
+        itself takes, potentially minutes for a large PLM), and its own
+        outcome is immaterial: the event stream is the only thing that
+        matters, whether it ever returns or not.
+
+        Drains streamed records into *file_path* (via the existing
+        format_links_event/_write_to_file) until a record's role is
+        "end_of_table" (real completion signal -- see _decode_role's "00"
+        mapping), or *max_gap_timeout* elapses since the last record (or
+        since draining started, for the first) with nothing new arriving --
+        a rolling/inactivity timeout, not an overall ceiling, so a
+        slow-but-steady scan is never cut off just because it runs long.
+        This is the sole timing mechanism; trigger is never awaited,
+        raced, or otherwise consulted.
+
+        Returns whether a real end_of_table sentinel was seen. Always
+        unregisters the listener before returning, on every exit path.
+        """
+        waiter = _LinksTableWaiter(self._iox_wrapper, "_2", action)
+        trigger_task = asyncio.ensure_future(trigger())
+        # Fire-and-forget: consume whatever this eventually resolves to
+        # (result or exception) so it never produces an "exception was
+        # never retrieved" warning -- nothing else ever looks at it.
+        trigger_task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+        try:
+            completed = False
+            while True:
+                try:
+                    _node, _control, _action, eventInfo = await asyncio.to_thread(
+                        waiter._queue.get, timeout=max_gap_timeout
+                    )
+                except queue.Empty:
+                    break
+                formatted_event = await self.format_links_event(eventInfo, type_)
+                await self._write_to_file(file_path, formatted_event + "\n", mode="a")
+                # role is the 2nd CSV field -- reuse it instead of
+                # re-deriving _decode_role here. Guard against
+                # format_links_event's non-CSV "No event information
+                # provided." fallback string.
+                role = formatted_event.split(",", 2)[1] if formatted_event.count(",") >= 2 else ""
+                if role == "end_of_table":
+                    completed = True
+                    break
+            return completed
+        finally:
+            self._iox_wrapper.unregister_listener(waiter._listener_id, "_2", action)
+
     async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:
             logger.warning("Stopping Insteon diagnostics...")
@@ -507,7 +616,6 @@ class INSTEONDiagnostics:
 
     async def _add_ending_to_file(self):
         if self._file_path:
-            time.sleep(1)  # Ensure any pending writes are completed
             await self._write_to_file(self._file_path, LINKS_TABLE_FENCE_CLOSE, mode="a")
 
     async def format_links_event(self, eventInfo: dict, type: Literal["iox", "device", "plm"]) -> str:
@@ -646,30 +754,6 @@ class INSTEONDiagnostics:
         device_id= device_id.replace(" ", "_") if device_id else "all" 
         return f"/tmp/{type}_links_table_{device_id}.txt"
 
-
-    async def update_links_table(self, node, control, action, eventInfo):
-        if not eventInfo:
-            logger.warning("No eventInfo provided for update_links_table.")
-            return
-
-        file_path = None
-        type = None
-        if action == "1":
-            file_path = self._get_file_path("plm", None)
-            type = "plm"
-        elif action == "2":
-            file_path = self._get_file_path("device", node)
-            type = "device"
-        elif action == "3":
-            file_path = self._get_file_path("iox", node)
-            type = "iox"
-        if file_path and type:
-            formatted_event = await self.format_links_event(eventInfo, type)
-            await self._write_to_file(file_path, formatted_event + "\n", mode="a")
-            logger.info(f"update_links_table: node={node if node else 'Unknown'}, control={control if control else 'Unknown'}, action={action if action else 'Unknown'}, formatted_event={formatted_event if formatted_event else 'Unknown'}") 
-
-
-        
     async def on_node_device_event(self, node, control, action, eventInfo):
         if not node or not action:
             return
