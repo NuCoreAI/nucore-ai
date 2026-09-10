@@ -2,8 +2,8 @@
 concurrent websocket connections used to clobber a single module-level
 instance's context/message. Also covers user_id (sourced from the context
 payload) winning over the per-connection uuid4 fallback as _run_once's
-effective session_id, which is what lets identity (and Plan's session
-ownership) survive a reconnect.
+effective session_id, which is what lets identity (and therefore
+conversation history) survive a reconnect.
 """
 
 from __future__ import annotations

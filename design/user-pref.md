@@ -23,8 +23,7 @@ Aliases and events behave very differently (static lookup table vs. dated/querya
 bearing record), but both are modeled as one `Preference` record with a `type` discriminator
 (`"alias"` | `"event"`) rather than two separate stores. This keeps `list_preferences`/
 `remove_preference` generic and lets a future preference type (whatever it turns out to be) get
-added without a new top-level store -- the same reasoning Plan already uses for `staged_ops`
-(one list, an `op` field distinguishes scene/automation/variable entries).
+added without a new top-level store.
 
 ## Design precedent: this session's own memory system
 
@@ -41,14 +40,13 @@ fuzzy semantic-relevance matching to decide what to surface, because its "memori
 structure. Events have a real, computable trigger instead -- a date being near, or the customer
 naming the event directly -- so "is this relevant right now" doesn't need to be fuzzy here.
 
-## Relationship to Plan/Diagnostics: no session, no staging
+## Relationship to Diagnostics: no session, no staging
 
-Plan and Diagnostics are both stateful, single-in-flight-session features with a lock, because
-they can drive real hub hardware or commit hard-to-reverse changes. Preferences are neither --
-adding/removing one is cheap, instant, and trivially reversible (a bad alias or event is just
-deleted). That puts preferences much closer to `variable_op`/`list_variables` in shape: plain
-immediate CRUD, no session, no review/apply pipeline. This also matches Plan's own internal rule
-that cheap/reversible operations (`create_folder`) commit immediately rather than being staged.
+Diagnostics is a stateful, single-in-flight-session feature with a lock, because it can drive real
+hub hardware or commit hard-to-reverse changes. Preferences are neither -- adding/removing one is
+cheap, instant, and trivially reversible (a bad alias or event is just deleted). That puts
+preferences much closer to `variable_op`/`list_variables` in shape: plain immediate CRUD, no
+session, no review/apply pipeline.
 
 ## Infer-and-suggest, but tool-gated writes
 
@@ -64,12 +62,12 @@ No separate propose/commit tool split is needed for this (see Open Questions).
 
 ### Where the backend lives
 
-Same reasoning already established for Plan: this isn't hub-native data (no `/rest/...` endpoint
-backs "preferences" the way devices/routines do), so it belongs in `src/unified/preferences/`, not
-inside `IoXWrapper` -- no backwards import from `iox` into `unified`.
+This isn't hub-native data (no `/rest/...` endpoint backs "preferences" the way devices/routines
+do), so it belongs in `src/unified/preferences/`, not inside `IoXWrapper` -- no backwards import
+from `iox` into `unified`.
 
 It's also, notably, the **first** feature in this codebase that needs to survive a process
-restart. `SessionStore`, `PlanEngine`, and `IoXDiagnostics` are all in-memory only, scoped to the
+restart. `SessionStore` and `IoXDiagnostics` are both in-memory only, scoped to the
 current process's lifetime (`session_store.py` says so directly, and even flags itself as "not
 thread-safe" with the concern deferred until it's an actual problem). Preferences can't take that
 shortcut -- a yahrtzeit has to still be known next month.
@@ -144,8 +142,8 @@ type-specific fields are populated.
 
 ### Tools
 
-Shaped like `variable_op`/`list_variables` (a single-op mutation tool + a list tool), not like
-Plan's session/staging tools, since preference edits are immediate and reversible:
+Shaped like `variable_op`/`list_variables` (a single-op mutation tool + a list tool), with no
+session/staging tools, since preference edits are immediate and reversible:
 
 - **`list_preferences(type?)`** -- returns every stored preference (optionally filtered by
   `type`), as structured data (id/type/fields), for the LLM to explain in plain language.
@@ -166,9 +164,8 @@ this covers every example given so far, and richer recurrence is a clean, additi
 No real delivery channel exists anywhere in this codebase today -- `notify(recipient, content)` in
 the routine DSL is scaffolding with no actual recipient/delivery concept (confirmed via grep). So
 v1 stores the `remind_days_before` intent and exposes it through `list_preferences`/a "due soon"
-query, but does not actually send anything. This mirrors how Plan ships most of its plan types as
-stubs rather than half-building a delivery mechanism with no real channel behind it yet. Real
-delivery (push/email/SMS/whatever channel NuCore's broader product actually uses) is a deliberate
+query, but does not actually send anything, rather than half-building a delivery mechanism with no
+real channel behind it yet. Real delivery (push/email/SMS/whatever channel NuCore's broader product actually uses) is a deliberate
 follow-up, not attempted here.
 
 ## Open questions
@@ -180,9 +177,8 @@ follow-up, not attempted here.
 2. **Is delete-then-create good enough**, or does editing a preference (e.g. changing what an
    alias points to) need a first-class `update` from day one?
 3. **Confirmation for LLM-inferred preferences** -- prompt-level guidance only (current proposal),
-   or a `propose_preference` (unconfirmed) / `preference_op` (confirmed) split mirroring Plan's
-   staging tiers? Leaning toward prompt-level guidance only, since a bad create is just deleted --
-   the same reasoning that justifies Plan skipping staging for `create_folder`.
+   or a `propose_preference` (unconfirmed) / `preference_op` (confirmed) split? Leaning toward
+   prompt-level guidance only, since a bad create is just deleted.
 4. ~~Where the JSON file's path actually gets configured~~ -- **Resolved**: `--preferences-dir`
    (CLI) or runtime config's `preferences_dir`, CLI wins if both are set. Deliberately no default
    -- an installation that hasn't configured either has preferences unavailable, rather than

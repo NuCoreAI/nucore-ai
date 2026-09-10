@@ -120,10 +120,10 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
             # can join freely alongside others. Reject up front rather than
             # letting the hub's own add-member call fail confusingly later.
             # Exempt the target group itself: retrying a partially-applied
-            # multi_device_scene call (e.g. after apply_plan created the
-            # group and added this very member, but a sibling member failed)
-            # must not reject the member that already succeeded as "already
-            # a controller" of the group being retried against.
+            # multi_device_scene call (e.g. the group was created and this
+            # very member was added, but a sibling member failed) must not
+            # reject the member that already succeeded as "already a
+            # controller" of the group being retried against.
             existing = [
                 g for g in nucore_interface.get_groups_for_device(link_address, controller_only=True)
                 if g.address != target_group_address
@@ -189,9 +189,9 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
     }
     if failed:
         # A top-level "error" key is this codebase's one universal signal for
-        # "this call did not fully succeed" -- both _apply_plan's own ok
-        # check and the model's mandatory-tool-use self-check key off its
-        # mere presence, not off summary/results, which are easy to miss
+        # "this call did not fully succeed" -- the model's mandatory-tool-use
+        # self-check keys off its mere presence, not off summary/results,
+        # which are easy to miss
         # (e.g. a scene created with one of its two intended members
         # silently absent, reported as if the whole call succeeded).
         failed_addrs = ", ".join(r["link_address"] for r in results if not r["successful"])

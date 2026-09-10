@@ -1,7 +1,7 @@
 """``list_preferences``/``preference_op`` -- customer preferences (aliases +
 events, see design/user-pref.md). Shaped like ``variable_op``/
 ``list_variables`` -- plain immediate CRUD, no session -- since preference
-edits are cheap and trivially reversible, unlike Plan/Diagnostics.
+edits are cheap and trivially reversible, unlike Diagnostics.
 
 Preferences are unavailable (a clear error, not a crash) for an installation
 that hasn't configured a ``preferences_dir`` -- see

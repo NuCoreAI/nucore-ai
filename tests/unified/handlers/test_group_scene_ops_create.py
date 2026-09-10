@@ -144,11 +144,10 @@ async def test_partial_member_failure_surfaces_a_top_level_error():
     # Regression: a scene where one of several requested members fails to be
     # added (e.g. a just-paired device not yet reporting itself available as
     # a controller/responder) used to come back with no top-level "error" at
-    # all -- only summary.failed/results[].successful, which neither
-    # _apply_plan's own "error" not in result check nor the model's
-    # mandatory-tool-use self-check inspect. That let a scene silently
-    # missing one of its intended members get reported all the way up as a
-    # full success.
+    # all -- only summary.failed/results[].successful, which the model's
+    # mandatory-tool-use self-check does not inspect. That let a scene
+    # silently missing one of its intended members get reported all the way
+    # up as a full success.
     backend = _FakeBackend()
 
     async def flaky_roles(node_address):

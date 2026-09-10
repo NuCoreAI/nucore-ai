@@ -24,8 +24,7 @@ assistant, so each just returns a link (``install_url``/``purchase_url``/
 ``delete_url``) for the customer to finish there themselves. The plugin-facing get_prompt/get_tools/handle_llm_result calls attempt a real
 per-plugin API (see ``NuCoreInterface``'s docstrings); that API may not
 exist in production yet either, in which case they fail gracefully
-(``successful: false``) rather than raising. See ``design/plan-design.md``'s
-"AI-capable plugin contract" for the target shape this implements.
+(``successful: false``) rather than raising.
 
 ``plugin_ops`` -- starts/stops/restarts an installed plugin's own service
 (distinct from ``run_diagnostic_step``'s ``services_ops``, which is core

@@ -1,6 +1,6 @@
 """End-to-end: list_preferences/preference_op dispatched through
-execute_tool. Preferences aren't session-scoped (unlike Plan) -- plain
-immediate CRUD, same shape as variable_op/list_variables.
+execute_tool. Preferences aren't session-scoped -- plain immediate CRUD,
+same shape as variable_op/list_variables.
 
 FakeBackend gets its preferences_dir set to a tmp_path per test (rather than
 pre-attaching a PreferenceStore directly) so these tests exercise the same

@@ -95,8 +95,8 @@ class EisyUIContext:
         """The authenticated user's durable id (an email address), sourced
         from the context payload -- used as this conversation's session_id
         instead of a fresh uuid4 per connection, so identity (and therefore
-        e.g. Plan's session ownership) survives a reconnect. None if no
-        context carrying one has been seen yet on this connection."""
+        conversation history) survives a reconnect. None if no context
+        carrying one has been seen yet on this connection."""
         return self.user_id
 
 
@@ -427,8 +427,9 @@ async def _run_once(
     if not query:
         return
     # Prefer the durable, authenticated user_id over the per-connection
-    # fallback -- this is what lets identity (and Plan's session ownership)
-    # survive a reconnect instead of resetting to a fresh uuid4 every time.
+    # fallback -- this is what lets identity (and therefore conversation
+    # history) survive a reconnect instead of resetting to a fresh uuid4
+    # every time.
     session_id = eisy_ui_context.get_user_id() or session_id or "default"
     results = await runtime.handle_query(query, framework_context=eisy_ui_context.get_context(), session_id=session_id)
     if not results:

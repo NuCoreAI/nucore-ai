@@ -376,8 +376,6 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
   diagnostic step directly against the backend (e.g. checking or starting/stopping/restarting core
   services), and `run_shell_command` runs a shell command on the backend host (e.g. to
   search the device activity log).
-- **Plan** -- `start_plan`/`run_plan_step` walk a customer through a structured multi-step task
-  such as a new device installation, rather than a single command/response turn.
 - **User preferences** -- `preference_op`/`list_preferences` store per-user aliases (e.g. naming
   a device or routine) and event subscriptions, persisted across sessions.
 - **Plugin management** -- `list_store_plugins`/`list_purchased_plugins`/`list_installed_plugins`

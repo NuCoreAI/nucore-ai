@@ -86,10 +86,8 @@ get real access there), are explicitly **deferred** rather than solved by this d
 Tool name: `run_shell_command` (bare verb in JSON `"name"`, domain-prefixed filename — matches
 existing `node_op`/`send_command`/`preference_op` convention).
 
-**Session-scoping**: do *not* add it to `_DIAGNOSTICS_EXEMPT_TOOLS`/`_PLAN_EXEMPT_TOOLS` in
-`dispatch.py`. It's stateless (no hub session), so its handler keeps the plain
-`(nucore_interface, args)` signature. Side benefit of leaving it out of the exempt sets: it's
-automatically refused while a diagnostics/plan session is active, for free.
+**Session-scoping**: it's stateless (no hub session), so its handler keeps the plain
+`(nucore_interface, args)` signature.
 
 ### JSON schema (`tool_shell_run.json`)
 
