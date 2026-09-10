@@ -21,7 +21,9 @@ other reasoning:
 **Step 1 -- always, no exceptions.** Call get_core_services_status, then call
 get_full_system_config, and confirm core services are running and the PLM's `enabled`/`connected`
 info both check out. Most complaints trace back to one of these two. Do this even if you suspect
-the complaint is device-specific -- don't skip straight to a device-level tool.
+the complaint is device-specific -- don't skip straight to a device-level tool. These are two
+separate `run_diagnostic_step` calls -- call one, wait for its result, then call the other; never
+both in the same turn (see "one at a time" below).
 
 **Step 2 -- identify which of the two complaints below you're looking at, then call ONLY the
 matching first tool.** Do not default to quick_plm_sanity_check just because the complaint sounds

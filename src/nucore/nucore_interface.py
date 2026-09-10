@@ -581,11 +581,10 @@ class NuCoreInterface(ABC):
     async def get_plugin_prompt(self, plugin_id: str) -> dict:
         """
         Fetch an installed plugin's natural-language usage guidance for its
-        declared capabilities. No real per-plugin content exists on the
-        backend side of this yet, so implementations may call a real
-        endpoint that doesn't exist in production -- treat a non-2xx/
-        connection failure as an expected outcome (successful=False),
-        not a bug, until NuCore ships this API for real.
+        declared capabilities. Implementations call a real per-plugin
+        backend endpoint -- treat a non-2xx/connection failure as an
+        ordinary, expected outcome (successful=False), same as any other
+        HTTP call, not a sign the caller did something wrong.
         :param plugin_id: The installed plugin's id (profileNum).
         :return: {"successful": bool, "data": {"prompt": str}}
         """
@@ -594,9 +593,8 @@ class NuCoreInterface(ABC):
     async def get_plugin_tools(self, plugin_id: str) -> dict:
         """
         Fetch an installed plugin's declared tool-spec list (name/params/
-        description). Same caveat as get_plugin_prompt -- the backing
-        endpoint may not exist yet; a failure response is expected, not
-        exceptional.
+        description). Same as get_plugin_prompt -- calls a real backing
+        endpoint; a failure response is ordinary, not exceptional.
         :param plugin_id: The installed plugin's id (profileNum).
         :return: {"successful": bool, "data": {"tools": [...]}}
         """
@@ -606,9 +604,8 @@ class NuCoreInterface(ABC):
         """
         Forward the LLM's call of one of a plugin's declared tools (name +
         arguments) to that plugin for real execution, and return whatever it
-        reports back. Same caveat as get_plugin_prompt -- the backing
-        endpoint may not exist yet; a failure response is expected, not
-        exceptional.
+        reports back. Same as get_plugin_prompt -- calls a real backing
+        endpoint; a failure response is ordinary, not exceptional.
         :param plugin_id: The installed plugin's id (profileNum).
         :param args: The arguments the LLM supplied for that tool call. ** it includes the tool_name key, which is the name of the tool to call. **
         :return: {"successful": bool, "data": {...}}

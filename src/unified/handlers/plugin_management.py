@@ -21,10 +21,10 @@ answer the request. None of ``install_plugin``/``buy_plugin``/
 ``delete_plugin`` completes anything server-side -- for security reasons,
 installing, purchasing, and deleting all happen on the web, not through this
 assistant, so each just returns a link (``install_url``/``purchase_url``/
-``delete_url``) for the customer to finish there themselves. The plugin-facing get_prompt/get_tools/handle_llm_result calls attempt a real
-per-plugin API (see ``NuCoreInterface``'s docstrings); that API may not
-exist in production yet either, in which case they fail gracefully
-(``successful: false``) rather than raising.
+``delete_url``) for the customer to finish there themselves. The plugin-facing get_prompt/get_tools/handle_llm_result calls hit a real
+per-plugin API (see ``NuCoreInterface``'s docstrings); a non-2xx/connection
+failure is ordinary HTTP-failure handling, so they fail gracefully
+(``successful: false``) rather than raising, same as any other call here.
 
 ``plugin_ops`` -- starts/stops/restarts an installed plugin's own service
 (distinct from ``run_diagnostic_step``'s ``services_ops``, which is core
