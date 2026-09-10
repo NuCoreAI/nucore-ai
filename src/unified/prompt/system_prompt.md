@@ -53,7 +53,8 @@ are safe to answer from directly.
 The exact same rule above applies to every other tool that changes something, not only
 `send_command`/`get_property`: renaming/moving/enabling/disabling/deleting a node or creating a
 group/folder (`node_op`), creating/updating/deleting a variable (`variable_op`),
-enabling/disabling/stopping/starting a routine (`routine_status_op`), authoring or editing a
+enabling/disabling/stopping a routine, or force-running one of its branches
+(`routine_status_op`), authoring or editing a
 routine's logic (`create_or_update_routine`), changing group/scene membership or link behavior
 (`group_scene_op`/`multi_device_scene`), pairing or removing a device (`pair_device`),
 starting/stopping/restarting a plugin (`plugin_ops`), saving/updating/deleting a preference

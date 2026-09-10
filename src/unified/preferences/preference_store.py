@@ -87,10 +87,8 @@ class PreferenceStore:
 
 def get_store(nucore_interface: Any) -> PreferenceStore | None:
     """Lazily attach one ``PreferenceStore`` per ``nucore_interface``
-    instance -- same lazy-getattr/setattr pattern as Plan's ``_get_engine``,
-    but public (not underscore-prefixed) since both ``prompt_builder.py`` and
-    ``handlers/preferences.py`` need to call it, unlike ``_get_engine``,
-    which only ever had one caller.
+    instance -- public (not underscore-prefixed) since both
+    ``prompt_builder.py`` and ``handlers/preferences.py`` need to call it.
 
     Returns ``None`` -- rather than falling back to some default location --
     when this installation hasn't configured a ``preferences_dir`` (via

@@ -159,6 +159,13 @@ async def wait_for_node_event(
 
     Returns the event's ``node`` value if one arrived before *total_timeout*
     elapsed, ``None`` on timeout. Always unregisters before returning.
+
+    Only safe to call *after* the action that triggers the event has left a
+    human-scale gap before the event can fire (e.g. a physical pairing/
+    exclusion button press) -- see ``wait_for_node_event_around`` for an
+    action that can complete essentially instantly on its own (a plain REST
+    call the hub might act on, and dispatch the resulting event for, before
+    a listener registered only afterward would ever see it).
     """
     waiter = _RegisteredWaiter(nucore_interface, control, action)
     try:
@@ -166,5 +173,44 @@ async def wait_for_node_event(
         return node
     except queue.Empty:
         return None
+    finally:
+        nucore_interface.unregister_listener(waiter._listener_id, control, action)
+
+
+async def wait_for_node_event_around(
+    nucore_interface: NuCoreInterface,
+    control: str,
+    action: str | None,
+    total_timeout: float,
+    trigger: Callable[[], Awaitable[bool]],
+) -> tuple[bool, str | None]:
+    """Like ``wait_for_node_event``, but registers its listener *before*
+    awaiting *trigger()* -- the action whose effect the event reports --
+    instead of after.
+
+    ``wait_for_node_event`` alone is only safe when the triggering action
+    leaves a human-scale gap before the event can possibly fire (a physical
+    button press). A plain REST call has no such guarantee: the hub can
+    act on it, and fully dispatch the resulting event to every listener
+    registered *at that moment*, before the caller's own ``await`` on that
+    REST call even returns. There is no event replay/buffer, so a listener
+    registered afterward would miss it forever -- registering first closes
+    that race.
+
+    Returns ``(trigger_ok, node_address)``: *trigger_ok* is whatever
+    *trigger()* itself returned; if it's falsy, the listener is unregistered
+    immediately without waiting and *node_address* is ``None``. Otherwise
+    *node_address* is the matched event's ``node`` field, or ``None`` if
+    *total_timeout* elapses first. Always unregisters before returning.
+    """
+    waiter = _RegisteredWaiter(nucore_interface, control, action)
+    try:
+        trigger_ok = await trigger()
+        if not trigger_ok:
+            return False, None
+        node, _control, _action, _event_info = await asyncio.to_thread(waiter._queue.get, timeout=total_timeout)
+        return True, node
+    except queue.Empty:
+        return True, None
     finally:
         nucore_interface.unregister_listener(waiter._listener_id, control, action)

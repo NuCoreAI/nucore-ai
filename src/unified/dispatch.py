@@ -13,7 +13,6 @@ from .handlers import (
     group_scene_ops,
     node_ops,
     pair_device,
-    plan,
     plugin_management,
     preferences,
     routine_automation,
@@ -23,68 +22,6 @@ from .handlers import (
 )
 
 logger = get_logger(__name__)
-
-# While a plan session is running (for the session_id that owns it -- any other
-# session gets refused outright, see execute_tool), every tool call is routed
-# by what it actually does instead of through an explicit propose_*/run_plan_step
-# indirection:
-#
-# - _PLAN_STAGEABLE_TOOLS: mutating and part of "propose a configuration change"
-#   -- auto-staged (held for apply_plan) instead of executed.
-# - _PLAN_ALWAYS_IMMEDIATE_TOOLS: never staged, never blocked, even mid-plan --
-#   pair_device (hardware pairing can't wait for a later apply), node_op
-#   (folder/rename/move -- low-stakes and already immediate today),
-#   send_command (so an installer can test a device right after pairing it),
-#   start_plan/run_plan_step (session control).
-# - _PLAN_READONLY_PASSTHROUGH_TOOLS: always allowed live, never
-#   staged/blocked -- lets the model do the fresh get_device_detail/
-#   get_routine_detail/list_variables lookups create_or_update_routine's own
-#   description requires, which the old blanket lock used to block entirely.
-# - Anything in none of the three sets stays blocked during an active plan,
-#   same as today's blanket refusal (default-deny, so a new tool added to
-#   TOOL_HANDLERS doesn't silently become staged/passthrough without a
-#   deliberate classification).
-_PLAN_STAGEABLE_TOOLS = frozenset({
-    "create_or_update_routine",
-    "variable_op",
-    "multi_device_scene",
-    "group_scene_op",
-    "routine_status_op",
-})
-
-_PLAN_ALWAYS_IMMEDIATE_TOOLS = frozenset({
-    "pair_device",
-    "node_op",
-    "send_command",
-    "start_plan",
-    "run_plan_step",
-})
-
-_PLAN_READONLY_PASSTHROUGH_TOOLS = frozenset({
-    "get_property",
-    "get_device_detail",
-    "get_routine_detail",
-    "get_group_detail",
-    "list_variables",
-    "list_preferences",
-    "list_store_plugins",
-    "list_purchased_plugins",
-    "list_installed_plugins",
-    "get_plugin_capabilities",
-    "get_diagnostics_prompt",
-})
-
-# Which tools get session_id forwarded to their handler -- a different
-# concern from the plan classification sets above (which merely happen to
-# share two members with it): only start_plan/run_plan_step's handlers accept a
-# session_id kwarg. Diagnostics has no session at all any more --
-# run_diagnostic_step/get_diagnostics_prompt are ordinary, always-available
-# tools, neither needs session_id forwarded. The 4 steps that actually
-# touch the shared PLM connection (get_dev_links_table, compare_device_links,
-# get_all_plm_links, quick_plm_sanity_check) enforce their own narrow, atomic
-# mutual exclusion in IoXDiagnostics -- see _begin_plm_op/_end_plm_op --
-# independent of this dispatcher entirely.
-_SESSION_SCOPED_TOOLS = frozenset({"start_plan", "run_plan_step"})
 
 ToolHandler = Callable[[NuCoreInterface, dict[str, Any]], Awaitable[Any]]
 
@@ -113,51 +50,21 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "plugin_ops": plugin_management.plugin_ops,
     "run_diagnostic_step": diagnostics.run_diagnostic_step,
     "get_diagnostics_prompt": diagnostics.get_diagnostics_prompt,
-    "start_plan": plan.start_plan,
-    "run_plan_step": plan.run_plan_step,
     "list_preferences": preferences.list_preferences,
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,
 }
 
 
-async def execute_tool(
-    name: str, args: dict[str, Any], *, nucore_interface: NuCoreInterface, session_id: str | None = None
-) -> Any:
+async def execute_tool(name: str, args: dict[str, Any], *, nucore_interface: NuCoreInterface) -> Any:
     """Look up and run *name*'s handler, returning a JSON-serializable
     result or ``{"error": ...}`` -- never raises, so one bad tool call can't
-    take down the agentic loop.
-
-    *session_id* identifies which conversation this call came from -- used
-    only for the plan ownership check below; every other handler ignores it."""
+    take down the agentic loop."""
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
         return {"error": f"unknown tool '{name}'"}
 
-    running_plan = plan.get_running_plan(nucore_interface)
-    if running_plan is not None:
-        owner = running_plan.get("session_id")
-        if session_id != owner:
-            return {
-                "error": (
-                    f"a plan session is currently in progress "
-                    f"(started {running_plan['elapsed_s']}s ago) -- it belongs to a different conversation, "
-                    "so no actions can be performed here until it concludes, times out, or is stopped."
-                )
-            }
-        if name in _PLAN_STAGEABLE_TOOLS:
-            return await plan.stage_tool_call(nucore_interface, name, args)
-        if name not in _PLAN_ALWAYS_IMMEDIATE_TOOLS and name not in _PLAN_READONLY_PASSTHROUGH_TOOLS:
-            return {
-                "error": (
-                    f"'{name}' isn't available while a plan session is in progress -- "
-                    "ask the customer whether to stop it, then call run_plan_step with step='stop', or wait."
-                )
-            }
-
     try:
-        if name in _SESSION_SCOPED_TOOLS:
-            return await handler(nucore_interface, args, session_id=session_id)
         return await handler(nucore_interface, args)
     except Exception as exc:
         logger.error(f"tool '{name}' raised: {exc}")

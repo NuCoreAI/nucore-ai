@@ -198,7 +198,12 @@ class IoXWrapper(NuCoreInterface):
             path = path if path.startswith("/") else f"/{path}"
             url=f"{self.base_url}{path}"
             client = await self._get_client()
-            response = await client.delete(url, auth=(self.username, self.password), content=body, headers=headers)
+            # httpx's AsyncClient.delete() shorthand doesn't accept a body at
+            # all (unlike post/put/patch) -- request() is the only way to
+            # send DELETE with content, which /api/nodes/{id}/ requires.
+            response = await client.request(
+                "DELETE", url, auth=(self.username, self.password), content=body, headers=headers
+            )
             if response.status_code != 200:
                 logger.error(f"invalid url status code = {response.status_code}")
             return response
@@ -1317,17 +1322,22 @@ class IoXWrapper(NuCoreInterface):
 
         if operation == "move":
             new_parent_id = kwargs.get("new_parent_id", None)
-            if not new_parent_id:
-                out = "New parent ID must be provided for move operation."
-                logger.error(out)
-                return out
-
-            parent_type, out = self._get_node_type(new_parent_id)
-            if not parent_type:
-                return out
+            if new_parent_id:
+                parent_type, out = self._get_node_type(new_parent_id)
+                if not parent_type:
+                    return out
+                body = { 'nodeType': type, 'parentAddress': new_parent_id, 'parentNodeType': parent_type }
+            else:
+                # Move to the top level/root: the hub's real "clear the
+                # parent" signal is an empty parentAddress with
+                # parentNodeType omitted entirely (not null -- absent) --
+                # confirmed against eisy-ui's own "Remove From Folder"
+                # action (NodeRemoveFromFolder.tsx / useNodesSetParent),
+                # which sends this exact shape. There is no node to resolve
+                # a type for, so _get_node_type is skipped.
+                body = { 'nodeType': type, 'parentAddress': '' }
 
             try:
-                body = { 'nodeType': type, 'parentAddress': new_parent_id, 'parentNodeType': parent_type } 
                 headers = {
                     "Content-Type": "application/json"
                 }
@@ -1336,12 +1346,12 @@ class IoXWrapper(NuCoreInterface):
                 out = f"Error performing move node operation: {ex}"
                 logger.error(out)
                 response = out
-            return response      
+            return response
 
     async def routine_ops(
         self,
         routine_id: int,
-        operation: Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup"],
+        operation: Literal["runIf", "runThen", "runElse", "stop", "enable", "disable", "enableRunAtStartup", "disableRunAtStartup", "delete"],
     ):
         """Perform a lifecycle operation on an IoX routine.
 
@@ -1733,14 +1743,14 @@ class IoXWrapper(NuCoreInterface):
         options = await self.diagnostics._get_system_options()
         return not options.get("ZMatterZWave", False)
 
-    async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> Any:
+    async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> bool:
         body = {"flag": flag, "address": device_address}
         if name:
             body["name"] = name
         if device_type:
             body["deviceType"] = device_type
         response = await self.post(self._family_api_path("add-node"), json.dumps(body), {"Content-Type": "application/json"})
-        return device_address if response is not None and response.status_code == 200 else None
+        return response is not None and response.status_code == 200
 
     async def discover_devices(self, device_type: str = None, protocol: str = None, mode: str = "include", **kwargs) -> Any:
         family = PROTOCOL_TO_ZMATTER_FAMILY.get(protocol)
@@ -2434,6 +2444,11 @@ class IoXWrapper(NuCoreInterface):
             await self.diagnostics.on_device_event(node, control, action, eventInfo)
         elif control == "_2": # variable write pending
             await self.diagnostics.update_links_table(node, control, action, eventInfo)
+        elif control == "_5": # system busy events -- see subscription_events.md
+            if action == "0": # DEVINTIX_SYSTEM_IS_NOT_BUSY_ACTION
+                self.system_busy = False
+            elif action == "1": # DEVINTIX_SYSTEM_IS_BUSY_ACTION
+                self.system_busy = True
 
     def _get_node_family(self, device_id) -> str | None:
         node = self._get_node(device_id)

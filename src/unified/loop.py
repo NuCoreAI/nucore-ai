@@ -11,12 +11,10 @@ which makes exactly one tool-call round then a separate call with
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Awaitable, Callable
 
 from .adapters import LLMAdapter, ToolCall, ToolSpec
-from utils import get_logger
-from utils.logger import _write_debug_prompt
+from utils import get_logger, get_prompt_log_manager
 
 logger = get_logger(__name__)
 
@@ -77,10 +75,7 @@ class AgenticLoop:
         new_messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
 
         for iteration in range(self.max_iterations):
-            # Mirrors router.py/base.py's own _write_debug_prompt call before
-            # their LLM calls -- same /tmp/nucore.prompt.md file, so the
-            # unified path shows up there too instead of being silent.
-            await _write_debug_prompt(f"unified (round {iteration + 1})", messages)
+            await get_prompt_log_manager().write(f"unified (round {iteration + 1})", messages)
             raw_response = await self.llm_client.generate(
                 messages=messages,
                 config=llm_config,
@@ -100,7 +95,23 @@ class AgenticLoop:
                 iteration + 1,
                 [(tc.name, tc.args) for tc in tool_calls],
             )
-            tool_results = await asyncio.gather(*[self.dispatch(tc.name, tc.args) for tc in tool_calls])
+            # Sequential, not asyncio.gather -- tool calls in the same turn can
+            # have real ordering dependencies (pair a device, then reference it
+            # in a scene/routine; stage one item, then another that assumes the
+            # first already landed). That used to be masked by every IoXWrapper
+            # HTTP call being fake-async (a blocking `requests` call dressed up
+            # in an async def), which meant a "concurrently" gathered call's
+            # blocking I/O monopolized the single-threaded loop and accidentally
+            # serialized everything anyway. Now that HTTP calls are genuinely
+            # async (httpx.AsyncClient), gather would let a later call's REST
+            # request actually interleave with and outrace an earlier call's
+            # still-in-flight one for the same device/state -- e.g. a
+            # multi_device_scene role-check racing ahead of the pair_device
+            # call adding that very device, reporting it "not available" even
+            # though it was, moments later, added successfully.
+            tool_results = []
+            for tc in tool_calls:
+                tool_results.append(await self.dispatch(tc.name, tc.args))
             logger.info("unified: round %d tool results: %s", iteration + 1, list(tool_results))
 
             round_trip = self.llm_client.build_tool_round_trip_messages(

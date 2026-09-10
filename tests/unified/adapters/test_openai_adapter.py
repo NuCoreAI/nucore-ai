@@ -89,7 +89,7 @@ def test_run_diagnostic_step_tool_file_is_strict_false():
 def test_all_free_form_params_tool_files_declare_strict_false():
     # Guard against a future tool file reintroducing additionalProperties:
     # true without also opting out of strict mode.
-    for name in ("tool_diagnostics_run_step.json", "tool_plan_run_step.json", "tool_plugin_call.json"):
+    for name in ("tool_diagnostics_run_step.json", "tool_plugin_call.json"):
         data = json.loads((_TOOLS_DIR / name).read_text())
         assert data.get("strict") is False, name
 

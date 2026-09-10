@@ -1,6 +1,8 @@
-> **For future consideration.** This is a design proposal, not an approved or scheduled
-> change. Nothing here has been implemented. Keep this note until a decision is made to build
-> it, shelve it permanently, or revisit its risk trade-offs.
+> **Implemented.** This started as a design proposal; `run_shell_command` now exists for real --
+> see `src/unified/handlers/shell.py` (handler), `dispatch.py`'s `TOOL_HANDLERS` (wiring), and
+> `tests/unified/handlers/test_shell.py` (tests). The design/risk reasoning below is kept as the
+> record of the decisions actually shipped, not a pending proposal -- treat any place it still
+> reads as forward-looking ("would", "this design assumes") as describing what was built.
 
 # Add a built-in shell-execution tool
 
@@ -86,10 +88,8 @@ get real access there), are explicitly **deferred** rather than solved by this d
 Tool name: `run_shell_command` (bare verb in JSON `"name"`, domain-prefixed filename — matches
 existing `node_op`/`send_command`/`preference_op` convention).
 
-**Session-scoping**: do *not* add it to `_DIAGNOSTICS_EXEMPT_TOOLS`/`_PLAN_EXEMPT_TOOLS` in
-`dispatch.py`. It's stateless (no hub session), so its handler keeps the plain
-`(nucore_interface, args)` signature. Side benefit of leaving it out of the exempt sets: it's
-automatically refused while a diagnostics/plan session is active, for free.
+**Session-scoping**: it's stateless (no hub session), so its handler keeps the plain
+`(nucore_interface, args)` signature.
 
 ### JSON schema (`tool_shell_run.json`)
 

@@ -50,6 +50,33 @@ async def test_delete_success_still_reports_ok():
     assert result == {"node_id": "n1", "operation": "delete", "status": "ok"}
 
 
+@pytest.mark.asyncio
+async def test_move_to_a_real_parent_forwards_it_unchanged():
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    result = await node_op(backend, {"operation": "move", "node_id": "n1", "new_parent_id": "70326"})
+    assert result == {"node_id": "n1", "operation": "move", "status": "ok"}
+    assert backend.calls == [("n1", "move", {"new_parent_id": "70326"})]
+
+
+@pytest.mark.asyncio
+async def test_move_with_no_new_parent_id_means_root_not_an_error():
+    # Regression: an omitted/empty new_parent_id used to be rejected outright
+    # ("move requires new_parent_id") -- it actually means "move to the top
+    # level/root", a real, valid request, not a missing argument.
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    result = await node_op(backend, {"operation": "move", "node_id": "n1"})
+    assert result == {"node_id": "n1", "operation": "move", "status": "ok"}
+    assert backend.calls == [("n1", "move", {"new_parent_id": ""})]
+
+
+@pytest.mark.asyncio
+async def test_move_with_explicit_empty_new_parent_id_also_means_root():
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    result = await node_op(backend, {"operation": "move", "node_id": "n1", "new_parent_id": ""})
+    assert result == {"node_id": "n1", "operation": "move", "status": "ok"}
+    assert backend.calls == [("n1", "move", {"new_parent_id": ""})]
+
+
 class _CreateFakeBackend(NuCoreInterface):
     """Real NuCoreInterface subclass -- add_group/add_folder's id lookup
     goes through wait_until, which needs register_listener/

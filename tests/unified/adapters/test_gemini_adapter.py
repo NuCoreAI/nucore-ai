@@ -272,9 +272,9 @@ def test_export_tools_strips_additional_properties_gemini_rejects_outright():
     # Live bug: Gemini's function-declaration Schema proto has no
     # additionalProperties field at all -- sending it 400s the whole request,
     # unlike most JSON Schema consumers which just ignore unknown keywords.
-    # tool_plan_run_step.json's "params" is deliberately free-form
+    # tool_diagnostics_run_step.json's "params" is deliberately free-form
     # (additionalProperties: true) for OpenAI's strict-mode escape hatch.
-    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_plan_run_step.json")
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_diagnostics_run_step.json")
 
     tools = GeminiAdapter().export_tools([spec])
 

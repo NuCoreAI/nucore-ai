@@ -1,17 +1,18 @@
-"""``pair_device`` -- standalone global tool, not gated behind a Plan
-session. Covers: the protocol/action validity table (structural rejection
-vs. not-yet-supported), add_by_address, the unified include/exclude actions
-across insteon/zwave/zigbee/matter, the Legacy-Z-Wave error carve-out, and
-that the tool stays callable via dispatch.execute_tool while a plan session
-is running for the owning session_id (confirms dispatch.py's
-_PLAN_ALWAYS_IMMEDIATE_TOOLS/_SESSION_SCOPED_TOOLS split doesn't crash on an
-unexpected session_id kwarg).
+"""``pair_device`` -- standalone global tool, callable any time. Covers: the
+protocol/action validity table (structural rejection vs. not-yet-supported),
+add_by_address, the unified include/exclude actions across
+insteon/zwave/zigbee/matter, the Legacy-Z-Wave error carve-out, and that the
+tool is reachable via dispatch.execute_tool.
 
 Also covers the event-driven waits in pair_device.py's use of
 wait_until/wait_for_event/wait_for_node_event (_event_wait.py): add_device()
-is a plain REST call that doesn't itself update the local node list, so
-add_by_address waits for the newly-added device to actually show up locally.
-include instead waits for each protocol's own documented "pairing session
+is a plain REST call that only confirms the hub accepted the request -- it
+is not authoritative about the device's real address. add_by_address waits
+for the _3/"ND" (node added) event and takes the newly-added device's real
+address straight from that event's own node field (never the customer/model
+input, which may differ in case/shape), then waits again for that address to
+actually become usable before returning it. include instead waits for each
+protocol's own documented "pairing session
 ended" event (_20/"2" insteon, _25/"2.1" zwave, _27/"2.1" zigbee) --
 confirmed against the real eisy-ui frontend. zwave exclude waits directly
 for the node-removed event (_3/"NR") and takes the removed address straight
@@ -75,7 +76,7 @@ class FakeBackend(NuCoreInterface):
         self.add_device_calls.append((device_address, name, device_type))
         if self.add_device_result is not None:
             self._pending_nodes[device_address] = name or device_address
-        return self.add_device_result
+        return self.add_device_result is not None
 
     async def discover_devices(self, device_type=None, protocol=None, mode="include", **kwargs):
         if self.discover_error is not None:
@@ -105,7 +106,7 @@ class FakeBackend(NuCoreInterface):
         # blocking on wait_until's real wait loop.
         self.refresh_calls += 1
         for address, name in self._pending_nodes.items():
-            self.nodes[address] = SimpleNamespace(name=name)
+            self.nodes[address] = SimpleNamespace(name=name, node_def=object())
         self._pending_nodes = {}
         for address in self._pending_removals:
             self.nodes.pop(address, None)
@@ -156,6 +157,14 @@ async def _fire_node_removed_event_shortly(backend: FakeBackend, node_address: s
     backend._dispatch_event_listeners("_3", "NR", node_address, {})
 
 
+async def _fire_node_added_event_shortly(backend: FakeBackend, node_address: str, delay: float = 0.02):
+    """Simulates the hub's own node-added event (_3/"ND") arriving --
+    add_by_address registers for this directly and reads the newly-added
+    device's real address straight out of the event's own node field."""
+    await asyncio.sleep(delay)
+    backend._dispatch_event_listeners("_3", "ND", node_address, {})
+
+
 # ---------------------------------------------------------------------------
 # normalize_address
 # ---------------------------------------------------------------------------
@@ -193,6 +202,8 @@ def test_normalize_address_is_a_no_op_for_other_protocols(protocol):
 @pytest.mark.asyncio
 async def test_add_by_address_succeeds():
     backend = FakeBackend()
+    asyncio.create_task(_fire_node_added_event_shortly(backend, "1A 2B 3C 1"))
+
     result = await pair_device(backend, {
         "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
     })
@@ -222,17 +233,22 @@ async def test_add_by_address_reports_failure():
 
 
 @pytest.mark.asyncio
-async def test_add_by_address_matches_the_hub_reported_address_case_insensitively():
-    # The hub's own XML report can come back in a different case than
-    # whatever the customer/model typed -- the presence check must not
-    # treat that as "not found yet".
+async def test_add_by_address_does_not_miss_a_node_added_event_fired_during_add_device():
+    # Regression: if the _3/"ND" listener were only registered *after*
+    # add_device() is awaited, a hub fast enough to fire (and fully
+    # dispatch) that event before/during its own REST response would be
+    # missed forever -- there is no event replay/buffer, unlike wait_until's
+    # state-based fallback. The listener must be registered before
+    # add_device() is even called, not after.
     backend = FakeBackend()
 
-    async def reports_lowercase_address():
-        backend.nodes["1a 2b 3c 1"] = SimpleNamespace(name="1a 2b 3c 1")
+    async def add_device_and_fire_event_immediately(device_address, name=None, device_type=None, **kwargs):
+        backend.add_device_calls.append((device_address, name, device_type))
+        backend.nodes[device_address] = SimpleNamespace(name=device_address, node_def=object())
+        backend._dispatch_event_listeners("_3", "ND", device_address, {})
         return True
 
-    backend._refresh_device_structure = reports_lowercase_address
+    backend.add_device = add_device_and_fire_event_immediately
 
     result = await pair_device(backend, {
         "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
@@ -242,26 +258,55 @@ async def test_add_by_address_matches_the_hub_reported_address_case_insensitivel
 
 
 @pytest.mark.asyncio
+async def test_add_by_address_returns_the_node_added_events_own_address():
+    # Regression: add_device() just echoes back whatever case/shape the
+    # caller passed in -- it is NOT the hub's own canonical address. Every
+    # downstream tool resolves addresses via NuCoreInterface.get_node's
+    # exact-match `self.nodes.get(address)` (case-sensitive, no fallback), so
+    # the only trustworthy source for the real address is the _3/"ND"
+    # event's own node field -- never the customer/model's input, and never
+    # a case-insensitive guess at "the real key" either.
+    backend = FakeBackend()
+
+    async def reports_lowercase_address():
+        backend.nodes["1a 2b 3c 1"] = SimpleNamespace(name="1a 2b 3c 1", node_def=object())
+        return True
+
+    backend._refresh_device_structure = reports_lowercase_address
+    asyncio.create_task(_fire_node_added_event_shortly(backend, "1a 2b 3c 1"))
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert result["status"] == "added"
+    assert result["device_address"] == "1a 2b 3c 1"
+
+
+@pytest.mark.asyncio
 async def test_add_by_address_waits_for_an_event_before_succeeding():
-    # The device doesn't show up on the very first refresh -- wait_until
-    # must actually block until a matching device event wakes it (not just
-    # check once and give up), then refresh again and find it.
+    # The device's profile doesn't resolve on the very first refresh after
+    # the node-added event arrives -- the profile-readiness wait_until must
+    # actually block until a matching device event wakes it (not just check
+    # once and give up), then refresh again and find it.
     backend = FakeBackend()
     calls = {"n": 0}
 
     async def flaky_refresh():
         calls["n"] += 1
         if calls["n"] >= 2:
-            backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1")
+            backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1", node_def=object())
         return True
 
     backend._refresh_device_structure = flaky_refresh
 
-    async def fire_event_shortly():
+    async def fire_events_shortly():
         await asyncio.sleep(0.02)
         backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "NI", "1A 2B 3C 1", {})
 
-    asyncio.create_task(fire_event_shortly())
+    asyncio.create_task(fire_events_shortly())
 
     result = await pair_device(backend, {
         "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
@@ -272,22 +317,114 @@ async def test_add_by_address_waits_for_an_event_before_succeeding():
 
 
 @pytest.mark.asyncio
-async def test_add_by_address_errors_if_the_device_never_appears():
-    # Refresh keeps "succeeding" and no event ever arrives, but the target
-    # address never actually shows up -- wait_until must give up once
-    # _WAIT_TOTAL_TIMEOUT_S elapses.
+async def test_add_by_address_waits_for_device_profile_not_just_bare_address():
+    # Regression: the hub can register a bare node (address present,
+    # node.node_def still None) well before it finishes resolving the
+    # device's profile via a later _3/"NI" event -- returning "added" at the
+    # first point only handed back a device that create_or_update_routine's
+    # resolver and multi_device_scene's role precheck would then reject as
+    # having "no device profile"/"not available as a controller".
     backend = FakeBackend()
 
-    async def refreshes_but_finds_nothing():
+    async def address_appears_without_a_profile_yet():
+        # Only creates the node once -- a real refresh reloads from the hub,
+        # it doesn't reset an already-resolved node_def back to None.
+        backend.nodes.setdefault("1A 2B 3C 1", SimpleNamespace(name="1A 2B 3C 1", node_def=None))
         return True
 
-    backend._refresh_device_structure = refreshes_but_finds_nothing
+    backend._refresh_device_structure = address_appears_without_a_profile_yet
+
+    async def node_added_then_profile_resolves_shortly():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        await asyncio.sleep(0.02)
+        backend.nodes["1A 2B 3C 1"].node_def = object()
+        backend._dispatch_event_listeners("_3", "NI", "1A 2B 3C 1", {})
+
+    asyncio.create_task(node_added_then_profile_resolves_shortly())
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert result["status"] == "added"
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_times_out_if_the_profile_never_resolves():
+    backend = FakeBackend()
+
+    async def address_present_but_profile_never_resolves():
+        backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1", node_def=None)
+        return True
+
+    backend._refresh_device_structure = address_present_but_profile_never_resolves
+    asyncio.create_task(_fire_node_added_event_shortly(backend, "1A 2B 3C 1"))
 
     result = await pair_device(backend, {
         "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
     })
 
     assert "error" in result
+    assert "device profile" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_waits_for_the_system_to_stop_reporting_busy():
+    # Regression: node.node_def resolving isn't the only signal that a
+    # device is actually safe to reference -- the hub's own _5 (System Busy
+    # Events) can still report busy a moment longer during the same
+    # handshake. _is_device_usable must gate on nucore_interface.system_busy
+    # too, not just address presence + node_def.
+    backend = FakeBackend()
+    backend.system_busy = True
+    backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1", node_def=object())
+
+    async def node_added_then_system_becomes_not_busy_shortly():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        await asyncio.sleep(0.02)
+        backend.system_busy = False
+        backend._dispatch_event_listeners("_3", "NI", "1A 2B 3C 1", {})
+
+    asyncio.create_task(node_added_then_system_becomes_not_busy_shortly())
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert result["status"] == "added"
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_times_out_while_the_system_stays_busy():
+    backend = FakeBackend()
+    backend.system_busy = True
+    backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1", node_def=object())
+    asyncio.create_task(_fire_node_added_event_shortly(backend, "1A 2B 3C 1"))
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_errors_if_the_node_added_event_never_arrives():
+    # add_device() only confirms the hub accepted the request -- if the
+    # _3/"ND" event that carries the device's real address never shows up,
+    # there is no trustworthy address to report, so this must time out with
+    # a clear, distinct error rather than falling back to the
+    # customer-supplied address.
+    backend = FakeBackend()
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert "error" in result
+    assert "node-added event" in result["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +454,7 @@ async def test_include_opens_pairing_mode_and_reports_a_new_device(protocol):
     asyncio.create_task(_fire_complete_event_shortly(backend, protocol))
 
     async def adds_a_device():
-        backend.nodes["NEW001"] = SimpleNamespace(name="NEW001")
+        backend.nodes["NEW001"] = SimpleNamespace(name="NEW001", node_def=object())
         return True
 
     backend._refresh_device_structure = adds_a_device
@@ -338,8 +475,8 @@ async def test_include_reports_every_device_added_during_the_window_for_insteon(
     backend = FakeBackend()
 
     async def adds_two_devices_then_completes():
-        backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1")
-        backend.nodes["22 22 22 1"] = SimpleNamespace(name="22 22 22 1")
+        backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1", node_def=object())
+        backend.nodes["22 22 22 1"] = SimpleNamespace(name="22 22 22 1", node_def=object())
         await asyncio.sleep(0.02)
         backend._dispatch_event_listeners("_20", "2", None, {})
 
@@ -363,7 +500,7 @@ async def test_include_waits_for_the_node_added_event_after_the_session_ends():
         await asyncio.sleep(0.01)
         backend._dispatch_event_listeners("_25", "2.1", None, {})
         await asyncio.sleep(0.03)  # within the (monkeypatched) 0.1s grace window
-        backend.nodes["ZW001"] = SimpleNamespace(name="ZW001")
+        backend.nodes["ZW001"] = SimpleNamespace(name="ZW001", node_def=object())
         backend._dispatch_event_listeners("_3", "ND", "ZW001", {})
 
     asyncio.create_task(session_ends_then_node_added_slightly_later())
@@ -371,6 +508,53 @@ async def test_include_waits_for_the_node_added_event_after_the_session_ends():
     result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
 
     assert [d["address"] for d in result["new_devices"]] == ["ZW001"]
+
+
+@pytest.mark.asyncio
+async def test_include_waits_for_the_new_devices_profile_too():
+    # Regression, same underlying issue as add_by_address: the node-added
+    # grace period only confirms the address exists, not that its device
+    # profile (node_def) has resolved yet (a later, separate _3/"NI" event)
+    # -- a device handed back before that point is unusable by
+    # create_or_update_routine/multi_device_scene right afterward.
+    backend = FakeBackend()
+
+    async def node_added_then_profile_resolves_slightly_later():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_25", "2.1", None, {})
+        backend.nodes["ZW001"] = SimpleNamespace(name="ZW001", node_def=None)
+        backend._dispatch_event_listeners("_3", "ND", "ZW001", {})
+        await asyncio.sleep(0.03)  # within the (monkeypatched) 0.1s grace window
+        backend.nodes["ZW001"].node_def = object()
+        backend._dispatch_event_listeners("_3", "NI", "ZW001", {})
+
+    asyncio.create_task(node_added_then_profile_resolves_slightly_later())
+
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+
+    assert [d["address"] for d in result["new_devices"]] == ["ZW001"]
+    assert backend.nodes["ZW001"].node_def is not None
+
+
+@pytest.mark.asyncio
+async def test_include_does_not_error_if_the_new_devices_profile_never_resolves():
+    # Best-effort grace period, not a hard requirement -- a device whose
+    # profile is still resolving when the budget runs out is still reported
+    # (same as before this fix), not turned into an error.
+    backend = FakeBackend()
+
+    async def node_added_but_profile_never_resolves():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_25", "2.1", None, {})
+        backend.nodes["ZW001"] = SimpleNamespace(name="ZW001", node_def=None)
+        backend._dispatch_event_listeners("_3", "ND", "ZW001", {})
+
+    asyncio.create_task(node_added_but_profile_never_resolves())
+
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+
+    assert [d["address"] for d in result["new_devices"]] == ["ZW001"]
+    assert "error" not in result
 
 
 @pytest.mark.asyncio
@@ -690,33 +874,17 @@ async def test_unknown_action_is_rejected_for_a_known_protocol():
 
 
 # ---------------------------------------------------------------------------
-# Dispatch-level: callable standalone and mid-Plan-session
+# Dispatch-level: callable via execute_tool
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_callable_standalone_via_dispatch():
     backend = FakeBackend()
+    asyncio.create_task(_fire_node_added_event_shortly(backend, "1A 2B 3C 1"))
     result = await execute_tool(
         "pair_device",
         {"protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1"},
         nucore_interface=backend,
     )
-    assert result["status"] == "added"
-
-
-@pytest.mark.asyncio
-async def test_callable_while_a_plan_session_is_running():
-    backend = FakeBackend()
-    await execute_tool(
-        "start_plan", {"plan_type": "new_installation"}, nucore_interface=backend, session_id="s1"
-    )
-
-    result = await execute_tool(
-        "pair_device",
-        {"protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1"},
-        nucore_interface=backend,
-        session_id="s1",
-    )
-
     assert result["status"] == "added"

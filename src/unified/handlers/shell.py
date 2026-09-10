@@ -1,6 +1,6 @@
 """``run_shell_command`` -- the one deliberately unsandboxed, arbitrary-exec
 tool in this codebase: runs a shell command as whatever OS account this
-process itself runs under (see ``design/shell-tool-future-consideration.md``
+process itself runs under (see ``design/shell-tool.md``
 for the deployment decision behind that -- a dedicated node-server account
 whose sudoers.d file, not this module, is what gates any privileged
 operation). There is no command-content allowlist here by design; a

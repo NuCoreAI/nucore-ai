@@ -36,7 +36,12 @@ async def _check_role_precheck(nucore_interface: NuCoreInterface, link_address: 
     payload = await nucore_interface.group_scene_get_node_roles(node_address=link_address)
     if payload is None:
         return f"failed to fetch node roles for '{link_address}'"
-    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    # `.get("data", {})` alone only substitutes {} when "data" is missing --
+    # not when the hub returns it explicitly as null (seen for at least
+    # keypad button sub-nodes), which left `data` as None and crashed the
+    # very next .get() call below with a bare AttributeError instead of a
+    # clean per-member error.
+    data = (payload.get("data") or {}) if isinstance(payload, dict) else {}
     if is_controller and not bool(data.get("availableAsController", False)):
         return f"'{link_address}' is not available as a controller"
     if not is_controller and not bool(data.get("availableAsResponder", False)):
@@ -96,6 +101,7 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
     if not isinstance(devices, list) or not devices:
         return {"error": "'devices' must be a non-empty list"}
 
+    target_group_address = args.get("group_address")
     for idx, device in enumerate(devices):
         if not isinstance(device, dict):
             return {"error": f"device entry at index {idx} is not an object"}
@@ -109,7 +115,19 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
                 )
             }
         if role == "controller":
-            existing = nucore_interface.get_groups_for_device(link_address, controller_only=True)
+            # A device can only be a controller in ONE scene -- a scene is a
+            # relationship between two or more nodes, not a set a controller
+            # can join freely alongside others. Reject up front rather than
+            # letting the hub's own add-member call fail confusingly later.
+            # Exempt the target group itself: retrying a partially-applied
+            # multi_device_scene call (e.g. the group was created and this
+            # very member was added, but a sibling member failed) must not
+            # reject the member that already succeeded as "already a
+            # controller" of the group being retried against.
+            existing = [
+                g for g in nucore_interface.get_groups_for_device(link_address, controller_only=True)
+                if g.address != target_group_address
+            ]
             if existing:
                 names = ", ".join(f"{g.name} [{g.address}]" for g in existing)
                 return {"error": f"'{link_address}' is already a controller in: {names}"}
@@ -162,9 +180,20 @@ async def multi_device_scene(nucore_interface: NuCoreInterface, args: dict[str, 
         )
 
     successful = sum(1 for r in results if r["successful"])
-    return {
+    failed = len(results) - successful
+    response: dict[str, Any] = {
         "group_address": group_address,
         "group_name": group_name,
-        "summary": {"total": len(results), "successful": successful, "failed": len(results) - successful},
+        "summary": {"total": len(results), "successful": successful, "failed": failed},
         "results": results,
     }
+    if failed:
+        # A top-level "error" key is this codebase's one universal signal for
+        # "this call did not fully succeed" -- the model's mandatory-tool-use
+        # self-check keys off its mere presence, not off summary/results,
+        # which are easy to miss
+        # (e.g. a scene created with one of its two intended members
+        # silently absent, reported as if the whole call succeeded).
+        failed_addrs = ", ".join(r["link_address"] for r in results if not r["successful"])
+        response["error"] = f"{failed} of {len(results)} member(s) failed to be added: {failed_addrs} -- see 'results' for per-member detail"
+    return response

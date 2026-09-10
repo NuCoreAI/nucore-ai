@@ -20,7 +20,7 @@
       },
       "alias": {
         "type": ["string", "null"],
-        "description": "type == 'alias', create only. The customer's shorthand, e.g. 'mbr'."
+        "description": "type == 'alias', create only. The customer's shorthand, e.g. 'mbr'. Rejected if an alias with this name (case-insensitive) already exists -- delete the existing one first if they want to redefine it."
       },
       "target": {
         "type": ["string", "null"],

@@ -20,6 +20,14 @@ group_scene_ops/routine_automation:
   silently just disabling the node instead). Covers a non-matching event
   being discarded while waiting continues, returning the full matched event
   tuple, timing out with None, and unregistering.
+- ``wait_for_node_event_around``: like ``wait_for_node_event``, but
+  registers its listener *before* awaiting a caller-supplied trigger (used
+  by pair_device's add_by_address, where the triggering REST call -- unlike
+  a physical pairing button press -- can complete, and the hub can dispatch
+  the resulting event, fast enough that registering only afterward would
+  miss it). Covers the event firing synchronously from inside the trigger
+  itself, a falsy trigger short-circuiting without waiting, timing out with
+  None, and unregistering on every exit path.
 """
 
 from __future__ import annotations
@@ -29,7 +37,13 @@ import asyncio
 import pytest
 
 from nucore.nucore_interface import NuCoreInterface
-from unified.handlers._event_wait import wait_for_event, wait_for_matching_event, wait_for_node_event, wait_until
+from unified.handlers._event_wait import (
+    wait_for_event,
+    wait_for_matching_event,
+    wait_for_node_event,
+    wait_for_node_event_around,
+    wait_until,
+)
 
 
 class FakeBackend(NuCoreInterface):
@@ -273,4 +287,74 @@ async def test_wait_for_matching_event_returns_none_on_timeout():
     event = await wait_for_matching_event(backend, "_3", lambda *a: False, total_timeout=0.05)
 
     assert event is None
+    assert backend._event_listeners == {}
+
+
+# ---------------------------------------------------------------------------
+# wait_for_node_event_around
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_for_node_event_around_catches_an_event_fired_synchronously_by_the_trigger():
+    # The whole point of this helper: the listener is registered before
+    # trigger() runs, so even an event dispatched from *inside* trigger()
+    # itself (no gap at all) is still caught -- wait_for_node_event alone
+    # would miss this, since it only registers after awaiting the action.
+    backend = FakeBackend()
+
+    async def trigger():
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        return True
+
+    ok, node = await wait_for_node_event_around(backend, "_3", "ND", total_timeout=2, trigger=trigger)
+
+    assert ok is True
+    assert node == "1A 2B 3C 1"
+    assert backend._event_listeners == {}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_node_event_around_catches_an_event_fired_after_trigger_returns():
+    backend = FakeBackend()
+
+    async def trigger():
+        asyncio.create_task(_fire_event_shortly(backend))
+        return True
+
+    async def _fire_event_shortly(backend):
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+
+    ok, node = await wait_for_node_event_around(backend, "_3", "ND", total_timeout=2, trigger=trigger)
+
+    assert ok is True
+    assert node == "1A 2B 3C 1"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_node_event_around_short_circuits_on_a_falsy_trigger():
+    backend = FakeBackend()
+
+    async def failing_trigger():
+        return False
+
+    ok, node = await wait_for_node_event_around(backend, "_3", "ND", total_timeout=0.05, trigger=failing_trigger)
+
+    assert ok is False
+    assert node is None
+    assert backend._event_listeners == {}  # unregistered without ever waiting
+
+
+@pytest.mark.asyncio
+async def test_wait_for_node_event_around_returns_none_on_timeout():
+    backend = FakeBackend()
+
+    async def trigger():
+        return True
+
+    ok, node = await wait_for_node_event_around(backend, "_3", "ND", total_timeout=0.05, trigger=trigger)
+
+    assert ok is True
+    assert node is None
     assert backend._event_listeners == {}

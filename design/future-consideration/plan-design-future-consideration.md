@@ -1,5 +1,13 @@
 # PLAN FEATURE (PROPOSAL, 2026-07-30)
 
+> **FOR FUTURE CONSIDERATION ONLY -- NOT IN USE.** A staged-tool-call implementation of this
+> proposal was built and then removed (2026-09-10): the staging/session/apply model it describes
+> was the direct or indirect source of most of the pairing/crosslink bugs debugged around that
+> time, and the agentic loop now executes tools directly with no Plan session, staging, or
+> `start_plan`/`run_plan_step` tools. This document is kept only as historical reference for a
+> possible future redesign -- nothing here reflects the current system, and none of it should be
+> assumed implemented or relied upon.
+
 ## Purpose
 
 This document captures the design for a new **Plan** feature: an LLM-driven session, structurally

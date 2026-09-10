@@ -40,7 +40,14 @@ class NuCoreInterface(ABC):
 
     def __init__(self, json_output:bool, formatter_type:str):
         self.device_structure_changed = True # flag to track if device structure has changed and needs refreshing
-        self.routines_changed = True # flag to track if programs have changed so that we can refresh them 
+        self.routines_changed = True # flag to track if programs have changed so that we can refresh them
+        # Tracks the hub's own _5 (System Busy Events) reports -- defaults to
+        # not-busy since this only ever flips True on an actual observed
+        # _5/"1" (DEVINTIX_SYSTEM_IS_BUSY_ACTION); a hub that never emits _5
+        # at all (most of the time -- it's transient, not a heartbeat) should
+        # never be treated as permanently busy for want of a signal. See
+        # IoXWrapper._on_device_event for where this is actually set.
+        self.system_busy = False
         self.is_subscribed = False
         self.formatter_type = formatter_type
         self.json_output = json_output
@@ -364,8 +371,9 @@ class NuCoreInterface(ABC):
         :param operation: The operation to perform (e.g., "delete", "enable", "disable", "rename", "move").
         :param kwargs: Additional parameters for the operation:
           new_name for rename
-          new_parent_id for move
-        :return: response from the API or None if failure 
+          new_parent_id for move -- empty/omitted means move to the top
+            level/root, not an invalid call
+        :return: response from the API or None if failure
         """
         raise NotImplementedError("Subclasses must implement the node_ops method.")
 
@@ -573,11 +581,10 @@ class NuCoreInterface(ABC):
     async def get_plugin_prompt(self, plugin_id: str) -> dict:
         """
         Fetch an installed plugin's natural-language usage guidance for its
-        declared capabilities. No real per-plugin content exists on the
-        backend side of this yet, so implementations may call a real
-        endpoint that doesn't exist in production -- treat a non-2xx/
-        connection failure as an expected outcome (successful=False),
-        not a bug, until NuCore ships this API for real.
+        declared capabilities. Implementations call a real per-plugin
+        backend endpoint -- treat a non-2xx/connection failure as an
+        ordinary, expected outcome (successful=False), same as any other
+        HTTP call, not a sign the caller did something wrong.
         :param plugin_id: The installed plugin's id (profileNum).
         :return: {"successful": bool, "data": {"prompt": str}}
         """
@@ -586,9 +593,8 @@ class NuCoreInterface(ABC):
     async def get_plugin_tools(self, plugin_id: str) -> dict:
         """
         Fetch an installed plugin's declared tool-spec list (name/params/
-        description). Same caveat as get_plugin_prompt -- the backing
-        endpoint may not exist yet; a failure response is expected, not
-        exceptional.
+        description). Same as get_plugin_prompt -- calls a real backing
+        endpoint; a failure response is ordinary, not exceptional.
         :param plugin_id: The installed plugin's id (profileNum).
         :return: {"successful": bool, "data": {"tools": [...]}}
         """
@@ -598,9 +604,8 @@ class NuCoreInterface(ABC):
         """
         Forward the LLM's call of one of a plugin's declared tools (name +
         arguments) to that plugin for real execution, and return whatever it
-        reports back. Same caveat as get_plugin_prompt -- the backing
-        endpoint may not exist yet; a failure response is expected, not
-        exceptional.
+        reports back. Same as get_plugin_prompt -- calls a real backing
+        endpoint; a failure response is ordinary, not exceptional.
         :param plugin_id: The installed plugin's id (profileNum).
         :param args: The arguments the LLM supplied for that tool call. ** it includes the tool_name key, which is the name of the tool to call. **
         :return: {"successful": bool, "data": {...}}
@@ -635,10 +640,10 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
 
     # ------------------------------------------------------------------
-    # Device pairing (used by the Plan feature's "new_installation" flow).
-    # Distinct from add_node -- add_node creates a software node (folder/
-    # group) via the REST API; these drive the physical hub's actual
-    # pairing/linking hardware workflow instead.
+    # Device pairing (used by pair_device). Distinct from add_node --
+    # add_node creates a software node (folder/group) via the REST API;
+    # these drive the physical hub's actual pairing/linking hardware
+    # workflow instead.
     #
     # Two genuinely different, mutually exclusive ways to add a physical
     # device (INSTEON/X10):
@@ -652,13 +657,14 @@ class NuCoreInterface(ABC):
     #    during the session (it commits, it does not cancel/abort despite
     #    the underlying SOAP action's name).
     #
-    # Plan only ever uses add_device -- the batch workflow has no reliable
-    # way to map an anonymously-discovered address back to which room/name
-    # the customer actually meant, so it's deliberately not exposed there.
+    # pair_device's add_by_address action only ever uses add_device -- the
+    # batch workflow has no reliable way to map an anonymously-discovered
+    # address back to which room/name the customer actually meant, so it's
+    # deliberately not exposed there.
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def add_device(self, device_address: str, **kwargs):
+    async def add_device(self, device_address: str, **kwargs) -> bool:
         """
         Add one specific physical device by its own address. Self-contained
         -- no discover/finish follow-up call needed. Protocol-specific under
@@ -667,7 +673,11 @@ class NuCoreInterface(ABC):
         silently no-op.
         :param device_address: The physical device's own address.
         :param kwargs: Reserved for additional protocol-specific parameters.
-        :return: response from the hub, or None/error info on failure.
+        :return: True if the hub accepted the add request, False otherwise.
+            This says nothing about the device's real address -- only the
+            hub's own `_3`/`"ND"` (node added) event is authoritative about
+            that, since the hub's canonical case/shape for the address may
+            differ from whatever was passed in here.
         """
         raise NotImplementedError("Subclasses must implement the add_device method.")
 
@@ -679,8 +689,8 @@ class NuCoreInterface(ABC):
         devices as they want while this is active, with no addresses needed
         upfront. Must be followed by finish_device_discovery() to actually
         program the devices that were linked; there's no address-to-name
-        mapping provided by this call, which is why Plan doesn't use it (see
-        above).
+        mapping provided by this call, which is why pair_device doesn't use
+        it (see above).
 
         :param protocol: Which protocol's linking mode to start (e.g.
             "insteon", "zwave", "zigbee", "matter"). A backend may ignore

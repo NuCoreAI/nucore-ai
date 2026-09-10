@@ -1,6 +1,8 @@
 {
   "max_iterations": 20,
   "preferences_dir": null,
+  "prompt_log_dir": null,
+  "prompt_log_enabled": true,
   "history_token_budget": 20000,
   "nucore_runtime": {
     "default": {
