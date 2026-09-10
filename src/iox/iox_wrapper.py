@@ -144,6 +144,7 @@ class IoXWrapper(NuCoreInterface):
 
         self.unauthorized = False
         self.diagnostics = IoXDiagnostics(self)
+        self.diagnostics.start_subsystem_status_listener()
 
     def __info__(self, info) -> None:
         """Polyglot ISY-info subscription callback.
@@ -2440,10 +2441,6 @@ class IoXWrapper(NuCoreInterface):
             self.device_structure_changed = True # just to be on the safe side
         elif control == "_1": #programs updated event
             self.routines_changed = True # just to be on the safe side
-        elif control in [ "_21" , "_25", "_27", "_28"]: # zw, zw-zwave, zw-zigbee, zw-matter
-            await self.diagnostics.on_device_event(node, control, action, eventInfo)
-        elif control == "_2": # variable write pending
-            await self.diagnostics.update_links_table(node, control, action, eventInfo)
         elif control == "_5": # system busy events -- see subscription_events.md
             if action == "0": # DEVINTIX_SYSTEM_IS_NOT_BUSY_ACTION
                 self.system_busy = False

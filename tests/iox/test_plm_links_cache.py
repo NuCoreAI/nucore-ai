@@ -109,6 +109,20 @@ async def test_get_all_plm_links_ignores_a_small_fresh_cache_file(tmp_path, monk
         return "some content"
     diag._read_from_file = fake_read
 
+    # This test is about the cache decision (too-small -> live scan), not
+    # the streaming mechanics -- stub out the actual event-driven drain
+    # (which needs a real NuCoreInterface for register_listener/
+    # unregister_listener, and would otherwise wait out its real timeout
+    # since this FakeWrapper never dispatches any "_2" events) the same way
+    # tests/iox/test_insteon_links_streaming.py does for an equivalent case.
+    # Still calls the real trigger (the POST, whose own result is ignored
+    # by the real _stream_links_into_file too) so fetch_calls reflects
+    # whether a live scan actually ran.
+    async def fake_stream(action, file_path, type_, trigger, **kwargs):
+        await trigger()
+        return True
+    diag._stream_links_into_file = fake_stream
+
     await diag._get_all_plm_links()
 
     assert len(fetch_calls) == 1, "a too-small cache file must not be served -- a live scan should run instead"
