@@ -1,28 +1,31 @@
 """``pair_device`` -- standalone global tool, not gated behind a Plan
 session. Covers: the protocol/action validity table (structural rejection
-vs. not-yet-supported), each of insteon's 3 real actions, the
-zwave/zigbee/matter inclusion+exclusion actions, the Legacy-Z-Wave error
-carve-out, and that the tool stays callable via dispatch.execute_tool while
-a plan session is running for the owning session_id (confirms dispatch.py's
+vs. not-yet-supported), add_by_address, the unified include/exclude actions
+across insteon/zwave/zigbee/matter, the Legacy-Z-Wave error carve-out, and
+that the tool stays callable via dispatch.execute_tool while a plan session
+is running for the owning session_id (confirms dispatch.py's
 _PLAN_ALWAYS_IMMEDIATE_TOOLS/_SESSION_SCOPED_TOOLS split doesn't crash on an
 unexpected session_id kwarg).
 
-Also covers the post-pairing refresh-and-verify polling in pair_device.py's
-_refresh_until: add_device()/finish_device_discovery() are plain REST calls
-that don't themselves update the local node list, so pair_device polls
-_refresh_device_structure() until the newly-added device actually shows up
-locally (add_by_address), or -- the mirror image -- until an already-known
-device_address disappears (finish_exclusion), rather than assuming one
-refresh call is enough. Also covers start_inclusion/finish_inclusion's
-_inclusion_baselines: the "before" node-address snapshot is taken when
-start_inclusion opens the pairing window, not when finish_inclusion is
-later called, since a device activated mid-window can already be reflected
-in nucore_interface.nodes (via the routine per-turn refresh) by the time
-finish_inclusion runs.
+Also covers the event-driven waits in pair_device.py's use of
+wait_until/wait_for_event/wait_for_node_event (_event_wait.py): add_device()
+is a plain REST call that doesn't itself update the local node list, so
+add_by_address waits for the newly-added device to actually show up locally.
+include instead waits for each protocol's own documented "pairing session
+ended" event (_20/"2" insteon, _25/"2.1" zwave, _27/"2.1" zigbee) --
+confirmed against the real eisy-ui frontend. zwave exclude waits directly
+for the node-removed event (_3/"NR") and takes the removed address straight
+from that event's own node field -- no before/after diffing or
+_has_address re-check needed. finish_device_discovery is never called by
+any of these flows (confirmed not part of the real success path for any
+protocol), so FakeBackend's implementation of it deliberately raises if
+ever invoked, to catch a regression loudly instead of silently returning
+success.
 """
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -34,30 +37,15 @@ from unified.handlers import pair_device as pair_device_module
 from unified.handlers.pair_device import normalize_address, pair_device
 
 
-async def _instant_sleep(_seconds):
-    """Replaces asyncio.sleep so a test whose condition never becomes true
-    doesn't actually block for real seconds -- _refresh_until checks its
-    condition on every poll regardless of whether _refresh_device_structure()
-    itself reports a reload, so any test where nothing ever changes runs the
-    full poll budget's worth of iterations, just without a real wait."""
-    return None
-
-
 @pytest.fixture(autouse=True)
-def _no_real_sleeps(monkeypatch):
-    monkeypatch.setattr(pair_device_module.asyncio, "sleep", _instant_sleep)
-
-
-@pytest.fixture(autouse=True)
-def _clean_inclusion_baselines():
-    # _inclusion_baselines is module-level, shared-instance state (mirrors
-    # the real hub, which can only run one inclusion window per protocol at
-    # a time) -- clear it around every test so a start_inclusion left
-    # dangling by one test (no matching finish_inclusion) can't leak into a
-    # later, unrelated test that happens to use the same protocol.
-    pair_device_module._inclusion_baselines.clear()
-    yield
-    pair_device_module._inclusion_baselines.clear()
+def _fast_wait_timeout(monkeypatch):
+    # wait_until()/wait_for_event() genuinely block (via asyncio.to_thread)
+    # rather than asyncio.sleep()-ing, so they can't be mocked away like a
+    # fixed poll interval could -- shrink both budgets instead, so a test
+    # whose event never arrives still gives up fast rather than for real
+    # seconds.
+    monkeypatch.setattr(pair_device_module, "_WAIT_TOTAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(pair_device_module, "_NODE_ADDED_GRACE_TIMEOUT_S", 0.1)
 
 
 class FakeBackend(NuCoreInterface):
@@ -65,22 +53,18 @@ class FakeBackend(NuCoreInterface):
         super().__init__(json_output=True, formatter_type="minimal")
         self.add_device_calls: list[tuple] = []
         self.discover_calls: list[tuple] = []
-        self.finish_calls: list[tuple] = []
         self.remove_device_calls: list[tuple] = []
         self.add_device_result: object = "1A 2B 3C 1"
         self.discover_result: bool = True
-        self.finish_result: bool = True
         self.remove_device_result: bool = True
         self.discover_error: Exception | None = None
-        self.finish_error: Exception | None = None
         self.remove_device_error: Exception | None = None
         self.refresh_calls = 0
         # add_device stages the address here, and the default
         # _refresh_device_structure below merges it into self.nodes on its
         # first call -- simulates a real hub reload finding what was just
         # added, without needing every existing test to script the refresh
-        # itself. Tests that need to exercise the polling/retry/timeout
-        # logic directly override backend._refresh_device_structure instead.
+        # itself.
         self._pending_nodes: dict[str, str] = {}
         # remove_device stages the address here, consumed by
         # _refresh_device_structure the same way -- simulates the hub
@@ -100,10 +84,11 @@ class FakeBackend(NuCoreInterface):
         return self.discover_result
 
     async def finish_device_discovery(self, flag=1, protocol=None, **kwargs):
-        if self.finish_error is not None:
-            raise self.finish_error
-        self.finish_calls.append((flag, protocol))
-        return self.finish_result
+        # Confirmed (against the real eisy-ui frontend) not part of the
+        # real success path for include/exclude, for any protocol -- raising
+        # here means a regression that starts calling it again fails loudly
+        # instead of silently "working".
+        raise AssertionError("finish_device_discovery must not be called by include/exclude")
 
     async def remove_device(self, device_address, protocol=None, **kwargs):
         if self.remove_device_error is not None:
@@ -116,9 +101,8 @@ class FakeBackend(NuCoreInterface):
     async def _refresh_device_structure(self):
         # Always reports a successful (instant) reload -- merges in whatever
         # add_device staged, if anything. Returning True unconditionally
-        # (rather than only when something changed) keeps tests that don't
-        # care about the refresh mechanics (e.g. finish_inclusion with
-        # nothing staged) from blocking on _refresh_until's real sleep loop.
+        # keeps tests that don't care about the refresh mechanics from
+        # blocking on wait_until's real wait loop.
         self.refresh_calls += 1
         for address, name in self._pending_nodes.items():
             self.nodes[address] = SimpleNamespace(name=name)
@@ -155,6 +139,23 @@ class FakeBackend(NuCoreInterface):
     async def _subscribe_events(self, *a, **kw): raise NotImplementedError
 
 
+async def _fire_complete_event_shortly(backend: FakeBackend, protocol: str, delay: float = 0.02):
+    """Simulates the hub's own "pairing session ended" event arriving --
+    the same (control, action) pair pair_device.py registers for via
+    _INCLUDE_COMPLETE_EVENT."""
+    await asyncio.sleep(delay)
+    control, action = pair_device_module._INCLUDE_COMPLETE_EVENT[protocol]
+    backend._dispatch_event_listeners(control, action, None, {})
+
+
+async def _fire_node_removed_event_shortly(backend: FakeBackend, node_address: str, delay: float = 0.02):
+    """Simulates the hub's own node-removed event (_3/"NR") arriving --
+    zwave exclude registers for this directly and reads the removed address
+    straight out of the event's own node field."""
+    await asyncio.sleep(delay)
+    backend._dispatch_event_listeners("_3", "NR", node_address, {})
+
+
 # ---------------------------------------------------------------------------
 # normalize_address
 # ---------------------------------------------------------------------------
@@ -185,7 +186,7 @@ def test_normalize_address_is_a_no_op_for_other_protocols(protocol):
 
 
 # ---------------------------------------------------------------------------
-# Insteon -- the only implemented protocol
+# add_by_address -- insteon/x10 only
 # ---------------------------------------------------------------------------
 
 
@@ -221,34 +222,6 @@ async def test_add_by_address_reports_failure():
 
 
 @pytest.mark.asyncio
-async def test_start_inclusion_succeeds():
-    backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
-    assert result["status"] == "inclusion_started"
-    assert backend.discover_calls == [(None, "insteon", "include")]
-
-
-@pytest.mark.asyncio
-async def test_finish_inclusion_succeeds():
-    backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
-    assert result["status"] == "inclusion_committed"
-    assert backend.finish_calls == [(1, "insteon")]
-
-
-@pytest.mark.asyncio
-async def test_finish_inclusion_passes_through_flag():
-    backend = FakeBackend()
-    await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion", "flag": 3})
-    assert backend.finish_calls == [(3, "insteon")]
-
-
-# ---------------------------------------------------------------------------
-# Post-pairing refresh-and-verify polling (_refresh_until)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
 async def test_add_by_address_matches_the_hub_reported_address_case_insensitively():
     # The hub's own XML report can come back in a different case than
     # whatever the customer/model typed -- the presence check must not
@@ -269,50 +242,43 @@ async def test_add_by_address_matches_the_hub_reported_address_case_insensitivel
 
 
 @pytest.mark.asyncio
-async def test_add_by_address_waits_for_refresh_before_succeeding():
+async def test_add_by_address_waits_for_an_event_before_succeeding():
+    # The device doesn't show up on the very first refresh -- wait_until
+    # must actually block until a matching device event wakes it (not just
+    # check once and give up), then refresh again and find it.
     backend = FakeBackend()
     calls = {"n": 0}
 
     async def flaky_refresh():
         calls["n"] += 1
-        if calls["n"] < 3:
-            return False
-        backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1")
+        if calls["n"] >= 2:
+            backend.nodes["1A 2B 3C 1"] = SimpleNamespace(name="1A 2B 3C 1")
         return True
 
     backend._refresh_device_structure = flaky_refresh
+
+    async def fire_event_shortly():
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+
+    asyncio.create_task(fire_event_shortly())
 
     result = await pair_device(backend, {
         "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
     })
 
     assert result["status"] == "added"
-    assert calls["n"] == 3
+    assert calls["n"] == 2
 
 
 @pytest.mark.asyncio
-async def test_add_by_address_errors_if_never_refreshed():
-    backend = FakeBackend()
-
-    async def never_refreshes():
-        return False
-
-    backend._refresh_device_structure = never_refreshes
-
-    result = await pair_device(backend, {
-        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
-    })
-
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_add_by_address_errors_if_refreshed_but_device_still_missing():
+async def test_add_by_address_errors_if_the_device_never_appears():
+    # Refresh keeps "succeeding" and no event ever arrives, but the target
+    # address never actually shows up -- wait_until must give up once
+    # _WAIT_TOTAL_TIMEOUT_S elapses.
     backend = FakeBackend()
 
     async def refreshes_but_finds_nothing():
-        # Reload "succeeds" each time, but the target address never actually
-        # appears in backend.nodes -- exhausts _REFRESH_MAX_ATTEMPTS.
         return True
 
     backend._refresh_device_structure = refreshes_but_finds_nothing
@@ -322,98 +288,6 @@ async def test_add_by_address_errors_if_refreshed_but_device_still_missing():
     })
 
     assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_finish_inclusion_returns_newly_discovered_addresses():
-    backend = FakeBackend()
-    await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
-
-    async def discovers_two_devices():
-        backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1")
-        backend.nodes["22 22 22 1"] = SimpleNamespace(name="22 22 22 1")
-        return True
-
-    backend._refresh_device_structure = discovers_two_devices
-
-    result = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
-
-    assert result["status"] == "inclusion_committed"
-    assert {d["address"] for d in result["new_devices"]} == {"11 11 11 1", "22 22 22 1"}
-
-
-@pytest.mark.asyncio
-async def test_finish_inclusion_reports_nothing_new_without_erroring():
-    backend = FakeBackend()
-    await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
-
-    async def refreshes_but_nothing_new():
-        return True
-
-    backend._refresh_device_structure = refreshes_but_nothing_new
-
-    result = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
-
-    assert result["status"] == "inclusion_committed"
-    assert result["new_devices"] == []
-    assert "error" not in result
-
-
-@pytest.mark.asyncio
-async def test_finish_inclusion_finds_a_device_that_appeared_before_finish_was_called():
-    # Regression test: the customer activates the device mid-window, and the
-    # routine per-turn refresh (build_system_prompt -> _refresh_device_structure)
-    # can pick it up well before the customer says "done" and finish_inclusion
-    # actually runs. If "before" were snapshotted at finish_inclusion time
-    # (the old bug), this device would already be in that snapshot and never
-    # get reported.
-    backend = FakeBackend()
-    await pair_device(backend, {"protocol": "zwave", "action": "start_inclusion"})
-
-    # Simulates the routine per-turn refresh landing the new node before
-    # finish_inclusion is ever called.
-    backend.nodes["ZW099"] = SimpleNamespace(name="New Sensor")
-
-    result = await pair_device(backend, {"protocol": "zwave", "action": "finish_inclusion"})
-
-    assert result["status"] == "inclusion_committed"
-    assert [d["address"] for d in result["new_devices"]] == ["ZW099"]
-
-
-@pytest.mark.asyncio
-async def test_start_inclusion_baselines_are_independent_per_protocol():
-    # Starting zigbee's inclusion window must not clobber zwave's
-    # already-recorded baseline (each protocol gets its own dict entry).
-    backend = FakeBackend()
-    backend.nodes["EXISTING"] = SimpleNamespace(name="Existing Device")
-
-    await pair_device(backend, {"protocol": "zwave", "action": "start_inclusion"})
-    await pair_device(backend, {"protocol": "zigbee", "action": "start_inclusion"})
-    # A zigbee device is committed (and its window closed) before the zwave
-    # device shows up, so there's no ambiguity about which window it belongs
-    # to when zwave's own finish_inclusion runs afterward.
-    backend.nodes["ZB001"] = SimpleNamespace(name="Zigbee Device")
-    zigbee_result = await pair_device(backend, {"protocol": "zigbee", "action": "finish_inclusion"})
-    backend.nodes["ZW001"] = SimpleNamespace(name="Zwave Device")
-    zwave_result = await pair_device(backend, {"protocol": "zwave", "action": "finish_inclusion"})
-
-    assert [d["address"] for d in zigbee_result["new_devices"]] == ["ZB001"]
-    assert [d["address"] for d in zwave_result["new_devices"]] == ["ZB001", "ZW001"]
-
-
-@pytest.mark.asyncio
-async def test_finish_inclusion_baseline_is_not_reused_after_being_consumed():
-    backend = FakeBackend()
-    await pair_device(backend, {"protocol": "insteon", "action": "start_inclusion"})
-    backend.nodes["11 11 11 1"] = SimpleNamespace(name="First Device")
-    first = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
-    assert [d["address"] for d in first["new_devices"]] == ["11 11 11 1"]
-
-    # No new start_inclusion call -- the baseline was already popped, so this
-    # falls back to a same-call snapshot and must not re-report the device
-    # that was already committed above.
-    second = await pair_device(backend, {"protocol": "insteon", "action": "finish_inclusion"})
-    assert second["new_devices"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -431,82 +305,307 @@ async def test_x10_add_by_address_is_not_yet_supported():
 
 
 # ---------------------------------------------------------------------------
-# Z-Wave/Zigbee/Matter -- inclusion (add) and exclusion (remove)
+# include -- insteon/zwave/zigbee open pairing mode and block for the
+# protocol's own "session ended" event; matter is redirected to the UI.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
-async def test_start_inclusion_succeeds_for_zmatter_protocols(protocol):
+@pytest.mark.parametrize("protocol", ["insteon", "zwave", "zigbee"])
+async def test_include_opens_pairing_mode_and_reports_a_new_device(protocol):
     backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": protocol, "action": "start_inclusion"})
-    assert result["status"] == "inclusion_started"
+    asyncio.create_task(_fire_complete_event_shortly(backend, protocol))
+
+    async def adds_a_device():
+        backend.nodes["NEW001"] = SimpleNamespace(name="NEW001")
+        return True
+
+    backend._refresh_device_structure = adds_a_device
+
+    result = await pair_device(backend, {"protocol": protocol, "action": "include"})
+
     assert backend.discover_calls == [(None, protocol, "include")]
+    assert result["status"] == "inclusion_committed"
+    assert [d["address"] for d in result["new_devices"]] == ["NEW001"]
 
 
 @pytest.mark.asyncio
-async def test_start_exclusion_opens_an_activation_window_for_zwave():
-    # zwave is the only protocol with a real hardware exclude-mode window --
-    # see zigbee/matter's direct-removal tests below.
+async def test_include_reports_every_device_added_during_the_window_for_insteon():
+    # Insteon's pairing window is multi-device -- several devices can appear
+    # before the customer clicks Finish on their screen (the _20/"2" event).
+    # Waiting for that one terminal event, not the first device, must report
+    # all of them.
+    backend = FakeBackend()
+
+    async def adds_two_devices_then_completes():
+        backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1")
+        backend.nodes["22 22 22 1"] = SimpleNamespace(name="22 22 22 1")
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_20", "2", None, {})
+
+    asyncio.create_task(adds_two_devices_then_completes())
+
+    result = await pair_device(backend, {"protocol": "insteon", "action": "include"})
+
+    assert result["status"] == "inclusion_committed"
+    assert {d["address"] for d in result["new_devices"]} == {"11 11 11 1", "22 22 22 1"}
+
+
+@pytest.mark.asyncio
+async def test_include_waits_for_the_node_added_event_after_the_session_ends():
+    # The pairing session can end (_25/"2.1") slightly before the node
+    # manager actually finishes creating the node's record -- the
+    # _3/ND grace-period wait must give it a moment to land before the final
+    # state check runs, not check immediately once the session ends.
+    backend = FakeBackend()
+
+    async def session_ends_then_node_added_slightly_later():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_25", "2.1", None, {})
+        await asyncio.sleep(0.03)  # within the (monkeypatched) 0.1s grace window
+        backend.nodes["ZW001"] = SimpleNamespace(name="ZW001")
+        backend._dispatch_event_listeners("_3", "ND", "ZW001", {})
+
+    asyncio.create_task(session_ends_then_node_added_slightly_later())
+
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+
+    assert [d["address"] for d in result["new_devices"]] == ["ZW001"]
+
+
+@pytest.mark.asyncio
+async def test_include_reports_nothing_new_without_erroring_on_timeout():
+    backend = FakeBackend()
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+    assert result["status"] == "inclusion_committed"
+    assert result["new_devices"] == []
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_include_does_not_wake_on_a_differently_actioned_event():
+    # wait_for_event registers on the EXACT completion action -- an event on
+    # the same control but a different action (unlike wait_until's wildcard
+    # support) must not satisfy it.
+    backend = FakeBackend()
+
+    async def fire_wrong_action():
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_25", "2.2", None, {})  # "include active", not "2.1" inactive
+
+    asyncio.create_task(fire_wrong_action())
+
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+
+    assert result["new_devices"] == []  # timed out despite the (irrelevant) event
+
+
+@pytest.mark.asyncio
+async def test_include_reports_failure_to_start_pairing_mode():
+    backend = FakeBackend()
+    backend.discover_result = False
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_include_surfaces_a_nucore_error_from_discover_devices():
+    backend = FakeBackend()
+    backend.discover_error = NuCoreError("something went wrong")
+    result = await pair_device(backend, {"protocol": "zigbee", "action": "include"})
+    assert result == {"error": "something went wrong"}
+
+
+@pytest.mark.asyncio
+async def test_include_for_matter_redirects_to_the_ui_instead_of_calling_discover_devices():
+    backend = FakeBackend()
+    result = await pair_device(backend, {"protocol": "matter", "action": "include"})
+    assert "eisy-ui" in result
+    assert backend.discover_calls == []
+
+
+# ---------------------------------------------------------------------------
+# exclude -- zwave opens removal mode then waits directly for the
+# node-removed event (_3/"NR"), reading the removed address out of that
+# event rather than diffing/re-checking node state; zigbee/matter remove
+# directly, one call, no window.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exclude_opens_removal_mode_and_reports_removal_for_zwave():
     backend = FakeBackend()
     backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+    asyncio.create_task(_fire_node_removed_event_shortly(backend, "ZW001"))
+
     result = await pair_device(
-        backend, {"protocol": "zwave", "action": "start_exclusion", "device_address": "ZW001"}
+        backend, {"protocol": "zwave", "action": "exclude", "device_address": "ZW001"}
     )
-    assert result["status"] == "exclusion_started"
-    assert result["device_address"] == "ZW001"
+
     assert backend.discover_calls == [(None, "zwave", "exclude")]
+    assert result["status"] == "exclusion_committed"
+    assert result["removed_devices"] == [{"address": "ZW001", "name": "Front Door Lock"}]
     assert backend.remove_device_calls == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["zigbee", "matter"])
-@pytest.mark.parametrize("action", ["start_exclusion", "finish_exclusion"])
-async def test_exclusion_removes_directly_for_zigbee_and_matter(protocol, action):
-    # Neither zigbee nor matter has an activation-window concept -- eisy-ui
-    # only ever exposes a direct per-address remove endpoint for these two
-    # (see remove_device()/_remove_zmatter_device) -- so either action name
-    # performs the whole removal by itself, in one call.
+async def test_exclude_uses_the_address_carried_by_the_node_removed_event():
+    # The event's own node field is authoritative -- not a diff or a
+    # re-check of the originally requested device_address.
     backend = FakeBackend()
-    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+    asyncio.create_task(_fire_node_removed_event_shortly(backend, "ZW001"))
 
     result = await pair_device(
-        backend, {"protocol": protocol, "action": action, "device_address": "ZB001"}
+        backend, {"protocol": "zwave", "action": "exclude", "device_address": "ZW001"}
     )
 
+    assert result["removed_devices"][0]["address"] == "ZW001"
+
+
+@pytest.mark.asyncio
+async def test_exclude_works_for_zwave_without_a_device_address():
+    # The customer identifies the device physically (activating it while
+    # the hub listens) -- there's nothing to disambiguate in chat, so
+    # device_address must not be required here.
+    backend = FakeBackend()
+    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+    asyncio.create_task(_fire_node_removed_event_shortly(backend, "ZW001"))
+
+    result = await pair_device(backend, {"protocol": "zwave", "action": "exclude"})
+
+    assert backend.discover_calls == [(None, "zwave", "exclude")]
     assert result["status"] == "exclusion_committed"
-    assert result["removed_devices"] == [{"address": "ZB001", "name": "Front Door Sensor"}]
-    assert backend.remove_device_calls == [("ZB001", protocol)]
-    assert "ZB001" not in backend.nodes
-    # Neither the zwave-only activation-window calls nor the other
-    # exclusion action should ever be reached for these protocols.
+    assert result["removed_devices"] == [{"address": "ZW001", "name": "Front Door Lock"}]
+
+
+@pytest.mark.asyncio
+async def test_exclude_rejects_an_unknown_device_address_for_zwave_when_one_is_given():
+    backend = FakeBackend()
+    result = await pair_device(
+        backend, {"protocol": "zwave", "action": "exclude", "device_address": "nope"}
+    )
+    assert "error" in result
     assert backend.discover_calls == []
-    assert backend.finish_calls == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["zigbee", "matter"])
-async def test_calling_both_exclusion_actions_for_zigbee_matter_is_harmless(protocol):
-    # A model that (out of habit, matching zwave's two-step shape) calls
-    # start_exclusion then finish_exclusion for zigbee/matter must not error
-    # on the second call just because the device is already gone.
+async def test_exclude_requires_device_address_for_zigbee_and_matter(protocol):
+    # Unlike zwave, zigbee/matter target one specific address directly --
+    # there's no physical activation window to identify the device instead.
+    backend = FakeBackend()
+    result = await pair_device(backend, {"protocol": protocol, "action": "exclude"})
+    assert "error" in result
+    assert backend.remove_device_calls == []
+
+
+@pytest.mark.asyncio
+async def test_exclude_errors_if_the_node_removed_event_never_arrives():
+    backend = FakeBackend()
+    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
+
+    result = await pair_device(
+        backend, {"protocol": "zwave", "action": "exclude", "device_address": "ZW001"}
+    )
+
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_exclude_removes_directly_for_matter():
+    # matter has no activation-window concept -- eisy-ui only ever exposes
+    # a direct per-address remove endpoint (see remove_device()/
+    # _remove_zmatter_device) -- one call is the whole operation. No
+    # documented "disabled instead of removed" fallback for matter, so a
+    # plain wait for the address to disappear is enough (unlike zigbee).
+    backend = FakeBackend()
+    backend.nodes["MT001"] = SimpleNamespace(name="Front Door Sensor")
+
+    result = await pair_device(
+        backend, {"protocol": "matter", "action": "exclude", "device_address": "MT001"}
+    )
+
+    assert result["status"] == "exclusion_committed"
+    assert result["removed_devices"] == [{"address": "MT001", "name": "Front Door Sensor"}]
+    assert backend.remove_device_calls == [("MT001", "matter")]
+    assert "MT001" not in backend.nodes
+    assert backend.discover_calls == []  # the windowed zwave path is never reached
+
+
+@pytest.mark.asyncio
+async def test_exclude_removes_directly_for_zigbee_when_nr_arrives():
+    backend = FakeBackend()
+    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+    asyncio.create_task(_fire_node_removed_event_shortly(backend, "ZB001"))
+
+    result = await pair_device(
+        backend, {"protocol": "zigbee", "action": "exclude", "device_address": "ZB001"}
+    )
+
+    assert result["status"] == "exclusion_committed"
+    assert result["removed_devices"] == [{"address": "ZB001", "name": "Front Door Sensor"}]
+    assert backend.remove_device_calls == [("ZB001", "zigbee")]
+    assert backend.discover_calls == []
+
+
+@pytest.mark.asyncio
+async def test_exclude_errors_for_zigbee_when_the_hub_only_disables_the_node():
+    # Zigbee removal can fail silently at the network layer -- the hub
+    # disables the node locally instead of actually removing it, firing
+    # _3/"EN" with eventInfo {"enabled": "false"} rather than _3/"NR".
     backend = FakeBackend()
     backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
 
-    first = await pair_device(
-        backend, {"protocol": protocol, "action": "start_exclusion", "device_address": "ZB001"}
-    )
-    second = await pair_device(
-        backend, {"protocol": protocol, "action": "finish_exclusion", "device_address": "ZB001"}
+    async def fire_disabled_event_shortly():
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "EN", "ZB001", {"enabled": "false"})
+
+    asyncio.create_task(fire_disabled_event_shortly())
+
+    result = await pair_device(
+        backend, {"protocol": "zigbee", "action": "exclude", "device_address": "ZB001"}
     )
 
-    assert first["status"] == "exclusion_committed"
-    assert second["status"] == "exclusion_committed"
-    # The device is already gone by the second call, so its name is no
-    # longer available -- _remove_zmatter_device falls back to the address,
-    # same convention as add_by_address's own not-found fallback.
-    assert second["removed_devices"] == [{"address": "ZB001", "name": "ZB001"}]
-    assert len(backend.remove_device_calls) == 2
+    assert "error" in result
+    assert "manually" in result["error"]
+    assert result["device_address"] == "ZB001"
+
+
+@pytest.mark.asyncio
+async def test_exclude_ignores_an_unrelated_en_event_for_zigbee():
+    # enabled=true (re-enabled, not the failure signal) and any other
+    # action on _3 must be discarded rather than mistaken for an outcome --
+    # only NR or EN-with-enabled=false end the wait.
+    backend = FakeBackend()
+    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+
+    async def fire_events_shortly():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "EN", "ZB001", {"enabled": "true"})
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "NR", "ZB001", {})
+
+    asyncio.create_task(fire_events_shortly())
+
+    result = await pair_device(
+        backend, {"protocol": "zigbee", "action": "exclude", "device_address": "ZB001"}
+    )
+
+    assert result["status"] == "exclusion_committed"
+
+
+@pytest.mark.asyncio
+async def test_exclude_errors_for_zigbee_when_neither_event_arrives():
+    backend = FakeBackend()
+    backend.nodes["ZB001"] = SimpleNamespace(name="Front Door Sensor")
+
+    result = await pair_device(
+        backend, {"protocol": "zigbee", "action": "exclude", "device_address": "ZB001"}
+    )
+
+    assert "error" in result
+    assert "manually" not in result["error"]  # a plain timeout, not the disabled-node message
 
 
 @pytest.mark.asyncio
@@ -516,7 +615,7 @@ async def test_zigbee_removal_error_surfaces_from_remove_device():
     backend.remove_device_error = NuCoreError("remove_device is not supported for protocol 'zigbee'")
 
     result = await pair_device(
-        backend, {"protocol": "zigbee", "action": "start_exclusion", "device_address": "ZB001"}
+        backend, {"protocol": "zigbee", "action": "exclude", "device_address": "ZB001"}
     )
 
     assert "error" in result
@@ -524,120 +623,19 @@ async def test_zigbee_removal_error_surfaces_from_remove_device():
 
 
 @pytest.mark.asyncio
-async def test_start_exclusion_requires_device_address():
-    backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": "zwave", "action": "start_exclusion"})
-    assert "error" in result
-    assert backend.discover_calls == []
-
-
-@pytest.mark.asyncio
-async def test_start_exclusion_rejects_an_unknown_device_address():
-    backend = FakeBackend()
-    result = await pair_device(
-        backend, {"protocol": "zwave", "action": "start_exclusion", "device_address": "nope"}
-    )
-    assert "error" in result
-    assert backend.discover_calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["zwave", "zigbee", "matter"])
-async def test_finish_inclusion_returns_newly_discovered_addresses_for_zmatter_protocols(protocol):
-    backend = FakeBackend()
-    await pair_device(backend, {"protocol": protocol, "action": "start_inclusion"})
-
-    async def discovers_one_device():
-        backend.nodes["ZW001"] = SimpleNamespace(name="ZW001")
-        return True
-
-    backend._refresh_device_structure = discovers_one_device
-
-    result = await pair_device(backend, {"protocol": protocol, "action": "finish_inclusion"})
-
-    assert result["status"] == "inclusion_committed"
-    assert backend.finish_calls == [(1, protocol)]
-    assert [d["address"] for d in result["new_devices"]] == ["ZW001"]
-
-
-@pytest.mark.asyncio
-async def test_finish_exclusion_commits_the_activation_window_for_zwave():
-    backend = FakeBackend()
-    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
-
-    async def excludes_the_device():
-        del backend.nodes["ZW001"]
-        return True
-
-    backend._refresh_device_structure = excludes_the_device
-
-    result = await pair_device(
-        backend, {"protocol": "zwave", "action": "finish_exclusion", "device_address": "ZW001"}
-    )
-
-    assert result["status"] == "exclusion_committed"
-    assert backend.finish_calls == [(1, "zwave")]
-    assert result["removed_devices"] == [{"address": "ZW001", "name": "Front Door Lock"}]
-    assert "ZW001" not in backend.nodes
-    assert backend.remove_device_calls == []
-
-
-@pytest.mark.asyncio
-async def test_finish_exclusion_requires_device_address():
-    backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": "zwave", "action": "finish_exclusion"})
-    assert "error" in result
-    assert backend.finish_calls == []
-
-
-@pytest.mark.asyncio
-async def test_finish_exclusion_errors_if_the_address_never_disappears():
-    backend = FakeBackend()
-    backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
-
-    async def refreshes_but_device_still_there():
-        return True
-
-    backend._refresh_device_structure = refreshes_but_device_still_there
-
-    result = await pair_device(
-        backend, {"protocol": "zwave", "action": "finish_exclusion", "device_address": "ZW001"}
-    )
-
-    assert "error" in result
-    assert "ZW001" in backend.nodes
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["start_inclusion", "start_exclusion"])
+@pytest.mark.parametrize("action", ["include", "exclude"])
 async def test_legacy_zwave_returns_a_clear_error_instead_of_pairing(action):
     backend = FakeBackend()
     backend.discover_error = NuCoreError(
         "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
     )
     args = {"protocol": "zwave", "action": action}
-    if action == "start_exclusion":
+    if action == "exclude":
         backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
         args["device_address"] = "ZW001"
     result = await pair_device(backend, args)
     assert "Legacy Z-Wave" in result["error"]
     assert backend.discover_calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["finish_inclusion", "finish_exclusion"])
-async def test_legacy_zwave_finish_returns_a_clear_error_instead_of_pairing(action):
-    backend = FakeBackend()
-    backend.finish_error = NuCoreError(
-        "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
-    )
-    args = {"protocol": "zwave", "action": action}
-    if action == "finish_exclusion":
-        backend.nodes["ZW001"] = SimpleNamespace(name="Front Door Lock")
-        args["device_address"] = "ZW001"
-    result = await pair_device(backend, args)
-    assert "Legacy Z-Wave" in result["error"]
-    assert backend.finish_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -659,21 +657,20 @@ async def test_add_by_address_is_structurally_invalid_for_non_insteon(protocol):
 
 
 @pytest.mark.asyncio
-async def test_start_inclusion_is_structurally_invalid_for_x10():
+async def test_include_is_structurally_invalid_for_x10():
     backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": "x10", "action": "start_inclusion"})
+    result = await pair_device(backend, {"protocol": "x10", "action": "include"})
     assert "error" in result
     assert "not valid for protocol" in result["error"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["insteon", "x10"])
-@pytest.mark.parametrize("action", ["start_exclusion", "finish_exclusion"])
-async def test_exclusion_actions_are_structurally_invalid_for_insteon_and_x10(protocol, action):
+async def test_exclude_is_structurally_invalid_for_insteon_and_x10(protocol):
     # Neither insteon nor x10 model a distinct hardware "exclude" mode in
-    # this codebase -- only zwave/zigbee/matter get these actions.
+    # this codebase -- only zwave/zigbee/matter get this action.
     backend = FakeBackend()
-    result = await pair_device(backend, {"protocol": protocol, "action": action})
+    result = await pair_device(backend, {"protocol": protocol, "action": "exclude"})
     assert "error" in result
     assert "not valid for protocol" in result["error"]
 

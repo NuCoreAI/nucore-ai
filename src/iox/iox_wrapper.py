@@ -1249,19 +1249,21 @@ class IoXWrapper(NuCoreInterface):
                     out = (
                         "Cannot delete a zwave device via node_op -- the hub must be put into "
                         "removal mode instead. Use pair_device(protocol=\"zwave\", "
-                        "action=\"start_exclusion\"), have the customer activate the device to "
-                        "remove, then call finish_exclusion to commit."
+                        "action=\"exclude\") -- device_address is optional here (the customer "
+                        "identifies the device physically by activating it, not by name), so "
+                        "there's no need to ask which device. It opens removal mode and waits "
+                        "(up to ~80s) for the customer to complete it on their own screen, then "
+                        "reports back whichever device the hub actually excluded."
                     )
                     logger.error(out)
                     return out
                 if protocol in ("zigbee", "matter"):
                     out = (
                         f"Cannot delete a {protocol} device via node_op -- call "
-                        f"pair_device(protocol=\"{protocol}\", action=\"start_exclusion\", "
+                        f"pair_device(protocol=\"{protocol}\", action=\"exclude\", "
                         f"device_address=<this device's address>) instead. Unlike zwave, this "
                         "removes the device immediately in that one call -- no activation window, "
-                        "nothing for the customer to press, and no finish_exclusion follow-up call "
-                        "needed or expected."
+                        "nothing for the customer to press, and no follow-up call needed or expected."
                     )
                     logger.error(out)
                     return out
@@ -2415,6 +2417,7 @@ class IoXWrapper(NuCoreInterface):
             action=action.get('value', None)
         node = message.get('node', None)
         eventInfo = message.get('eventInfo', None)
+        self._dispatch_event_listeners(control, action, node, eventInfo)
         if control == "_3": #node updated event
             await self.diagnostics.on_node_updated_event(node, control, action, eventInfo)
             if action and action in [ 'NX', 'PI', 'WD', 'EN', 'WH' ]:

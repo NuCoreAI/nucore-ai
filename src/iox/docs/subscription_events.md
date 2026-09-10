@@ -122,7 +122,7 @@ The most commonly used event category. Fired by `U7Report` and device drivers.
 | `NI` | `DEVINTIX_NODE_SUPPORTED_TYPE_INFO_CHANGED_ACTION` | Node's nodedef changed | `U7Report::reportNodeDefChanged()` |
 | `NE` | `DEVINTIX_NODE_IN_ERROR_ACTION` | Node in error (comm failure) | Node manager |
 | `CE` | `DEVINTIX_NODE_CLEAR_ERROR_ACTION` | Node error cleared | Node manager |
-| `EN` | `DEVINTIX_NODE_ENABLED_ACTION` | Node enabled/disabled | Node manager |
+| `EN` | `DEVINTIX_NODE_ENABLED_ACTION` | Node enabled/disabled -- `eventInfo` is `{"enabled": "true"}` or `{"enabled": "false"}`. Notably, a Zigbee node-removal request can fail silently at the network layer and surface as `EN`/`{"enabled": "false"}` instead of `NR` -- the hub disabled the node locally rather than actually removing it (see `pair_device.py`'s `_remove_zmatter_device`, which watches for both). | Node manager |
 | `PC` | `DEVINTIX_NODE_PARENT_CHANGED_ACTION` | Node parent changed | Node manager |
 | `NX` | `DEVINTIX_NODE_NOTES_CHANGED_ACTION` | Node notes changed | Node manager |
 | `PI` | `DEVINTIX_NODE_POWER_INFO_CHANGED_ACTION` | Power info changed | Node manager |

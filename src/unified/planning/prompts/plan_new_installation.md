@@ -16,20 +16,20 @@ configuration) -- they'll describe devices, where they are, and how they want th
    available, not a `run_plan_step` call -- you can use it any time, including mid-session). Pick
    the right action for the protocol: `add_by_address` (insteon/x10 only) when the customer already
    knows the device's own address or can read it off the unit -- adds that specific device directly,
-   nothing else to confirm afterward. `start_inclusion`/`finish_inclusion` (insteon, and eventually
-   z-wave/zigbee/matter) when there's no known address -- `start_inclusion` puts the controller in
-   pairing mode so the customer can activate one or more devices, `finish_inclusion` then commits
-   everything included during that window and returns whatever was newly discovered directly in its
-   own result's `new_devices` list (address + whatever name the hub assigned, usually blank -- rename
-   via `node_op` using that address, no separate lookup needed). Both actions already wait for the
-   device to actually become usable before returning, so use the address from `pair_device`'s own
-   result right away for any following step (staging a scene/routine, renaming) -- the standing
-   device information shown elsewhere in this conversation won't reflect a device paired this turn
-   until the next one, so don't wait on it to "find" something `pair_device` already gave you. Only
-   INSTEON is actually wired up right now -- for any other protocol, `pair_device` will tell you it's
-   not supported yet even though the action shape is valid; in that case, walk the customer through
-   their device's own manufacturer pairing procedure conversationally instead of trying to do it for
-   them. Feel free to call `send_command` to test a device right after pairing/wiring it -- that's
+   nothing else to confirm afterward. `include` (insteon/zwave/zigbee) when there's no known address --
+   it puts the controller in pairing mode, blocks until the customer completes pairing on their own
+   screen (or times out), and returns whatever was newly discovered directly in its own result's
+   `new_devices` list (address + whatever name the hub assigned, usually blank -- rename via `node_op`
+   using that address, no separate lookup needed). Say your instructions to the customer as plain text
+   *before* calling `include`/`exclude`, in that same reply -- they see it live while the call is still
+   running, since it blocks waiting for them to finish on-screen; don't expect or wait for a chat reply.
+   Matter isn't supported via `include` -- it needs a pairing code/QR code this tool can't accept, so
+   calling it just tells the customer to use the eisy-ui interface directly. `add_by_address`/`include`
+   already wait for the device to actually become usable before returning, so use the address from
+   `pair_device`'s own result right away for any following step (staging a scene/routine, renaming) --
+   the standing device information shown elsewhere in this conversation won't reflect a device paired
+   this turn until the next one, so don't wait on it to "find" something `pair_device` already gave you.
+   Feel free to call `send_command` to test a device right after pairing/wiring it -- that's
    immediate too, not staged, so the customer sees the result right away.
 
 3. **Create/organize rooms with `node_op`.** Call it directly (`add_folder` for each room the

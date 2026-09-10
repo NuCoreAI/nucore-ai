@@ -3,37 +3,81 @@ standalone global tool (not gated behind a Plan session -- see
 ``dispatch.py``'s ``_PLAN_ALWAYS_IMMEDIATE_TOOLS``, which lets this run even
 while a plan session is in progress).
 
-Three structurally different shapes, not one:
+Three actions, one call each -- no multi-turn "start, customer replies,
+finish" shape for any protocol:
 - ``add_by_address`` -- the customer already has/reads the device's own
   address (insteon/x10 only; z-wave/zigbee/matter devices have no usable
-  address until physically activated during an inclusion window).
-- ``start_inclusion``/``finish_inclusion`` -- put the controller in pairing
-  (add) mode, the customer activates one or more devices, then a separate
-  call commits everything included during that window. Available for
-  insteon/zwave/zigbee/matter. ``start_inclusion`` snapshots the current node
-  addresses *before* the pairing window opens (``_inclusion_baselines``) --
-  a device the customer activates mid-window can already be reflected in
-  ``nucore_interface.nodes`` (via the routine per-turn refresh) by the time
-  the customer says "done" and ``finish_inclusion`` actually runs, so the
-  diff has to be against that early snapshot, not one taken at
-  ``finish_inclusion`` time.
-- ``start_exclusion``/``finish_exclusion`` -- for removing a device instead
-  of adding one. zwave/zigbee/matter only -- insteon has no distinct
-  hardware "exclude" mode in this codebase. Unlike inclusion (the new
-  device's address is unknown until it shows up), exclusion always targets
-  an already-known, already-paired device, so both actions require
-  ``device_address`` (the exact address from DEVICE DATABASE). Two different
-  shapes hide behind these same two action names, per protocol:
-  - zwave: a real two-step activation window, same shape as
-    inclusion -- ``start_exclusion`` opens it, the customer physically
-    activates the device, ``finish_exclusion`` commits and polls for that
-    specific address to *disappear* from ``nucore_interface.nodes`` -- the
-    mirror image of ``add_by_address`` polling for its address to *appear*
-    (see ``_has_address``/``_refresh_until`` below).
-  - zigbee/matter: no activation window exists at all -- either call
-    directly and immediately removes the device via ``remove_device()``
-    (mirrors eisy-ui's ``node/:address/remove``), so a single call (either
-    one) is enough; see ``_remove_zmatter_device``.
+  address until physically activated during pairing). Waits (via
+  ``wait_until``) for the address to actually become usable before
+  returning.
+- ``include`` -- add a device whose address isn't known up front (insteon/
+  zwave/zigbee). Opens the hub's pairing mode, then blocks until that
+  protocol's own "pairing session ended" event fires (or times out) -- then,
+  since node creation can lag slightly behind that signal, gives the actual
+  ``_3``/``ND`` (node added) event a brief grace period too (see
+  ``_NODE_ADDED_GRACE_TIMEOUT_S``) before checking final state and reporting
+  whatever new device(s) appeared. Each protocol signals session-end
+  completely differently, confirmed against the real eisy-ui frontend
+  (cloned from ``git@github.com:universaldevices/eisy-ui.git`` and read
+  directly -- ``InsteonDiscoveryDialog.tsx``/``ZWaveDiscoveryDialog.tsx``/
+  ``ZigbeeDiscoveryDialog.tsx``/``FamilyDiscoveryDialog.tsx``):
+    - insteon: the customer finishes by clicking "Finish" in an on-screen
+      eisy-ui dialog -- that click is what actually commits the session
+      (with a flag the customer picks via UI radio buttons, never passed
+      through chat). The dialog's own "COMPLETE" phase is reached on `_20`
+      action `"2"` (`UD_LINKER_EVENT_CLEAR`, category `_20` = Linker
+      Events) -- multi-device is real (the dialog tracks every device found
+      before Finish is clicked), so waiting for this one terminal event
+      rather than the first device appearing preserves that.
+    - zwave/zigbee: driven by their own event category (`_25` zwave, `_27`
+      zigbee), action format `"{category}.{type}"` -- sub-type `2` = include
+      active, `1` = inactive (session ended), fired automatically by the hub,
+      no customer UI click needed. The dialogs' own code comments state
+      "Done: ... No cancel call" on the success path -- `finish_device_
+      discovery`/`node/cancel` is only used to abort early and is never part
+      of normal completion, so this call never makes it either.
+    - matter: **not implemented via chat.** There is no simple `node/include`
+      for Matter -- the real flow (`MatterInclusionDialog.tsx`) needs a
+      customer-supplied pairing code/QR code and a 5-step commissioning
+      sequence with no equivalent in this tool's arguments. `include` for
+      matter returns a message directing the customer to the eisy-ui
+      interface instead of attempting a call that doesn't correspond to
+      anything real. Matter *exclusion* is unaffected -- see below.
+- ``exclude`` -- remove an already-known, already-paired device (zwave/
+  zigbee/matter only -- insteon has no distinct hardware "exclude" mode in
+  this codebase). Two different shapes hide behind this one action name, per
+  protocol:
+  - zwave: ``device_address`` is optional -- the customer identifies the
+    device physically (pressing its own exclude button while the hub
+    listens), not by name in chat, so there is nothing to disambiguate
+    up front. Opens exclude mode, then waits directly for the node-removed
+    event (`_3`/`"NR"`) -- its own `node` field *is* the address of
+    whichever device was just excluded, so no before/after diffing or
+    ``_has_address`` re-check is needed to find out what happened.
+  - zigbee/matter: no activation window exists at all -- confirmed no
+    `node/exclude` exists for either protocol (only a direct per-address
+    `node/:address/remove`, mirrored by ``remove_device()``) -- so
+    ``device_address`` is required here, and this call alone performs the
+    whole removal immediately; see ``_remove_zmatter_device``. Zigbee can
+    fail silently at the network layer -- instead of actually removing the
+    node, the hub sometimes just disables it locally, firing `_3`/`"EN"`
+    (eventInfo `{"enabled": "false"}`) rather than `_3`/`"NR"`. This is
+    detected (waiting for whichever of the two actually happens) and
+    surfaced as an error telling the customer to remove it manually via
+    eisy-ui, instead of reporting a false "success". Matter has no
+    documented equivalent fallback, so it stays a plain wait for the
+    address to disappear.
+
+Every ``include``/``exclude`` call above blocks (up to ``_WAIT_TOTAL_TIMEOUT_S``)
+waiting for the customer's physical action -- the turn loop streams the
+model's own text live to the customer as it's generated, including text
+that precedes a ``tool_use`` block in the same round, *before* that tool
+call executes (see ``claude_adapter.py``). So the model must say
+instructions to the customer ("follow the on-screen instructions...") as
+its own text *immediately before* calling this tool, in the same reply --
+not after, and never expecting the customer to reply in chat to continue --
+since only text preceding a tool call reaches the customer while the call
+is still running.
 
 insteon/zwave/zigbee/matter have real backends today (x10's only action,
 add_by_address, is not implemented for it); every other protocol/action
@@ -47,12 +91,13 @@ as ``NuCoreError``) instead of silently no-op'ing.
 
 from __future__ import annotations
 
-import asyncio
 import re
-from typing import Any, Callable
+from typing import Any
 
 from nucore import NuCoreInterface, NuCoreError
 from utils import get_logger
+
+from ._event_wait import wait_for_event, wait_for_matching_event, wait_for_node_event, wait_until
 
 logger = get_logger(__name__)
 
@@ -91,16 +136,22 @@ def normalize_address(original_address: str, protocol: str) -> str:
     return original_address
 
 
-_INCLUSION_EXCLUSION_ACTIONS = frozenset(
-    {"start_inclusion", "finish_inclusion", "start_exclusion", "finish_exclusion"}
-)
-
 _PROTOCOL_ACTIONS: dict[str, frozenset[str]] = {
-    "insteon": frozenset({"add_by_address", "start_inclusion", "finish_inclusion"}),
+    "insteon": frozenset({"add_by_address", "include"}),
     "x10": frozenset({"add_by_address"}),
-    "zwave": _INCLUSION_EXCLUSION_ACTIONS,
-    "zigbee": _INCLUSION_EXCLUSION_ACTIONS,
-    "matter": _INCLUSION_EXCLUSION_ACTIONS,
+    "zwave": frozenset({"include", "exclude"}),
+    "zigbee": frozenset({"include", "exclude"}),
+    "matter": frozenset({"include", "exclude"}),
+}
+
+# Each protocol's own "pairing session ended" event -- (control, action) --
+# confirmed against the real eisy-ui frontend (see module docstring). This
+# is what `include` waits for; matter isn't here because `include` never
+# reaches discover_devices() for it at all (see module docstring).
+_INCLUDE_COMPLETE_EVENT: dict[str, tuple[str, str]] = {
+    "insteon": ("_20", "2"),
+    "zwave": ("_25", "2.1"),
+    "zigbee": ("_27", "2.1"),
 }
 
 # zigbee/matter removal has no activation-window concept at all (unlike
@@ -113,29 +164,20 @@ _DIRECT_REMOVE_PROTOCOLS = frozenset({"zigbee", "matter"})
 # shape that just isn't backed by a real call yet.
 _IMPLEMENTED_PROTOCOLS = frozenset({"insteon", "zwave", "zigbee", "matter"})
 
-# Baseline node-address sets captured at start_inclusion time, keyed by
-# protocol -- see finish_inclusion below. A device activated during the
-# pairing window can already be reflected in nucore_interface.nodes (via the
-# routine per-turn _refresh_device_structure() call made at the start of
-# every conversation turn) well before the customer says "done" and
-# finish_inclusion actually runs, so the before/after diff has to be against
-# a snapshot taken before the window opened, not one taken at
-# finish_inclusion time. A single shared cache keyed by protocol (not by
-# conversation) matches the real hardware constraint -- the hub can only run
-# one inclusion window per protocol at a time -- and nucore-ai only ever
-# targets a single hub instance (see IoXWrapper._EISYUI_INSTANCE).
-_inclusion_baselines: dict[str, set[str]] = {}
+# add_device()/discover_devices() are plain REST calls -- neither updates
+# the local node list itself. That only happens once the websocket reports
+# the relevant event (guaranteed, but async and not synchronous with the
+# REST call above). So instead of assuming one refresh is enough, we wait --
+# event-driven, via wait_until/wait_for_event -- worst case
+# _WAIT_TOTAL_TIMEOUT_S before giving up.
+_WAIT_TOTAL_TIMEOUT_S = 80
 
-# add_device()/finish_device_discovery() are plain REST POSTs -- neither sets
-# device_structure_changed itself. That only flips once the websocket's
-# node-added event arrives (guaranteed, but async and not synchronous with
-# the REST call above), and _refresh_device_structure() only actually
-# reloads from the hub when that flag is already True. So we poll instead of
-# assuming one call is enough -- worst case _REFRESH_MAX_ATTEMPTS *
-# _REFRESH_POLL_TIMEOUT_S = 80s before giving up.
-_REFRESH_POLL_INTERVAL_S = 2
-_REFRESH_POLL_TIMEOUT_S = 40
-_REFRESH_MAX_ATTEMPTS = 2
+# include's own pairing-session-ended event (_INCLUDE_COMPLETE_EVENT) can
+# fire slightly before the node manager actually finishes creating the new
+# node's record -- once the session itself has ended, this is just a brief
+# grace period for the real _3/ND (node added) event to land before the
+# final state check, not another "wait for the customer" budget.
+_NODE_ADDED_GRACE_TIMEOUT_S = 60
 
 
 def _has_address(nucore_interface: NuCoreInterface, address: str) -> bool:
@@ -149,41 +191,23 @@ def _has_address(nucore_interface: NuCoreInterface, address: str) -> bool:
     return any(key.casefold() == target for key in nucore_interface.nodes)
 
 
-async def _refresh_until(nucore_interface: NuCoreInterface, condition: Callable[[], bool]) -> bool:
-    """Poll every ``_REFRESH_POLL_INTERVAL_S`` seconds, up to
-    ``_REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S`` seconds total, for
-    *condition()* to become true against ``nucore_interface``'s live state.
-
-    Calls ``_refresh_device_structure()`` on every poll as a best-effort
-    nudge, but checks *condition()* regardless of what it returns --
-    ``nucore_interface`` is a shared, system-wide instance, not
-    per-conversation, so something else may have already consumed
-    ``device_structure_changed`` and reloaded before this loop got a turn;
-    gating the condition check on *our own* call reporting a reload would
-    miss a change that already landed via someone else's call.
-    """
-    total_budget_s = _REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S
-    elapsed = 0
-    while True:
-        await nucore_interface._refresh_device_structure()
-        if condition():
-            return True
-        if elapsed >= total_budget_s:
-            return False
-        await asyncio.sleep(_REFRESH_POLL_INTERVAL_S)
-        elapsed += _REFRESH_POLL_INTERVAL_S
+def _is_zigbee_disabled_event(node: str, control: str, action: str, event_info: object) -> bool:
+    """Zigbee removal can fail at the network layer without the REST call
+    itself reporting it -- instead of actually removing the node, the hub
+    sometimes just disables it locally and fires ``_3``/``"EN"`` (node
+    enabled/disabled) with ``eventInfo == {"enabled": "false"}``, never
+    ``_3``/``"NR"`` (node removed) at all."""
+    return action == "EN" and isinstance(event_info, dict) and event_info.get("enabled") == "false"
 
 
 async def _remove_zmatter_device(
     nucore_interface: NuCoreInterface, protocol: str, action: str, device_address: str
 ) -> Any:
     """Zigbee/Matter device removal is one direct call, no activation
-    window (unlike zwave's exclude mode -- see remove_device()). Shared by
-    both start_exclusion and finish_exclusion so either one works by
-    itself; calling both (out of habit, matching zwave's two-step shape) is
-    harmless -- the second call just re-issues the same removal against an
-    address that's typically already gone, and _refresh_until's condition
-    is satisfied immediately.
+    window (unlike zwave's exclude mode -- see remove_device()). This is
+    the only ``exclude`` path for these two protocols -- neither has a
+    windowed `node/exclude` at all (confirmed against the real eisy-ui
+    frontend -- see module docstring).
     """
     # Snapshot the name up front -- it's unavailable once the device is
     # actually gone from nucore_interface.nodes.
@@ -198,12 +222,56 @@ async def _remove_zmatter_device(
     if not ok:
         return {"error": f"failed to remove '{device_address}'"}
 
-    removed = await _refresh_until(nucore_interface, lambda: not _has_address(nucore_interface, device_address))
+    if protocol == "zigbee":
+        # Wait for whichever of the two real outcomes the hub reports --
+        # an actual removal (NR) or a silent fallback to merely disabling
+        # the node (EN, enabled=false) -- rather than inferring success
+        # purely from the node disappearing (a disabled-but-not-removed
+        # node may or may not still show up locally).
+        event = await wait_for_matching_event(
+            nucore_interface, "_3",
+            lambda node, control, evt_action, event_info: evt_action == "NR" or _is_zigbee_disabled_event(node, control, evt_action, event_info),
+            _WAIT_TOTAL_TIMEOUT_S,
+        )
+        await nucore_interface._refresh_device_structure()
+        if event is None:
+            return {
+                "error": (
+                    f"'{device_address}' was still present after "
+                    f"{_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
+                )
+            }
+        _node, _control, matched_action, _event_info = event
+        if matched_action == "EN":
+            return {
+                "error": (
+                    f"'{removed_name}' ({device_address}) could not be removed from the Zigbee "
+                    "network -- the hub only disabled it locally instead. The customer needs to "
+                    "remove it manually from the eisy-ui interface."
+                ),
+                "device_address": device_address,
+            }
+        return {
+            "protocol": protocol, "action": action, "status": "exclusion_committed",
+            "removed_devices": [{"address": device_address, "name": removed_name}],
+            "note": "Removed directly -- zigbee devices don't need a pairing window or physical "
+                    "activation to be removed (unlike zwave); this one call was enough, no follow-up "
+                    "call needed.",
+        }
+
+    # matter -- no documented "disabled instead of removed" fallback, so
+    # this stays a plain wait for the address to actually disappear.
+    removed = await wait_until(
+        nucore_interface, "_3", None,
+        lambda: not _has_address(nucore_interface, device_address),
+        nucore_interface._refresh_device_structure,
+        _WAIT_TOTAL_TIMEOUT_S,
+    )
     if not removed:
         return {
             "error": (
                 f"'{device_address}' was still present after "
-                f"{_REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S}s of waiting -- try again shortly."
+                f"{_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
             )
         }
     return {
@@ -245,17 +313,28 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             return {"error": f"failed to add device '{device_address}'"}
 
         device_address = normalize_address(device_address, protocol)
-        found = await _refresh_until(nucore_interface, lambda: _has_address(nucore_interface, device_address))
+        found = await wait_until(
+            nucore_interface, "_3", None,
+            lambda: _has_address(nucore_interface, device_address),
+            nucore_interface._refresh_device_structure,
+            _WAIT_TOTAL_TIMEOUT_S,
+        )
         if not found:
             return {
                 "error": (
                     f"'{device_address}' was added on the hub but never appeared locally after "
-                    f"{_REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S}s of waiting -- try again shortly."
+                    f"{_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
                 )
             }
         return {"protocol": protocol, "action": action, "device_address": result, "status": "added"}
 
-    if action == "start_inclusion":
+    if action == "include":
+        if protocol == "matter":
+            return (
+                "Adding a Matter device requires scanning a QR code or entering a pairing code, "
+                "which isn't available through this chat -- please use the eisy-ui interface "
+                "directly (Devices -> Add Device -> Matter) to add this device."
+            )
         try:
             ok = await nucore_interface.discover_devices(
                 device_type=args.get("device_type"), protocol=protocol, mode="include",
@@ -264,60 +343,17 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             return {"error": str(e)}
         if not ok:
             return {"error": "failed to start include mode"}
-        _inclusion_baselines[protocol] = set(nucore_interface.nodes.keys())
-        return {
-            "protocol": protocol, "action": action, "status": "inclusion_started",
-            "note": "The hub is now in pairing mode -- tell the customer to activate each device "
-                    "they want to add, then call finish_inclusion to commit.",
-        }
 
-    if action == "start_exclusion":
-        device_address = args.get("device_address")
-        if not device_address:
-            return {"error": "device_address is required for start_exclusion"}
-        if not _has_address(nucore_interface, device_address):
-            return {
-                "error": f"'{device_address}' is not a known device address -- check DEVICE "
-                         "DATABASE for the real address rather than guessing"
-            }
-        if protocol in _DIRECT_REMOVE_PROTOCOLS:
-            return await _remove_zmatter_device(nucore_interface, protocol, action, device_address)
-        try:
-            ok = await nucore_interface.discover_devices(
-                device_type=args.get("device_type"), protocol=protocol, mode="exclude",
-            )
-        except NuCoreError as e:
-            return {"error": str(e)}
-        if not ok:
-            return {"error": "failed to start exclude mode"}
-        return {
-            "protocol": protocol, "action": action, "device_address": device_address,
-            "status": "exclusion_started",
-            "note": f"The hub is now in removal mode -- tell the customer to activate the device "
-                    f"at '{device_address}' now, then call finish_exclusion with this same "
-                    f"device_address to commit.",
-        }
+        before = set(nucore_interface.nodes.keys())
+        control, complete_action = _INCLUDE_COMPLETE_EVENT[protocol]
+        await wait_for_event(nucore_interface, control, complete_action, _WAIT_TOTAL_TIMEOUT_S)
+        # The pairing session has ended -- give the actual node-added event a
+        # brief grace period to land too, in case node creation lags slightly
+        # behind the session-ended signal (see _NODE_ADDED_GRACE_TIMEOUT_S).
+        await wait_for_event(nucore_interface, "_3", "ND", _NODE_ADDED_GRACE_TIMEOUT_S)
+        await nucore_interface._refresh_device_structure()
 
-    if action == "finish_inclusion":
-        flag = args.get("flag", 1)
-        # Pop the baseline captured at start_inclusion time -- see
-        # _inclusion_baselines above. Falls back to a same-call snapshot only
-        # if start_inclusion was never recorded for this protocol (e.g. a
-        # process restart mid-session); that degrades to the old, racy
-        # behavior rather than crashing, but is otherwise never hit in
-        # normal use.
-        before = _inclusion_baselines.pop(protocol, None)
-        if before is None:
-            before = set(nucore_interface.nodes.keys())
-        try:
-            ok = await nucore_interface.finish_device_discovery(flag=flag, protocol=protocol)
-        except NuCoreError as e:
-            return {"error": str(e)}
-        if not ok:
-            return {"error": "failed to commit inclusion session"}
-
-        changed = await _refresh_until(nucore_interface, lambda: set(nucore_interface.nodes.keys()) != before)
-        changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before) if changed else []
+        changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before)
         devices = [
             {"address": address, "name": nucore_interface.nodes[address].name} for address in changed_addresses
         ]
@@ -328,35 +364,59 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
                     "Rename/assign these as needed using the addresses above.",
         }
 
-    # action == "finish_exclusion"
+    # action == "exclude"
     device_address = args.get("device_address")
-    if not device_address:
-        return {"error": "device_address is required for finish_exclusion"}
+
     if protocol in _DIRECT_REMOVE_PROTOCOLS:
+        # zigbee/matter target one specific address directly (no physical
+        # activation window to identify the device some other way), so an
+        # address is genuinely required here.
+        if not device_address:
+            return {"error": "device_address is required for exclude"}
+        if not _has_address(nucore_interface, device_address):
+            return {
+                "error": f"'{device_address}' is not a known device address -- check DEVICE "
+                         "DATABASE for the real address rather than guessing"
+            }
         return await _remove_zmatter_device(nucore_interface, protocol, action, device_address)
-    # Snapshot the name up front -- it's unavailable once the device is
-    # actually gone from nucore_interface.nodes.
-    removed_name = next(
-        (node.name for key, node in nucore_interface.nodes.items() if key.casefold() == device_address.casefold()),
-        device_address,
-    )
-    flag = args.get("flag", 1)
+
+    # zwave only, from here -- device_address is optional: the customer
+    # identifies the device physically (pressing its exclude button while
+    # the hub is listening), and the hub reports back which one it was via
+    # the node-removed event -- there's nothing to disambiguate in chat, so
+    # never ask the customer which device before calling this.
+    if device_address and not _has_address(nucore_interface, device_address):
+        return {
+            "error": f"'{device_address}' is not a known device address -- check DEVICE "
+                     "DATABASE for the real address rather than guessing"
+        }
     try:
-        ok = await nucore_interface.finish_device_discovery(flag=flag, protocol=protocol)
+        ok = await nucore_interface.discover_devices(
+            device_type=args.get("device_type"), protocol=protocol, mode="exclude",
+        )
     except NuCoreError as e:
         return {"error": str(e)}
     if not ok:
-        return {"error": "failed to commit exclusion session"}
+        return {"error": "failed to start exclude mode"}
 
-    removed = await _refresh_until(nucore_interface, lambda: not _has_address(nucore_interface, device_address))
-    if not removed:
+    # The node-removed event's own "node" field *is* the address of the
+    # device that was excluded -- no before/after diffing or _has_address
+    # re-check needed (that older pattern predates real event handling).
+    # Its name is looked up before the refresh below removes it locally.
+    removed_address = await wait_for_node_event(nucore_interface, "_3", "NR", _WAIT_TOTAL_TIMEOUT_S)
+    if removed_address is None:
         return {
             "error": (
-                f"'{device_address}' was still present after "
-                f"{_REFRESH_MAX_ATTEMPTS * _REFRESH_POLL_TIMEOUT_S}s of waiting -- try again shortly."
+                f"no device was excluded after {_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
             )
         }
+    removed_name = next(
+        (node.name for key, node in nucore_interface.nodes.items() if key.casefold() == removed_address.casefold()),
+        removed_address,
+    )
+    await nucore_interface._refresh_device_structure()
+
     return {
         "protocol": protocol, "action": action, "status": "exclusion_committed",
-        "removed_devices": [{"address": device_address, "name": removed_name}],
+        "removed_devices": [{"address": removed_address, "name": removed_name}],
     }

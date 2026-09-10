@@ -283,6 +283,8 @@ implementation actually landed:
     `finish_device_discovery`, → eisy-ui's `start-linking`/`stop-linking`). The *only* shape
     `zwave`/`zigbee`/`matter` will ever use -- their ecosystems call this "inclusion," which is why
     the action names use that term rather than Insteon's own "linking" vocabulary.
+    **(Superseded -- see "Update (2026-09-09)" below: this two-turn shape was later collapsed into
+    a single blocking `include` call, for every protocol.)**
   - A `{protocol: {valid actions}}` table (`pair_device.py`'s `_PROTOCOL_ACTIONS`) rejects an
     invalid protocol/action pairing (e.g. `zwave` + `add_by_address`) as a structural error,
     independent of whether that protocol is implemented yet -- distinct from a valid-but-unbacked
@@ -296,6 +298,7 @@ implementation actually landed:
   Matter have no inclusion-start routes found anywhere yet. Either way, a device only becomes
   eligible for a staged scene/automation once the standing device information confirms it exists
   for real -- Plan never stages configuration for a device that hasn't actually been paired yet.
+  **(Superseded -- see "Update (2026-09-09)" below: all four protocols are implemented now.)**
 
 ## Open risks / tradeoffs
 
@@ -370,6 +373,43 @@ This only landed for `new_installation` -- the mechanism (`dispatch.py`'s three-
 `PlanEngine.stage_tool_call`/`_apply_plan`) is generic and plan-type-agnostic, so every other stub
 plan type in the catalog above inherits it for free whenever it's implemented; their prompt files
 just need writing, not a new staging mechanism.
+
+## Update (2026-09-09): `pair_device` collapsed to `add_by_address`/`include`/`exclude`, all protocols implemented
+
+The `start_inclusion`/`finish_inclusion` shape described above (and its `start_exclusion`/
+`finish_exclusion` mirror added when Z-Wave/Zigbee/Matter were implemented) is gone. A real bug
+report -- removing a Z-Wave device, the assistant lost track of which device it was mid-removal,
+because conversation history only stores flat text, not structured tool-call arguments -- led to
+collapsing the two-turn "start, customer replies, finish" shape entirely, for every protocol
+including Insteon. This was viable because the turn loop already streams the model's own text live
+to the customer *before* a blocking tool call executes, so a single call that says instructions
+then blocks behaves exactly like `add_by_address` always did.
+
+`pair_device` now has exactly three actions:
+- `add_by_address` -- unchanged (Insteon/x10 only).
+- `include` -- opens pairing mode, then blocks (event-driven, via `_event_wait.py`'s
+  `wait_for_event`/`wait_for_node_event`) until that protocol's own real "pairing session ended"
+  signal fires: Insteon's own on-screen "Finish" dialog (`_20`/`"2"`), or Z-Wave/Zigbee's
+  hub-driven auto-transition to inactive (`_25`/`_27`, `"2.1"`) -- confirmed against the real
+  eisy-ui frontend source, not assumed from backend docs alone. `finish_device_discovery` is never
+  called by any of these flows (confirmed not part of the real success path for any protocol).
+  Matter `include` is out of scope -- real Matter commissioning needs a pairing code/QR code this
+  tool has no field for, so it just redirects the customer to the eisy-ui interface.
+- `exclude` -- protocol-specific, not one shape: Z-Wave opens removal mode and waits directly for
+  the node-removed event (`_3`/`"NR"`), reading the removed address straight off that event
+  (no polling/diffing) -- `device_address` is therefore *optional* for Z-Wave, since the customer
+  identifies the device physically (pressing its own button) rather than naming it in chat.
+  Zigbee/Matter have no activation window at all (confirmed no `node/exclude` route exists for
+  either) -- one direct per-address `remove_device()` call is the whole operation, so
+  `device_address` is required for those two. Zigbee can additionally fail silently at the network
+  layer (the hub disables the node locally instead of removing it, firing `_3`/`"EN"` with
+  `eventInfo == {"enabled": "false"}` rather than `_3`/`"NR"`) -- detected and surfaced as an error
+  telling the customer to remove it manually via eisy-ui, instead of reporting a false "success".
+
+All four protocols (`insteon`, `zwave`, `zigbee`, `matter`) are implemented now, not just Insteon
+-- `_IMPLEMENTED_PROTOCOLS` covers all of them; only `x10` remains in the not-yet-supported bucket.
+See `src/unified/handlers/pair_device.py`'s module docstring for the full per-protocol event
+mapping and the eisy-ui research behind it.
 
 ## Status
 
