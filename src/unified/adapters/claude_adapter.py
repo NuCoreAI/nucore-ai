@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, BadRequestError
 from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
 
@@ -26,6 +26,12 @@ class ClaudeAdapter(LLMAdapter):
             base_url: Optional custom endpoint (useful for proxies or testing).
         """
         self._client = AsyncAnthropic(api_key=api_key, base_url=base_url)
+        # Models discovered (via a live 400) not to accept `temperature` --
+        # see the retry logic in generate(). Persists for this adapter
+        # instance's lifetime (one per process, per ProviderDispatchLLMAdapter)
+        # so only the first call to a given such model ever pays for the
+        # failing round-trip; every call after that skips `extra_body` up front.
+        self._no_temperature_models: set[str] = set()
 
     async def generate(
         self,
@@ -98,11 +104,14 @@ class ClaudeAdapter(LLMAdapter):
             ]
         if tools:
             kwargs["tools"] = tools
-        if "temperature" in cfg:
-            # The installed anthropic SDK (>=1.0) dropped `temperature` as a
-            # typed kwarg on create()/stream(); `extra_body` is the SDK's
-            # documented escape hatch for API params it no longer exposes
-            # directly.
+        if cfg.get("temperature") is not None and model not in self._no_temperature_models:
+            # runtime_config.py's resolve_profile always inserts a
+            # "temperature" key (None when unconfigured) -- checking mere
+            # key presence here would misfire on every call regardless of
+            # whether a real value was ever set. The installed anthropic SDK
+            # (>=1.0) dropped `temperature` as a typed kwarg on
+            # create()/stream(); `extra_body` is the SDK's documented escape
+            # hatch for API params it no longer exposes directly.
             kwargs["extra_body"] = {"temperature": cfg["temperature"]}
 
         stream_handler = cfg.get("stream_handler")
@@ -110,11 +119,22 @@ class ClaudeAdapter(LLMAdapter):
 
         # Always use the streaming transport (see docstring) -- only forward
         # chunks to a callback when one is actually configured.
-        async with self._client.messages.stream(**kwargs) as response_stream:
-            if callback is not None:
-                async for text_chunk in response_stream.text_stream:
-                    await callback(text_chunk)
-            final_message = await response_stream.get_final_message()
+        try:
+            final_message = await self._stream_once(kwargs, callback)
+        except BadRequestError as exc:
+            if "extra_body" not in kwargs or not self._is_temperature_deprecated_error(exc):
+                raise
+            # Some newer models reject a caller-supplied temperature outright
+            # (400 "`temperature` is deprecated for this model"), unlike older
+            # ones where it's just an optional sampling knob -- retry once
+            # without it rather than hard-failing every request to such a
+            # model. No fixed model-id list to maintain: this reacts to
+            # whatever the API itself says is unsupported, model by model.
+            # Remembered on the instance so this model never pays for the
+            # failing round-trip again.
+            self._no_temperature_models.add(model)
+            kwargs = {k: v for k, v in kwargs.items() if k != "extra_body"}
+            final_message = await self._stream_once(kwargs, callback)
 
         content = final_message.content
         text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
@@ -130,6 +150,20 @@ class ClaudeAdapter(LLMAdapter):
             "tool_calls": tool_calls,
             "raw": final_message.model_dump(),
         }
+
+    async def _stream_once(self, kwargs: dict[str, Any], callback: Any) -> Any:
+        async with self._client.messages.stream(**kwargs) as response_stream:
+            if callback is not None:
+                async for text_chunk in response_stream.text_stream:
+                    await callback(text_chunk)
+            return await response_stream.get_final_message()
+
+    @staticmethod
+    def _is_temperature_deprecated_error(exc: BadRequestError) -> bool:
+        body = getattr(exc, "body", None)
+        message = str(body.get("error", {}).get("message", "")) if isinstance(body, dict) else ""
+        message = message.lower()
+        return "temperature" in message and "deprecated" in message
 
     def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
         """Convert :class:`ToolSpec` objects to Claude's native tool format.
