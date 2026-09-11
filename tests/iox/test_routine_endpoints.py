@@ -390,6 +390,55 @@ async def test_load_routines_tolerates_summary_fetch_failure():
 
 
 @pytest.mark.asyncio
+async def test_load_routines_does_not_duplicate_on_repeated_refresh():
+    # Regression test: _load_routines used to append onto
+    # all_routines/condensed_routines without clearing them first, so every
+    # refresh (routines_changed flips on nearly every device event) piled
+    # another full copy of every routine onto condensed_routines forever.
+    wrapper = _bare_wrapper_for_load_routines()
+    wrapper.get_device_name = lambda node_id: node_id
+
+    async def fake_get_all_routines():
+        return [{"id": 42, "name": "Bedtime", "parent": 0, "if": [], "then": [], "else": []}]
+
+    async def fake_get_all_routines_summary():
+        return [{"id": 7, "name": "Vacation Mode", "folder": True, "enabled": True, "status": False}]
+
+    wrapper.get_all_routines = fake_get_all_routines
+    wrapper.get_all_routines_summary = fake_get_all_routines_summary
+
+    await wrapper._load_routines()
+    await wrapper._load_routines()
+    await wrapper._load_routines()
+
+    assert len(wrapper.all_routines) == 1
+    assert len(wrapper.condensed_routines) == 2  # one trigger-sourced + one folder-only
+
+
+@pytest.mark.asyncio
+async def test_load_routines_drops_a_routine_deleted_on_the_hub():
+    # A full refresh, not an incremental merge -- a routine gone from the
+    # hub's own response must actually disappear here, not linger forever.
+    wrapper = _bare_wrapper_for_load_routines()
+    wrapper.get_device_name = lambda node_id: node_id
+
+    routines = [{"id": 42, "name": "Bedtime", "parent": 0, "if": [], "then": [], "else": []}]
+
+    async def fake_get_all_routines():
+        return routines
+
+    wrapper.get_all_routines = fake_get_all_routines
+    await wrapper._load_routines()
+    assert set(wrapper.all_routines.keys()) == {42}
+
+    routines.clear()  # simulate the routine having been deleted on the hub
+    await wrapper._load_routines()
+
+    assert wrapper.all_routines == {}
+    assert wrapper.condensed_routines == []
+
+
+@pytest.mark.asyncio
 async def test_get_device_name_list_recurses_into_paren_and_skips_nodeless_types():
     wrapper = _bare_wrapper_for_load_routines()
     wrapper.get_device_name = lambda node_id: {"N1": "Device One"}.get(node_id, node_id)

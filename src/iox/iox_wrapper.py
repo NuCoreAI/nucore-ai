@@ -2167,9 +2167,7 @@ class IoXWrapper(NuCoreInterface):
 
         ``self.variables`` is keyed ``"<type>:<id>"`` (see
         ``NuCoreInterface.get_variable``) so the two id spaces never
-        collide. Rebuilt from scratch each call (unlike ``_load_routines``,
-        which appends -- there's no existing accumulate-across-refreshes
-        behavior to preserve here since this store is brand new).
+        collide. Rebuilt from scratch each call, same as ``_load_routines``.
 
         Called from ``_refresh_routines_database`` before ``_load_routines``
         so routines' ``variable_names`` cross-reference has fresh data to
@@ -2223,10 +2221,18 @@ class IoXWrapper(NuCoreInterface):
         ``device_names``/``comment`` empty since there's no trigger content
         to derive them from.
 
+        Both stores are rebuilt from scratch on every call (not merged/appended) --
+        this is a full refresh, not incremental, so a routine deleted on the hub
+        since the last refresh actually disappears here instead of lingering
+        forever, and repeated calls don't keep piling up duplicate entries.
+
         Silently ignores exceptions so a partial failure does not block
         startup.
         """
         try:
+            self.all_routines = {}
+            self.condensed_routines = []
+
             all_routines = await self.get_all_routines()
 
             try:
