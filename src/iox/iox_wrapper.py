@@ -5,7 +5,7 @@ import os
 import base64
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 import websockets
@@ -62,6 +62,72 @@ def xml_elem_to_obj(elem):
             out[tag] = value
 
     return out
+
+
+def _parse_node_property_history_xml(xml_text: str) -> list[dict[str, Any]]:
+    """Parse a ``GET /rest/history/node/properties/get`` response.
+
+    Confirmed against a live hub -- ``design/history.md``'s originally
+    guessed JSON shape was wrong; the real endpoint returns XML, matching
+    this system's classic ``/rest/...`` style elsewhere (e.g. the old
+    ``GetSystemOptions`` SOAP call)::
+
+        <history>
+          <node id="ZY008_1">
+            <properties>
+              <property id="ST" name="Status">
+                <event timestamp="2026-09-04T15:18:43.231576-07:00">
+                  <value uom="78" precision="0">
+                    <scaled>0</scaled>
+                    <float>0.0</float>
+                    <formatted>Off</formatted>
+                  </value>
+                </event>
+                ...
+              </property>
+            </properties>
+          </node>
+          ...
+        </history>
+
+    Returns one ``{"node", "property", "property_name", "history"}`` group
+    per (node, property) pair actually present in the response -- an empty
+    ``<history>`` (no data recorded for the requested window) yields an
+    empty list, not an error. Each history entry's ``value``/``formatted``/
+    ``uom``/``prec`` field names mirror ``nucore.nodedef.Property``'s own,
+    for consistency with how a live property reads elsewhere in this
+    codebase -- ``value`` is the raw ``<scaled>`` reading (a string, same
+    as ``Property.value``), not the human ``<float>``/``<formatted>`` forms.
+    """
+    root = ET.fromstring(xml_text)
+    groups: list[dict[str, Any]] = []
+    for node_elem in root.findall("node"):
+        node_id = node_elem.get("id")
+        for property_elem in node_elem.findall("./properties/property"):
+            events: list[dict[str, Any]] = []
+            for event_elem in property_elem.findall("event"):
+                value_elem = event_elem.find("value")
+                if value_elem is None:
+                    continue
+                events.append(
+                    {
+                        "timestamp": event_elem.get("timestamp"),
+                        "value": value_elem.findtext("scaled"),
+                        "formatted": value_elem.findtext("formatted"),
+                        "uom": value_elem.get("uom"),
+                        "prec": value_elem.get("precision"),
+                    }
+                )
+            groups.append(
+                {
+                    "node": node_id,
+                    "property": property_elem.get("id"),
+                    "property_name": property_elem.get("name"),
+                    "history": events,
+                }
+            )
+    return groups
+
 
 class IoXWrapper(NuCoreInterface):
     """Direct HTTP/WebSocket wrapper for the Universal Devices IoX (ISY) controller.
@@ -1706,6 +1772,87 @@ class IoXWrapper(NuCoreInterface):
         return await self.diagnostics.run_diagnostic_step(step, **params)
 
     # ------------------------------------------------------------------
+    # Node property history -- see NuCoreInterface.set_node_property_history_recording
+    # / get_node_property_history and design/history.md for the reverse-
+    # engineered backend contract this wraps.
+    # ------------------------------------------------------------------
+
+    async def set_node_property_history_recording(self, enabled: bool) -> dict | None:
+        suffix = "on" if enabled else "off"
+        response = await self.get(f"/rest/history/node/properties/recording/{suffix}")
+        if response is None or response.status_code != 200:
+            return {
+                "successful": False,
+                "data": f"failed to set node property history recording: "
+                        f"{response.status_code if response else 'no response'}",
+            }
+        return {"successful": True, "enabled": enabled}
+
+    async def get_node_property_history(
+        self,
+        device_ids: list[str],
+        properties: list[str],
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        one_before: bool = False,
+        one_after: bool = False,
+        limit: int = 500,
+    ) -> dict | None:
+        nodes: list[str] = []
+        for device_id in device_ids:
+            node = self.get_node(device_id)
+            if node is None:
+                return {"successful": False, "data": f"no device found with id '{device_id}'; check DEVICE DATABASE"}
+            nodes.append(node.address)
+
+        # Property resolution is device-scoped (same as get_property) --
+        # union each name's resolved id across every requested device, so
+        # a name valid on any one of them is accepted; a name matching none
+        # of them is the same "unknown property" error get_property gives.
+        property_ids: list[str] = []
+        for name in properties:
+            resolved = {self.resolve_property_id(device_id, name) for device_id in device_ids}
+            resolved.discard(None)
+            if not resolved:
+                return {
+                    "successful": False,
+                    "data": f"'{name}' is not a known property on any of the given devices; please clarify",
+                }
+            for property_id in resolved:
+                if property_id not in property_ids:
+                    property_ids.append(property_id)
+
+        query_params: dict[str, Any] = {
+            "node": ",".join(nodes),
+            "property": ",".join(property_ids),
+            "limit": limit,
+        }
+        if start:
+            query_params["start"] = start
+        if end:
+            query_params["end"] = end
+        if one_before:
+            query_params["oneBefore"] = "true"
+        if one_after:
+            query_params["oneAfter"] = "true"
+
+        response = await self.get(f"/rest/history/node/properties/get?{urlencode(query_params)}")
+        if response is None or response.status_code != 200:
+            return {
+                "successful": False,
+                "data": f"failed to fetch node property history: "
+                        f"{response.status_code if response else 'no response'}",
+            }
+        try:
+            groups = _parse_node_property_history_xml(response.text)
+        except ET.ParseError as exc:
+            # Never crash on a surprising body -- report it as a backend
+            # error instead.
+            return {"successful": False, "data": f"unexpected (non-XML) response from history endpoint: {exc}"}
+        return {"successful": True, "data": groups}
+
+    # ------------------------------------------------------------------
     # Device pairing -- drives the PLM's physical pairing/linking hardware
     # workflow (distinct from add_node above, which creates a software node
     # via the REST API). Calls eisy-ui's REST API
@@ -1742,7 +1889,7 @@ class IoXWrapper(NuCoreInterface):
         decision from the same system option to pick which family's page to
         show."""
         options = await self.diagnostics._get_system_options()
-        return not options.get("ZMatterZWave", False)
+        return not options.get("zMatterZwave", False)
 
     async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> bool:
         body = {"flag": flag, "address": device_address}

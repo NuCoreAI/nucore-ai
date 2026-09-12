@@ -640,6 +640,74 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
 
     # ------------------------------------------------------------------
+    # Node property history -- design/history.md's reverse-engineered
+    # contract: a global recording on/off toggle, plus a paginated,
+    # multi-node/multi-property query endpoint. Plain methods with a
+    # raising default (the plugin_ops/configure_plugin pattern above), not
+    # @abstractmethod like run_diagnostic_step -- 15 test-only
+    # NuCoreInterface fake subclasses exist across tests/; @abstractmethod
+    # would force every one of them to grow a new stub just to stay
+    # instantiable, for a capability most of them never exercise.
+    # ------------------------------------------------------------------
+
+    async def set_node_property_history_recording(self, enabled: bool) -> dict | None:
+        """
+        Turn node-property history recording on or off -- a single GLOBAL
+        switch for the whole installation (every device/property), not
+        scoped to one device. Persists across IoX restarts; defaults to
+        Off on a fresh install. Implementations call a real backend
+        endpoint -- treat a non-2xx/connection failure as an ordinary,
+        expected outcome (successful=False), same as any other HTTP call.
+        :param enabled: True to turn recording on, False to turn it off.
+        :return: {"successful": bool, "enabled": bool} (on success) or
+            {"successful": False, "data": <error>}.
+        """
+        raise NotImplementedError("Subclasses must implement the set_node_property_history_recording method.")
+
+    async def get_node_property_history(
+        self,
+        device_ids: list[str],
+        properties: list[str],
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        one_before: bool = False,
+        one_after: bool = False,
+        limit: int = 500,
+    ) -> dict | None:
+        """
+        Query recorded historical values for one or more devices' properties
+        -- the full cross-product of device_ids x properties, not exact
+        pairs (a caller wanting exact pairs makes one call per pair).
+        Requires recording to have been on for the requested time range --
+        no data exists for periods when it was off. Implementations resolve
+        each device_id/property name the same way get_property does (real
+        id/address, per-device-scoped property resolution), then query the
+        real backend for the resolved cross-product.
+        :param device_ids: Real device ids, as used by get_property.
+        :param properties: Property display names, as used by get_property
+            -- resolved per-device; a name matching none of the given
+            devices' properties is an error, same shape as get_property's.
+        :param start: ISO-8601 timestamp with offset -- lower time bound,
+            or unbounded if omitted.
+        :param end: ISO-8601 timestamp with offset -- upper time bound, or
+            unbounded if omitted.
+        :param one_before: Include one record immediately before the
+            requested time window, for boundary continuity.
+        :param one_after: Include one record immediately after the
+            requested time window, for boundary continuity.
+        :param limit: Maximum records returned by this call -- the backend
+            caps rather than returning an unbounded result; page using the
+            last returned record's timestamp as the next call's start.
+        :return: {"successful": bool, "data": <list of {"node", "property",
+            "property_name", "history": [{"timestamp", "value", "formatted",
+            "uom", "prec"}]} groups, one per (node, property) pair present
+            in the response, confirmed against a live hub>} on success, or
+            {"successful": False, "data": <error>}.
+        """
+        raise NotImplementedError("Subclasses must implement the get_node_property_history method.")
+
+    # ------------------------------------------------------------------
     # Device pairing (used by pair_device). Distinct from add_node --
     # add_node creates a software node (folder/group) via the REST API;
     # these drive the physical hub's actual pairing/linking hardware

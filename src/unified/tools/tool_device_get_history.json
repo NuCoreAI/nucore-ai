@@ -1,0 +1,55 @@
+{
+  "name": "get_node_property_history",
+  "description": "Fetch recorded historical VALUES for one or more devices' properties over time -- the historical counterpart to get_property, which only reads the CURRENT value. Use this for value/pattern questions: what was the value at a point in time, how has it trended, when did it last change. Requires node-property history recording to have been turned on (via set_node_property_history_recording) for the period being asked about; it defaults to Off, so a query covering a time before recording was enabled will return no data for that period -- that is not an error, and not evidence the feature is broken. If a query seems to be missing data, consider whether recording was actually on then; get_full_system_config's 'Node Property History Enabled' field reports the CURRENT state only, not a history of when it changed.\n\nNOT for 'who/what did this' questions: each recorded event is a CHANGE OF STATE only (a value resent without changing produces no event -- so this under-counts commands, it isn't a full activity log), and it carries no actor -- there is no WEB/ROUTINE/SYSTEM attribution like DEV.LOG's actor column. For 'why did X change', 'who/what turned X on', or any question needing attribution or every command (not just net value changes), use run_shell_command against DEV.LOG instead (see diagnose.md's DEVICE ACTIVITY LOG section) -- do not use this tool for that and do not present a value transition here as if it identifies a cause.\n\nCROSS-PRODUCT semantics: every property in `properties` is queried against every device in `device_ids` -- e.g. device_ids=[A,B], properties=[X,Y] returns up to four series (A/X, A/Y, B/X, B/Y), not just two matched pairs. If you only want specific device/property PAIRS, call this once per pair instead of combining everything into one call. `properties` are display names exactly as get_property/get_device_detail expect (e.g. \"Status\", \"Temperature\") -- resolved per device, same as get_property; a name that isn't a real property on ANY of the given devices is an error.\n\nPAGINATION: results are capped at `limit` records (default 500). If the response includes `more_available: true`, there is more data in the requested window than was returned -- re-call with `start` set to the returned `next_start` to continue, rather than assuming the result is complete. Never omit a bound on a broad query (no start/end, a large limit) expecting to get 'everything' in one call -- narrow the time window or paginate instead.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "device_ids",
+      "properties"
+    ],
+    "properties": {
+      "device_ids": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string"
+        },
+        "description": "Real device ids, exactly as shown in DEVICE DATABASE."
+      },
+      "properties": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string"
+        },
+        "description": "Property display names, exactly as returned by get_device_detail's 'properties' list (not ids)."
+      },
+      "start": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "ISO-8601 timestamp with timezone offset -- lower bound of the time window. Compute a real timestamp from the customer's request using TIME & LOCATION context (e.g. 'yesterday', 'this morning'); omit for no lower bound."
+      },
+      "end": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "ISO-8601 timestamp with timezone offset -- upper bound of the time window. Omit for no upper bound (up to now)."
+      },
+      "one_before": {
+        "type": "boolean",
+        "description": "Include one record immediately before the time window, for boundary continuity. Defaults to false."
+      },
+      "one_after": {
+        "type": "boolean",
+        "description": "Include one record immediately after the time window, for boundary continuity. Defaults to false."
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Maximum records to return in this call. Defaults to 500 -- lower it for a quick check, or page through a larger window using `more_available`/`next_start` in the result."
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ from .handlers import (
     command_control_status,
     diagnostics,
     group_scene_ops,
+    history,
     node_ops,
     pair_device,
     plugin_management,
@@ -53,6 +54,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_preferences": preferences.list_preferences,
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,
+    "set_node_property_history_recording": history.set_node_property_history_recording,
+    "get_node_property_history": history.get_node_property_history,
 }
 
 

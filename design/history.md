@@ -173,35 +173,43 @@ The design suggests a history API with the following behavior profile:
 - query can include neighbors around the requested window for continuity
 - query result is probably a structured history set keyed by node and property ID, with timestamps and values
 
-The exact payload keys are not shown in the email, but the design should assume something like:
+**Update: confirmed against a live hub.** The email gave no sample response, and the guess
+originally recorded here (a JSON `{"node","property","history":[...]}` shape) was wrong -- the
+real endpoint returns **XML**, matching this system's classic `/rest/...` style elsewhere (e.g.
+the old `GetSystemOptions` SOAP call, before it was replaced by `/api/sys` -- see
+`design/history_impl.md` section 4):
 
-```json
-{
-  "node": "1D 6F 15 1",
-  "property": "ST",
-  "history": [
-    {
-      "timestamp": "2023-12-16T21:11:50.939221-08:00",
-      "value": "...",
-      "formatted": "...",
-      "uom": "...",
-      "prec": 1
-    }
-  ]
-}
+```xml
+<history>
+  <node id="ZY008_1">
+    <properties>
+      <property id="ST" name="Status">
+        <event timestamp="2026-09-04T15:18:43.231576-07:00">
+          <value uom="78" precision="0">
+            <scaled>0</scaled>
+            <float>0.0</float>
+            <formatted>Off</formatted>
+          </value>
+        </event>
+        <!-- one <event> per recorded change -->
+      </property>
+      <!-- one <property> per requested property found on this node -->
+    </properties>
+  </node>
+  <!-- one <node> per requested device found in the response -->
+</history>
 ```
 
-This is consistent with the project’s existing model in `src/nucore/nodedef.py`, which already treats a property as a record containing:
+An empty `<history></history>` (no data recorded for the requested window) is the real "no data"
+response, not an error.
 
-- `id`
-- `value`
-- `formatted`
-- `uom`
-- `uom_name`
-- `prec`
-- `name`
-
-The history API likely extends that same conceptual model by adding a timestamp dimension to each property sample.
+`src/iox/iox_wrapper.py`'s `_parse_node_property_history_xml` parses this into one
+`{"node", "property", "property_name", "history"}` group per (node, property) pair, with each
+history entry normalized to `{"timestamp", "value", "formatted", "uom", "prec"}` -- `value` is the
+raw `<scaled>` reading (a string), matching `src/nucore/nodedef.py`'s existing `Property` model
+(`id`/`value`/`formatted`/`uom`/`uom_name`/`prec`/`name`) for consistency with how a live property
+reads elsewhere in this codebase. Unlike routine logic elsewhere in this codebase, the API already
+computes `formatted` per-event itself, so no separate enum-label resolution step is needed here.
 
 ## Technical constraints and assumptions
 
@@ -307,7 +315,8 @@ async def get_node_property_history(
 
 ## Open questions
 
-1. What is the exact response schema for `/rest/history/node/properties/get`?
+1. ~~What is the exact response schema for `/rest/history/node/properties/get`?~~ **Answered**:
+   XML, not JSON -- see "Interpretation of the API contract" above.
 2. Is `property` required to be a property ID or can it accept display names?
 3. Does the controller support a bulk “all properties” query when `property` is omitted?
 4. Is `node` required to be a raw address or can it take aliases/names?
