@@ -66,7 +66,7 @@ _PLM_METHODS = {
 
 
 async def _fake_get_system_options():
-    return {"INSTEONSupport": True}
+    return {"insteonSupport": True}
 
 
 async def _fake_get_core_services_status():

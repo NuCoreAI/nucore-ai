@@ -32,7 +32,7 @@ class _FakeDiagnostics:
         self._zmatter_zwave = zmatter_zwave
 
     async def _get_system_options(self):
-        return {"ZMatterZWave": self._zmatter_zwave}
+        return {"zMatterZwave": self._zmatter_zwave}
 
 
 def _bare_wrapper(zmatter_zwave: bool = True) -> IoXWrapper:

@@ -256,20 +256,27 @@ class IoXDiagnostics:
         self._plm_op_state = None
 
     async def _get_system_options(self) -> dict[str, Any]:
-        """Fetch and parse GetSystemOptions once -- shared by
-        get_full_system_config (all 5 subsystems' "enabled" flags) and
-        quick_plm_sanity_check's INSTEON-enabled check, so the fetch/parse
-        logic lives in exactly one place instead of being duplicated."""
-        options = await self._iox_wrapper._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_SYSTEM_OPTIONS, None)
-        if options is None:
-            logger.error("Failed to get system options: no response")
+        """Fetch subsystem-enabled flags via the plain JSON ``/api/sys``
+        endpoint -- confirmed against a live hub to return the same facts
+        the old SOAP ``GetSystemOptions`` call did (``insteonSupport``,
+        ``zwaveSupport``, ``zMatterZwave``, ``zigbeeSupport``,
+        ``matterSupport``), just camelCase instead of the SOAP response's
+        PascalCase, and as a plain REST GET instead of a SOAP request --
+        simpler to parse, and the same call the node-property-history
+        feature already needs for `nodePropertyHistory` (see
+        design/history_impl.md), so that feature can reuse this fetch
+        instead of adding a second one. Shared by get_full_system_config
+        (all 5 subsystems' "enabled" flags) and quick_plm_sanity_check's
+        INSTEON-enabled check, so the fetch/parse logic lives in exactly
+        one place instead of being duplicated."""
+        response = await self._iox_wrapper.get("/api/sys")
+        if response is None or response.status_code != 200:
+            logger.error(f"Failed to get system options: {response.status_code if response else 'No response'}")
             return {}
         try:
-            root = ET.fromstring(options)
-            system_opts = root.find('.//SystemOptions')
-            return _element_to_dict_excluding(system_opts) if system_opts is not None else {}
-        except ET.ParseError as e:
-            logger.error(f"Failed to parse system options XML: {e}")
+            return response.json().get("data", {}) or {}
+        except Exception as e:
+            logger.error(f"Failed to parse system options JSON: {e}")
             return {}
 
     # get system configuration
@@ -418,11 +425,12 @@ class IoXDiagnostics:
         # system options, system config, about, and availabe upgrades
         # First get system options and update info in subsystem state
         options_config = await self._get_system_options()
-        self._subsystem_state[Subsystems.INSTEON.value]["enabled"] = options_config.get("INSTEONSupport", False)
-        self._subsystem_state[Subsystems.GENERIC_ZWAVE.value]["enabled"] = options_config.get("ZWaveSupport", False)
-        self._subsystem_state[Subsystems.ZWAVE.value]["enabled"] = options_config.get("ZMatterZWave", False)
-        self._subsystem_state[Subsystems.ZIGBEE.value]["enabled"] = options_config.get("ZigbeeSupport", False)
-        self._subsystem_state[Subsystems.MATTER.value]["enabled"] = options_config.get("MatterSupport", False)
+        self._subsystem_state[Subsystems.INSTEON.value]["enabled"] = options_config.get("insteonSupport", False)
+        self._subsystem_state[Subsystems.GENERIC_ZWAVE.value]["enabled"] = options_config.get("zwaveSupport", False)
+        self._subsystem_state[Subsystems.ZWAVE.value]["enabled"] = options_config.get("zMatterZwave", False)
+        self._subsystem_state[Subsystems.ZIGBEE.value]["enabled"] = options_config.get("zigbeeSupport", False)
+        self._subsystem_state[Subsystems.MATTER.value]["enabled"] = options_config.get("matterSupport", False)
+        full_config["Node Property History Enabled"] = options_config.get("nodePropertyHistory", False)
 
         # second get PLM Infomation and update subsystem state
         if self._subsystem_state[Subsystems.INSTEON.value]["enabled"]:
@@ -640,7 +648,7 @@ class IoXDiagnostics:
                 return None
 
             options_config = await self._get_system_options()
-            insteon_enabled = bool(options_config.get("INSTEONSupport", False))
+            insteon_enabled = bool(options_config.get("insteonSupport", False))
 
             try:
                 services_status: Any = await self.get_core_services_status()
