@@ -1,4 +1,4 @@
-"""get_routine_detail must annotate index/enum-uom values (25/146/148) with
+"""get_routine_details must annotate index/enum-uom values (25/146/148) with
 their real label, resolved server-side from the referenced device/command/
 property's live Editor -- not leave the model to notice a raw index needs
 translating and remember to make a follow-up get_device_detail call (it
@@ -128,15 +128,15 @@ async def test_enum_uom_action_params_get_real_labels():
         "else": [],
     }
 
-    result = await execute_tool("get_routine_detail", {"id": 29}, nucore_interface=backend)
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
 
-    gv10_params = result["then"][1]["p"]
+    gv10_params = result[0]["then"][1]["p"]
     assert gv10_params[0]["val"]["label"] == "All"
     assert gv10_params[1]["val"]["label"] == "Clock Radio Alarm"
     assert gv10_params[2]["val"]["label"] == "General Notification"
 
     # non-enum uom (51 = percent) must not get a spurious label
-    assert "label" not in result["then"][0]["p"][0]["val"]
+    assert "label" not in result[0]["then"][0]["p"][0]["val"]
 
 
 @pytest.mark.asyncio
@@ -161,8 +161,8 @@ async def test_status_condition_enum_gets_a_label():
         "else": [],
     }
 
-    result = await execute_tool("get_routine_detail", {"id": 30}, nucore_interface=backend)
-    assert result["if"][0]["val"]["label"] == "On"
+    result = await execute_tool("get_routine_details", {"ids": [30]}, nucore_interface=backend)
+    assert result[0]["if"][0]["val"]["label"] == "On"
 
 
 @pytest.mark.asyncio
@@ -189,5 +189,5 @@ async def test_paren_nested_status_condition_gets_a_label():
         "else": [],
     }
 
-    result = await execute_tool("get_routine_detail", {"id": 31}, nucore_interface=backend)
-    assert result["if"][0]["conditions"][0]["val"]["label"] == "On"
+    result = await execute_tool("get_routine_details", {"ids": [31]}, nucore_interface=backend)
+    assert result[0]["if"][0]["conditions"][0]["val"]["label"] == "On"

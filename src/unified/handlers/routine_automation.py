@@ -20,7 +20,7 @@ backs the *classic* (non-unified) path's full-fidelity device context
 (``NuCoreInterface.rags``, as opposed to the compact ``summary_rags`` the
 unified DEVICE DATABASE uses) -- rather than writing new formatting logic.
 
-``get_routine_detail`` closes the equivalent gap on the routine-content
+``get_routine_details`` closes the equivalent gap on the routine-content
 side: ROUTINES DATABASE (``condensed_routines``) only carries
 id/name/comment/device_names, never the actual if/then/else logic --
 fetching that needs its own explicit tool call, via
@@ -28,8 +28,14 @@ fetching that needs its own explicit tool call, via
 ``get_device_detail`` does for a device's full spec. Belongs here, not in
 ``routine_status_ops.py``, per this codebase's content-vs-runtime-state
 split (``routine_status_ops`` is runtime state only -- enable/disable/run).
+Takes a list of ids and returns one result per id (same "backend does the
+deterministic thing, never rely on model discipline" reasoning as the
+label/name annotation below, applied to round-trip count instead of a
+value lookup: a real session asked the model to confirm several candidate
+routines and it fetched them one at a time across separate turns instead
+of batching the ids into one call).
 
-``get_routine_detail`` also annotates every enumeration-uom value (uom
+``get_routine_details`` also annotates every enumeration-uom value (uom
 25/146/148, per ``is_enumeration_uom``) with its real ``label`` --
 deterministically, server-side, from the referenced device/command/
 property's live ``Editor.ranges[*].names`` -- rather than returning a bare
@@ -469,18 +475,25 @@ def _annotate_action(nucore_interface: NuCoreInterface, action: Any) -> None:
         _annotate_val(param.get("val"), editor)
 
 
-async def get_routine_detail(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    routine_id = args.get("id")
-    if not routine_id:
-        return {"error": "id is required"}
+async def get_routine_details(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    routine_ids = args.get("ids")
+    if not isinstance(routine_ids, list) or not routine_ids:
+        return {"error": "ids is required and must be a non-empty list"}
 
+    results: list[Any] = []
+    for routine_id in routine_ids:
+        results.append(await _get_one_routine_detail(nucore_interface, routine_id))
+    return results
+
+
+async def _get_one_routine_detail(nucore_interface: NuCoreInterface, routine_id: Any) -> Any:
     try:
         result = await nucore_interface.get_routine(routine_id)
     except Exception as exc:
-        return {"error": f"failed to fetch routine detail: {exc}"}
+        return {"id": routine_id, "error": f"failed to fetch routine detail: {exc}"}
 
     if not isinstance(result, dict):
-        return {"error": f"failed to fetch routine '{routine_id}': {_op_error(result)}"}
+        return {"id": routine_id, "error": f"failed to fetch routine '{routine_id}': {_op_error(result)}"}
 
     for condition in result.get("if") or []:
         _annotate_condition(nucore_interface, condition)
@@ -504,7 +517,7 @@ async def create_or_update_routine(nucore_interface: NuCoreInterface, args: dict
         # or the update fails/misbehaves. `parent` is placement metadata,
         # never expressed in the DSL -- fetched here directly rather than
         # trusting the model to have read and correctly threaded it through
-        # from an earlier get_routine_detail call (same "backend does the
+        # from an earlier get_routine_details call (same "backend does the
         # exact lookup, never rely on model discipline for a fact" pattern
         # used throughout this codebase).
         try:

@@ -36,7 +36,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "routine_status_op": routine_status_ops.routine_status_op,
     "create_or_update_routine": routine_automation.create_or_update_routine,
     "get_device_detail": routine_automation.get_device_detail,
-    "get_routine_detail": routine_automation.get_routine_detail,
+    "get_routine_details": routine_automation.get_routine_details,
     "variable_op": variable_ops.variable_op,
     "list_variables": variable_ops.list_variables,
     "list_store_plugins": plugin_management.list_store_plugins,

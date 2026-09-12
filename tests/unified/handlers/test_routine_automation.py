@@ -83,6 +83,7 @@ class FakeBackend(NuCoreInterface):
         self.updated_trigger = None
         self.refresh_calls = 0
         self.routine_detail = None
+        self.routine_details_by_id: dict = {}
 
     async def create_automation_routine(self, trigger):
         self.created_trigger = trigger
@@ -93,6 +94,8 @@ class FakeBackend(NuCoreInterface):
         return FakeResp(self.update_status, self.update_error_body)
 
     async def get_routine(self, routine_id):
+        if routine_id in self.routine_details_by_id:
+            return self.routine_details_by_id[routine_id]
         if self.routine_detail is None:
             return FakeResp(404)
         return self.routine_detail
@@ -464,7 +467,7 @@ async def test_update_routine_replaces_full_content_not_a_patch():
     fetched only a fragment of the current logic (or none at all) would
     silently drop the rest -- this test documents that the handler itself
     enforces no safety net here; the tool description's guidance to call
-    get_routine_detail first is the only thing that prevents data loss."""
+    get_routine_details first is the only thing that prevents data loss."""
     backend = FakeBackend()
     backend.routine_detail = EXISTING_ROUTINE
     minimal_code = 'device("BAR1").command("DON")'
@@ -502,7 +505,7 @@ async def test_create_routine_rejection_surfaces_hub_error_message():
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_returns_full_trigger():
+async def test_get_routine_details_returns_full_trigger():
     backend = FakeBackend()
     backend.routine_detail = {
         "id": 29,
@@ -513,27 +516,44 @@ async def test_get_routine_detail_returns_full_trigger():
         "then": [{"type": "cmd", "id": "DON", "node": "BackyardSteps", "p": []}],
         "else": [],
     }
-    result = await execute_tool("get_routine_detail", {"id": 29}, nucore_interface=backend)
-    assert result["id"] == 29 and result["name"] == "Movie Test"
-    assert result["if"][0]["type"] == "status"
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
+    assert result[0]["id"] == 29 and result[0]["name"] == "Movie Test"
+    assert result[0]["if"][0]["type"] == "status"
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_missing_routine():
+async def test_get_routine_details_missing_routine():
     backend = FakeBackend()
-    result = await execute_tool("get_routine_detail", {"id": 999}, nucore_interface=backend)
-    assert "error" in result and "HTTP 404" in result["error"]
+    result = await execute_tool("get_routine_details", {"ids": [999]}, nucore_interface=backend)
+    assert "error" in result[0] and "HTTP 404" in result[0]["error"]
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_requires_id():
+async def test_get_routine_details_requires_ids():
     backend = FakeBackend()
-    result = await execute_tool("get_routine_detail", {}, nucore_interface=backend)
-    assert "error" in result
+    for bad_args in ({}, {"ids": []}, {"ids": 29}):
+        result = await execute_tool("get_routine_details", bad_args, nucore_interface=backend)
+        assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_annotates_var_condition_and_action_with_name():
+async def test_get_routine_details_batches_multiple_ids_with_partial_failure():
+    """The whole point of taking a list: several routines confirmed in one
+    call instead of one round trip per id -- including when some of them
+    don't exist, which shouldn't fail the ones that do."""
+    backend = FakeBackend()
+    backend.routine_details_by_id = {
+        29: {"id": 29, "name": "Movie Test", "parent": 0, "if": [], "then": [], "else": []},
+        999: FakeResp(404),
+    }
+    result = await execute_tool("get_routine_details", {"ids": [29, 999]}, nucore_interface=backend)
+    assert len(result) == 2
+    assert result[0]["id"] == 29 and result[0]["name"] == "Movie Test"
+    assert result[1]["id"] == 999 and "HTTP 404" in result[1]["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_routine_details_annotates_var_condition_and_action_with_name():
     backend = FakeBackend()
     backend.variables = {
         "1:5": {"id": "5", "name": "Irrigation_Mode", "type": 1},
@@ -551,14 +571,14 @@ async def test_get_routine_detail_annotates_var_condition_and_action_with_name()
         ],
         "else": [],
     }
-    result = await execute_tool("get_routine_detail", {"id": 29}, nucore_interface=backend)
-    assert result["if"][0]["name"] == "Irrigation_Mode"
-    assert result["then"][0]["name"] == "Irrigation_Mode"
-    assert result["then"][0]["var"]["name"] == "Rain_Delay"
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
+    assert result[0]["if"][0]["name"] == "Irrigation_Mode"
+    assert result[0]["then"][0]["name"] == "Irrigation_Mode"
+    assert result[0]["then"][0]["var"]["name"] == "Rain_Delay"
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_annotates_var_action_op_label_but_not_condition():
+async def test_get_routine_details_annotates_var_action_op_label_but_not_condition():
     """Real, observed model mistake: a `var` action's op="EQ" (an
     assignment) got narrated in English as "check if X equals 1" -- the
     wording for a `var` CONDITION (a comparison). op_label removes the
@@ -579,13 +599,13 @@ async def test_get_routine_detail_annotates_var_action_op_label_but_not_conditio
         ],
         "else": [],
     }
-    result = await execute_tool("get_routine_detail", {"id": 9}, nucore_interface=backend)
-    assert result["then"][0]["op_label"] == "set equal to"
-    assert "op_label" not in result["if"][0]
+    result = await execute_tool("get_routine_details", {"ids": [9]}, nucore_interface=backend)
+    assert result[0]["then"][0]["op_label"] == "set equal to"
+    assert "op_label" not in result[0]["if"][0]
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_annotates_while_repeat_var_with_name():
+async def test_get_routine_details_annotates_while_repeat_var_with_name():
     backend = FakeBackend()
     backend.variables = {"2:7": {"id": "7", "name": "Poolpump_has_already_run", "type": 2}}
     backend.routine_detail = {
@@ -598,12 +618,12 @@ async def test_get_routine_detail_annotates_while_repeat_var_with_name():
         ],
         "else": [],
     }
-    result = await execute_tool("get_routine_detail", {"id": 29}, nucore_interface=backend)
-    assert result["then"][0]["while"]["var"]["name"] == "Poolpump_has_already_run"
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
+    assert result[0]["then"][0]["while"]["var"]["name"] == "Poolpump_has_already_run"
 
 
 @pytest.mark.asyncio
-async def test_get_routine_detail_var_condition_without_known_variable_gets_no_name():
+async def test_get_routine_details_var_condition_without_known_variable_gets_no_name():
     backend = FakeBackend()
     backend.variables = {}
     backend.routine_detail = {
@@ -614,5 +634,5 @@ async def test_get_routine_detail_var_condition_without_known_variable_gets_no_n
         "then": [],
         "else": [],
     }
-    result = await execute_tool("get_routine_detail", {"id": 29}, nucore_interface=backend)
-    assert "name" not in result["if"][0]
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
+    assert "name" not in result[0]["if"][0]

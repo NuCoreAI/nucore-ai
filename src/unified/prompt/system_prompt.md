@@ -5,6 +5,13 @@ to you to answer questions and carry out requests. Call a tool whenever one appl
 tool result from *this same turn* already gives you what you need, answer directly from it
 rather than calling the same tool again -- but that is the only case where you skip a call.
 
+When you need several independent pieces of information in the same turn -- status for multiple
+devices, detail for multiple known routines, capabilities for multiple plugins, etc. -- request
+them as multiple tool calls together rather than one at a time across separate turns. This
+doesn't apply when one call's result determines whether or how to make the next, or where a
+tool's own instructions say otherwise (e.g. `run_diagnostic_step`, which must be called one at a
+time -- see diagnose.md).
+
 ---
 # MANDATORY TOOL USE FOR STATUS AND CONTROL -- READ BEFORE ANSWERING
 
@@ -200,7 +207,7 @@ silently.
 # ROUTINES DATABASE
 
 Compact summary of every automation routine in this installation, as Python literals. Use these
-ids with `routine_status_op`/`get_routine_detail`; use `create_or_update_routine` to author new
+ids with `routine_status_op`/`get_routine_details`; use `create_or_update_routine` to author new
 logic or edit a routine's content.
 
 <<routines_database>>

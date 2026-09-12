@@ -67,16 +67,16 @@ actually reference one. Use `variable_op` to create/update/delete a variable its
 
 **Routines** — An if/then/else automation: a condition (device state, time, schedule), a `then`
 branch, an `else` branch. Routines have both *content* (what logic they run, authored/edited via
-`create_or_update_routine`, read via `get_routine_detail`) and *runtime state* (enabled/disabled,
+`create_or_update_routine`, read via `get_routine_details`) and *runtime state* (enabled/disabled,
 currently running, scheduled-to-run-at-startup, operated via `routine_status_op`) — these are
 different questions ("what does this routine do" vs. "is this routine currently active") and use
 different tools. ROUTINES DATABASE only ever lists a routine's name/comment/referenced devices/
-referenced variables — never its actual logic; call `get_routine_detail` for any "what does this
+referenced variables — never its actual logic; call `get_routine_details` for any "what does this
 routine do"/"show me its logic"/"explain this routine" question, or before editing an existing
 routine, never guess its content from the name alone. Unlike everywhere else, `create_or_update_routine`'s DSL needs
 real property/command/parameter ids and uom/precision, not display names — call
 `get_device_detail` for every device it will reference before authoring code (see that tool's own
-description for the full grammar, which `get_routine_detail`'s result also follows).
+description for the full grammar, which `get_routine_details`'s result also follows).
 
 **Diagnosing problems** — Two distinct question shapes both belong here, not just the first:
 (1) the customer describes a device or system problem you can't resolve with the normal
@@ -99,8 +99,10 @@ Once you have the log's actor code for that event, it tells you exactly what to 
   - **SYSTEM alone** (no WEB/ROUTINE entry nearby) — a physical/local action on the device, or a
     scene/link outside NuCore's own command path. Say so honestly. No need for ROUTINES DATABASE.
   - **ROUTINE** — *only now* does ROUTINES DATABASE come in, purely to name which one: the log
-    already told you a routine caused it, so cross-reference `device_names`/schedule for a
-    candidate and confirm with `get_routine_detail` before naming it to the customer.
+    already told you a routine caused it, so cross-reference `device_names`/schedule for
+    candidates and confirm with `get_routine_details` before naming it to the customer — if more
+    than one candidate matches, pass all their ids in the same call rather than checking them one
+    at a time.
 Call `get_diagnostics_prompt` for how to investigate either shape and the steps you can call via
 `run_diagnostic_step` — an ordinary tool, always available, no session to open first.
 
