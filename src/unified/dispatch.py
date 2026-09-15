@@ -37,6 +37,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "routine_status_op": routine_status_ops.routine_status_op,
     "create_or_update_routine": routine_automation.create_or_update_routine,
     "get_device_detail": routine_automation.get_device_detail,
+    "get_device_history": history.get_device_history,
     "get_routine_details": routine_automation.get_routine_details,
     "variable_op": variable_ops.variable_op,
     "list_variables": variable_ops.list_variables,
@@ -51,11 +52,12 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "plugin_ops": plugin_management.plugin_ops,
     "run_diagnostic_step": diagnostics.run_diagnostic_step,
     "get_diagnostics_prompt": diagnostics.get_diagnostics_prompt,
+    "get_full_system_config": diagnostics.get_full_system_config,
+    "get_core_services_status": diagnostics.get_core_services_status,
+    "get_device_family": diagnostics.get_device_family,
     "list_preferences": preferences.list_preferences,
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,
-    "set_node_property_history_recording": history.set_node_property_history_recording,
-    "get_node_property_history": history.get_node_property_history,
 }
 
 

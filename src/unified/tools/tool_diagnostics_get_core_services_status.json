@@ -1,0 +1,8 @@
+{
+  "name": "get_core_services_status",
+  "description": "Returns the status (running/stopped/failed) of NuCore core services: isy, udx, eisyui, mosquitto.ud, etc. No params. Cheap and side-effect-free -- call it freely for any question about whether the system's core services are up, not just while troubleshooting. This is also the mandatory first step (together with get_full_system_config, in the same turn) before any INSTEON diagnostics -- see get_diagnostics_prompt.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

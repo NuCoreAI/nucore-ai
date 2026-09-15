@@ -8,6 +8,8 @@ block other tools -- see tests/iox/test_run_diagnostics.py for the narrow
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from nucore.nucore_interface import NuCoreInterface
@@ -19,11 +21,25 @@ class FakeBackend(NuCoreInterface):
     def __init__(self):
         super().__init__(json_output=True, formatter_type="minimal")
         self.step_calls: list[tuple] = []
-        self.step_result = {"step": "get_full_system_config", "result": "ok"}
+        self.step_result = {"step": "compare_device_links", "result": "ok"}
+        self.full_system_config_result: Any = {"INSTEON Enabled": True}
+        self.core_services_status_result: Any = {"isy": "running"}
+        self.device_family_result: Any = "insteon"
+        self.device_family_calls: list[str] = []
 
     async def run_diagnostic_step(self, step, **params):
         self.step_calls.append((step, params))
         return self.step_result
+
+    async def get_full_system_config(self):
+        return self.full_system_config_result
+
+    async def get_core_services_status(self):
+        return self.core_services_status_result
+
+    async def get_device_family(self, device_id):
+        self.device_family_calls.append(device_id)
+        return self.device_family_result
 
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
@@ -71,9 +87,9 @@ async def test_run_diagnostic_step_passes_step_and_params_through():
 async def test_run_diagnostic_step_defaults_params_to_empty_dict():
     backend = FakeBackend()
 
-    await execute_tool("run_diagnostic_step", {"step": "get_full_system_config"}, nucore_interface=backend)
+    await execute_tool("run_diagnostic_step", {"step": "compare_device_links"}, nucore_interface=backend)
 
-    assert backend.step_calls == [("get_full_system_config", {})]
+    assert backend.step_calls == [("compare_device_links", {})]
 
 
 @pytest.mark.asyncio
@@ -104,7 +120,7 @@ async def test_run_diagnostic_step_rejects_a_non_json_string_params():
     backend = FakeBackend()
 
     result = await execute_tool(
-        "run_diagnostic_step", {"step": "get_full_system_config", "params": "not json"}, nucore_interface=backend
+        "run_diagnostic_step", {"step": "compare_device_links", "params": "not json"}, nucore_interface=backend
     )
 
     assert "error" in result
@@ -116,11 +132,54 @@ async def test_run_diagnostic_step_rejects_non_object_params():
     backend = FakeBackend()
 
     result = await execute_tool(
-        "run_diagnostic_step", {"step": "get_full_system_config", "params": [1, 2, 3]}, nucore_interface=backend
+        "run_diagnostic_step", {"step": "compare_device_links", "params": [1, 2, 3]}, nucore_interface=backend
     )
 
     assert "error" in result
     assert backend.step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_full_system_config_calls_the_backend_directly_no_step_wrapper():
+    # Promoted to a standing top-level tool -- goes straight to
+    # NuCoreInterface.get_full_system_config, not through run_diagnostic_step.
+    backend = FakeBackend()
+
+    result = await execute_tool("get_full_system_config", {}, nucore_interface=backend)
+
+    assert result == backend.full_system_config_result
+    assert backend.step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_core_services_status_calls_the_backend_directly_no_step_wrapper():
+    backend = FakeBackend()
+
+    result = await execute_tool("get_core_services_status", {}, nucore_interface=backend)
+
+    assert result == backend.core_services_status_result
+    assert backend.step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_device_family_calls_the_backend_directly_with_device_id():
+    backend = FakeBackend()
+
+    result = await execute_tool("get_device_family", {"device_id": "n001"}, nucore_interface=backend)
+
+    assert result == backend.device_family_result
+    assert backend.device_family_calls == ["n001"]
+    assert backend.step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_device_family_requires_device_id():
+    backend = FakeBackend()
+
+    result = await execute_tool("get_device_family", {}, nucore_interface=backend)
+
+    assert "error" in result
+    assert backend.device_family_calls == []
 
 
 @pytest.mark.asyncio

@@ -640,72 +640,123 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
 
     # ------------------------------------------------------------------
-    # Node property history -- design/history.md's reverse-engineered
-    # contract: a global recording on/off toggle, plus a paginated,
-    # multi-node/multi-property query endpoint. Plain methods with a
-    # raising default (the plugin_ops/configure_plugin pattern above), not
-    # @abstractmethod like run_diagnostic_step -- 15 test-only
-    # NuCoreInterface fake subclasses exist across tests/; @abstractmethod
-    # would force every one of them to grow a new stub just to stay
-    # instantiable, for a capability most of them never exercise.
+    # Three steps promoted out of the run_diagnostic_step catalog into their
+    # own standing top-level tools -- they're cheap, side-effect-free, and
+    # needed too often/too broadly (the "Step 1, always" INSTEON-diagnostics
+    # rule; any protocol-family question) to justify the get_diagnostics_prompt
+    # round trip every other diagnostic step requires. Implementations may
+    # still share code with run_diagnostic_step's own dispatch target for
+    # these names (e.g. IoXWrapper delegates to the same IoXDiagnostics
+    # methods) -- only the model-facing surface changed. Plain methods with a
+    # raising default (the plugin_ops/get_device_history pattern), not
+    # @abstractmethod like run_diagnostic_step itself -- see get_device_history
+    # above for why.
     # ------------------------------------------------------------------
 
-    async def set_node_property_history_recording(self, enabled: bool) -> dict | None:
+    async def get_full_system_config(self) -> dict[str, Any] | None:
         """
-        Turn node-property history recording on or off -- a single GLOBAL
-        switch for the whole installation (every device/property), not
-        scoped to one device. Persists across IoX restarts; defaults to
-        Off on a fresh install. Implementations call a real backend
-        endpoint -- treat a non-2xx/connection failure as an ordinary,
-        expected outcome (successful=False), same as any other HTTP call.
-        :param enabled: True to turn recording on, False to turn it off.
-        :return: {"successful": bool, "enabled": bool} (on success) or
-            {"successful": False, "data": <error>}.
+        Get the full system configuration: subsystem states, PLM info,
+        versions, available upgrades. No params.
+        :return: A flat dict of config facts.
         """
-        raise NotImplementedError("Subclasses must implement the set_node_property_history_recording method.")
+        raise NotImplementedError("Subclasses must implement the get_full_system_config method.")
 
-    async def get_node_property_history(
+    async def get_core_services_status(self) -> dict[str, Any] | None:
+        """
+        Returns the status (running/stopped/failed) of NuCore core services:
+        isy, udx, eisyui, mosquitto.ud, etc. No params.
+        :return: A dict of service name -> status.
+        """
+        raise NotImplementedError("Subclasses must implement the get_core_services_status method.")
+
+    async def get_device_family(self, device_id: str) -> str | None:
+        """
+        Returns a device's real protocol family: insteon, z-wave, zigbee,
+        matter, plugin, or unknown -- never infer this from a device's name,
+        address/id, or icon.
+        :param device_id: The device's real id.
+        :return: The family name as a string.
+        """
+        raise NotImplementedError("Subclasses must implement the get_device_family method.")
+
+    # ------------------------------------------------------------------
+    # Device history -- backed by the ISY/eisy firmware's own structured
+    # DEV.LOG capture (DEVLOG.DB, see design/history_impl_isy.md), queried
+    # directly via the `sqlite3` CLI. Replaces the older
+    # get_node_property_history/set_node_property_history_recording pair
+    # (design/iox_apis/history.md/design/history_impl.md, removed) -- DEVLOG.DB is always
+    # populated (no recording toggle to remember to turn on) and every row
+    # carries an Actor (System/Web/Routine/...), so this single tool now
+    # answers both "what was the value" and "who/what caused it" questions.
+    # Plain method with a raising default (the plugin_ops/configure_plugin
+    # pattern above), not @abstractmethod like run_diagnostic_step -- 15
+    # test-only NuCoreInterface fake subclasses exist across tests/;
+    # @abstractmethod would force every one of them to grow a new stub just
+    # to stay instantiable, for a capability most of them never exercise.
+    # ------------------------------------------------------------------
+
+    async def get_device_history(
         self,
-        device_ids: list[str],
-        properties: list[str],
+        device_ids: list[str] | None = None,
+        properties: list[str] | None = None,
         *,
         start: str | None = None,
         end: str | None = None,
         one_before: bool = False,
         one_after: bool = False,
         limit: int = 500,
+        sql: str | None = None,
     ) -> dict | None:
         """
-        Query recorded historical values for one or more devices' properties
-        -- the full cross-product of device_ids x properties, not exact
-        pairs (a caller wanting exact pairs makes one call per pair).
-        Requires recording to have been on for the requested time range --
-        no data exists for periods when it was off. Implementations resolve
-        each device_id/property name the same way get_property does (real
-        id/address, per-device-scoped property resolution), then query the
-        real backend for the resolved cross-product.
+        Query recorded historical activity for one or more devices'
+        properties -- the full cross-product of device_ids x properties,
+        not exact pairs (a caller wanting exact pairs makes one call per
+        pair). Implementations resolve each device_id/property name the
+        same way get_property does (real id/address, per-device-scoped
+        property resolution), then query DEVLOG.DB for the resolved
+        cross-product.
+
+        Two mutually exclusive modes: structured (device_ids/properties,
+        below) or raw SQL (``sql``, for aggregation/grouping/counting
+        questions the structured params can't express) -- passing both is
+        an error. Implementations must validate ``sql`` is a single
+        read-only SELECT/WITH statement before executing it (not a second
+        unsandboxed shell).
         :param device_ids: Real device ids, as used by get_property.
+            Required unless ``sql`` is given.
         :param properties: Property display names, as used by get_property
             -- resolved per-device; a name matching none of the given
             devices' properties is an error, same shape as get_property's.
+            Required unless ``sql`` is given.
         :param start: ISO-8601 timestamp with offset -- lower time bound,
-            or unbounded if omitted.
+            or unbounded if omitted. Structured mode only.
         :param end: ISO-8601 timestamp with offset -- upper time bound, or
-            unbounded if omitted.
+            unbounded if omitted. Structured mode only.
         :param one_before: Include one record immediately before the
-            requested time window, for boundary continuity.
+            requested time window, for boundary continuity. Structured
+            mode only.
         :param one_after: Include one record immediately after the
-            requested time window, for boundary continuity.
-        :param limit: Maximum records returned by this call -- the backend
-            caps rather than returning an unbounded result; page using the
-            last returned record's timestamp as the next call's start.
-        :return: {"successful": bool, "data": <list of {"node", "property",
-            "property_name", "history": [{"timestamp", "value", "formatted",
-            "uom", "prec"}]} groups, one per (node, property) pair present
-            in the response, confirmed against a live hub>} on success, or
+            requested time window, for boundary continuity. Structured
+            mode only.
+        :param limit: Maximum records/rows returned by this call, either
+            mode -- implementations cap rather than returning an unbounded
+            result. Structured mode: page using the last returned record's
+            timestamp as the next call's start. Raw-SQL mode: a hard
+            maximum applies regardless of the value given; check the
+            result's ``truncated`` flag.
+        :param sql: A single read-only SELECT (or WITH ... SELECT)
+            statement against DEVLOG.DB's DevLogEvents table. Mutually
+            exclusive with device_ids/properties/start/end/one_before/
+            one_after.
+        :return: Structured mode: {"successful": bool, "data": <list of
+            {"node", "device_name", "property", "property_name", "history":
+            [{"timestamp", "action", "actor", "is_command"}]} groups, one
+            per (node, property) pair present in DEVLOG.DB>} on success, or
             {"successful": False, "data": <error>}.
+            Raw-SQL mode: {"successful": bool, "data": <list of row dicts>,
+            "truncated": bool} on success, or {"successful": False, "data": <error>}.
         """
-        raise NotImplementedError("Subclasses must implement the get_node_property_history method.")
+        raise NotImplementedError("Subclasses must implement the get_device_history method.")
 
     # ------------------------------------------------------------------
     # Device pairing (used by pair_device). Distinct from add_node --

@@ -52,7 +52,7 @@ the real `udi` firmware source:
 
 ## Context
 
-`get_node_property_history` (see `design/history.md`, `design/history_impl.md`) wraps the hub's
+`get_node_property_history` (see `design/iox_apis/history.md`, `design/history_impl.md`) wraps the hub's
 `/rest/history/node/properties/get` endpoint. Comparing its real output against a live payload
 surfaced two structural limits, confirmed against the actual XML shape:
 

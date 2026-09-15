@@ -14,8 +14,7 @@ from iox.diagnostics.iox_diagnostics import IoXDiagnostics
 from iox.iox_wrapper import IoXWrapper
 
 STEP_NAMES = {
-    "get_full_system_config", "get_core_services_status",
-    "services_ops", "get_device_family", "get_dev_links_table", "get_iox_links_table",
+    "services_ops", "get_dev_links_table", "get_iox_links_table",
     "compare_device_links", "get_all_plm_links", "quick_plm_sanity_check",
 }
 
@@ -96,15 +95,15 @@ async def test_run_diagnostic_step_dispatches_to_the_backend_method():
 
     calls = []
 
-    async def fake_get_full_system_config():
+    async def fake_quick_plm_sanity_check():
         calls.append("called")
         return {"ok": True}
 
-    diag.get_full_system_config = fake_get_full_system_config
+    diag.quick_plm_sanity_check = fake_quick_plm_sanity_check
 
-    result = await diag.run_diagnostic_step("get_full_system_config")
+    result = await diag.run_diagnostic_step("quick_plm_sanity_check")
 
-    assert result == {"step": "get_full_system_config", "result": {"ok": True}}
+    assert result == {"step": "quick_plm_sanity_check", "result": {"ok": True}}
     assert calls == ["called"]
 
 
@@ -133,9 +132,9 @@ async def test_run_diagnostic_step_catches_unexpected_exceptions():
     async def failing():
         raise RuntimeError("hub unreachable")
 
-    diag.get_full_system_config = failing
+    diag.quick_plm_sanity_check = failing
 
-    result = await diag.run_diagnostic_step("get_full_system_config")
+    result = await diag.run_diagnostic_step("quick_plm_sanity_check")
 
     assert "error" in result
     assert "hub unreachable" in result["error"]
@@ -146,13 +145,27 @@ async def test_run_diagnostic_step_is_always_available_no_session_needed():
     # Calling it back-to-back with no start call and nothing in between --
     # there's no session state to be missing.
     diag = _bare_diagnostics()
-    diag.get_device_family = lambda device_id=None, **kw: _resolved("insteon")
+    diag.get_iox_links_table = lambda device_id=None, **kw: _resolved("insteon")
 
-    first = await diag.run_diagnostic_step("get_device_family", device_id="n001")
-    second = await diag.run_diagnostic_step("get_device_family", device_id="n002")
+    first = await diag.run_diagnostic_step("get_iox_links_table", device_id="n001")
+    second = await diag.run_diagnostic_step("get_iox_links_table", device_id="n002")
 
     assert first["result"] == "insteon"
     assert second["result"] == "insteon"
+
+
+@pytest.mark.asyncio
+async def test_run_diagnostic_step_rejects_promoted_steps_by_name():
+    # get_full_system_config/get_core_services_status/get_device_family were
+    # promoted to standing top-level tools (see NuCoreInterface's own
+    # methods) and deliberately removed from diagnose.md's step catalog --
+    # calling them through the old string-dispatch path is now a clear
+    # "unknown step" error, not a silent success.
+    diag = _bare_diagnostics()
+
+    for step in ("get_full_system_config", "get_core_services_status", "get_device_family"):
+        result = await diag.run_diagnostic_step(step)
+        assert "error" in result
 
 
 async def _resolved(value):
@@ -177,13 +190,63 @@ async def test_wrapper_run_diagnostic_step_delegates():
 
     calls = []
 
-    async def fake_get_full_system_config():
+    async def fake_quick_plm_sanity_check():
         calls.append("called")
         return {"ok": True}
 
-    wrapper.diagnostics.get_full_system_config = fake_get_full_system_config
+    wrapper.diagnostics.quick_plm_sanity_check = fake_quick_plm_sanity_check
 
-    result = await wrapper.run_diagnostic_step("get_full_system_config")
+    result = await wrapper.run_diagnostic_step("quick_plm_sanity_check")
 
-    assert result == {"step": "get_full_system_config", "result": {"ok": True}}
+    assert result == {"step": "quick_plm_sanity_check", "result": {"ok": True}}
     assert calls == ["called"]
+
+
+# ----------------------------------------------------------------------
+# The three steps promoted to standing top-level tools -- IoXWrapper now
+# exposes them directly (NuCoreInterface.get_full_system_config/
+# get_core_services_status/get_device_family), delegating to the exact same
+# IoXDiagnostics methods run_diagnostic_step used to dispatch to by name.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wrapper_get_full_system_config_delegates_to_diagnostics():
+    wrapper = _bare_wrapper_with_diagnostics()
+
+    async def fake():
+        return {"ok": True}
+
+    wrapper.diagnostics.get_full_system_config = fake
+
+    assert await wrapper.get_full_system_config() == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_wrapper_get_core_services_status_delegates_to_diagnostics():
+    wrapper = _bare_wrapper_with_diagnostics()
+
+    async def fake():
+        return {"isy": "running"}
+
+    wrapper.diagnostics.get_core_services_status = fake
+
+    assert await wrapper.get_core_services_status() == {"isy": "running"}
+
+
+@pytest.mark.asyncio
+async def test_wrapper_get_device_family_delegates_to_diagnostics_with_device_id():
+    wrapper = _bare_wrapper_with_diagnostics()
+
+    received = {}
+
+    async def fake(device_id=None, **kwargs):
+        received["device_id"] = device_id
+        return "insteon"
+
+    wrapper.diagnostics.get_device_family = fake
+
+    result = await wrapper.get_device_family("n001")
+
+    assert result == "insteon"
+    assert received["device_id"] == "n001"

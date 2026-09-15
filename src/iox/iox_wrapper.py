@@ -1,11 +1,14 @@
+import asyncio
 import datetime
 import json
+import sqlite3
 import sys
 import os
 import base64
+import time
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 import httpx
 import websockets
@@ -64,69 +67,204 @@ def xml_elem_to_obj(elem):
     return out
 
 
-def _parse_node_property_history_xml(xml_text: str) -> list[dict[str, Any]]:
-    """Parse a ``GET /rest/history/node/properties/get`` response.
+# ------------------------------------------------------------------
+# Device history -- queries the ISY/eisy firmware's own structured DEV.LOG
+# capture (see design/history_impl_isy.md) directly via Python's built-in
+# `sqlite3` module, rather than the older `/rest/history/node/properties/get`
+# REST endpoint
+# (design/iox_apis/history.md/design/history_impl.md -- now removed). DEVLOG.DB is a
+# strict superset of that old endpoint's data: it is always populated (no
+# recording on/off toggle to forget about), and every row carries an
+# `Actor` (System/Web/Routine/...), which the old endpoint could never
+# provide -- see design/history_impl_isy.md's schema section.
+# ------------------------------------------------------------------
 
-    Confirmed against a live hub -- ``design/history.md``'s originally
-    guessed JSON shape was wrong; the real endpoint returns XML, matching
-    this system's classic ``/rest/...`` style elsewhere (e.g. the old
-    ``GetSystemOptions`` SOAP call)::
+_DEVLOG_DB_PATH = "/var/isy/FILES/LOG/DEVLOG.DB"
+_SQLITE_QUERY_TIMEOUT_S = 15
 
-        <history>
-          <node id="ZY008_1">
-            <properties>
-              <property id="ST" name="Status">
-                <event timestamp="2026-09-04T15:18:43.231576-07:00">
-                  <value uom="78" precision="0">
-                    <scaled>0</scaled>
-                    <float>0.0</float>
-                    <formatted>Off</formatted>
-                  </value>
-                </event>
-                ...
-              </property>
-            </properties>
-          </node>
-          ...
-        </history>
+# LOCAL_ISO(EventTime) is registered on every DEVLOG.DB connection (see
+# _run_devlog_sqlite_query_sync) -- the one correct conversion for the
+# column's raw UTC epoch seconds, bound to *this* installation's real
+# timezone (get_device_history's own _resolve_history_tzinfo), never the
+# server process's own OS timezone the way SQLite's built-in
+# datetime(..., 'localtime') would resolve against.
+_DEVLOG_COLUMNS = (
+    "NodeAddress, NodeName, ControlId, ControlLabel, Action, Actor, EventTime, IsCommand, "
+    "LOCAL_ISO(EventTime) AS EventTimeLocal"
+)
 
-    Returns one ``{"node", "property", "property_name", "history"}`` group
-    per (node, property) pair actually present in the response -- an empty
-    ``<history>`` (no data recorded for the requested window) yields an
-    empty list, not an error. Each history entry's ``value``/``formatted``/
-    ``uom``/``prec`` field names mirror ``nucore.nodedef.Property``'s own,
-    for consistency with how a live property reads elsewhere in this
-    codebase -- ``value`` is the raw ``<scaled>`` reading (a string, same
-    as ``Property.value``), not the human ``<float>``/``<formatted>`` forms.
-    """
-    root = ET.fromstring(xml_text)
-    groups: list[dict[str, Any]] = []
-    for node_elem in root.findall("node"):
-        node_id = node_elem.get("id")
-        for property_elem in node_elem.findall("./properties/property"):
-            events: list[dict[str, Any]] = []
-            for event_elem in property_elem.findall("event"):
-                value_elem = event_elem.find("value")
-                if value_elem is None:
-                    continue
-                events.append(
-                    {
-                        "timestamp": event_elem.get("timestamp"),
-                        "value": value_elem.findtext("scaled"),
-                        "formatted": value_elem.findtext("formatted"),
-                        "uom": value_elem.get("uom"),
-                        "prec": value_elem.get("precision"),
-                    }
-                )
-            groups.append(
-                {
-                    "node": node_id,
-                    "property": property_elem.get("id"),
-                    "property_name": property_elem.get("name"),
-                    "history": events,
-                }
-            )
-    return groups
+
+def _sql_quote(value: Any) -> str:
+    """Escape a value for embedding as a SQL string literal (doubling
+    embedded single quotes) -- the same manual-escaping approach
+    design/history_impl_isy.md documents the firmware itself using for its
+    own prune-export INSERTs (``UDXSQLUtil::appendNullOrQuoted``), since the
+    `sqlite3` CLI has no bound-parameter mechanism to use instead."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _run_devlog_sqlite_query_sync(
+    sql: str, tzinfo: datetime.tzinfo
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Synchronous worker for _run_devlog_sqlite_query -- run via
+    asyncio.to_thread since Python's sqlite3 module is blocking. Opens
+    DEVLOG.DB truly read-only: `mode=ro` at the VFS level plus
+    `PRAGMA query_only` as a second, connection-wide backstop against any
+    write regardless of how it's smuggled past _validate_readonly_select_sql's
+    regex checks. Also registers LOCAL_ISO(epoch), so both our own
+    structured-mode SQL and the model's own raw SQL get one single,
+    deterministic, always-correct EventTime conversion -- see
+    IoXWrapper._resolve_history_tzinfo for where *tzinfo* comes from."""
+    uri = f"file:{quote(_DEVLOG_DB_PATH)}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=_SQLITE_QUERY_TIMEOUT_S)
+    except sqlite3.OperationalError as exc:
+        return None, f"failed to open DEVLOG.DB: {exc}"
+
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        conn.row_factory = sqlite3.Row
+        conn.create_function(
+            "LOCAL_ISO",
+            1,
+            lambda epoch: (
+                None
+                if epoch is None
+                else datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+                .astimezone(tzinfo)
+                .isoformat()
+            ),
+        )
+        deadline = time.monotonic() + _SQLITE_QUERY_TIMEOUT_S
+        conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
+
+        rows = [dict(row) for row in conn.execute(sql).fetchall()]
+        return rows, None
+    except sqlite3.OperationalError as exc:
+        if "interrupted" in str(exc).lower():
+            return None, f"sqlite3 query timed out after {_SQLITE_QUERY_TIMEOUT_S}s"
+        return None, str(exc)
+    except sqlite3.DatabaseError as exc:
+        return None, str(exc)
+    finally:
+        conn.close()
+
+
+async def _run_devlog_sqlite_query(
+    sql: str, tzinfo: datetime.tzinfo
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Run one read-only query against DEVLOG.DB. Returns ``(rows, None)``
+    on success or ``(None, error)`` -- a missing database file, a locked
+    database, or a malformed query are all ordinary, expected failure
+    modes here, not crashes."""
+    return await asyncio.to_thread(_run_devlog_sqlite_query_sync, sql, tzinfo)
+
+
+def _iso_to_epoch(timestamp: str) -> int:
+    """Parse an ISO-8601 timestamp (with offset) into Unix epoch seconds --
+    matching DEVLOG.DB's own `EventTime` storage (see
+    design/history_impl_isy.md's "confirmed against real source" section).
+    Same `Z`-normalization convention already used elsewhere in this
+    codebase (``rag/routine_summary_rag_formatter.py``)."""
+    return int(datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp())
+
+
+def _boundary_sql(nodes: list[str], property_ids: list[str], comparison: str, epoch: int, direction: str) -> str:
+    """Build one UNION ALL query returning at most one boundary row per
+    (node, property) pair in the cross-product -- a single `sqlite3` call
+    covering every pair, rather than one call each."""
+    selects = [
+        f"SELECT * FROM (SELECT {_DEVLOG_COLUMNS} FROM DevLogEvents "
+        f"WHERE NodeAddress={_sql_quote(node)} AND ControlId={_sql_quote(property_id)} AND {comparison} {epoch} "
+        f"ORDER BY EventTime {direction} LIMIT 1)"
+        for node in nodes
+        for property_id in property_ids
+    ]
+    return " UNION ALL ".join(selects) + ";"
+
+
+# ------------------------------------------------------------------
+# Raw-SQL mode for get_device_history -- lets the model write its own
+# read-only SELECT against DevLogEvents for aggregation/grouping/counting
+# questions the structured (device_ids/properties/time-window) mode can't
+# express, without becoming a second unsandboxed shell like run_shell_command.
+# ------------------------------------------------------------------
+
+_MAX_SQL_LENGTH = 4000
+_DEVLOG_SQL_DEFAULT_LIMIT = 500
+_DEVLOG_SQL_MAX_ROWS = 2000  # hard cap regardless of caller-requested limit
+
+_SQL_LEADING_KEYWORD_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+_SQL_FORBIDDEN_KEYWORD_RE = re.compile(
+    r"\b(ATTACH|DETACH|PRAGMA|VACUUM|REINDEX|ALTER|DROP|CREATE|INSERT|UPDATE|"
+    r"DELETE|REPLACE|TRIGGER|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b",
+    re.IGNORECASE,
+)
+# Blanks out '...'-quoted literal contents (doubled '' handled) before the
+# semicolon/keyword scans below, so e.g. WHERE Action='DROP' or a value
+# containing ';' can't produce a false positive/negative against the scan.
+_SQL_STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _validate_readonly_select_sql(sql: str) -> tuple[str | None, str | None]:
+    """Defense-in-depth guard for raw-SQL device-history queries, run
+    BEFORE _run_devlog_sqlite_query opens the database -- the connection
+    itself is already opened `mode=ro` with `PRAGMA query_only = ON` (an
+    engine-level guarantee against any write, independent of this text
+    scan), but not against a stacked `; ATTACH ...` or a smuggled PRAGMA
+    statement, which could still read/attach files outside DEVLOG.DB.
+    Structural backstops, not just the keyword blacklist: the statement
+    must *start* with SELECT/WITH (SQLite's grammar doesn't let a
+    `WITH ... SELECT` smuggle a DML/DDL statement in as a sub-clause --
+    only as a separate, semicolon-joined statement, independently blocked
+    here), and this text is never shell-parsed -- it's passed straight to
+    `sqlite3.Connection.execute`, not a subprocess.
+
+    Returns ``(cleaned_sql, None)`` -- with at most one trailing `;` and
+    surrounding whitespace stripped -- or ``(None, error)``."""
+    if not sql or not sql.strip():
+        return None, "sql must not be empty"
+    if len(sql) > _MAX_SQL_LENGTH:
+        return None, f"sql exceeds the {_MAX_SQL_LENGTH}-character limit"
+
+    cleaned = sql.strip()
+    if cleaned.endswith(";"):
+        cleaned = cleaned[:-1].rstrip()
+
+    scan_target = _SQL_STRING_LITERAL_RE.sub("''", cleaned)
+    if ";" in scan_target:
+        return None, "only a single SQL statement is allowed (no ';'-separated statements)"
+    if not _SQL_LEADING_KEYWORD_RE.match(scan_target):
+        return None, "sql must be a single SELECT (or WITH ... SELECT) statement"
+    forbidden = _SQL_FORBIDDEN_KEYWORD_RE.search(scan_target)
+    if forbidden:
+        return None, f"'{forbidden.group(1)}' is not allowed in device-history sql (read-only SELECT only)"
+    return cleaned, None
+
+
+async def _run_devlog_raw_sql(sql: str, limit: int | None, tzinfo: datetime.tzinfo) -> dict[str, Any]:
+    """Validate, cap, and run a caller-supplied SELECT against DEVLOG.DB.
+    Wraps the (validated) statement in an outer `SELECT * FROM (...) LIMIT
+    <cap+1>` rather than special-casing aggregates -- this caps whatever
+    columns/shape the inner query produces (a plain row dump or a
+    `GROUP BY`/`count(*)` aggregate alike) with one extra row requested to
+    detect truncation without a separate COUNT(*) round trip. *tzinfo* is
+    only used to back the LOCAL_ISO(...) SQL function the caller's own
+    `sql` may call -- no output post-processing needed here."""
+    cleaned, err = _validate_readonly_select_sql(sql)
+    if err is not None:
+        return {"successful": False, "data": err}
+
+    capped_limit = max(1, min(int(limit) if limit else _DEVLOG_SQL_DEFAULT_LIMIT, _DEVLOG_SQL_MAX_ROWS))
+    wrapped_sql = f"SELECT * FROM ({cleaned}) LIMIT {capped_limit + 1};"
+    rows, err = await _run_devlog_sqlite_query(wrapped_sql, tzinfo)
+    if err is not None:
+        return {"successful": False, "data": f"failed to query device history: {err}"}
+
+    truncated = len(rows) > capped_limit
+    if truncated:
+        rows = rows[:capped_limit]
+    return {"successful": True, "data": rows, "truncated": truncated}
 
 
 class IoXWrapper(NuCoreInterface):
@@ -1771,34 +1909,61 @@ class IoXWrapper(NuCoreInterface):
         """
         return await self.diagnostics.run_diagnostic_step(step, **params)
 
+    # Three steps promoted to standing top-level tools -- see
+    # NuCoreInterface's own comment above these. Calls the exact same
+    # IoXDiagnostics methods run_diagnostic_step would have dispatched to,
+    # just directly instead of through the string-keyed step catalog.
+
+    async def get_full_system_config(self) -> dict[str, Any] | None:
+        return await self.diagnostics.get_full_system_config()
+
+    async def get_core_services_status(self) -> dict[str, Any] | None:
+        return await self.diagnostics.get_core_services_status()
+
+    async def get_device_family(self, device_id: str) -> str | None:
+        return await self.diagnostics.get_device_family(device_id=device_id)
+
     # ------------------------------------------------------------------
-    # Node property history -- see NuCoreInterface.set_node_property_history_recording
-    # / get_node_property_history and design/history.md for the reverse-
-    # engineered backend contract this wraps.
+    # Device history -- see NuCoreInterface.get_device_history and
+    # design/history_impl_isy.md for the DEVLOG.DB schema this queries.
     # ------------------------------------------------------------------
 
-    async def set_node_property_history_recording(self, enabled: bool) -> dict | None:
-        suffix = "on" if enabled else "off"
-        response = await self.get(f"/rest/history/node/properties/recording/{suffix}")
-        if response is None or response.status_code != 200:
-            return {
-                "successful": False,
-                "data": f"failed to set node property history recording: "
-                        f"{response.status_code if response else 'no response'}",
-            }
-        return {"successful": True, "enabled": enabled}
+    async def _resolve_history_tzinfo(self) -> datetime.tzinfo:
+        """The exact TzId TIME & LOCATION already shows the model (via
+        get_timespecs(), which hits /rest/time), as a real tzinfo for
+        LOCAL_ISO -- never the server process's own OS timezone. Falls
+        back to UTC (get_timespecs()'s own fallback) if the hub call
+        fails, so a history query still returns a correctly-labeled, just
+        not localized, timestamp instead of erroring."""
+        try:
+            timespecs = await self.get_timespecs()
+        except Exception:
+            timespecs = None
+        tz_name = timespecs.get("timezone") if isinstance(timespecs, dict) else None
+        return ZoneInfo(tz_name) if tz_name else datetime.timezone.utc
 
-    async def get_node_property_history(
+    async def get_device_history(
         self,
-        device_ids: list[str],
-        properties: list[str],
+        device_ids: list[str] | None = None,
+        properties: list[str] | None = None,
         *,
         start: str | None = None,
         end: str | None = None,
         one_before: bool = False,
         one_after: bool = False,
         limit: int = 500,
+        sql: str | None = None,
     ) -> dict | None:
+        tzinfo = await self._resolve_history_tzinfo()
+
+        if sql:
+            if device_ids or properties or start or end or one_before or one_after:
+                return {"successful": False, "data": "pass either sql, or device_ids/properties (not both)"}
+            return await _run_devlog_raw_sql(sql, limit, tzinfo)
+
+        if not device_ids or not properties:
+            return {"successful": False, "data": "device_ids and properties are required unless sql is provided"}
+
         nodes: list[str] = []
         for device_id in device_ids:
             node = self.get_node(device_id)
@@ -1823,33 +1988,77 @@ class IoXWrapper(NuCoreInterface):
                 if property_id not in property_ids:
                     property_ids.append(property_id)
 
-        query_params: dict[str, Any] = {
-            "node": ",".join(nodes),
-            "property": ",".join(property_ids),
-            "limit": limit,
-        }
-        if start:
-            query_params["start"] = start
-        if end:
-            query_params["end"] = end
-        if one_before:
-            query_params["oneBefore"] = "true"
-        if one_after:
-            query_params["oneAfter"] = "true"
-
-        response = await self.get(f"/rest/history/node/properties/get?{urlencode(query_params)}")
-        if response is None or response.status_code != 200:
-            return {
-                "successful": False,
-                "data": f"failed to fetch node property history: "
-                        f"{response.status_code if response else 'no response'}",
-            }
         try:
-            groups = _parse_node_property_history_xml(response.text)
-        except ET.ParseError as exc:
-            # Never crash on a surprising body -- report it as a backend
-            # error instead.
-            return {"successful": False, "data": f"unexpected (non-XML) response from history endpoint: {exc}"}
+            start_epoch = _iso_to_epoch(start) if start else None
+            end_epoch = _iso_to_epoch(end) if end else None
+        except ValueError as exc:
+            return {"successful": False, "data": f"invalid start/end timestamp: {exc}"}
+
+        node_list_sql = ",".join(_sql_quote(n) for n in nodes)
+        prop_list_sql = ",".join(_sql_quote(p) for p in property_ids)
+        where = [f"NodeAddress IN ({node_list_sql})", f"ControlId IN ({prop_list_sql})"]
+        if start_epoch is not None:
+            where.append(f"EventTime >= {start_epoch}")
+        if end_epoch is not None:
+            where.append(f"EventTime <= {end_epoch}")
+
+        main_sql = (
+            f"SELECT {_DEVLOG_COLUMNS} FROM DevLogEvents WHERE {' AND '.join(where)} "
+            f"ORDER BY EventTime ASC LIMIT {int(limit)};"
+        )
+        rows, err = await _run_devlog_sqlite_query(main_sql, tzinfo)
+        if err is not None:
+            return {"successful": False, "data": f"failed to query device history: {err}"}
+
+        boundary_rows: list[dict[str, Any]] = []
+        if one_before and start_epoch is not None:
+            before_rows, err = await _run_devlog_sqlite_query(
+                _boundary_sql(nodes, property_ids, "EventTime <", start_epoch, "DESC"), tzinfo
+            )
+            if err is not None:
+                return {"successful": False, "data": f"failed to query device history: {err}"}
+            boundary_rows.extend(before_rows or [])
+        if one_after and end_epoch is not None:
+            after_rows, err = await _run_devlog_sqlite_query(
+                _boundary_sql(nodes, property_ids, "EventTime >", end_epoch, "ASC"), tzinfo
+            )
+            if err is not None:
+                return {"successful": False, "data": f"failed to query device history: {err}"}
+            boundary_rows.extend(after_rows or [])
+
+        groups: list[dict[str, Any]] = []
+        groups_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
+        for row in list(rows or []) + boundary_rows:
+            key = (row.get("NodeAddress"), row.get("ControlId"))
+            group = groups_by_key.get(key)
+            if group is None:
+                group = {
+                    "node": row.get("NodeAddress"),
+                    "device_name": row.get("NodeName"),
+                    "property": row.get("ControlId"),
+                    "property_name": row.get("ControlLabel"),
+                    "history": [],
+                }
+                groups_by_key[key] = group
+                groups.append(group)
+            group["history"].append(
+                {
+                    "timestamp": row["EventTimeLocal"],
+                    "action": row.get("Action"),
+                    "actor": row.get("Actor"),
+                    "is_command": bool(row.get("IsCommand")),
+                    "_event_time": row["EventTime"],
+                }
+            )
+        for group in groups:
+            # Sort by the real epoch, not the formatted string -- once
+            # entries can carry different real local offsets (a window
+            # spanning a DST change), string order can disagree with true
+            # chronological order right at the boundary.
+            group["history"].sort(key=lambda entry: entry["_event_time"])
+            for entry in group["history"]:
+                del entry["_event_time"]
+
         return {"successful": True, "data": groups}
 
     # ------------------------------------------------------------------

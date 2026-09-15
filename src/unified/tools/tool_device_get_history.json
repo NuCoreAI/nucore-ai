@@ -1,54 +1,43 @@
 {
-  "name": "get_node_property_history",
-  "description": "Fetch recorded historical VALUES for one or more devices' properties over time -- the historical counterpart to get_property, which only reads the CURRENT value. Use this for value/pattern questions: what was the value at a point in time, how has it trended, when did it last change. Requires node-property history recording to have been turned on (via set_node_property_history_recording) for the period being asked about; it defaults to Off, so a query covering a time before recording was enabled will return no data for that period -- that is not an error, and not evidence the feature is broken. If a query seems to be missing data, consider whether recording was actually on then; get_full_system_config's 'Node Property History Enabled' field reports the CURRENT state only, not a history of when it changed.\n\nNOT for 'who/what did this' questions: each recorded event is a CHANGE OF STATE only (a value resent without changing produces no event -- so this under-counts commands, it isn't a full activity log), and it carries no actor -- there is no WEB/ROUTINE/SYSTEM attribution like DEV.LOG's actor column. For 'why did X change', 'who/what turned X on', or any question needing attribution or every command (not just net value changes), use run_shell_command against DEV.LOG instead (see diagnose.md's DEVICE ACTIVITY LOG section) -- do not use this tool for that and do not present a value transition here as if it identifies a cause.\n\nCROSS-PRODUCT semantics: every property in `properties` is queried against every device in `device_ids` -- e.g. device_ids=[A,B], properties=[X,Y] returns up to four series (A/X, A/Y, B/X, B/Y), not just two matched pairs. If you only want specific device/property PAIRS, call this once per pair instead of combining everything into one call. `properties` are display names exactly as get_property/get_device_detail expect (e.g. \"Status\", \"Temperature\") -- resolved per device, same as get_property; a name that isn't a real property on ANY of the given devices is an error.\n\nPAGINATION: results are capped at `limit` records (default 500). If the response includes `more_available: true`, there is more data in the requested window than was returned -- re-call with `start` set to the returned `next_start` to continue, rather than assuming the result is complete. Never omit a bound on a broad query (no start/end, a large limit) expecting to get 'everything' in one call -- narrow the time window or paginate instead.",
+  "name": "get_device_history",
+  "description": "Query recorded historical device activity from DEVLOG.DB, the ISY/eisy firmware's own structured event-capture database (a SQLite file at /var/isy/FILES/LOG/DEVLOG.DB, table `DevLogEvents`) -- the authoritative source for 'what happened to X', 'why did X change', 'how often does X run', and 'is there a pattern to X' questions. This is the only interface to that data; there is no `/var/log/...` device-activity log on this platform, and no separate diagnostic step or session is needed to use this tool. It supports TWO mutually exclusive modes, selected by whether `sql` is provided -- do not set `sql` together with `device_ids`/`properties`/`start`/`end`/`one_before`/`one_after`, that is a usage error.\n\nMODE 1 -- STRUCTURED (omit `sql`): give `device_ids` and `properties`; every property is queried against every device (the full cross-product, not exact pairs -- if you want specific device/property PAIRS, call once per pair). `properties` are display names exactly as `get_property`/`get_device_detail` show them (e.g. \"Status\", \"Current Humidity\"), resolved per device the same way `get_property` resolves them -- a name valid on ANY of the given devices is accepted, one matching none of them is an error. Returns one group per (device, property) pair actually found, each with its own chronological `history` list. Use `start`/`end` (ISO-8601 with offset) to bound the window, `one_before`/`one_after` to also fetch the single nearest record just outside the window (for boundary continuity), and `limit` (default 500) to cap records returned. If the response's `more_available` is true, more data exists in the window than was returned -- re-call with `start` set to the returned `next_start` to page forward; never assume an unbounded, unpaged query returned everything.\n\nMODE 2 -- RAW SQL (provide `sql`, omit the structured params): for aggregation, grouping, counting, or any pattern-finding question the fixed structured params can't express (e.g. 'how many times was it turned on last month', 'break this down by actor', 'find days it never ran') -- write a single read-only `SELECT` (or `WITH ... SELECT`) statement yourself against the `DevLogEvents` table and it runs directly, wrapped and capped at `limit` rows (default 500, hard maximum 2000 regardless of what you request) -- if more rows matched, the result's `truncated` will be true and you got the first `limit` of them, not a random sample; narrow your `WHERE`/window and re-run rather than assuming the rest don't matter. Guardrails, enforced BEFORE anything is executed: exactly one statement (no ';'-separated statements), must start with SELECT or WITH, and must not contain ATTACH/DETACH/PRAGMA/VACUUM/REINDEX/ALTER/DROP/CREATE/INSERT/UPDATE/DELETE/REPLACE/TRIGGER/BEGIN/COMMIT/ROLLBACK/SAVEPOINT/RELEASE as real SQL keywords (a bad query is rejected immediately with a clear error, not attempted) -- this is a read-only reporting interface, not a second shell. In this mode the result's `rows` is a plain list of dicts, one per matched row, with whatever columns you selected -- there is no device/property resolution or grouping in this mode, so reference `NodeAddress`/`ControlId` directly (see schema below), not display names, unless you first look them up yourself in the same query (e.g. select `NodeName`/`ControlLabel` alongside).\n\nDevLogEvents SCHEMA (only table in the database):\n- `EventTime` -- Unix epoch SECONDS, UTC -- NOT already local like every other timestamp in this system. Compute bounds as real epoch-seconds integers using TIME & LOCATION context. Never convert it yourself, and never use SQLite's built-in `datetime(EventTime, 'unixepoch', 'localtime')` -- that modifier follows the server's own OS timezone, not this installation's TIMEZONE, and has produced wrong-by-an-hour and wrong-DST answers before. Use `LOCAL_ISO(EventTime)` instead -- a function this tool provides, backed by this installation's real timezone (the same one shown in TIME & LOCATION), correct for any historical date including DST transitions. In structured mode you don't need to call it yourself: `history[].timestamp` is already `LOCAL_ISO(EventTime)`, precomputed. In raw-SQL mode, call it directly in your own SELECT (or inside `date(LOCAL_ISO(EventTime))` to group by the customer's real local calendar day, not UTC day) -- reserve raw EventTime for filtering/ORDER BY against the window bounds you computed.\n- `NodeAddress` -- the device's real address, exactly the `device_id` you already have from DEVICE DATABASE -- use it verbatim in raw SQL, no lookup needed.\n- `NodeName` -- the device's display name at the time of the event (informational; filter on `NodeAddress`, which is exact, not this).\n- `ControlId` -- the property's raw internal id (e.g. `ST`, `CLIHUM`) -- not surfaced elsewhere; don't guess it in raw SQL, filter/select `ControlLabel` instead.\n- `ControlLabel` -- the firmware's resolved property display name, the same one `get_device_detail`/`get_property` show (e.g. \"Status\", \"Current Humidity\"). Has known historical gaps for some built-in controls (occasionally logged under its raw id instead, e.g. `CV` instead of \"Current Voltage\"); if a raw-SQL query filtered on a `ControlLabel` returns nothing and you're not already confident there's genuinely no data, run a quick discovery query first: `SELECT DISTINCT ControlId, ControlLabel FROM DevLogEvents WHERE NodeAddress='<id>'` and match by inspection before concluding there's no history.\n- `Action` -- the recorded value/command text (e.g. \"On\", \"100%\", \"DON\") -- not a separate numeric/uom breakdown. If you're not sure which value means 'on' for a device, sample distinct values first (`SELECT DISTINCT Action FROM DevLogEvents WHERE NodeAddress='<id>' AND ControlLabel='<property>' LIMIT 20`) rather than guessing.\n- `Actor` -- `\"System\"` (the device/firmware itself reporting a value), `\"Web\"`, `\"Routine\"`, or occasionally another raw actor code.\n- `IsCommand` -- 1 for an actual issued command (Web/Routine/...), 0 for a plain system-reported value change.\n\nANSWERING 'why did X change at time T': find the IsCommand=0 row (Actor=System) reporting the value at/near T, then look for an IsCommand=1 row for the same device/property at the same or immediately preceding EventTime. Actor=Web means the web UI/app did it. Actor=Routine means a routine did it, but DEVLOG.DB never says which one -- cross-reference ROUTINES DATABASE for a routine whose actions target this device/command and whose trigger/schedule fits the time; if several candidates fit, call `get_routine_details` once with ALL candidate ids in one `ids` list to disambiguate, not one call per candidate. If neither an IsCommand=1 row nor a routine match turns up, say so honestly -- it was most likely a physical/local action or an out-of-NuCore scene/link, not a guessable NuCore-driven cause. If several devices show IsCommand=0 at the same EventTime, look for one IsCommand=1 row (via `NodeAddress IN (...)`) that explains all of them -- a single scene/group command driving multiple devices, not separate causes.\n\nNever tell a customer you have no way to check historical device activity -- this tool is exactly that capability, always available.",
   "input_schema": {
     "type": "object",
-    "required": [
-      "device_ids",
-      "properties"
-    ],
+    "required": [],
     "properties": {
       "device_ids": {
-        "type": "array",
-        "minItems": 1,
-        "items": {
-          "type": "string"
-        },
-        "description": "Real device ids, exactly as shown in DEVICE DATABASE."
+        "type": ["array", "null"],
+        "items": { "type": "string" },
+        "description": "STRUCTURED MODE ONLY (omit when using `sql`). Real device ids, exactly as shown in DEVICE DATABASE. Required (non-empty) unless `sql` is provided."
       },
       "properties": {
-        "type": "array",
-        "minItems": 1,
-        "items": {
-          "type": "string"
-        },
-        "description": "Property display names, exactly as returned by get_device_detail's 'properties' list (not ids)."
+        "type": ["array", "null"],
+        "items": { "type": "string" },
+        "description": "STRUCTURED MODE ONLY (omit when using `sql`). Property display names, exactly as returned by get_device_detail/get_property (not raw ids). Required (non-empty) unless `sql` is provided."
       },
       "start": {
-        "type": [
-          "string",
-          "null"
-        ],
-        "description": "ISO-8601 timestamp with timezone offset -- lower bound of the time window. Compute a real timestamp from the customer's request using TIME & LOCATION context (e.g. 'yesterday', 'this morning'); omit for no lower bound."
+        "type": ["string", "null"],
+        "description": "STRUCTURED MODE ONLY. ISO-8601 timestamp with timezone offset -- lower bound of the time window. Compute from the customer's request using TIME & LOCATION context; omit for no lower bound."
       },
       "end": {
-        "type": [
-          "string",
-          "null"
-        ],
-        "description": "ISO-8601 timestamp with timezone offset -- upper bound of the time window. Omit for no upper bound (up to now)."
+        "type": ["string", "null"],
+        "description": "STRUCTURED MODE ONLY. ISO-8601 timestamp with timezone offset -- upper bound of the time window. Omit for no upper bound (up to now)."
       },
       "one_before": {
-        "type": "boolean",
-        "description": "Include one record immediately before the time window, for boundary continuity. Defaults to false."
+        "type": ["boolean", "null"],
+        "description": "STRUCTURED MODE ONLY. Include one record immediately before the time window, for boundary continuity. Defaults to false."
       },
       "one_after": {
-        "type": "boolean",
-        "description": "Include one record immediately after the time window, for boundary continuity. Defaults to false."
+        "type": ["boolean", "null"],
+        "description": "STRUCTURED MODE ONLY. Include one record immediately after the time window, for boundary continuity. Defaults to false."
       },
       "limit": {
-        "type": "integer",
-        "description": "Maximum records to return in this call. Defaults to 500 -- lower it for a quick check, or page through a larger window using `more_available`/`next_start` in the result."
+        "type": ["integer", "null"],
+        "description": "Maximum records/rows returned, either mode. Defaults to 500. In structured mode, page through a larger window using the result's `more_available`/`next_start`. In raw-SQL mode this is a hard cap (maximum 2000 regardless of the value given) -- check `truncated` rather than assuming completeness."
+      },
+      "sql": {
+        "type": ["string", "null"],
+        "description": "RAW SQL MODE. A single read-only SELECT (or WITH ... SELECT) statement against DevLogEvents, for aggregation/grouping/counting/pattern questions the structured params can't express. Mutually exclusive with device_ids/properties/start/end/one_before/one_after. See this tool's main description for the full schema, guardrails, and the row cap/`truncated` behavior."
       }
     }
   }
