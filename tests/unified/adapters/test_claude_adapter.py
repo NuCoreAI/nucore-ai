@@ -14,6 +14,7 @@ import httpx
 import pytest
 from anthropic import BadRequestError
 
+from unified.adapters.base_adapter import ToolSpec
 from unified.adapters.claude_adapter import ClaudeAdapter
 
 
@@ -21,9 +22,37 @@ def _adapter() -> ClaudeAdapter:
     return ClaudeAdapter(api_key="test-key")
 
 
-def _fake_final_message(text: str = "hi"):
+def test_export_tools_marks_only_the_last_tool_as_a_cache_breakpoint():
+    """Tool definitions never change turn to turn (unlike `system`, which
+    carries TIME & LOCATION and changes almost every turn) -- they need
+    their own cache_control breakpoint so a volatile system prompt doesn't
+    also bust the cache for the static tool descriptions. Only the last
+    tool should carry it: a single trailing breakpoint caches everything up
+    to and including it, one on every tool would be wrong/wasteful."""
+    specs = [
+        ToolSpec(name="a", description="first", json_schema={}),
+        ToolSpec(name="b", description="second", json_schema={}),
+        ToolSpec(name="c", description="third", json_schema={}),
+    ]
+    tools = _adapter().export_tools(specs)
+
+    assert "cache_control" not in tools[0]
+    assert "cache_control" not in tools[1]
+    assert tools[2]["cache_control"] == {"type": "ephemeral"}
+    # Content itself must be untouched by the mutation.
+    assert tools[2]["name"] == "c" and tools[2]["description"] == "third"
+
+
+def test_export_tools_handles_empty_spec_list():
+    assert _adapter().export_tools([]) == []
+
+
+def _fake_final_message(text: str = "hi", usage: dict | None = None):
     block = SimpleNamespace(type="text", text=text, model_dump=lambda: {"type": "text", "text": text})
-    return SimpleNamespace(content=[block], model_dump=lambda: {"content": [{"type": "text", "text": text}]})
+    dump = {"content": [{"type": "text", "text": text}]}
+    if usage is not None:
+        dump["usage"] = usage
+    return SimpleNamespace(content=[block], model_dump=lambda: dump)
 
 
 class _FakeStream:
@@ -173,3 +202,42 @@ async def test_temperature_key_present_but_none_is_not_forwarded():
     await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={"temperature": None})
 
     assert "extra_body" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_generate_surfaces_usage_including_cache_fields():
+    # usage (including cache_creation_input_tokens/cache_read_input_tokens)
+    # already rode along inside `raw`, but AgenticLoop's prompt-log write
+    # needs it without knowing Claude's response shape -- so it must also be
+    # surfaced as its own top-level key.
+    adapter = _adapter()
+    usage = {
+        "input_tokens": 120,
+        "output_tokens": 40,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 14000,
+    }
+
+    def fake_stream(**kwargs):
+        return _FakeStream(_fake_final_message("ok", usage=usage))
+
+    adapter._client.messages.stream = fake_stream
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["usage"] == usage
+    assert result["raw"]["usage"] == usage
+
+
+@pytest.mark.asyncio
+async def test_generate_usage_defaults_to_empty_dict_when_absent():
+    adapter = _adapter()
+
+    def fake_stream(**kwargs):
+        return _FakeStream(_fake_final_message("ok"))  # no usage= passed
+
+    adapter._client.messages.stream = fake_stream
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["usage"] == {}

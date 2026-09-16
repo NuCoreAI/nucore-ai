@@ -70,10 +70,10 @@ branch, an `else` branch. Routines have both *content* (what logic they run, aut
 `create_or_update_routine`, read via `get_routine_details`) and *runtime state* (enabled/disabled,
 currently running, scheduled-to-run-at-startup, operated via `routine_status_op`) — these are
 different questions ("what does this routine do" vs. "is this routine currently active") and use
-different tools. ROUTINES DATABASE only ever lists a routine's name/comment/referenced devices/
-referenced variables — never its actual logic; call `get_routine_details` for any "what does this
-routine do"/"show me its logic"/"explain this routine" question, or before editing an existing
-routine, never guess its content from the name alone. Unlike everywhere else, `create_or_update_routine`'s DSL needs
+different tools. Call `get_routine_details` for any "what does this routine do"/"show me its
+logic"/"explain this routine" question, or before editing an existing routine — see that tool's
+own description for exactly what ROUTINES DATABASE does and doesn't carry; never guess a routine's
+content from its name alone. Unlike everywhere else, `create_or_update_routine`'s DSL needs
 real property/command/parameter ids and uom/precision, not display names — call
 `get_device_detail` for every device it will reference before authoring code (see that tool's own
 description for the full grammar, which `get_routine_details`'s result also follows).

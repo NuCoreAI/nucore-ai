@@ -65,6 +65,11 @@ class ClaudeAdapter(LLMAdapter):
             - ``content``: list of content block dicts
             - ``text``:  plain text extracted from text content blocks
             - ``tool_calls``: canonical tool_use dicts (may be empty)
+            - ``usage``: token-usage dict for this turn, including
+              ``cache_creation_input_tokens``/``cache_read_input_tokens``
+              (already present in ``raw["usage"]``, surfaced at the top
+              level so callers -- e.g. AgenticLoop's prompt-log write --
+              don't need to know Claude's response shape)
             - ``raw``: original SDK response as a dict
         """
         cfg = dict(config or {})
@@ -144,11 +149,13 @@ class ClaudeAdapter(LLMAdapter):
         if callback is not None:
             await callback("", is_end=True)  # Signal end of stream to the handler.
 
+        final_message_dict = final_message.model_dump()
         return {
             "content": content_dicts,
             "text": "\n".join(text_parts),
             "tool_calls": tool_calls,
-            "raw": final_message.model_dump(),
+            "usage": final_message_dict.get("usage") or {},
+            "raw": final_message_dict,
         }
 
     async def _stream_once(self, kwargs: dict[str, Any], callback: Any) -> Any:
@@ -170,8 +177,18 @@ class ClaudeAdapter(LLMAdapter):
 
         Claude expects tools as a list of dicts with ``name``, ``description``,
         and ``input_schema`` (JSON Schema).
+
+        The last tool carries its own ``cache_control`` breakpoint -- tool
+        definitions are entirely static (they never vary turn to turn, unlike
+        ``system``, which carries ``TIME & LOCATION`` and changes almost every
+        turn by design -- see generate()'s own cache_control comment). Without
+        this, the request had exactly one cache breakpoint (on ``system``), so
+        any turn where the volatile tail of ``system`` changed missed the
+        cache for the ~14K tokens of tool descriptions too, even though they
+        never actually changed. A second, independent breakpoint here lets
+        the tools array cache on its own regardless of what ``system`` does.
         """
-        return [
+        tools = [
             {
                 "name": spec.name,
                 "description": spec.description,
@@ -179,6 +196,9 @@ class ClaudeAdapter(LLMAdapter):
             }
             for spec in specs
         ]
+        if tools:
+            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+        return tools
 
     def parse_tool_calls(self, response: Any) -> list[ToolCall]:
         """Extract ``tool_use`` content blocks from a Claude response dict.
