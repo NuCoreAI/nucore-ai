@@ -8,7 +8,9 @@ cutover, per explicit scope decision), and the lifecycle
 
 from __future__ import annotations
 
+import datetime
 import json
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -174,6 +176,71 @@ async def test_get_all_routines_summary_hits_api_programs():
 
     assert calls == ["/api/programs"]
     assert result == [{"id": 1, "enabled": True}]
+
+
+def _mock_timespecs(monkeypatch, tz_name: str | None):
+    """Monkeypatch IoXWrapper.get_timespecs (what _resolve_history_tzinfo
+    calls) to return a fixed timezone -- or None, to simulate the hub call
+    failing/being unavailable. Same helper as test_device_history.py's."""
+
+    async def _fake_get_timespecs(self):
+        return {"timezone": tz_name} if tz_name else None
+
+    monkeypatch.setattr(IoXWrapper, "get_timespecs", _fake_get_timespecs)
+
+
+@pytest.mark.asyncio
+async def test_get_routine_summary_localizes_utc_timestamps(monkeypatch):
+    """The hub returns lastRunTime/lastFinishTime/nextScheduledRunTime as
+    naive UTC wall-clock strings (confirmed against a real installation) --
+    they must come back converted to this installation's real local
+    timezone, matching what system_prompt.md tells the model to expect."""
+    wrapper = _bare_wrapper()
+    _mock_timespecs(monkeypatch, "America/Los_Angeles")
+
+    async def fake_get(path):
+        return FakeResp(data=[
+            {"id": 1, "name": "My Programs", "folder": True},
+            {
+                "id": 29, "name": "Movie Test", "folder": False,
+                "lastRunTime": "2026-07-19T05:00:00",
+                "lastFinishTime": "2026-07-19T05:00:01",
+                "nextScheduledRunTime": "2026-07-20T05:00:00",
+            },
+        ])
+
+    wrapper.get = fake_get
+    result = await wrapper.get_routine_summary(29)
+
+    def _expected(naive_utc: str) -> str:
+        return (
+            datetime.datetime.fromisoformat(naive_utc)
+            .replace(tzinfo=datetime.timezone.utc)
+            .astimezone(ZoneInfo("America/Los_Angeles"))
+            .isoformat()
+        )
+
+    target = next(e for e in result if e["id"] == 29)
+    assert target["lastRunTime"] == _expected("2026-07-19T05:00:00")
+    assert target["lastFinishTime"] == _expected("2026-07-19T05:00:01")
+    assert target["nextScheduledRunTime"] == _expected("2026-07-20T05:00:00")
+    # A folder entry with no time fields at all must pass through untouched.
+    folder_entry = next(e for e in result if e["id"] == 1)
+    assert folder_entry == {"id": 1, "name": "My Programs", "folder": True}
+
+
+@pytest.mark.asyncio
+async def test_get_routine_summary_falls_back_to_utc_without_timespecs(monkeypatch):
+    wrapper = _bare_wrapper()
+    _mock_timespecs(monkeypatch, None)
+
+    async def fake_get(path):
+        return FakeResp(data=[{"id": 29, "lastRunTime": "2026-07-19T05:00:00"}])
+
+    wrapper.get = fake_get
+    result = await wrapper.get_routine_summary(29)
+
+    assert result[0]["lastRunTime"] == "2026-07-19T05:00:00+00:00"
 
 
 @pytest.mark.asyncio

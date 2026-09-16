@@ -169,6 +169,38 @@ def _iso_to_epoch(timestamp: str) -> int:
     return int(datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp())
 
 
+# /api/ai/program/:id (get_routine_summary) returns lastRunTime/
+# lastFinishTime/nextScheduledRunTime as naive ISO-8601 strings that are
+# actually UTC wall-clock (confirmed against a real installation), not this
+# installation's local time and not offset-annotated -- unlike TIME &
+# LOCATION's own GMT/SunriseGMT/SunsetGMT fields, which get_timespecs()
+# already localizes the same way (UTC -> astimezone(real tzinfo)) before
+# the model ever sees them. system_prompt.md tells the model every routine
+# timestamp is already local, so this must be fixed at the source, the same
+# LOCAL_ISO-style conversion get_device_history applies to DEVLOG.DB's
+# EventTime, just from an ISO string instead of epoch seconds.
+_ROUTINE_UTC_TIME_FIELDS = ("lastRunTime", "lastFinishTime", "nextScheduledRunTime")
+
+
+def _localize_routine_time(value: Any, tzinfo: datetime.tzinfo) -> Any:
+    """Convert one of _ROUTINE_UTC_TIME_FIELDS's raw hub values from naive
+    UTC wall-clock to this installation's real local timezone, ISO-8601
+    with offset. Returns *value* unchanged if it isn't a non-empty string
+    or doesn't parse -- never raises, so one malformed timestamp doesn't
+    fail retrieving the rest of a routine's runtime state."""
+    if not isinstance(value, str) or not value:
+        return value
+    try:
+        return (
+            datetime.datetime.fromisoformat(value)
+            .replace(tzinfo=datetime.timezone.utc)
+            .astimezone(tzinfo)
+            .isoformat()
+        )
+    except ValueError:
+        return value
+
+
 def _boundary_sql(nodes: list[str], property_ids: list[str], comparison: str, epoch: int, direction: str) -> str:
     """Build one UNION ALL query returning at most one boundary row per
     (node, property) pair in the cross-product -- a single `sqlite3` call
@@ -1245,6 +1277,12 @@ class IoXWrapper(NuCoreInterface):
         calling the API.  Note that the API response includes folder entries
         as well as the target program.
 
+        ``lastRunTime``/``lastFinishTime``/``nextScheduledRunTime`` on every
+        returned entry are localized from the hub's raw UTC to this
+        installation's real timezone before being returned -- see
+        ``_ROUTINE_UTC_TIME_FIELDS``/``_localize_routine_time`` above -- so
+        callers never see the raw UTC values.
+
         Args:
             program_id: Integer routine ID or hex string (e.g. ``"1a2b"``).
 
@@ -1274,10 +1312,20 @@ class IoXWrapper(NuCoreInterface):
         if response == None or response.status_code != 200:
             return response if response else None
         try:
-            return response.json()['data']
+            data = response.json()['data']
         except Exception as ex:
             logger.error(f"Error retrieving routine summary: {ex}")
             return None
+
+        if isinstance(data, list):
+            tzinfo = await self._resolve_history_tzinfo()
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                for field in _ROUTINE_UTC_TIME_FIELDS:
+                    if field in entry:
+                        entry[field] = _localize_routine_time(entry[field], tzinfo)
+        return data
 
     async def get_all_routines(self):
         """Fetch complete trigger/action definitions for all routines.
