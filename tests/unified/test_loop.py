@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 
+import unified.loop as loop_module
 from unified.loop import AgenticLoop
 
 
@@ -60,3 +61,37 @@ async def test_tool_calls_in_one_turn_dispatch_sequentially_not_concurrently():
     # completion while "slow" was still sleeping, giving
     # ["slow:start", "fast:start", "fast:end", "slow:end"] instead.
     assert order == ["slow:start", "slow:end", "fast:start", "fast:end"]
+
+
+async def test_generate_usage_is_logged_per_round(monkeypatch):
+    # Each round's cache_xxx usage must reach the prompt log tagged with that
+    # same round's intent name, so it can be correlated back to the request
+    # that produced it (see PromptLogManager.write_usage).
+    logged: list[tuple[str, dict]] = []
+
+    class _FakeManager:
+        async def write(self, *a, **kw):
+            pass
+
+        async def write_usage(self, intent_name, usage):
+            logged.append((intent_name, usage))
+
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: _FakeManager())
+
+    responses = [
+        {"tool_calls": [{"id": "1", "name": "noop", "input": {}}], "usage": {"cache_read_input_tokens": 14000}},
+        {"text": "done", "usage": {"cache_read_input_tokens": 14000, "cache_creation_input_tokens": 0}},
+    ]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda name, args: _ok())
+
+    await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert logged == [
+        ("unified (round 1)", {"cache_read_input_tokens": 14000}),
+        ("unified (round 2)", {"cache_read_input_tokens": 14000, "cache_creation_input_tokens": 0}),
+    ]
+
+
+async def _ok():
+    return {"ok": True}

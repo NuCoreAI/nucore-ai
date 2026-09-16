@@ -8,6 +8,15 @@ from openai import AsyncOpenAI
 from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
 
+def _usage_dict(usage: Any) -> dict[str, Any]:
+    """Normalize an SDK usage object (or None, or a fake test double without
+    one) to a plain dict -- real ChatCompletion.usage is a pydantic model
+    with .model_dump(), but nothing here should crash generate() over a
+    debug-only stat."""
+    model_dump = getattr(usage, "model_dump", None)
+    return model_dump() if callable(model_dump) else {}
+
+
 class OpenAIAdapter(LLMAdapter):
     """LLM adapter for OpenAI chat completion models.
 
@@ -27,6 +36,11 @@ class OpenAIAdapter(LLMAdapter):
     # response_format object; subclasses can disable it and rely on prompt
     # instructions for JSON output instead.
     _supports_response_format = True
+    # stream_options={"include_usage": True} is what makes a streamed
+    # response's final chunk carry `usage` at all -- real OpenAI supports it,
+    # but an arbitrary self-hosted OpenAI-compatible server might reject an
+    # unrecognized field, so subclasses for those can opt out.
+    _supports_stream_usage = True
 
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
         """Initialise the adapter.
@@ -36,6 +50,13 @@ class OpenAIAdapter(LLMAdapter):
             base_url: Optional endpoint override (used by :class:`OpenAICompatibleAdapter`).
         """
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+    def _extra_headers(self, cfg: dict[str, Any]) -> dict[str, str] | None:
+        """Hook for a subclass to attach extra HTTP headers to the
+        underlying ``chat.completions.create()`` call (e.g. Grok's
+        cache-routing header). ``None`` (the default) means no extra
+        headers -- plain OpenAI needs none."""
+        return None
 
     async def generate(
         self,
@@ -80,6 +101,8 @@ class OpenAIAdapter(LLMAdapter):
             # Ask the model to guarantee JSON output (no extra prose).
             kwargs["response_format"] = {"type": "json_object"}
 
+        extra_headers = self._extra_headers(cfg)
+
         stream = bool(cfg.get("stream", False))
         stream_handler = cfg.get("stream_handler")
         if stream and callable(stream_handler):
@@ -87,9 +110,24 @@ class OpenAIAdapter(LLMAdapter):
             # Map from call index → accumulated call dict so that fragmented
             # tool-call deltas from multiple chunks can be reassembled.
             tool_call_accumulator: dict[int, dict[str, Any]] = {}
+            usage: dict[str, Any] = {}
 
-            stream_response = await self._client.chat.completions.create(stream=True, **kwargs)
+            stream_kwargs = dict(kwargs)
+            if self._supports_stream_usage:
+                # Only the include_usage:True final chunk carries `usage` at
+                # all -- without this, a streamed call never reports cache
+                # hits, unlike the non-streaming path where usage always
+                # rides along on the one response object.
+                stream_kwargs["stream_options"] = {"include_usage": True}
+
+            stream_response = await self._client.chat.completions.create(
+                stream=True, extra_headers=extra_headers, **stream_kwargs
+            )
             async for chunk in stream_response:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = _usage_dict(chunk_usage)
+
                 choices = getattr(chunk, "choices", None) or []
                 if not choices:
                     continue
@@ -143,6 +181,7 @@ class OpenAIAdapter(LLMAdapter):
                 "content": "".join(content_parts),
                 "tool_calls": tool_calls,
                 "native_tool_calls": raw_tool_calls,
+                "usage": usage,
                 "raw": {
                     "streamed": True,
                     "chunks": len(content_parts),
@@ -150,7 +189,7 @@ class OpenAIAdapter(LLMAdapter):
             }
 
         # Non-streaming path: single request, parse tool calls from the message.
-        response = await self._client.chat.completions.create(**kwargs)
+        response = await self._client.chat.completions.create(extra_headers=extra_headers, **kwargs)
         message = response.choices[0].message
         raw_tool_calls = [
             {
@@ -174,6 +213,10 @@ class OpenAIAdapter(LLMAdapter):
             # can echo it back verbatim in the assistant turn -- OpenAI requires
             # the exact {id, type, function:{name, arguments}} shape it emitted.
             "native_tool_calls": raw_tool_calls,
+            # prompt_tokens_details.cached_tokens is OpenAI's cache-hit count
+            # (automatic caching, no cache_creation counter like Anthropic's --
+            # a miss just reads 0, there's nothing else to report).
+            "usage": _usage_dict(getattr(response, "usage", None)),
             "raw": response.model_dump(),
         }
 

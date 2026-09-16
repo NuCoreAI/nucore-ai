@@ -21,6 +21,11 @@ class LlamaCppAdapter(OpenAICompatibleAdapter):
 
     _forward_temperature_and_max_tokens = True
     _supports_response_format = False
+    # An arbitrary self-hosted llama.cpp build's OpenAI-compat surface is not
+    # guaranteed to recognize stream_options -- unlike _supports_response_format
+    # this isn't a confirmed-rejected case, just an unverified one not worth
+    # risking a live streaming call over for a debug-only usage stat.
+    _supports_stream_usage = False
 
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
         # llama.cpp servers typically run without authentication.

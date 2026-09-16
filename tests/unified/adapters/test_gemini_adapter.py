@@ -190,6 +190,58 @@ async def test_streaming_extracts_a_function_call_from_a_real_captured_sse_trace
     ]
 
 
+@pytest.mark.asyncio
+async def test_generate_surfaces_usage_metadata_non_streaming():
+    # cachedContentTokenCount is Gemini's automatic/implicit-caching hit
+    # count (2.5+ models, no cache_control needed) -- surfaced the same way
+    # as Claude's/OpenAI's usage so AgenticLoop's prompt-log write doesn't
+    # need to know which provider produced it.
+    _FakeAsyncClient.next_response_data = {
+        "candidates": [],
+        "usageMetadata": {"promptTokenCount": 500, "candidatesTokenCount": 20, "cachedContentTokenCount": 420},
+    }
+    adapter = GeminiAdapter(api_key="k")
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["usage"] == {"promptTokenCount": 500, "candidatesTokenCount": 20, "cachedContentTokenCount": 420}
+
+
+@pytest.mark.asyncio
+async def test_generate_usage_defaults_to_empty_dict_when_absent():
+    _FakeAsyncClient.next_response_data = {"candidates": []}
+    adapter = GeminiAdapter(api_key="k")
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["usage"] == {}
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_surfaces_usage_from_the_final_sse_chunk(monkeypatch):
+    # usageMetadata is cumulative -- only the last chunk that carries one has
+    # the final counts, matching how Gemini's real SSE trace reports it.
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _FakeStreamingAsyncClient)
+    _FakeStreamingAsyncClient.sse_lines = [
+        'data: {"candidates": [{"content": {"parts": [{"text": "hi"}],"role": "model"}}],'
+        '"usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 0}}',
+        'data: {"candidates": [{"content": {"parts": [{"text": ""}],"role": "model"},'
+        '"finishReason": "STOP"}],'
+        '"usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 3, "cachedContentTokenCount": 80}}',
+    ]
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    async def stream_handler(text: str) -> None:
+        pass
+
+    result = await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"stream": True, "stream_handler": stream_handler},
+    )
+
+    assert result["usage"] == {"promptTokenCount": 100, "candidatesTokenCount": 3, "cachedContentTokenCount": 80}
+
+
 def test_build_tool_round_trip_messages_echoes_the_native_part_with_thought_signature():
     # Live bug: AgenticLoop overwrites ToolCall.raw with the provider-agnostic
     # canonical tool_use dict before build_tool_round_trip_messages ever sees

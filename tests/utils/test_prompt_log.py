@@ -191,6 +191,35 @@ async def test_pruning_archives_oldest_lines_and_keeps_file_under_threshold(tmp_
 
 
 @pytest.mark.asyncio
+async def test_write_usage_logs_one_line_carrying_the_usage_dict(tmp_path):
+    manager = PromptLogManager(tmp_path)
+    usage = {"input_tokens": 120, "output_tokens": 40, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 14000}
+
+    await manager.write_usage("unified (round 1)", usage)
+
+    lines = _lines(manager.path)
+    assert len(lines) == 1
+    assert lines[0]["kind"] == "usage"
+    assert lines[0]["intent"] == "unified (round 1)"
+    assert lines[0]["usage"] == usage
+    assert "ts" in lines[0] and "session" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_write_usage_is_a_noop_for_empty_usage(tmp_path):
+    manager = PromptLogManager(tmp_path)
+    await manager.write_usage("unified (round 1)", {})
+    assert _lines(manager.path) == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_manager_write_usage_never_creates_a_file(tmp_path):
+    manager = PromptLogManager(tmp_path / "logs", enabled=False)
+    await manager.write_usage("intent", {"input_tokens": 1})
+    assert not (tmp_path / "logs").exists()
+
+
+@pytest.mark.asyncio
 async def test_write_failure_is_logged_not_raised(tmp_path, monkeypatch):
     # Debug logging must never break the actual conversation.
     manager = PromptLogManager(tmp_path)

@@ -259,6 +259,11 @@ class GeminiAdapter(LLMAdapter):
             # emitted, for build_tool_round_trip_messages to echo back
             # verbatim -- the canonical tool_calls shape above loses both.
             "native_tool_calls": [tc.raw for tc in parsed_calls],
+            # cachedContentTokenCount reflects Gemini's automatic/implicit
+            # caching (2.5+ models, no cache_control needed) -- Anthropic's
+            # cache_creation/cache_read split doesn't apply here, this is a
+            # single cumulative "how much of the prompt was a cache hit".
+            "usage": data.get("usageMetadata") or {},
             "raw": data,
         }
 
@@ -326,10 +331,20 @@ class GeminiAdapter(LLMAdapter):
         combined_response = {"candidates": all_candidates}
         parsed_calls = self.parse_tool_calls(combined_response)
 
+        # usageMetadata is cumulative for the whole response -- the last
+        # chunk that carries one has the final counts, not each chunk's own.
+        usage: dict[str, Any] = {}
+        for chunk in reversed(chunks):
+            chunk_usage = chunk.get("usageMetadata")
+            if chunk_usage:
+                usage = chunk_usage
+                break
+
         return {
             "content": "".join(text_parts),
             "tool_calls": self.to_canonical_tools(parsed_calls),
             "native_tool_calls": [tc.raw for tc in parsed_calls],
+            "usage": usage,
             "raw": {
                 "streamed": True,
                 "chunks": chunks,

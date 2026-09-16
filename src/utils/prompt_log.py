@@ -99,17 +99,41 @@ class PromptLogManager:
             lines: list[dict[str, Any]] = []
             for msg in new_messages:
                 lines.extend(self._render_message(intent_name, msg))
-            if not lines:
-                return
-
-            text = "".join(json.dumps(line, default=str) + "\n" for line in lines)
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(text)
-
-            await self._maybe_prune()
+            await self._write_lines(lines)
         except Exception as ex:
             # Debug logging must never break the actual conversation.
             logger.error(f"prompt log write failed: {ex}")
+
+    async def write_usage(self, intent_name: str, usage: dict[str, Any]) -> None:
+        """Log one turn's token-usage stats (e.g. Claude's
+        ``cache_creation_input_tokens``/``cache_read_input_tokens``) as their
+        own line in the same JSONL file, tagged with the same *intent_name*
+        as the request line that produced them so the two can be correlated
+        (and ``grep '"kind":"usage"'`` isolates just the cache-hit/-miss
+        trend across turns without wading through message content)."""
+        if not self.enabled or not usage:
+            return
+        try:
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            line = {
+                "ts": ts,
+                "session": self._session_id,
+                "intent": intent_name,
+                "role": "assistant",
+                "kind": "usage",
+                "usage": usage,
+            }
+            await self._write_lines([line])
+        except Exception as ex:
+            logger.error(f"prompt log usage write failed: {ex}")
+
+    async def _write_lines(self, lines: list[dict[str, Any]]) -> None:
+        if not lines:
+            return
+        text = "".join(json.dumps(line, default=str) + "\n" for line in lines)
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(text)
+        await self._maybe_prune()
 
     def _new_messages_since_last_write(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key = id(messages)

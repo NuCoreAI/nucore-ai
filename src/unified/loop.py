@@ -75,12 +75,16 @@ class AgenticLoop:
         new_messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
 
         for iteration in range(self.max_iterations):
-            await get_prompt_log_manager().write(f"unified (round {iteration + 1})", messages)
+            intent_name = f"unified (round {iteration + 1})"
+            await get_prompt_log_manager().write(intent_name, messages)
             raw_response = await self.llm_client.generate(
                 messages=messages,
                 config=llm_config,
                 tools=self._exported_tools,
             )
+            usage = raw_response.get("usage") or {}
+            if usage:
+                await get_prompt_log_manager().write_usage(intent_name, usage)
             canonical_calls = raw_response.get("tool_calls") or []
             if not canonical_calls:
                 text = raw_response.get("text") or raw_response.get("content") or ""

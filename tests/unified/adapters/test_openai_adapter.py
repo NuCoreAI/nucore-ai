@@ -29,9 +29,10 @@ def _adapter() -> OpenAIAdapter:
     return OpenAIAdapter(api_key="test-key")
 
 
-def _fake_completion_response():
+def _fake_completion_response(usage: dict | None = None):
     message = SimpleNamespace(content="hi", tool_calls=None)
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)], model_dump=lambda: {})
+    usage_obj = SimpleNamespace(model_dump=lambda: usage) if usage is not None else None
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage_obj, model_dump=lambda: {})
 
 
 def test_strict_true_by_default_forces_additional_properties_false():
@@ -127,3 +128,85 @@ async def test_reasoning_effort_omitted_when_not_configured():
     await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
     assert "reasoning_effort" not in captured
+
+
+@pytest.mark.asyncio
+async def test_generate_surfaces_usage_non_streaming():
+    adapter = _adapter()
+    usage = {"prompt_tokens": 100, "completion_tokens": 20, "prompt_tokens_details": {"cached_tokens": 80}}
+
+    async def fake_create(**kwargs):
+        return _fake_completion_response(usage=usage)
+
+    adapter._client.chat.completions.create = fake_create
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["usage"] == usage
+
+
+@pytest.mark.asyncio
+async def test_generate_usage_defaults_to_empty_dict_when_absent():
+    adapter = _adapter()
+
+    async def fake_create(**kwargs):
+        return _fake_completion_response()  # no usage= passed
+
+    adapter._client.chat.completions.create = fake_create
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["usage"] == {}
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_extra_headers_hook_to_both_calls():
+    # _extra_headers is a no-op on plain OpenAIAdapter, but subclasses (e.g.
+    # GrokAdapter) override it -- verify the hook's return value actually
+    # reaches chat.completions.create for both the streaming and
+    # non-streaming paths, not just one.
+    adapter = _adapter()
+    adapter._extra_headers = lambda cfg: {"x-test": "1"}
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert captured["extra_headers"] == {"x-test": "1"}
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_surfaces_usage_from_final_chunk():
+    adapter = _adapter()
+    usage = {"prompt_tokens": 50, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 40}}
+
+    def _chunk(content=None, usage_obj=None):
+        delta = SimpleNamespace(content=content, tool_calls=None)
+        choice = SimpleNamespace(delta=delta)
+        return SimpleNamespace(choices=[choice], usage=usage_obj)
+
+    async def fake_stream(**kwargs):
+        assert kwargs["stream_options"] == {"include_usage": True}
+
+        async def _gen():
+            yield _chunk(content="hi")
+            # OpenAI's include_usage final chunk: empty choices, usage set.
+            yield SimpleNamespace(choices=[], usage=SimpleNamespace(model_dump=lambda: usage))
+
+        return _gen()
+
+    adapter._client.chat.completions.create = fake_stream
+
+    async def handler(text, is_end=False):
+        pass
+
+    result = await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"stream": True, "stream_handler": handler},
+    )
+
+    assert result["usage"] == usage

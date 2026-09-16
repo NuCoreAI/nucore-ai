@@ -116,11 +116,16 @@ class UnifiedRuntime:
             dispatch=dispatch,
             max_iterations=self.max_iterations,
         )
+        llm_config = self._resolve_llm_config()
+        # Grok's adapter reads this back out to set the x-grok-conv-id header
+        # that keeps repeat calls in this conversation routed to the same
+        # cache-warm server -- every other adapter ignores the extra key.
+        llm_config["session_id"] = session_id
         final_text, _ = await loop.run(
             system_prompt=system_prompt,
             history_messages=history_messages,
             user_message=user_message,
-            llm_config=self._resolve_llm_config(),
+            llm_config=llm_config,
         )
 
         history.append(query, final_text)
