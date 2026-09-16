@@ -24,8 +24,7 @@ class DedupeRoutines:
         "#   can't run as authored\" explanations, shared across many routines.\n"
         "#\n"
         "# ROUTINES: list of (id, name, comment, device_names, variable_names, invalid,\n"
-        "#   invalid_reason, folder, enabled, running, status, run_at_startup,\n"
-        "#   last_run_time, last_finish_time, next_scheduled_run_time) tuples, one per\n"
+        "#   invalid_reason, folder, enabled, run_at_startup) tuples, one per\n"
         "#   routine/folder.\n"
         "#     id: routine/folder id (int).\n"
         "#     name: routine/folder name.\n"
@@ -41,25 +40,17 @@ class DedupeRoutines:
         "#       can carry its own gating condition -- programs inside it only\n"
         "#       get evaluated when the folder's condition is true.\n"
         "#     enabled: False means this entry is never evaluated.\n"
-        "#     running: True if its actions are executing right now.\n"
-        "#     status: current evaluation of its `if` condition (true/false),\n"
-        "#       None if never evaluated.\n"
         "#     run_at_startup: True if its `then` actions run once right after\n"
         "#       hub reboot.\n"
-        "#     last_run_time / last_finish_time: when its `then`/`else` actions\n"
-        "#       last started/finished running, None if never run.\n"
-        "#     next_scheduled_run_time: when it's next due to be evaluated, None\n"
-        "#       if not schedule-driven or unknown. For a sunrise/sunset-relative\n"
-        "#       schedule (no fixed date), this is only the next single upcoming\n"
-        "#       instance, not the routine's fixed daily time -- it recomputes.\n"
-        "#   Any runtime field is None when the hub's runtime summary didn't\n"
-        "#   report it.\n"
+        "#   Any field above is None when the hub's runtime summary didn't report it.\n"
+        "#   Live runtime state -- whether it's running right now, its if-condition's\n"
+        "#   current evaluation, and when it last/next ran -- is NOT here; it's a live\n"
+        "#   value the same way a device's current property value is, so it's fetched\n"
+        "#   the same way: call get_routine_details(ids=[...]) and read its\n"
+        "#   `running_state` field, never guessed or recalled from an earlier turn.\n"
     )
 
-    _RUNTIME_SUMMARY_KEYS = (
-        "folder", "enabled", "running", "status", "runAtStartup",
-        "lastRunTime", "lastFinishTime", "nextScheduledRunTime",
-    )
+    _RUNTIME_SUMMARY_KEYS = ("folder", "enabled", "runAtStartup")
 
     @staticmethod
     def render_python(routines: list[dict[str, Any]]) -> str:

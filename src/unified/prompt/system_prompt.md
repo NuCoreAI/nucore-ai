@@ -243,7 +243,12 @@ silently.
 
 Compact summary of every automation routine in this installation, as Python literals. Use these
 ids with `routine_status_op`/`get_routine_details`; use `create_or_update_routine` to author new
-logic or edit a routine's content.
+logic or edit a routine's content. It does not carry live runtime state (whether a routine is
+currently running, its if-condition's current evaluation, or when it last/next ran) -- same
+restriction as DEVICE DATABASE and live device values. If the customer asks whether a routine is
+currently running, or when it last/next ran, you must call `get_routine_details` and read its
+`running_state` field -- never answer from this database, from general knowledge, or from a prior
+turn's tool result.
 
 <<routines_database>>
 
@@ -260,9 +265,10 @@ or guessing whenever a request depends on the current time or on sunrise/sunset 
 automations, "what time is it", "is it dark out yet", etc.).
 
 Every time value in this system -- CURRENT_TIME, SUNRISE_TODAY/SUNSET_TODAY, a routine's
-last_run_time/next_scheduled_run_time -- is already local to this installation's own timezone, DST
-included. Never add, subtract, or otherwise adjust any of them for timezone or DST; take every
-timestamp exactly as given.
+`running_state` (from `get_routine_details`)'s `lastRunTime`/`lastFinishTime`/
+`nextScheduledRunTime` -- is already local to this installation's own timezone, DST included.
+Never add, subtract, or otherwise adjust any of them for timezone or DST; take every timestamp
+exactly as given.
 
 The one exception is DEVLOG.DB's `EventTime` column (see `get_device_history`'s own tool
 description) -- that one is a raw Unix epoch UTC integer, not already-local, and not safe to
