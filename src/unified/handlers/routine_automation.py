@@ -25,9 +25,16 @@ side: ROUTINES DATABASE (``condensed_routines``) only carries
 id/name/comment/device_names, never the actual if/then/else logic --
 fetching that needs its own explicit tool call, via
 ``NuCoreInterface.get_routine`` (``GET /api/triggers/:id``), same as
-``get_device_detail`` does for a device's full spec. Belongs here, not in
+``get_device_detail`` does for a device's full spec. It also attaches a
+best-effort ``running_state`` dict per routine, from
+``NuCoreInterface.get_routine_summary`` (``GET /api/ai/program/:id``) --
+the same runtime-state fields (folder/status/lastRunTime/lastFinishTime/
+enabled/runAtStartup/running/nextScheduledRunTime) ``condensed_routines``
+carries today, but fetchable on demand for one routine instead of only as
+part of the always-loaded bulk summary. Belongs here, not in
 ``routine_status_ops.py``, per this codebase's content-vs-runtime-state
-split (``routine_status_ops`` is runtime state only -- enable/disable/run).
+split (``routine_status_ops`` is runtime state *changes* only --
+enable/disable/run -- not reads).
 Takes a list of ids and returns one result per id (same "backend does the
 deterministic thing, never rely on model discipline" reasoning as the
 label/name annotation below, applied to round-trip count instead of a
@@ -70,8 +77,11 @@ from nucore.uom import is_enumeration_uom
 from nucore.value_resolution import ValueResolutionError, resolve_value
 from rag.profile_rag_formatter import ProfileRagFormatter
 from unified.routine_compiler import TriggerCompileError, compile_trigger_source
+from utils import get_logger
 
 from ._event_wait import wait_until
+
+logger = get_logger(__name__)
 
 _ROUTINE_CREATE_WAIT_TIMEOUT_S = 15
 
@@ -499,6 +509,23 @@ async def _get_one_routine_detail(nucore_interface: NuCoreInterface, routine_id:
         _annotate_condition(nucore_interface, condition)
     for action in (result.get("then") or []) + (result.get("else") or []):
         _annotate_action(nucore_interface, action)
+
+    # Best-effort: runtime state (running/status/last-run-time/etc.) is a
+    # separate hub endpoint from the if/then/else logic above, so its
+    # failure shouldn't fail this call -- logic is what this tool exists
+    # for. The response includes folder/ancestor entries alongside the
+    # target program (see get_routine_summary's own docstring), so match
+    # the right one by id rather than assuming shape/order.
+    try:
+        summary_list = await nucore_interface.get_routine_summary(routine_id)
+    except Exception as exc:
+        logger.error(f"Error retrieving runtime summary for routine '{routine_id}': {exc}")
+        summary_list = None
+
+    if isinstance(summary_list, list):
+        match = next((s for s in summary_list if str(s.get("id")) == str(routine_id)), None)
+        if match:
+            result["running_state"] = match
 
     return result
 

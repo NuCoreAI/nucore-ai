@@ -84,6 +84,7 @@ class FakeBackend(NuCoreInterface):
         self.refresh_calls = 0
         self.routine_detail = None
         self.routine_details_by_id: dict = {}
+        self.routine_summary_by_id: dict = {}
 
     async def create_automation_routine(self, trigger):
         self.created_trigger = trigger
@@ -114,7 +115,11 @@ class FakeBackend(NuCoreInterface):
     async def get_all_routines_summary(self): raise NotImplementedError
     async def _load_variables(self): pass
     async def variable_ops(self, var_type, var_id, operation, **kwargs): raise NotImplementedError
-    async def get_routine_summary(self, routine_id): raise NotImplementedError
+
+    async def get_routine_summary(self, routine_id):
+        if routine_id in self.routine_summary_by_id:
+            return self.routine_summary_by_id[routine_id]
+        raise NotImplementedError
     async def get_all_routines(self): raise NotImplementedError
     async def add_node(self, node_name, type): raise NotImplementedError
     async def node_ops(self, node_id, operation, **kwargs): raise NotImplementedError
@@ -526,6 +531,44 @@ async def test_get_routine_details_missing_routine():
     backend = FakeBackend()
     result = await execute_tool("get_routine_details", {"ids": [999]}, nucore_interface=backend)
     assert "error" in result[0] and "HTTP 404" in result[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_routine_details_attaches_running_state_matched_by_id():
+    """get_routine_summary's response includes folder/ancestor entries
+    alongside the target program -- the right one must be picked out by id,
+    not assumed to be first in the list."""
+    backend = FakeBackend()
+    backend.routine_detail = {"id": 29, "name": "Movie Test", "parent": 0, "if": [], "then": [], "else": []}
+    backend.routine_summary_by_id = {
+        29: [
+            {"id": 1, "name": "My Programs", "folder": True},
+            {
+                "id": 29, "name": "Movie Test", "folder": False, "status": True, "enabled": True,
+                "runAtStartup": False, "running": False,
+                "lastRunTime": "2026-09-15 20:00:00", "lastFinishTime": "2026-09-15 20:00:05",
+                "nextScheduledRunTime": "2026-09-16 20:00:00",
+            },
+        ]
+    }
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
+    assert result[0]["running_state"]["id"] == 29
+    assert result[0]["running_state"]["status"] is True
+    assert result[0]["running_state"]["lastRunTime"] == "2026-09-15 20:00:00"
+
+
+@pytest.mark.asyncio
+async def test_get_routine_details_omits_running_state_when_summary_unavailable():
+    """Runtime-summary failure is best-effort -- it must not fail the whole
+    call, since the if/then/else logic is what this tool primarily exists
+    for (FakeBackend's default get_routine_summary raises NotImplementedError,
+    same as an unmocked/unavailable hub endpoint would surface as an
+    exception)."""
+    backend = FakeBackend()
+    backend.routine_detail = {"id": 29, "name": "Movie Test", "parent": 0, "if": [], "then": [], "else": []}
+    result = await execute_tool("get_routine_details", {"ids": [29]}, nucore_interface=backend)
+    assert result[0]["id"] == 29
+    assert "running_state" not in result[0]
 
 
 @pytest.mark.asyncio
