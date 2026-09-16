@@ -58,6 +58,7 @@ class FakeBackend(NuCoreInterface):
         self.add_device_result: object = "1A 2B 3C 1"
         self.discover_result: bool = True
         self.remove_device_result: bool = True
+        self.protocol_enabled: bool = True
         self.discover_error: Exception | None = None
         self.remove_device_error: Exception | None = None
         self.refresh_calls = 0
@@ -77,6 +78,9 @@ class FakeBackend(NuCoreInterface):
         if self.add_device_result is not None:
             self._pending_nodes[device_address] = name or device_address
         return self.add_device_result is not None
+
+    async def is_protocol_enabled(self, protocol):
+        return self.protocol_enabled
 
     async def discover_devices(self, device_type=None, protocol=None, mode="include", **kwargs):
         if self.discover_error is not None:
@@ -439,6 +443,34 @@ async def test_x10_add_by_address_is_not_yet_supported():
         "protocol": "x10", "action": "add_by_address", "device_address": "1A 2B 3C 1",
     })
     assert "not yet supported" in result
+
+
+# ---------------------------------------------------------------------------
+# Protocol-enabled gate -- runs right after protocol validity, before the
+# action-validity check or the not-yet-implemented check, so a disabled
+# subsystem is reported as a system-config issue rather than a generic
+# "not yet supported"/"invalid action" message.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_protocol_not_enabled_returns_a_clear_text_message():
+    backend = FakeBackend()
+    backend.protocol_enabled = False
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include"})
+    assert "not enabled" in result
+    assert "zwave" in result
+    assert backend.discover_calls == []
+
+
+@pytest.mark.asyncio
+async def test_protocol_not_enabled_check_runs_before_the_action_validity_check():
+    # Even an invalid action for this protocol should still surface the
+    # disabled-subsystem message first, not "action '...' is not valid".
+    backend = FakeBackend()
+    backend.protocol_enabled = False
+    result = await pair_device(backend, {"protocol": "insteon", "action": "exclude"})
+    assert "not enabled" in result
 
 
 # ---------------------------------------------------------------------------

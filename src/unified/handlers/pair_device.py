@@ -332,6 +332,14 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
     if valid_actions is None:
         return {"error": f"unknown protocol '{protocol}' -- must be one of: {sorted(_PROTOCOL_ACTIONS)}"}
 
+    if not await nucore_interface.is_protocol_enabled(protocol):
+        return (
+            f"The '{protocol}' subsystem is not enabled on this eisy -- "
+            "it needs to be turned on there before any devices can be paired. Direct the customer "
+            f"to the {protocol} configuration page (link it per UI NAVIGATION RULES) to enable it, "
+            "then try again."
+        )
+
     action = args.get("action")
     if action not in valid_actions:
         return {"error": f"action '{action}' is not valid for protocol '{protocol}' -- must be one of: {sorted(valid_actions)}"}
