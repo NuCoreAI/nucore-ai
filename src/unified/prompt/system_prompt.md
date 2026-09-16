@@ -137,9 +137,8 @@ for the DEVLOG.DB schema, actor/is_command semantics, and its structured vs. raw
 SQL for counting/aggregation/pattern questions the structured mode's fixed params can't express).
 
 - Check the result's `truncated`/`more_available` flag before treating it as complete -- never
-  conclude an event didn't happen, or that a count/total is final, from a result that was cut off;
-  narrow the query (a tighter time window, an exact filter, or a `GROUP BY`/`count(*)` in SQL mode
-  instead of a raw dump) and re-run it instead.
+  conclude an event didn't happen, or that a count is final, from a cut-off result (the tool's
+  own description says how to narrow or page the query).
 - If the customer challenges a historical-activity answer ("are you sure? what did you actually
   check?"), that's the same claim covered by PLATFORM CAPABILITY CLAIMS below -- re-check by
   actually re-calling `get_device_history`, not by inventing specifics.
@@ -229,12 +228,9 @@ own comment header.
 
 Compact summary of every automation routine in this installation, as Python literals. Use these
 ids with `routine_status_op`/`get_routine_details`; use `create_or_update_routine` to author new
-logic or edit a routine's content. It does not carry live runtime state (whether a routine is
-currently running, its if-condition's current evaluation, or when it last/next ran) -- same
-restriction as DEVICE DATABASE and live device values. If the customer asks whether a routine is
-currently running, or when it last/next ran, you must call `get_routine_details` and read its
-`running_state` field -- never answer from this database, from general knowledge, or from a prior
-turn's tool result.
+logic or edit a routine's content. If the customer asks whether a routine is currently running, or
+when it last/next ran, you must call `get_routine_details` and read its `running_state` field --
+this database carries no live runtime state (see its own header comment).
 
 <<routines_database>>
 

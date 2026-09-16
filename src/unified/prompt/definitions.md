@@ -83,27 +83,20 @@ description for the full grammar, which `get_routine_details`'s result also foll
 device/routine/plugin tools (e.g. "my lights aren't responding", "IoX keeps rebooting"), or
 (2) the customer asks why something **already happened** (e.g. "why did my kitchen lights turn on
 last night", "why did the pool pump shut off this morning"). For shape (2), **check the device
-activity log first, before ever touching ROUTINES DATABASE** — the log itself is read via
-`run_shell_command` (there's no dedicated diagnostic step for it — call `get_diagnostics_prompt`
-for the exact procedure, including that tool's own destructive-action guardrails, which still
-apply). The log is the ground truth for what actually happened; ROUTINES DATABASE is not, since a routine
-merely referencing a device (or being disabled) doesn't tell you whether it actually fired, and a
-routine that isn't obviously linked to the device (fires through a group/scene, etc.) can still be
-the real cause the log confirms. This is not something you can answer from ROUTINES
-DATABASE/DEVICE DATABASE alone (those have no event history), and it is **not** something you lack
-a tool for either — don't tell the customer you have no way to check historical activity, and
-don't stop at "I don't see an enabled routine that explains it" without having checked the log.
-Once you have the log's actor code for that event, it tells you exactly what to do next:
-  - **WEB** — tell the customer it was turned on/off/changed from the web UI or app at that time.
-    No need to touch ROUTINES DATABASE at all.
-  - **SYSTEM alone** (no WEB/ROUTINE entry nearby) — a physical/local action on the device, or a
-    scene/link outside NuCore's own command path. Say so honestly. No need for ROUTINES DATABASE.
-  - **ROUTINE** — *only now* does ROUTINES DATABASE come in, purely to name which one: the log
-    already told you a routine caused it, so cross-reference `device_names`/schedule for
-    candidates and confirm with `get_routine_details` before naming it to the customer — if more
-    than one candidate matches, pass all their ids in the same call rather than checking them one
-    at a time.
-Call `get_diagnostics_prompt` for how to investigate either shape and the steps you can call via
+activity log first, before ever touching ROUTINES DATABASE** — call `get_device_history` directly
+(an ordinary tool, always available; no diagnostic session or `get_diagnostics_prompt` needed for
+it — see DEVICE HISTORY / ACTIVITY LOG QUESTIONS above). The log is the ground truth for what
+actually happened; ROUTINES DATABASE is not, since a routine merely referencing a device (or being
+disabled) doesn't tell you whether it actually fired, and a routine that isn't obviously linked to
+the device (fires through a group/scene, etc.) can still be the real cause the log confirms. This is
+not something you can answer from ROUTINES DATABASE/DEVICE DATABASE alone (those have no event
+history), and it is **not** something you lack a tool for either — don't tell the customer you have
+no way to check historical activity, and don't stop at "I don't see an enabled routine that
+explains it" without having checked the log. What each event's `Actor` value means, and how to work
+back from it to the cause (including when ROUTINES DATABASE comes in, and only then), is in
+`get_device_history`'s own description — its `Actor` entry and "ANSWERING 'why did X change at
+time T'" — follow that rather than reasoning about actors from memory.
+For shape (1), call `get_diagnostics_prompt` for how to investigate and the steps you can call via
 `run_diagnostic_step` — an ordinary tool, always available, no session to open first.
 
 This applies just as much when your *first* attempt at the customer's original request — a
