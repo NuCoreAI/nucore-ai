@@ -29,6 +29,36 @@ from .diagnostics.iox_diagnostics import IoXDiagnostics
 from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER, ZMATTER_BASE_PATHS, PROTOCOL_TO_ZMATTER_FAMILY
 logger = get_logger(__name__)
 
+# Keys come directly from DEVICE_FAMILIES (imported above) rather than a
+# second hand-typed protocol vocabulary -- one canonical spelling of
+# "Z-Wave"/"INSTEON"/etc. in this codebase, not two. Legacy Z-Wave and Plugin
+# (also in DEVICE_FAMILIES) are deliberately excluded: Legacy doesn't count
+# as "zwave enabled" (matches _is_legacy_zwave's own treatment below), and
+# Plugin isn't a pairing protocol. x10 has no DEVICE_FAMILIES entry of its
+# own, so it's the one explicit addition.
+_PROTOCOL_ENABLED_KEYS: dict[str, str] = {
+    DEVICE_FAMILIES[DEVICE_FAMILY_INSTEON]: "insteonSupport",  # "INSTEON"
+    DEVICE_FAMILIES[DEVICE_FAMILY_Z_WAVE]: "zMatterZwave",     # "Z-Wave" (Z-Matter gen only)
+    DEVICE_FAMILIES[DEVICE_FAMILY_ZIGBEE]: "zigbeeSupport",    # "Zigbee"
+    DEVICE_FAMILIES[DEVICE_FAMILY_MATTER]: "matterSupport",    # "Matter"
+    "x10": "insteonSupport",  # rides on the Insteon/PLM subsystem -- no dedicated option of its own
+}
+
+
+def _normalize_protocol_name(name: str) -> str:
+    return (name or "").strip().casefold().replace("-", "")
+
+
+# Precomputed once at import time so is_protocol_enabled's lookup is a plain
+# dict get, not a re-normalize-every-key scan on every call. The same
+# normalization applied to both this table's keys and the caller's input
+# guarantees "Z-Wave" (DEVICE_FAMILIES' own spelling) and "zwave"/"ZWave"/etc.
+# all resolve identically, while "Legacy Z-Wave" normalizes to "legacy zwave"
+# -- distinct from "zwave", so it still correctly fails to match.
+_NORMALIZED_PROTOCOL_ENABLED_KEYS: dict[str, str] = {
+    _normalize_protocol_name(k): v for k, v in _PROTOCOL_ENABLED_KEYS.items()
+}
+
 
 def xml_elem_to_obj(elem):
     if elem is None:
@@ -2147,6 +2177,13 @@ class IoXWrapper(NuCoreInterface):
         show."""
         options = await self.diagnostics._get_system_options()
         return not options.get("zMatterZwave", False)
+
+    async def is_protocol_enabled(self, protocol: str) -> bool:
+        key = _NORMALIZED_PROTOCOL_ENABLED_KEYS.get(_normalize_protocol_name(protocol))
+        if key is None:
+            raise ValueError(f"unknown protocol '{protocol}' -- must be one of: {sorted(_PROTOCOL_ENABLED_KEYS)}")
+        options_config = await self.diagnostics._get_system_options()
+        return bool(options_config.get(key, False))
 
     async def add_device(self, device_address: str, name: str = None, device_type: str = None, flag: int = 1, **kwargs) -> bool:
         body = {"flag": flag, "address": device_address}

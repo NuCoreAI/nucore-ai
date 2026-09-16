@@ -679,6 +679,16 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the get_device_family method.")
 
+    async def is_protocol_enabled(self, protocol: str) -> bool:
+        """
+        Returns whether a given device protocol is enabled in this hub's system config.
+        :param protocol: One of "insteon", "zwave", "zigbee", "matter", "x10" -- matched
+            case- and hyphen-insensitively, so a DEVICE_FAMILIES display string like
+            "Z-Wave" or "INSTEON" (as returned by get_device_family()) works directly.
+        :return: True if enabled, False otherwise.
+        """
+        raise NotImplementedError("Subclasses must implement the is_protocol_enabled method.")
+
     # ------------------------------------------------------------------
     # Device history -- backed by the ISY/eisy firmware's own structured
     # DEV.LOG capture (DEVLOG.DB, see design/history_impl_isy.md), queried
