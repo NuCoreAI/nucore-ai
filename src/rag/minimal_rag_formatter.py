@@ -5,6 +5,8 @@ Format: device_id: device_name | props: p1, p2 | cmds: c1, c2 | enums: e1, e2
 """
 
 import json
+from typing import Any
+
 from nucore import Node, Group, RuntimeProfile, NodeDef, NodeHierarchy
 from nucore.numeric_enum import describe_numeric_enum
 from .rag_data_struct import RAGData
@@ -41,36 +43,52 @@ class MinimalRagFormatter(RAGFormatter):
                         enums.append(label)
         return enums
     
+    def _editor_value_spec(self, editor) -> Any:
+        """One editor's own value spec: the disguised-numeric descriptor
+        (see ``nucore.numeric_enum``) when its id is a known numeric-enum
+        editor, else its plain enum label list (empty if the editor is
+        absent or has no ranges)."""
+        if not editor:
+            return []
+        spec = describe_numeric_enum(editor)
+        if spec is not None:
+            return spec.descriptor
+        return self._collect_enum_values(editor)
+
     def _build_item(self, name: str, editor) -> dict:
         """Build a ``{name: value}`` compact-DB item for a property/single-
-        editor item: the disguised-numeric descriptor (see
-        ``nucore.numeric_enum``) when *editor*'s id is a known numeric-enum
-        editor, else the plain enum label list (empty if none)."""
-        if editor:
-            spec = describe_numeric_enum(editor)
-            if spec is not None:
-                return {name: spec.descriptor}
-            return {name: self._collect_enum_values(editor)}
-        return {name: []}
+        editor item."""
+        return {name: self._editor_value_spec(editor)}
+
+    def _build_param_spec(self, param) -> Any:
+        """One command parameter's own value spec, same rules as
+        ``_editor_value_spec``."""
+        return self._editor_value_spec(param.editor)
 
     def _build_command_item(self, name: str, parameters) -> dict:
-        """Same as ``_build_item`` but for a command's parameter list --
-        checks every parameter's editor for a numeric-enum match first
-        (commands with a numeric-enum parameter have exactly one parameter
-        in practice), else falls back to combining every parameter's plain
-        enum labels, same as before."""
+        """Build a ``{name: value}`` compact-DB item for a command's
+        parameter list.
+
+        A single-parameter command collapses to that one parameter's own
+        spec, same shape as a property. A command with MORE than one
+        parameter -- e.g. a notification command with separate Group/
+        Sound/Content parameters -- renders as a list of (param_name, spec)
+        tuples, one per parameter, in order: send_command's `values` array
+        is positional against this same order (see
+        tool_device_send_command.json's description), so combining every
+        parameter's enum labels into one flat list here (the previous
+        approach, on the wrong assumption that a multi-parameter command
+        is rare enough to ignore) silently destroyed that contract -- a
+        real production command, UD Mobile's 3-parameter Notify/Send
+        Message, hit exactly this: its Group/Sound/Content parameters'
+        enum labels got merged into one undifferentiated list, and the
+        model had no way to tell there were 3 separate parameters to fill
+        rather than one to pick from."""
         if not parameters:
             return {name: []}
-        for param in parameters:
-            if param.editor:
-                spec = describe_numeric_enum(param.editor)
-                if spec is not None:
-                    return {name: spec.descriptor}
-        enums: list[str] = []
-        for param in parameters:
-            if param.editor:
-                enums.extend(self._collect_enum_values(param.editor))
-        return {name: enums}
+        if len(parameters) == 1:
+            return {name: self._build_param_spec(parameters[0])}
+        return {name: [(param.name or "n/a", self._build_param_spec(param)) for param in parameters]}
 
     def _format_nodedef_json(self, node_def: NodeDef) -> dict:
         """Format a single node into delimited string with sections."""

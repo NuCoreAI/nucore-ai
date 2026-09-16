@@ -53,6 +53,19 @@ class DedupeProfiles:
         return len(item[name])
 
     @staticmethod
+    def _is_multi_param_item(item: dict) -> bool:
+        """True for a MinimalRagFormatter multi-parameter command entry --
+        a list of (param_name, spec) tuples, one per parameter -- as
+        opposed to a plain item's flat list of enum-label strings. These
+        are never $ref candidates: $ref substitutes one item's whole
+        (name, values) as a unit, which only makes sense for a flat,
+        single enum list genuinely shared verbatim across profiles, not a
+        nested per-parameter structure unique to one command."""
+        name = next(iter(item))
+        values = item[name]
+        return isinstance(values, list) and bool(values) and isinstance(values[0], tuple)
+
+    @staticmethod
     def _slugify(name: str) -> str:
         """Turn a display name into a lowercase snake_case identifier fragment."""
         slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
@@ -96,6 +109,8 @@ class DedupeProfiles:
         for profile in profiles:
             for section in SECTIONS:
                 for item in profile.get(section, []):
+                    if DedupeProfiles._is_multi_param_item(item):
+                        continue
                     if DedupeProfiles._enum_count(item) <= MIN_ENUMS:
                         continue
                     canon = DedupeProfiles._canon(item)
@@ -190,6 +205,15 @@ class DedupeProfiles:
         "#       (name, {'on': (min, max), 'off': (min, max)}) -- a command needing\n"
         "#                              two independent numbers -- pass an object\n"
         "#                              {'on': <n>, 'off': <n>} as the value.\n"
+        "#       (name, [(param_name, spec), ...]) -- a command needing MORE THAN ONE\n"
+        "#                              independent value (e.g. a notification command\n"
+        "#                              with separate sound/content parameters) --\n"
+        "#                              one (param_name, spec) tuple per parameter, IN\n"
+        "#                              ORDER, each spec itself one of the value/range/\n"
+        "#                              on-off shapes above. send_command's `values`\n"
+        "#                              array is positional against this same order --\n"
+        "#                              pass one `values` entry per tuple here, in this\n"
+        "#                              exact order, never combine them into `value`.\n"
         "#       ('$ref', enum_id)   -- substitute ENUMS[enum_id] for this one item's\n"
         "#                              (name, values) -- used only for the handful of\n"
         "#                              large enum lists genuinely shared by several\n"
