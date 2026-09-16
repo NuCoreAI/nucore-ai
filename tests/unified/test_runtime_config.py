@@ -41,6 +41,35 @@ def test_reasoning_effort_passed_through_when_set(tmp_path):
     assert cfg["supported_llms"]["unified"]["reasoning_effort"] is None
 
 
+def test_cache_ttl_passed_through_and_defaults_to_none(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "default": {"provider": "claude", "model": "m", "cache_ttl": "1h"},
+            "unified": {"provider": "claude", "model": "m"},
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
+
+    assert cfg["supported_llms"]["default"]["cache_ttl"] == "1h"
+    assert cfg["supported_llms"]["unified"]["cache_ttl"] is None
+
+
+def test_cache_ttl_rejects_an_unknown_value(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "default": {"provider": "claude", "model": "m", "cache_ttl": "2h"},
+            "unified": {"provider": "claude", "model": "m"},
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError):
+        _load_runtime_config(path=str(path), stream_handler=None)
+
+
 def test_profile_stream_flag_honored_when_handler_present(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=StreamHandler())

@@ -54,12 +54,17 @@ class AgenticLoop:
     async def run(
         self,
         *,
-        system_prompt: str,
+        system_prompt: str | list[str],
         history_messages: list[dict[str, Any]],
         user_message: str,
         llm_config: dict[str, Any] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Run the loop for one user turn.
+
+        ``system_prompt`` may be a list of sections (static prefix first,
+        volatile tail last -- see prompt_builder.build_system_prompt_sections);
+        each becomes its own system message so an adapter can cache the
+        static part independently of the tail.
 
         Returns:
             ``(final_text, new_messages)`` -- the model's final answer, and
@@ -67,8 +72,9 @@ class AgenticLoop:
             tool-call/tool-result round trip and the final assistant reply),
             for a caller that wants to persist the full turn.
         """
+        sections = [system_prompt] if isinstance(system_prompt, str) else list(system_prompt)
         messages: list[dict[str, Any]] = (
-            [{"role": "system", "content": system_prompt}]
+            [{"role": "system", "content": section} for section in sections if section]
             + list(history_messages)
             + [{"role": "user", "content": user_message}]
         )

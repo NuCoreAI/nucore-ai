@@ -133,6 +133,21 @@ async def test_a_new_messages_list_is_not_treated_as_a_continuation(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_static_system_section_is_logged_once_while_the_tail_changes_per_turn(tmp_path):
+    # Every turn sends [static, volatile tail]; the static section must
+    # dedupe across turns even though a different system message (the tail)
+    # was logged in between -- a single "last hash" would re-log it every turn.
+    manager = PromptLogManager(tmp_path)
+    static = {"role": "system", "content": "static rules + databases"}
+
+    await manager.write("turn 1", [dict(static), {"role": "system", "content": "tail: 10:00"}, {"role": "user", "content": "a"}])
+    await manager.write("turn 2", [dict(static), {"role": "system", "content": "tail: 10:01"}, {"role": "user", "content": "b"}])
+
+    system_lines = [line["content"] for line in _lines(manager.path) if line["kind"] == "system_prompt"]
+    assert system_lines == ["static rules + databases", "tail: 10:00", "tail: 10:01"]
+
+
+@pytest.mark.asyncio
 async def test_gemini_native_parts_fallback_does_not_crash(tmp_path):
     # Regression: GeminiAdapter.build_tool_round_trip_messages returns
     # messages shaped like {"role": ..., "gemini_parts": [...]} instead of a

@@ -16,7 +16,7 @@ from nucore import NuCoreInterface
 from .dispatch import execute_tool
 from .history_compaction import maybe_compact_history
 from .loop import AgenticLoop
-from .prompt_builder import build_system_prompt
+from .prompt_builder import build_system_prompt_sections
 from .stream_handler import StreamHandler
 
 _TOOLS_DIR = Path(__file__).parent / "tools"
@@ -96,7 +96,7 @@ class UnifiedRuntime:
             token_budget=int(self.runtime_config.get("history_token_budget", 20000)),
         )
 
-        system_prompt = await build_system_prompt(self.nucore_interface)
+        system_prompt = await build_system_prompt_sections(self.nucore_interface)
 
         history_messages: list[dict[str, Any]] = []
         for turn in history.turns:

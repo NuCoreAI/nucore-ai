@@ -1,8 +1,13 @@
-"""Assembles the single unified system prompt.
+"""Assembles the unified system prompt, as cache-friendly sections.
 
 Reads ``nucore_interface``/``rag`` directly to build the compact
 ``DEVICE DATABASE``/``ROUTINES DATABASE`` sections -- no config-file/
-directory-loading machinery involved.
+directory-loading machinery involved. system_prompt.md carries a
+``<<cache_boundary>>`` marker: everything before it is static across
+conversations (until device/routine config changes), everything after it
+(USER PREFERENCES, TIME & LOCATION) can change turn to turn. The two halves
+are sent as separate system messages so claude_adapter can give the static
+part its own prompt-cache breakpoint -- see build_system_prompt_sections.
 """
 
 from __future__ import annotations
@@ -42,10 +47,11 @@ _TIME_INFO_VARS = (
 
 def _render_time_info(time_data: dict[str, Any] | None) -> str:
     """Render ``get_timespecs()``'s result as Python literals -- same
-    rendering convention as DEVICE DATABASE/ROUTINES DATABASE. Placed last in
-    the assembled prompt (see system_prompt.md), after the databases, since
-    it changes every turn and would otherwise bust the prompt-cache prefix
-    for everything after it (see claude_adapter.py's system cache_control)."""
+    rendering convention as DEVICE DATABASE/ROUTINES DATABASE. Lives after
+    the ``<<cache_boundary>>`` marker in system_prompt.md, in the volatile
+    tail section, since it changes every turn -- kept out of the static
+    section so it doesn't bust that section's prompt-cache entry (see
+    build_system_prompt_sections and claude_adapter.py's system blocks)."""
     if not time_data:
         return "```python\n# Time/timezone/location information is unavailable.\n```"
     lines = [
@@ -73,11 +79,26 @@ def _render_preference_aliases(nucore_interface: NuCoreInterface) -> str:
     return f"```python\n{chr(10).join(lines)}\n```"
 
 
-async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
-    """Build the complete unified system prompt for the given backend."""
+_CACHE_BOUNDARY = "<<cache_boundary>>"
+
+
+async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> list[str]:
+    """Build the unified system prompt as ordered sections: [static, volatile].
+
+    The template is split on ``<<cache_boundary>>`` *before* substitution
+    (so a substituted value can never contain the marker), then each half
+    gets the same placeholder substitution. Callers send each section as
+    its own system message.
+    """
     await nucore_interface._refresh_routines_database()
 
-    system_prompt = (_PROMPT_DIR / "system_prompt.md").read_text(encoding="utf-8").strip()
+    template = (_PROMPT_DIR / "system_prompt.md").read_text(encoding="utf-8").strip()
+    parts = template.split(_CACHE_BOUNDARY)
+    if len(parts) != 2:
+        raise ValueError(
+            f"system_prompt.md must contain exactly one {_CACHE_BOUNDARY} marker, found {len(parts) - 1}"
+        )
+
     definitions = (_PROMPT_DIR / "definitions.md").read_text(encoding="utf-8").strip()
     ui_navigation_rules = (_PROMPT_DIR / "ui_navigation_rules.md").read_text(encoding="utf-8").strip()
 
@@ -93,11 +114,23 @@ async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
     time_info = _render_time_info(time_data)
     preference_aliases = _render_preference_aliases(nucore_interface)
 
-    prompt = system_prompt.replace("<<definitions>>", definitions)
-    prompt = prompt.replace("<<host_environment>>", _HOST_ENVIRONMENT)
-    prompt = prompt.replace("<<ui_navigation_rules>>", ui_navigation_rules)
-    prompt = prompt.replace("<<device_database>>", device_database)
-    prompt = prompt.replace("<<routines_database>>", routines_database)
-    prompt = prompt.replace("<<time_info>>", time_info)
-    prompt = prompt.replace("<<preference_aliases>>", preference_aliases)
-    return prompt
+    substitutions = {
+        "<<definitions>>": definitions,
+        "<<host_environment>>": _HOST_ENVIRONMENT,
+        "<<ui_navigation_rules>>": ui_navigation_rules,
+        "<<device_database>>": device_database,
+        "<<routines_database>>": routines_database,
+        "<<time_info>>": time_info,
+        "<<preference_aliases>>": preference_aliases,
+    }
+    sections: list[str] = []
+    for part in parts:
+        for placeholder, value in substitutions.items():
+            part = part.replace(placeholder, value)
+        sections.append(part.strip())
+    return sections
+
+
+async def build_system_prompt(nucore_interface: NuCoreInterface) -> str:
+    """The sections from build_system_prompt_sections joined into one string."""
+    return "\n\n".join(await build_system_prompt_sections(nucore_interface))

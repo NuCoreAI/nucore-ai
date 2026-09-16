@@ -233,6 +233,11 @@ class OpenAIAdapter(LLMAdapter):
         tool message, the native ``tool_calls`` list on an assistant
         message) to recognise a tool-result turn -- coercing them to a plain
         string would silently break the agentic tool-calling loop.
+
+        Consecutive ``system`` messages are merged into one (joined with a
+        blank line): the prompt arrives as several sections (a static part
+        and a volatile tail, see prompt_builder), and some OpenAI-compatible
+        chat templates (llama.cpp) reject more than one system message.
         """
         normalized: list[dict[str, Any]] = []
         for msg in messages or []:
@@ -253,6 +258,9 @@ class OpenAIAdapter(LLMAdapter):
                     content_text = json.dumps(content, ensure_ascii=False)
                 except Exception:
                     content_text = str(content)
+            if role == "system" and normalized and normalized[-1].get("role") == "system":
+                normalized[-1] = {"role": "system", "content": f"{normalized[-1]['content']}\n\n{content_text}"}
+                continue
             normalized.append({"role": role, "content": content_text})
         return normalized
 

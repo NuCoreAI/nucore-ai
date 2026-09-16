@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 DEFAULT_FILENAME = "nucore.prompt.jsonl"
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 _MAX_TRACKED_RUNS = 200
+_MAX_TRACKED_SYSTEM_PROMPTS = 512
 
 
 class PromptLogManager:
@@ -68,7 +69,12 @@ class PromptLogManager:
             self.log_dir.mkdir(parents=True, exist_ok=True)
 
         self._session_id = uuid.uuid4().hex[:8]
-        self._logged_system_prompt_hash: str | None = None
+        # A bounded set of already-logged system-prompt hashes, not just the
+        # last one: every turn sends a static section followed by a volatile
+        # tail (see prompt_builder.build_system_prompt_sections), so with a
+        # single "last hash" the ~100KB static section would never match
+        # the previous line (the tail) and would be re-logged every turn.
+        self._logged_system_prompt_hashes: "OrderedDict[str, None]" = OrderedDict()
         # id(messages) -> (the list itself, how many of its entries are
         # already on disk). Lets write() be called with the *entire*
         # accumulated messages list on every iteration (as AgenticLoop
@@ -155,9 +161,12 @@ class PromptLogManager:
             content = msg.get("content")
             text = content if isinstance(content, str) else json.dumps(content, default=str)
             digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-            if digest == self._logged_system_prompt_hash:
+            if digest in self._logged_system_prompt_hashes:
+                self._logged_system_prompt_hashes.move_to_end(digest)
                 return []
-            self._logged_system_prompt_hash = digest
+            self._logged_system_prompt_hashes[digest] = None
+            while len(self._logged_system_prompt_hashes) > _MAX_TRACKED_SYSTEM_PROMPTS:
+                self._logged_system_prompt_hashes.popitem(last=False)
             return [{**base, "kind": "system_prompt", "hash": digest, "content": text}]
 
         lines = []

@@ -204,6 +204,71 @@ async def test_temperature_key_present_but_none_is_not_forwarded():
     assert "extra_body" not in calls[0]
 
 
+def _capture_stream(calls: list):
+    def fake_stream(**kwargs):
+        calls.append(kwargs)
+        return _FakeStream(_fake_final_message("ok"))
+    return fake_stream
+
+
+_TWO_SECTION_MESSAGES = [
+    {"role": "system", "content": "static"},
+    {"role": "system", "content": "tail"},
+    {"role": "user", "content": "hi"},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [{}, {"cache_ttl": "5m"}])
+async def test_each_system_message_becomes_its_own_cached_block(config):
+    # The prompt builder sends [static, volatile tail]; as one joined block
+    # the tail changing every turn busted the cache for the whole system
+    # prompt on every new conversation. Each section gets its own block and
+    # breakpoint; 5m (the default) emits no ttl key at all.
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+
+    await adapter.generate(messages=_TWO_SECTION_MESSAGES, config=config)
+
+    assert calls[0]["system"] == [
+        {"type": "text", "text": "static", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "tail", "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cache_ttl_applies_to_tools_and_static_blocks_but_not_the_volatile_tail():
+    # Longer TTLs must precede shorter ones in the request, so a configured
+    # 1h goes on the tools and the static block(s); the tail -- which changes
+    # every turn anyway -- keeps the default. The exported tools list is
+    # shared across rounds and must not be mutated in place.
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+    tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
+
+    await adapter.generate(messages=_TWO_SECTION_MESSAGES, config={"cache_ttl": "1h"}, tools=tools)
+
+    assert calls[0]["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert tools[-1]["cache_control"] == {"type": "ephemeral"}
+    assert calls[0]["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert calls[0]["system"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_only_the_last_three_system_blocks_carry_a_breakpoint():
+    # 4 breakpoints max per request, one of which is the tools list.
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+    messages = [{"role": "system", "content": f"s{i}"} for i in range(5)] + [{"role": "user", "content": "hi"}]
+
+    await adapter.generate(messages=messages, config={})
+
+    assert ["cache_control" in block for block in calls[0]["system"]] == [False, False, True, True, True]
+
+
 @pytest.mark.asyncio
 async def test_generate_surfaces_usage_including_cache_fields():
     # usage (including cache_creation_input_tokens/cache_read_input_tokens)

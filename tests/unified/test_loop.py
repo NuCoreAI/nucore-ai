@@ -93,5 +93,42 @@ async def test_generate_usage_is_logged_per_round(monkeypatch):
     ]
 
 
+async def test_list_system_prompt_emits_one_system_message_per_section_in_order(monkeypatch):
+    # prompt_builder splits the prompt into [static, volatile tail]; each
+    # section must reach the adapter as its own system message, in order,
+    # ahead of history -- that's what lets claude_adapter cache the static
+    # part independently of the tail. Empty sections are dropped.
+    class _FakeManager:
+        async def write(self, *a, **kw):
+            pass
+
+        async def write_usage(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: _FakeManager())
+    captured: list[list[dict]] = []
+
+    class _CapturingAdapter(_FakeAdapter):
+        async def generate(self, *, messages, config, tools):
+            captured.append(list(messages))
+            return await super().generate(messages=messages, config=config, tools=tools)
+
+    loop = AgenticLoop(llm_client=_CapturingAdapter([{"text": "done"}]), tool_specs=[], dispatch=lambda n, a: _ok())
+
+    await loop.run(
+        system_prompt=["static part", "", "volatile tail"],
+        history_messages=[{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "ok"}],
+        user_message="hi",
+    )
+
+    assert captured[0] == [
+        {"role": "system", "content": "static part"},
+        {"role": "system", "content": "volatile tail"},
+        {"role": "user", "content": "earlier"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "hi"},
+    ]
+
+
 async def _ok():
     return {"ok": True}

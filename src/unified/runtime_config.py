@@ -66,6 +66,9 @@ def _coerce_runtime_profile(
         raise ValueError(f"nucore_runtime.{profile_name} must define a non-empty 'provider'")
 
     capabilities = _PROVIDER_CAPABILITIES.get(provider, {})
+    cache_ttl = payload.get("cache_ttl")
+    if cache_ttl is not None and cache_ttl not in ("5m", "1h"):
+        raise ValueError(f'nucore_runtime.{profile_name}.cache_ttl must be "5m" or "1h", got {cache_ttl!r}')
     result: dict[str, Any] = {
         "provider": provider,
         "model": payload.get("model"),
@@ -75,6 +78,10 @@ def _coerce_runtime_profile(
         "temperature": payload.get("temperature"),
         "max_tokens": payload.get("max_tokens"),
         "reasoning_effort": payload.get("reasoning_effort"),
+        # Prompt-cache TTL for the static prefix (tools + static system
+        # sections); "1h" costs 2x to write vs 1.25x for "5m", so it only
+        # pays off when conversations are typically 5-60 minutes apart.
+        "cache_ttl": cache_ttl,
         "supports_system_role": bool(
             payload.get("supports_system_role", capabilities.get("supports_system_role", True))
         ),

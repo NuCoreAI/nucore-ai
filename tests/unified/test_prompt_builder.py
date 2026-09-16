@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from nucore.nucore_interface import NuCoreInterface
-from unified.prompt_builder import build_system_prompt
+from unified.prompt_builder import build_system_prompt, build_system_prompt_sections
 
 
 class FakeBackend(NuCoreInterface):
@@ -60,6 +60,28 @@ async def test_build_system_prompt_substitutes_every_placeholder():
     assert "# VARIABLES DATABASE" not in prompt
     assert "Bedtime" in prompt
     assert "Irrigation_Mode" in prompt  # via ROUTINES DATABASE's variable_names cross-reference
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_sections_splits_static_from_volatile_tail():
+    # The static section (rules + databases) must be byte-stable across
+    # conversations so claude_adapter can cache it on its own; everything
+    # that changes turn to turn (preferences, time) lives in the tail.
+    sections = await build_system_prompt_sections(FakeBackend())
+
+    assert len(sections) == 2
+    static, tail = sections
+    assert all("<<" not in s and ">>" not in s for s in sections)
+    assert "# DEVICE DATABASE" in static and "# ROUTINES DATABASE" in static
+    assert "# DEVICE DATABASE" not in tail and "# ROUTINES DATABASE" not in tail
+    assert "# USER PREFERENCES" in tail and "# TIME & LOCATION" in tail
+    assert "# USER PREFERENCES" not in static and "# TIME & LOCATION" not in static
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_is_the_sections_joined():
+    backend = FakeBackend()
+    assert await build_system_prompt(backend) == "\n\n".join(await build_system_prompt_sections(backend))
 
 
 @pytest.mark.asyncio

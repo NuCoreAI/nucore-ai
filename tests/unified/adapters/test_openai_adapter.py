@@ -131,6 +131,35 @@ async def test_reasoning_effort_omitted_when_not_configured():
 
 
 @pytest.mark.asyncio
+async def test_consecutive_system_messages_are_merged_into_one():
+    # The prompt arrives as [static, tail] system messages (see
+    # prompt_builder); some OpenAI-compatible chat templates (llama.cpp)
+    # reject more than one system message, so they're merged back here.
+    adapter = _adapter()
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    await adapter.generate(
+        messages=[
+            {"role": "system", "content": "static"},
+            {"role": "system", "content": "tail"},
+            {"role": "user", "content": "hi"},
+        ],
+        config={},
+    )
+
+    assert captured["messages"] == [
+        {"role": "system", "content": "static\n\ntail"},
+        {"role": "user", "content": "hi"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_generate_surfaces_usage_non_streaming():
     adapter = _adapter()
     usage = {"prompt_tokens": 100, "completion_tokens": 20, "prompt_tokens_details": {"cached_tokens": 80}}

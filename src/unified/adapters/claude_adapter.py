@@ -43,8 +43,9 @@ class ClaudeAdapter(LLMAdapter):
     ) -> Any:
         """Send a message to Claude and return a normalised response dict.
 
-        ``system`` role messages are collected and joined into Claude's
-        top-level ``system`` parameter; all other roles are forwarded as-is.
+        Each ``system`` role message becomes its own block in Claude's
+        top-level ``system`` parameter (with its own cache breakpoint -- see
+        the comment in the body); all other roles are forwarded as-is.
 
         Always issues the request via the SDK's streaming transport
         (``self._client.messages.stream``), regardless of ``config["stream"]``
@@ -92,23 +93,27 @@ class ClaudeAdapter(LLMAdapter):
             "messages": anthropic_messages,
             "max_tokens": int(cfg.get("max_tokens", 4096)),
         }
-        if system_parts:
-            # Mark the system block itself as the cache breakpoint. The
-            # top-level `cache_control` kwarg instead marks the *last*
-            # cacheable block in the request -- which is the current (always
-            # different) user turn, not this static system prompt -- so a
-            # fresh single-turn call never got a cache hit on the system
-            # prompt no matter how many times the same device/routine
-            # database was sent before.
-            kwargs["system"] = [
-                {
-                    "type": "text",
-                    "text": "\n\n".join(system_parts),
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ]
+        ttl = cfg.get("cache_ttl")
+        # One block per system message, each with its own cache breakpoint
+        # (the top-level `cache_control` kwarg would instead mark the current,
+        # always-different user turn). The prompt builder splits the prompt
+        # into a static prefix and a volatile tail (TIME & LOCATION etc.):
+        # as a single block, the tail changing every turn missed the cache
+        # for the whole ~25K-token system prompt on every new conversation,
+        # even though everything before the tail was byte-identical. The API
+        # allows 4 breakpoints; one is on the tools list, so only the last 3
+        # system blocks are marked -- earlier ones are still cached as the
+        # prefix of the first marked block. Longer TTLs must precede shorter
+        # ones, so a configured longer TTL goes on the tools and every system
+        # block except the last; the volatile tail keeps the default TTL.
+        blocks = [{"type": "text", "text": part} for part in system_parts if part]
+        for i in range(max(0, len(blocks) - 3), len(blocks)):
+            is_last = i == len(blocks) - 1
+            blocks[i]["cache_control"] = self._cache_control(None if is_last else ttl)
+        if blocks:
+            kwargs["system"] = blocks
         if tools:
-            kwargs["tools"] = tools
+            kwargs["tools"] = self._with_tools_ttl(tools, ttl)
         if cfg.get("temperature") is not None and model not in self._no_temperature_models:
             # runtime_config.py's resolve_profile always inserts a
             # "temperature" key (None when unconfigured) -- checking mere
@@ -171,6 +176,22 @@ class ClaudeAdapter(LLMAdapter):
         message = str(body.get("error", {}).get("message", "")) if isinstance(body, dict) else ""
         message = message.lower()
         return "temperature" in message and "deprecated" in message
+
+    @staticmethod
+    def _cache_control(ttl: str | None) -> dict[str, Any]:
+        # No `ttl` key for the default 5m -- keeps the request bytes identical
+        # to before the option existed.
+        if ttl and ttl != "5m":
+            return {"type": "ephemeral", "ttl": ttl}
+        return {"type": "ephemeral"}
+
+    def _with_tools_ttl(self, tools: list[dict[str, Any]], ttl: str | None) -> list[dict[str, Any]]:
+        """Apply a configured TTL to the tools breakpoint (export_tools() has
+        no access to the per-call config). Works on a copy -- the exported
+        list is shared across every round of a turn and must not be mutated."""
+        if not ttl or ttl == "5m" or "cache_control" not in tools[-1]:
+            return tools
+        return [*tools[:-1], {**tools[-1], "cache_control": self._cache_control(ttl)}]
 
     def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
         """Convert :class:`ToolSpec` objects to Claude's native tool format.

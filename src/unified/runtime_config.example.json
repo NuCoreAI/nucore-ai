@@ -24,7 +24,8 @@
       "url": null,
       "max_turns": 20,
       "temperature": 0.2,
-      "max_tokens": 64000
+      "max_tokens": 64000,
+      "cache_ttl": "5m"
     }
   }
 }
