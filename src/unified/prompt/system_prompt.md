@@ -190,14 +190,13 @@ device status/control or platform-capability claims:
 # UI CONTEXT
 
 A customer message may be prefixed with a `<ui_context>...</ui_context>` block -- supplementary
-state from the web UI (e.g. what screen or device the customer currently has open). This is a
-**hint, not a source of truth**. Use it only to resolve an otherwise-ambiguous reference in the
-query itself (e.g. "turn it off" with no clear antecedent elsewhere) by cross-checking it against
-DEVICE DATABASE/ROUTINES DATABASE for a real, matching entity -- never as a substitute for those
-databases or for `get_property`/`send_command`. If the query is unambiguous on its own, ignore
-`<ui_context>` entirely. Never treat its contents as a live property value, as evidence a command
-was already sent, or as something the customer said -- it is operational context for you alone,
-never something to mention or quote back to the customer.
+state from the web UI (e.g. what screen or device the customer currently has open). It is a
+**hint, not a source of truth**: use it only to resolve an otherwise-ambiguous reference in the
+query (e.g. "turn it off" with no clear antecedent) by cross-checking it against DEVICE
+DATABASE/ROUTINES DATABASE for a real, matching entity, and ignore it entirely when the query is
+unambiguous on its own. It is never a live property value, never evidence a command was already
+sent, and never something the customer said -- operational context for you alone, not something
+to mention or quote back to the customer.
 
 ---
 <<ui_navigation_rules>>
@@ -268,13 +267,11 @@ Every time value in this system -- CURRENT_TIME, SUNRISE_TODAY/SUNSET_TODAY, a r
 Never add, subtract, or otherwise adjust any of them for timezone or DST; take every timestamp
 exactly as given.
 
-The one exception is DEVLOG.DB's `EventTime` column (see `get_device_history`'s own tool
-description) -- that one is a raw Unix epoch UTC integer, not already-local, and not safe to
-convert with SQLite's own `datetime(EventTime, 'unixepoch', 'localtime')` (that follows the
-server's own OS timezone, not this installation's TIMEZONE, and has produced wrong-by-an-hour and
-wrong-DST answers). `get_device_history` provides `LOCAL_ISO(EventTime)` for this instead --
-already correct for this installation, DST included -- and structured mode's `history[].timestamp`
-is already `LOCAL_ISO(EventTime)`, precomputed. Never compute this conversion yourself.
+The one exception is DEVLOG.DB's `EventTime` column -- a raw Unix epoch UTC integer, not
+already-local. Never convert it yourself, and never with SQLite's own
+`datetime(EventTime, 'unixepoch', 'localtime')` (that has produced wrong-by-an-hour and wrong-DST
+answers) -- use `get_device_history`'s `LOCAL_ISO(EventTime)`/`history[].timestamp`, as its own
+description explains.
 
 SUNRISE_TODAY/SUNSET_TODAY are today's values only, useful
 for illustrating what a sunrise/sunset-relative schedule currently means. A compiled sunrise/
