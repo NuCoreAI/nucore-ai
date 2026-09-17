@@ -63,19 +63,29 @@ async def test_build_system_prompt_substitutes_every_placeholder():
 
 
 @pytest.mark.asyncio
-async def test_build_system_prompt_sections_splits_static_from_volatile_tail():
-    # The static section (rules + databases) must be byte-stable across
-    # conversations so claude_adapter can cache it on its own; everything
-    # that changes turn to turn (preferences, time) lives in the tail.
+async def test_build_system_prompt_sections_splits_into_three_cache_sections():
+    # Three ordered, least-to-most-volatile sections, each its own cache
+    # breakpoint: [static rules/definitions + DEVICE DATABASE], which only
+    # changes on a structural device edit; [ROUTINES DATABASE] alone, which
+    # changes whenever a routine is authored/edited/deleted (far more often
+    # than a device edit, but far less often than every turn); [USER
+    # PREFERENCES + TIME & LOCATION], which changes every turn.
     sections = await build_system_prompt_sections(FakeBackend())
 
-    assert len(sections) == 2
-    static, tail = sections
+    assert len(sections) == 3
+    static, routines, tail = sections
     assert all("<<" not in s and ">>" not in s for s in sections)
-    assert "# DEVICE DATABASE" in static and "# ROUTINES DATABASE" in static
-    assert "# DEVICE DATABASE" not in tail and "# ROUTINES DATABASE" not in tail
-    assert "# USER PREFERENCES" in tail and "# TIME & LOCATION" in tail
+
+    assert "# DEVICE DATABASE" in static
+    assert "# ROUTINES DATABASE" not in static
     assert "# USER PREFERENCES" not in static and "# TIME & LOCATION" not in static
+
+    assert "# ROUTINES DATABASE" in routines
+    assert "# DEVICE DATABASE" not in routines
+    assert "# USER PREFERENCES" not in routines and "# TIME & LOCATION" not in routines
+
+    assert "# USER PREFERENCES" in tail and "# TIME & LOCATION" in tail
+    assert "# DEVICE DATABASE" not in tail and "# ROUTINES DATABASE" not in tail
 
 
 @pytest.mark.asyncio

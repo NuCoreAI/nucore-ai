@@ -4,6 +4,8 @@
   "prompt_log_dir": null,
   "prompt_log_enabled": true,
   "history_token_budget": 20000,
+  "fabrication_guard_mode": "log",
+  "max_fabrication_retries": 1,
   "nucore_runtime": {
     "default": {
       "provider": "claude",

@@ -69,9 +69,12 @@ python -m unified.run_unified_runtime \
 
 Pass `--websocket-port` to run as a standalone WebSocket server instead of
 `--query`/REPL mode -- no HTTP framework involved (uses the `websockets` package, already
-a project dependency). Each connection gets its own session and conversation history;
-every received message is treated as a query, and the response streams back over the
-same connection.
+a project dependency). Every received message is treated as a query, and the response
+streams back over the same connection. Conversation history is shared across connections
+and keyed by session id, so a reconnect (network blip, page reload, a restarted client)
+finds its prior history instead of starting over empty; concurrent requests for the same
+session id are serialized rather than racing each other. See `src/unified/README.md`'s
+"Session history across connections" section for the mechanism.
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -434,6 +437,10 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
   the web -- each returns a link for the customer to finish there. `plugin_ops` starts, stops, or
   restarts an installed plugin's own service -- the only way to do that; core services go through
   the diagnostics flow above instead.
+- **Reliability** -- a fabrication guard flags (and, optionally, retries) a reply that claims a
+  tool-mediated action completed when no tool was actually called that turn, across every tool
+  with no per-tool maintenance. Controlled by the `fabrication_guard_mode`/`max_fabrication_retries`
+  runtime-config keys (no CLI flag) -- see `src/unified/README.md`'s "Fabrication guard" section.
 
 See `src/unified/prompt/definitions.md` for the exact tool-selection rules the model follows for
 each of these, and `src/unified/README.md` for the tool/handler layout.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from .models import ConversationHistory
 
 
@@ -7,12 +9,33 @@ class SessionStore:
     """In-memory store mapping session IDs to :class:`~models.ConversationHistory` objects.
 
     Sessions are created on first access and live for the lifetime of the
-    process.  This store is not thread-safe; if the runtime ever dispatches
-    concurrent requests for the same session ID, external locking is required.
+    process (or, when shared across connections -- see
+    ``run_unified_runtime._run_websocket_server`` -- for as long as this one
+    ``SessionStore`` instance is kept alive, which is what lets a
+    reconnecting client's conversation history actually survive the
+    reconnect instead of starting over empty).
+
+    Not safe for concurrent *mutation* of one session's history on its own --
+    two requests for the same session ID racing a read-generate-append
+    sequence against the same :class:`~models.ConversationHistory` object
+    would interleave. :meth:`lock` is the external locking this class's
+    caller (``UnifiedRuntime.handle_query``) is expected to hold for that
+    critical section; a second concurrent request for the same session then
+    waits for the first to fully finish instead of racing it.
     """
 
     def __init__(self) -> None:
         self._sessions: dict[str, ConversationHistory] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def lock(self, session_id: str) -> asyncio.Lock:
+        """Returns this session's lock, creating it on first use -- same
+        lazy-creation pattern as :meth:`get` uses for ``_sessions``. Always
+        returns the same object for the same ``session_id``, so callers that
+        ``async with`` it genuinely serialize against each other."""
+        if session_id not in self._locks:
+            self._locks[session_id] = asyncio.Lock()
+        return self._locks[session_id]
 
     def get(self, session_id: str, max_turns: int = 20) -> ConversationHistory:
         """Return the :class:`~models.ConversationHistory` for ``session_id``.

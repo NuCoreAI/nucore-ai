@@ -2,12 +2,27 @@
 
 Reads ``nucore_interface``/``rag`` directly to build the compact
 ``DEVICE DATABASE``/``ROUTINES DATABASE`` sections -- no config-file/
-directory-loading machinery involved. system_prompt.md carries a
-``<<cache_boundary>>`` marker: everything before it is static across
-conversations (until device/routine config changes), everything after it
-(USER PREFERENCES, TIME & LOCATION) can change turn to turn. The two halves
-are sent as separate system messages so claude_adapter can give the static
-part its own prompt-cache breakpoint -- see build_system_prompt_sections.
+directory-loading machinery involved. system_prompt.md carries two
+``<<cache_boundary>>`` markers, splitting it into three ordered,
+least-to-most-volatile sections:
+
+1. Rules/definitions/ui_navigation_rules/host_environment + DEVICE DATABASE
+   -- genuinely static: DEVICE DATABASE only changes on a structural device
+   edit (add/remove/rename/enable-disable/error), never on a plain status
+   change (confirmed against IoXWrapper's ``device_structure_changed`` gate).
+2. ROUTINES DATABASE alone -- changes far more often than (1), since
+   authoring/editing/deleting a routine via chat is a routine (no pun
+   intended) customer action, not a rare structural edit. Giving it a
+   separate breakpoint means editing one routine only costs a rewrite of
+   this small block plus the tail, not the ~24K-token block of otherwise-
+   stable prose in (1) too -- confirmed against live cache-usage logs, where
+   routine edits (not device on/off toggles, which don't touch DEVICE
+   DATABASE at all) were the actual cause of the partial cache misses this
+   split fixes.
+3. **CRITICAL** + USER PREFERENCES + TIME & LOCATION -- changes every turn.
+
+Each section is sent as its own system message so claude_adapter can give
+each its own prompt-cache breakpoint -- see build_system_prompt_sections.
 """
 
 from __future__ import annotations
@@ -83,10 +98,12 @@ _CACHE_BOUNDARY = "<<cache_boundary>>"
 
 
 async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> list[str]:
-    """Build the unified system prompt as ordered sections: [static, volatile].
+    """Build the unified system prompt as ordered sections: [static +
+    DEVICE DATABASE, ROUTINES DATABASE, volatile tail] -- see this module's
+    docstring for why ROUTINES DATABASE gets its own section.
 
     The template is split on ``<<cache_boundary>>`` *before* substitution
-    (so a substituted value can never contain the marker), then each half
+    (so a substituted value can never contain the marker), then each part
     gets the same placeholder substitution. Callers send each section as
     its own system message.
     """
@@ -94,9 +111,9 @@ async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> lis
 
     template = (_PROMPT_DIR / "system_prompt.md").read_text(encoding="utf-8").strip()
     parts = template.split(_CACHE_BOUNDARY)
-    if len(parts) != 2:
+    if len(parts) != 3:
         raise ValueError(
-            f"system_prompt.md must contain exactly one {_CACHE_BOUNDARY} marker, found {len(parts) - 1}"
+            f"system_prompt.md must contain exactly two {_CACHE_BOUNDARY} markers, found {len(parts) - 1}"
         )
 
     definitions = (_PROMPT_DIR / "definitions.md").read_text(encoding="utf-8").strip()

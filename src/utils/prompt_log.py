@@ -11,6 +11,26 @@ system prompt is written once per unique content (hash-deduped), not
 re-embedded on every agentic-loop iteration like the old code did -- that
 repetition was confirmed to be the dominant source of bloat in the old file.
 
+The same duplication problem also shows up *across* turns, not just within
+one: ``UnifiedRuntime.handle_query`` rebuilds ``history_messages`` from
+``SessionStore`` from scratch every turn and hands ``AgenticLoop.run()`` a
+brand-new ``messages`` list object each time, so the id()-based "only the
+new tail" tracking below (correct *within* one turn, where the same object
+is extended in place) never recognizes a new turn's list as a continuation
+-- the entire reconstructed history would get re-rendered to disk on every
+single turn. ``_logged_line_hashes``/``_is_duplicate_line`` fixes this with
+a second, content-based dedup layer: any rendered line whose exact content
+was already written (scoped by the caller's ``conversation_id``, so two
+different real conversations with coincidentally identical text don't
+suppress each other) is dropped instead of rewritten. Confirmed against a
+real 32-minute conversation's log: 750 logged ``text`` lines, only 129
+distinct; 52 ``tool_use`` lines, only 38 distinct -- this is what that fixes.
+The accepted tradeoff: the exact same literal text at two genuinely
+different real moments *within* one conversation (e.g. the identical
+canned reply to the same demo question asked twice) now also dedupes
+together, logging only the first occurrence. Acceptable for a debug/
+cache-analysis log, not an audit trail.
+
 Size management: the active file is pruned once it crosses *max_bytes* --
 the oldest lines are peeled off into a dated ``.jsonl.gz`` archive (never
 just discarded), and pruning runs on a worker thread (``asyncio.to_thread``)
@@ -41,6 +61,7 @@ DEFAULT_FILENAME = "nucore.prompt.jsonl"
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 _MAX_TRACKED_RUNS = 200
 _MAX_TRACKED_SYSTEM_PROMPTS = 512
+_MAX_TRACKED_LINES = 4096
 
 
 class PromptLogManager:
@@ -93,8 +114,23 @@ class PromptLogManager:
         # Bounded via LRU eviction so a long-running process doesn't hold
         # onto every turn's messages list forever.
         self._logged_counts: "OrderedDict[int, tuple[list, int]]" = OrderedDict()
+        # Second dedup layer, on top of the id()-based one above -- see this
+        # module's docstring for why the id()-based check alone isn't enough
+        # across turns. Keyed on a hash of (conversation_id, every field of
+        # the rendered line except ts/session/intent, which vary even for a
+        # line that's a genuine repeat), LRU-bounded the same way as
+        # _logged_system_prompt_hashes. system_prompt lines skip this layer
+        # entirely -- they're already deduped (globally, not per-conversation
+        # -- intentional, see that dedup's own comment) inside _render_message.
+        self._logged_line_hashes: "OrderedDict[str, None]" = OrderedDict()
 
-    async def write(self, intent_name: str, messages: list[dict[str, Any]]) -> None:
+    async def write(
+        self,
+        intent_name: str,
+        messages: list[dict[str, Any]],
+        *,
+        conversation_id: str | None = None,
+    ) -> None:
         if not self.enabled:
             return
         try:
@@ -105,6 +141,7 @@ class PromptLogManager:
             lines: list[dict[str, Any]] = []
             for msg in new_messages:
                 lines.extend(self._render_message(intent_name, msg))
+            lines = [line for line in lines if not self._is_duplicate_line(line, conversation_id)]
             await self._write_lines(lines)
         except Exception as ex:
             # Debug logging must never break the actual conversation.
@@ -133,6 +170,42 @@ class PromptLogManager:
         except Exception as ex:
             logger.error(f"prompt log usage write failed: {ex}")
 
+    async def write_flag(
+        self,
+        intent_name: str,
+        flag_kind: str,
+        detail: dict[str, Any],
+        *,
+        conversation_id: str | None = None,
+    ) -> None:
+        """Log one line for a code-level guard finding (currently: the
+        fabrication guard in ``unified.fabrication_guard``/``AgenticLoop`` --
+        see those for what triggers this) -- e.g. a reply that claimed a
+        tool-mediated action happened with no matching tool call that turn.
+        Always writes (never deduped -- each occurrence is independently
+        worth seeing), tagged with the same *intent_name* as the request/
+        response lines around it so ``grep '"kind":"fabrication_flag"'``
+        finds every instance directly, and *conversation_id* for the same
+        reason ``write()`` takes it -- correlating flags back to one real
+        conversation in a shared log file."""
+        if not self.enabled:
+            return
+        try:
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            line = {
+                "ts": ts,
+                "session": self._session_id,
+                "conversation_id": conversation_id,
+                "intent": intent_name,
+                "role": "assistant",
+                "kind": flag_kind,
+                **detail,
+            }
+            await self._write_lines([line])
+        except Exception as ex:
+            # Guard logging must never break the actual conversation.
+            logger.error(f"prompt log flag write failed: {ex}")
+
     async def _write_lines(self, lines: list[dict[str, Any]]) -> None:
         if not lines:
             return
@@ -151,6 +224,25 @@ class PromptLogManager:
         while len(self._logged_counts) > _MAX_TRACKED_RUNS:
             self._logged_counts.popitem(last=False)
         return new_messages
+
+    def _is_duplicate_line(self, line: dict[str, Any], conversation_id: str | None) -> bool:
+        """True if this exact rendered line (scoped to *conversation_id*)
+        has already been written -- see __init__'s comment on
+        _logged_line_hashes for why this exists alongside the id()-based
+        check in _new_messages_since_last_write."""
+        if line.get("kind") == "system_prompt":
+            return False  # already deduped inside _render_message.
+        key_fields = {k: v for k, v in line.items() if k not in ("ts", "session", "intent")}
+        digest = hashlib.sha256(
+            json.dumps([conversation_id, key_fields], sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        if digest in self._logged_line_hashes:
+            self._logged_line_hashes.move_to_end(digest)
+            return True
+        self._logged_line_hashes[digest] = None
+        while len(self._logged_line_hashes) > _MAX_TRACKED_LINES:
+            self._logged_line_hashes.popitem(last=False)
+        return False
 
     def _render_message(self, intent_name: str, msg: dict[str, Any]) -> list[dict[str, Any]]:
         role = msg.get("role", "?")

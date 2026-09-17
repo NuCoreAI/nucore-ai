@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from unified.models import IntentHandlerResult
 from unified.runtime import UnifiedRuntime
 from unified.runtime_config import _load_runtime_config
+from unified.session_store import SessionStore
 from unified.dispatch_builder import build_default_dispatch_adapter
 from unified.stream_handler import StreamHandler
 from nucore import NuCoreInterface, PromptFormatTypes
@@ -611,12 +612,17 @@ async def _run_websocket_server(
     """Serve WebSocket connections directly, no HTTP framework involved.
 
     ``nucore_interface``/``llm_adapter`` are shared across every connection
-    (same CLI-configured backend for the life of the process); each
-    connection gets its own :class:`UnifiedRuntime` (own session/history) and
-    its own :class:`StreamHandler` (own websocket target), matching the
-    isolation ``eisy_ai/chat.py`` already gives each browser tab -- just
-    without needing a caller-supplied connection object or an HTTP server in
-    front of it.
+    (same CLI-configured backend for the life of the process), and so, now,
+    is one ``SessionStore`` -- each connection gets its own
+    :class:`UnifiedRuntime` and its own :class:`StreamHandler` (own
+    websocket target), matching the isolation ``eisy_ai/chat.py`` already
+    gives each browser tab for everything except conversation history, which
+    is shared and keyed by session id specifically so a reconnecting
+    client's history survives instead of starting over empty (this was
+    previously a private, per-connection ``SessionStore`` too, which meant a
+    reconnect silently lost everything despite ``EisyUIContext.get_user_id``'s
+    session id being stable across one -- see ``SessionStore.lock`` for what
+    keeps sharing it across connections safe).
 
     ``runtime_config`` is *not* shared, unlike the other two -- it's rebuilt
     fresh per connection (a cheap local JSON read, no network I/O) because
@@ -638,6 +644,11 @@ async def _run_websocket_server(
     ``getpeereid()`` -- connections from any other UID are closed immediately,
     before any query is processed.
     """
+    # Shared across every connection -- see this function's own docstring
+    # and SessionStore.lock for why (a reconnect must find its history, not
+    # start over empty; the lock is what keeps that sharing safe).
+    shared_session_store = SessionStore()
+
     async def handler(websocket) -> None:
         if client_uid is not None:
             peer_uid = _get_unix_peer_uid(websocket)
@@ -664,6 +675,7 @@ async def _run_websocket_server(
             llm_client=llm_adapter,
             runtime_config=runtime_config,
             max_iterations=max_iterations,
+            session_store=shared_session_store,
         )
         runtime.stream_handler = stream_handler
         try:

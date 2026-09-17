@@ -326,3 +326,87 @@ regardless of which architecture direction is chosen.
   retired for first-party use.
 - Losing the router's upfront full-plan visibility means losing today's single point where a
   whole multi-step plan could be logged/audited/short-circuited before any tool executes.
+
+---
+
+# POST-LAUNCH HARDENING (2026-09)
+
+Four fixes made after the unified runtime went live, each grounded in a specific production
+transcript (`~/workspace/eisy-ai/logs/nucore.prompt.jsonl`) rather than speculative hardening.
+Implementation detail lives in code docstrings/comments and `src/unified/README.md`; this section
+records the *decisions* and the evidence behind them.
+
+## Prompt caching: a third breakpoint for ROUTINES DATABASE
+
+`system_prompt.md` originally had one `<<cache_boundary>>` splitting static prose+`DEVICE
+DATABASE` from everything volatile, including `ROUTINES DATABASE`. Cache-usage logs showed
+partial cache misses were actually caused by routine edits (create/update/delete a routine via
+chat), not device on/off toggles -- an initial hypothesis that device status changes were busting
+the cache was checked and disproven: `DEVICE DATABASE` is gated on `IoXWrapper`'s
+`device_structure_changed` event only, never on a plain status change. Fix: a second
+`<<cache_boundary>>`, giving `ROUTINES DATABASE` its own breakpoint between the genuinely-static
+block (1) and the every-turn-volatile tail (3). A routine edit now only cost a rewrite of the
+small middle block plus the tail, not the large stable block too. See `prompt_builder.py`'s module
+docstring for the exact three-way split and the ordering rationale (least-to-most volatile).
+
+## Fabrication guard: a tool-agnostic backstop for false completion claims
+
+Recurring, cross-tool problem observed in production transcripts: the model states an action
+completed ("Done!", "I've turned off...", "is now set to...") in a turn where it called *no* tool
+at all -- not specific to any one tool, so a per-tool fix wasn't viable long-term.
+
+Two-part fix:
+- **Prompt side**: `system_prompt.md`'s five separate, topic-specific "Self-check before every
+  reply" blocks were collapsed into one `# CRITICAL RULE -- NEVER CLAIM AN ACTION HAPPENED UNLESS
+  YOU DID IT THIS TURN` section near the top, with each former block now a one-line pointer back
+  to it. Single statement of the rule, harder for future prompt edits to drift out of sync across
+  five copies.
+- **Code side**: `fabrication_guard.py`'s `detect_completion_claim(text)` -- a regex heuristic over
+  the reply text, deliberately generic (past-tense action verbs, "is now", "has been",
+  "successfully", a checkmark, etc.), paired with a *structural* precondition checked by the
+  caller (`AgenticLoop.run`): only evaluated when zero tool calls happened this turn. That
+  precondition, not the pattern list, is what keeps this tool-agnostic and maintenance-free as
+  tools are added.
+
+  Three modes (`fabrication_guard_mode` runtime-config key, default `"log"`): `"off"` disables
+  detection; `"log"` flags a match to the prompt-log (`write_flag`) without changing the reply --
+  observation only; `"block"` retries the turn once (`max_fabrication_retries`, default 1) and, if
+  the retry also fabricates, substitutes a fixed "I'm not fully sure that completed correctly"
+  fallback rather than returning the unverified claim.
+
+  **Known, accepted v1 gap**: catches "no tool called at all," not "wrong tool called while
+  claiming the right one happened" (e.g. a status re-check standing in for a repeat action). Fixing
+  that needs matching claim-type to expected-tool, which reintroduces exactly the per-tool coupling
+  this design avoids -- deferred, not silently ignored.
+
+## SessionStore: shared across connections, with real per-session locking
+
+`SessionStore` docstring already said concurrent same-session access needed external locking that
+never existed, and separately, every accepted WebSocket connection in `_run_websocket_server`
+constructed its own private, empty `SessionStore` -- so a reconnect (network blip, page reload, the
+eisy-ui bridge itself reconnecting) silently lost all conversation history even though the
+session's durable id (`EisyUIContext.get_user_id()`) was stable across it. That history-loss bug
+was confirmed directly from the code; whether the eisy-ui bridge (the sole client of the
+`unix:///tmp/ai-listener` socket in production, per `start_eisyai.py`) ever opens truly concurrent
+connections for one logical session could not be confirmed from this workspace (no bridge/frontend
+source present).
+
+Fix designed to be correct either way: `_run_websocket_server` now builds one `SessionStore` and
+shares it across every connection (same lifetime pattern already used for `nucore_interface`/
+`llm_adapter`), and `SessionStore.lock(session_id)` hands out one `asyncio.Lock` per session id,
+held by `UnifiedRuntime.handle_query` for its entire read-history -> generate -> append-history
+critical section. A second concurrent request for the same session now waits for the first to
+finish instead of racing it, whether or not that race is currently exercised in production.
+Backward compatible: `UnifiedRuntime`'s `session_store` constructor param is optional and defaults
+to a private, unshared store, so `--query`/REPL mode and existing tests are unaffected.
+
+## `create_or_update_routine` DSL: documenting event-vs-window `else` semantics
+
+A live routine-editing session (~6 attempts, 4 user corrections) showed the model repeatedly
+misusing `at()`/`weekly_at()` (one-shot event triggers -- no real `else` semantics) where
+`between()`/`weekly_between()`/`weekly_for()` (window/state conditions -- real `else` semantics)
+were needed, confirmed against `routine_compiler/conditions/schedule.py`'s `compile_at` vs.
+`compile_between`/`compile_weekly_between`/`compile_weekly_for`. Fix: `tool_routine_create_or_update.json`
+gained one sentence stating the event-vs-window distinction explicitly, plus a fourth worked
+example (multiple known future date-windows, OR'd `between(...)` clauses) -- additive documentation
+only, no compiler or schema change.

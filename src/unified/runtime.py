@@ -30,11 +30,20 @@ class UnifiedRuntime:
         llm_client: LLMAdapter,
         runtime_config: dict[str, Any],
         max_iterations: int = 8,
+        session_store: SessionStore | None = None,
     ) -> None:
         self.nucore_interface = nucore_interface
         self.llm_client = llm_client
         self.runtime_config = runtime_config
-        self.session_store = SessionStore()
+        # A caller serving multiple connections for what can be the same
+        # logical customer (see run_unified_runtime._run_websocket_server)
+        # passes one shared SessionStore so a reconnect finds its history
+        # instead of starting empty -- see that class's own docstring for
+        # why the per-session lock it provides is what keeps sharing it
+        # safe. Every other caller (single-shot --query, the stdin REPL,
+        # and any test that doesn't pass one) keeps today's behavior: its
+        # own private store, unaffected by any other instance.
+        self.session_store = session_store or SessionStore()
         self.tool_specs = LLMAdapter.tools_spec_from_files(sorted(_TOOLS_DIR.glob("tool_*.json")))
         self.max_iterations = max_iterations
         # Chunk-count bookkeeping from the classic (retired) runtime -- unused
@@ -88,45 +97,60 @@ class UnifiedRuntime:
         framework_context: dict[str, Any] | None = None,
     ) -> IntentHandlerResult:
         session_id = session_id or "default"
-        history = self.session_store.get(session_id, max_turns=int(self.runtime_config.get("default_max_turns", 20)))
-        await maybe_compact_history(
-            history,
-            llm_client=self.llm_client,
-            llm_config=self._resolve_llm_config(),
-            token_budget=int(self.runtime_config.get("history_token_budget", 20000)),
-        )
+        # Holds this session's lock for the entire read-history -> generate
+        # -> append-history sequence below, so a second request for the
+        # *same* session_id (a stale reconnect, a second tab -- whatever a
+        # caller sharing one SessionStore across connections might produce,
+        # see run_unified_runtime._run_websocket_server) waits for this one
+        # to fully finish instead of reading a half-updated history or
+        # racing the same ConversationHistory object. A no-op in practice
+        # for a caller using a private, unshared SessionStore (single-shot
+        # --query, the stdin REPL): nothing else ever contends for that
+        # lock, so it's acquired and released immediately.
+        async with self.session_store.lock(session_id):
+            history = self.session_store.get(
+                session_id, max_turns=int(self.runtime_config.get("default_max_turns", 20))
+            )
+            await maybe_compact_history(
+                history,
+                llm_client=self.llm_client,
+                llm_config=self._resolve_llm_config(),
+                token_budget=int(self.runtime_config.get("history_token_budget", 20000)),
+            )
 
-        system_prompt = await build_system_prompt_sections(self.nucore_interface)
+            system_prompt = await build_system_prompt_sections(self.nucore_interface)
 
-        history_messages: list[dict[str, Any]] = []
-        for turn in history.turns:
-            history_messages.append({"role": "user", "content": turn.query})
-            history_messages.append({"role": "assistant", "content": turn.response})
+            history_messages: list[dict[str, Any]] = []
+            for turn in history.turns:
+                history_messages.append({"role": "user", "content": turn.query})
+                history_messages.append({"role": "assistant", "content": turn.response})
 
-        user_message = query
-        if framework_context:
-            user_message = f"<ui_context>{framework_context}</ui_context>\n\n{query}"
+            user_message = query
+            if framework_context:
+                user_message = f"<ui_context>{framework_context}</ui_context>\n\n{query}"
 
-        async def dispatch(name: str, args: dict[str, Any]) -> Any:
-            return await self._dispatch(name, args)
+            async def dispatch(name: str, args: dict[str, Any]) -> Any:
+                return await self._dispatch(name, args)
 
-        loop = AgenticLoop(
-            llm_client=self.llm_client,
-            tool_specs=self.tool_specs,
-            dispatch=dispatch,
-            max_iterations=self.max_iterations,
-        )
-        llm_config = self._resolve_llm_config()
-        # Grok's adapter reads this back out to set the x-grok-conv-id header
-        # that keeps repeat calls in this conversation routed to the same
-        # cache-warm server -- every other adapter ignores the extra key.
-        llm_config["session_id"] = session_id
-        final_text, _ = await loop.run(
-            system_prompt=system_prompt,
-            history_messages=history_messages,
-            user_message=user_message,
-            llm_config=llm_config,
-        )
+            loop = AgenticLoop(
+                llm_client=self.llm_client,
+                tool_specs=self.tool_specs,
+                dispatch=dispatch,
+                max_iterations=self.max_iterations,
+                fabrication_guard_mode=self.runtime_config.get("fabrication_guard_mode", "log"),
+                max_fabrication_retries=int(self.runtime_config.get("max_fabrication_retries", 1)),
+            )
+            llm_config = self._resolve_llm_config()
+            # Grok's adapter reads this back out to set the x-grok-conv-id header
+            # that keeps repeat calls in this conversation routed to the same
+            # cache-warm server -- every other adapter ignores the extra key.
+            llm_config["session_id"] = session_id
+            final_text, _ = await loop.run(
+                system_prompt=system_prompt,
+                history_messages=history_messages,
+                user_message=user_message,
+                llm_config=llm_config,
+            )
 
-        history.append(query, final_text)
+            history.append(query, final_text)
         return IntentHandlerResult(intent="unified", output={"text": final_text})

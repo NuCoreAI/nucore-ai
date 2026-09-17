@@ -133,6 +133,49 @@ async def test_a_new_messages_list_is_not_treated_as_a_continuation(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reconstructed_history_from_a_prior_turn_is_not_relogged(tmp_path):
+    # Reproduces the real bug: UnifiedRuntime.handle_query rebuilds
+    # history_messages from SessionStore from scratch every turn, so turn 2's
+    # `messages` is a brand-new list object that happens to re-include turn
+    # 1's user message verbatim (already on disk) alongside turn 1's
+    # assistant reply (never actually written during turn 1 itself -- see
+    # AgenticLoop.run, which now logs the final answer within its own turn;
+    # this test still covers a caller that doesn't). Only genuinely new
+    # content -- the reply (first time seen) and this turn's own new user
+    # message -- should hit disk; the already-logged user message must not.
+    manager = PromptLogManager(tmp_path)
+
+    await manager.write("turn 1", [{"role": "user", "content": "q1"}], conversation_id="conv-1")
+    await manager.write(
+        "turn 2",
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "r1"},
+            {"role": "user", "content": "q2"},
+        ],
+        conversation_id="conv-1",
+    )
+
+    lines = _lines(manager.path)
+    texts = [(line["role"], line["text"]) for line in lines]
+    assert texts == [("user", "q1"), ("assistant", "r1"), ("user", "q2")]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_line_dedup_is_scoped_per_conversation_id(tmp_path):
+    # The same literal reply genuinely happening in two different real
+    # conversations must not suppress each other.
+    manager = PromptLogManager(tmp_path)
+
+    await manager.write("turn 1", [{"role": "assistant", "content": "Done."}], conversation_id="conv-a")
+    await manager.write("turn 1", [{"role": "assistant", "content": "Done."}], conversation_id="conv-b")
+
+    lines = _lines(manager.path)
+    assert len(lines) == 2
+    assert all(line["text"] == "Done." for line in lines)
+
+
+@pytest.mark.asyncio
 async def test_static_system_section_is_logged_once_while_the_tail_changes_per_turn(tmp_path):
     # Every turn sends [static, volatile tail]; the static section must
     # dedupe across turns even though a different system message (the tail)

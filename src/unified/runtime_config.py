@@ -181,6 +181,21 @@ def _load_runtime_config(
     if configured_history_token_budget is not None and not isinstance(configured_history_token_budget, int):
         raise ValueError("history_token_budget must be an integer when provided")
 
+    configured_fabrication_guard_mode = payload.get("fabrication_guard_mode")
+    if configured_fabrication_guard_mode is not None and configured_fabrication_guard_mode not in (
+        "off",
+        "log",
+        "block",
+    ):
+        raise ValueError(
+            f'fabrication_guard_mode must be "off", "log", or "block", '
+            f"got {configured_fabrication_guard_mode!r}"
+        )
+
+    configured_max_fabrication_retries = payload.get("max_fabrication_retries")
+    if configured_max_fabrication_retries is not None and not isinstance(configured_max_fabrication_retries, int):
+        raise ValueError("max_fabrication_retries must be an integer when provided")
+
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
@@ -198,5 +213,14 @@ def _load_runtime_config(
         # already bounds that separately).
         "history_token_budget": (
             int(configured_history_token_budget) if configured_history_token_budget is not None else 20000
+        ),
+        # See unified.fabrication_guard/AgenticLoop -- the code-level backstop
+        # for a reply that claims a tool-mediated action happened with no
+        # matching tool call that turn. "log" (default) only ever writes a
+        # debug-log flag line, no customer-facing behavior change; "block"
+        # also forces a bounded corrective retry.
+        "fabrication_guard_mode": configured_fabrication_guard_mode or "log",
+        "max_fabrication_retries": (
+            int(configured_max_fabrication_retries) if configured_max_fabrication_retries is not None else 1
         ),
     }

@@ -130,5 +130,153 @@ async def test_list_system_prompt_emits_one_system_message_per_section_in_order(
     ]
 
 
+async def test_final_answer_is_logged_within_its_own_turn(monkeypatch):
+    # write() used to only ever be called before a generate() call, so a
+    # turn's actual final answer was never captured live -- only recovered
+    # (if at all) retroactively via the next turn's reconstructed history.
+    calls: list[tuple[str, list, str | None]] = []
+
+    class _FakeManager:
+        async def write(self, intent_name, messages, *, conversation_id=None):
+            calls.append((intent_name, list(messages), conversation_id))
+
+        async def write_usage(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: _FakeManager())
+
+    adapter = _FakeAdapter([{"text": "done"}])
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+
+    await loop.run(
+        system_prompt="sys",
+        history_messages=[],
+        user_message="hi",
+        llm_config={"session_id": "conv-1"},
+    )
+
+    assert len(calls) == 2  # the round-1 request, then the final answer
+    final_intent, final_messages, final_conversation_id = calls[-1]
+    assert final_intent == "unified (round 1)"
+    assert final_conversation_id == "conv-1"
+    assert final_messages[-1] == {"role": "assistant", "content": "done"}
+
+
+class _FlagRecordingManager:
+    """Records write()/write_flag() calls; used by the fabrication-guard
+    tests below. write() itself is a no-op -- these tests only care about
+    what the guard did, not the ordinary request/response log lines."""
+
+    def __init__(self):
+        self.flags: list[tuple[str, str, dict]] = []
+
+    async def write(self, *a, **kw):
+        pass
+
+    async def write_usage(self, *a, **kw):
+        pass
+
+    async def write_flag(self, intent_name, flag_kind, detail, *, conversation_id=None):
+        self.flags.append((intent_name, flag_kind, detail))
+
+
+async def test_fabrication_guard_flags_zero_tool_call_completion_claim(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    adapter = _FakeAdapter([{"text": "Done! I've turned off the light."}])
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+
+    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert [f for f in manager.flags if f[1] == "fabrication_flag"]
+    # mode defaults to "log" -- detection never changes what's returned.
+    assert final_text == "Done! I've turned off the light."
+
+
+async def test_fabrication_guard_does_not_fire_when_tool_was_called(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    responses = [
+        {"tool_calls": [{"id": "1", "name": "send_command", "input": {}}]},
+        {"text": "Done! The light is now off."},
+    ]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+
+    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert manager.flags == []
+    assert final_text == "Done! The light is now off."
+
+
+async def test_fabrication_guard_does_not_fire_on_legitimate_replies(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    for text in [
+        "I need you to specify which notification you'd like to send.",
+        "The GuestBathroom is currently on at 100% brightness.",
+    ]:
+        adapter = _FakeAdapter([{"text": text}])
+        loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+        await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert manager.flags == []
+
+
+async def test_fabrication_guard_block_mode_retries_and_returns_grounded_reply(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    responses = [
+        {"text": "Done! I've turned off the light."},  # round 1: fabricated, no tool call
+        {"tool_calls": [{"id": "1", "name": "send_command", "input": {}}]},  # retry: real call
+        {"text": "The light is now off."},  # grounded by this turn's own tool call
+    ]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(
+        llm_client=adapter,
+        tool_specs=[],
+        dispatch=lambda n, a: _ok(),
+        fabrication_guard_mode="block",
+    )
+
+    final_text, new_messages = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert final_text == "The light is now off."
+    assert any(f[1] == "fabrication_flag" for f in manager.flags)
+    assert any("system note" in m.get("content", "") for m in new_messages if m.get("role") == "user")
+
+
+async def test_fabrication_guard_block_mode_exhausts_retries_and_falls_back_safely(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    generate_calls = 0
+
+    class _AlwaysFabricatingAdapter(_FakeAdapter):
+        async def generate(self, *, messages, config, tools):
+            nonlocal generate_calls
+            generate_calls += 1
+            return {"text": "Done! I've turned off the light."}
+
+    loop = AgenticLoop(
+        llm_client=_AlwaysFabricatingAdapter([]),
+        tool_specs=[],
+        dispatch=lambda n, a: _ok(),
+        fabrication_guard_mode="block",
+        max_fabrication_retries=1,
+    )
+
+    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert final_text == loop_module._FABRICATION_FALLBACK_TEXT
+    assert final_text != "Done! I've turned off the light."
+    assert generate_calls == 2  # max_fabrication_retries(1) + the initial round
+    assert any(f[1] == "fabrication_retry_exhausted" for f in manager.flags)
+
+
 async def _ok():
     return {"ok": True}

@@ -97,15 +97,22 @@ class ClaudeAdapter(LLMAdapter):
         # One block per system message, each with its own cache breakpoint
         # (the top-level `cache_control` kwarg would instead mark the current,
         # always-different user turn). The prompt builder splits the prompt
-        # into a static prefix and a volatile tail (TIME & LOCATION etc.):
-        # as a single block, the tail changing every turn missed the cache
-        # for the whole ~25K-token system prompt on every new conversation,
-        # even though everything before the tail was byte-identical. The API
-        # allows 4 breakpoints; one is on the tools list, so only the last 3
-        # system blocks are marked -- earlier ones are still cached as the
-        # prefix of the first marked block. Longer TTLs must precede shorter
-        # ones, so a configured longer TTL goes on the tools and every system
-        # block except the last; the volatile tail keeps the default TTL.
+        # into ordered, least-to-most-volatile sections -- static rules/
+        # definitions/DEVICE DATABASE, then ROUTINES DATABASE (changes
+        # whenever a routine is authored/edited, far more often than a
+        # structural device edit but far less often than every turn), then
+        # the volatile tail (TIME & LOCATION etc., changes every turn): as a
+        # single block, the tail changing every turn missed the cache for
+        # the whole system prompt on every new conversation, and even after
+        # splitting off the tail, a routine edit still forced a rewrite of
+        # ~24K tokens of unrelated static prose because it shared a block
+        # with ROUTINES DATABASE -- see prompt_builder.py's module docstring.
+        # The API allows 4 breakpoints; one is on the tools list, so only the
+        # last 3 system blocks are marked -- earlier ones are still cached as
+        # the prefix of the first marked block. Longer TTLs must precede
+        # shorter ones, so a configured longer TTL goes on the tools and
+        # every system block except the last; the volatile tail keeps the
+        # default TTL.
         blocks = [{"type": "text", "text": part} for part in system_parts if part]
         for i in range(max(0, len(blocks) - 3), len(blocks)):
             is_last = i == len(blocks) - 1

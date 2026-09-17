@@ -14,11 +14,19 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from .adapters import LLMAdapter, ToolCall, ToolSpec
+from .fabrication_guard import detect_completion_claim
 from utils import get_logger, get_prompt_log_manager
 
 logger = get_logger(__name__)
 
 ToolDispatch = Callable[[str, dict[str, Any]], Awaitable[Any]]
+
+# See fabrication_guard.py's docstring for what this catches and what it
+# doesn't. Returned instead of a fabricated claim once corrective retries
+# (see max_fabrication_retries) are exhausted in "block" mode.
+_FABRICATION_FALLBACK_TEXT = (
+    "I'm not fully sure that completed correctly -- please check, or ask me to try again."
+)
 
 
 class AgenticLoop:
@@ -31,12 +39,22 @@ class AgenticLoop:
         tool_specs: list[ToolSpec],
         dispatch: ToolDispatch,
         max_iterations: int = 8,
+        fabrication_guard_mode: str = "log",
+        max_fabrication_retries: int = 1,
     ) -> None:
         self.llm_client = llm_client
         self.tool_specs = tool_specs
         self._exported_tools = llm_client.export_tools(tool_specs)
         self.dispatch = dispatch
         self.max_iterations = max_iterations
+        # "off": the guard never runs. "log": detect and write a
+        # fabrication_flag log line, but never change what the customer
+        # sees (default -- zero behavior risk). "block": also inject a
+        # corrective nudge and force one more round instead of returning
+        # the flagged reply, up to max_fabrication_retries times. See
+        # fabrication_guard.py and this method's own comments.
+        self.fabrication_guard_mode = fabrication_guard_mode
+        self.max_fabrication_retries = max_fabrication_retries
 
     @staticmethod
     def _canonical_to_tool_calls(canonical: list[dict[str, Any]]) -> list[ToolCall]:
@@ -61,10 +79,10 @@ class AgenticLoop:
     ) -> tuple[str, list[dict[str, Any]]]:
         """Run the loop for one user turn.
 
-        ``system_prompt`` may be a list of sections (static prefix first,
-        volatile tail last -- see prompt_builder.build_system_prompt_sections);
-        each becomes its own system message so an adapter can cache the
-        static part independently of the tail.
+        ``system_prompt`` may be a list of sections, ordered least-to-most
+        volatile (see prompt_builder.build_system_prompt_sections); each
+        becomes its own system message so an adapter can give each its own
+        cache breakpoint, independent of how often the others change.
 
         Returns:
             ``(final_text, new_messages)`` -- the model's final answer, and
@@ -79,10 +97,22 @@ class AgenticLoop:
             + [{"role": "user", "content": user_message}]
         )
         new_messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+        # UnifiedRuntime.handle_query sets this to the caller's per-conversation
+        # session id (the same one GrokAdapter reads back out for its
+        # x-grok-conv-id header) -- passed through to the prompt log purely to
+        # scope its cross-turn content dedup (see PromptLogManager.write), not
+        # used for anything else here.
+        conversation_id = (llm_config or {}).get("session_id")
+        # Whether any tool has actually been dispatched anywhere in this
+        # turn yet -- the fabrication guard's precondition (see
+        # fabrication_guard.py's docstring for why "no tool call at all",
+        # not "no *matching* tool call", is what keeps this tool-agnostic).
+        any_tool_dispatched = False
+        fabrication_retries = 0
 
         for iteration in range(self.max_iterations):
             intent_name = f"unified (round {iteration + 1})"
-            await get_prompt_log_manager().write(intent_name, messages)
+            await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
             raw_response = await self.llm_client.generate(
                 messages=messages,
                 config=llm_config,
@@ -96,9 +126,58 @@ class AgenticLoop:
                 text = raw_response.get("text") or raw_response.get("content") or ""
                 if not isinstance(text, str):
                     text = str(text)
-                new_messages.append({"role": "assistant", "content": text})
+
+                if not any_tool_dispatched and self.fabrication_guard_mode != "off":
+                    claim = detect_completion_claim(text)
+                    if claim:
+                        await get_prompt_log_manager().write_flag(
+                            intent_name,
+                            "fabrication_flag",
+                            {"pattern": claim, "text": text, "iteration": iteration + 1},
+                            conversation_id=conversation_id,
+                        )
+                        if (
+                            self.fabrication_guard_mode == "block"
+                            and fabrication_retries < self.max_fabrication_retries
+                        ):
+                            fabrication_retries += 1
+                            nudge = {
+                                "role": "user",
+                                "content": (
+                                    "(system note, not from the customer: your last reply claimed "
+                                    "an action was completed, but no tool was called this turn. "
+                                    "Call the tool the customer's request actually needs, or -- if "
+                                    "nothing needs calling -- answer again without that claim.)"
+                                ),
+                            }
+                            messages.append(nudge)
+                            new_messages.append(nudge)
+                            continue
+                        if self.fabrication_guard_mode == "block":
+                            # Retries exhausted -- don't hand back the
+                            # flagged claim either; a known-safe non-claim
+                            # beats a possibly-false "Done".
+                            await get_prompt_log_manager().write_flag(
+                                intent_name,
+                                "fabrication_retry_exhausted",
+                                {"text": text, "iteration": iteration + 1},
+                                conversation_id=conversation_id,
+                            )
+                            text = _FABRICATION_FALLBACK_TEXT
+
+                assistant_message = {"role": "assistant", "content": text}
+                messages.append(assistant_message)
+                new_messages.append(assistant_message)
+                # Log the actual final answer within its own turn -- write()
+                # is otherwise only ever called before a generate() call, so
+                # without this, a turn's final reply was never captured live;
+                # it only ever showed up (if at all) retroactively, mislabeled
+                # under the *next* turn's timestamp, once that next turn's
+                # reconstructed history happened to include it.
+                await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
                 return text, new_messages
 
+            any_tool_dispatched = True
             tool_calls = self._canonical_to_tool_calls(canonical_calls)
             logger.info(
                 "unified: round %d tool calls: %s",
@@ -134,9 +213,15 @@ class AgenticLoop:
             new_messages.extend(round_trip)
 
         logger.warning("AgenticLoop hit max_iterations=%d without a final answer", self.max_iterations)
+        # No fabrication-guard check here: this text is a hardcoded constant,
+        # never model-generated, so it structurally can't claim an action
+        # that didn't happen.
         fallback = (
             "I wasn't able to finish that within the allowed number of steps -- "
             "please try rephrasing or breaking it into smaller requests."
         )
-        new_messages.append({"role": "assistant", "content": fallback})
+        fallback_message = {"role": "assistant", "content": fallback}
+        messages.append(fallback_message)
+        new_messages.append(fallback_message)
+        await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
         return fallback, new_messages

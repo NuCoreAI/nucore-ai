@@ -140,3 +140,45 @@ def test_preferences_dir_rejects_non_string(tmp_path):
 
     with pytest.raises(ValueError):
         _load_runtime_config(path=path, stream_handler=None)
+
+
+def test_fabrication_guard_mode_defaults_to_log(tmp_path):
+    path = _write_config(tmp_path)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["fabrication_guard_mode"] == "log"
+
+
+def test_fabrication_guard_mode_parsed_from_top_level_config(tmp_path):
+    path = _write_config(tmp_path, fabrication_guard_mode="block")
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["fabrication_guard_mode"] == "block"
+
+
+def test_fabrication_guard_mode_rejects_an_unknown_value(tmp_path):
+    path = _write_config(tmp_path, fabrication_guard_mode="loud")
+
+    with pytest.raises(ValueError):
+        _load_runtime_config(path=path, stream_handler=None)
+
+
+def test_max_fabrication_retries_defaults_to_one(tmp_path):
+    path = _write_config(tmp_path)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["max_fabrication_retries"] == 1
+
+
+def test_max_fabrication_retries_parsed_from_top_level_config(tmp_path):
+    path = _write_config(tmp_path, max_fabrication_retries=3)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["max_fabrication_retries"] == 3
+
+
+def test_max_fabrication_retries_rejects_non_integer(tmp_path):
+    path = _write_config(tmp_path, max_fabrication_retries="three")
+
+    with pytest.raises(ValueError):
+        _load_runtime_config(path=path, stream_handler=None)
