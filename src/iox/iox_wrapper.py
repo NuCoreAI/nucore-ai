@@ -1759,12 +1759,11 @@ class IoXWrapper(NuCoreInterface):
     # ------------------------------------------------------------------
     # Timezone management
     # ------------------------------------------------------------------
-    async def get_timespecs(self) -> dict[str, str]:
+    async def _fetch_raw_timespecs(self) -> dict[str, Any] | None:
         """
-        Get time/timezone/location information from the device, including the
-        current time and today's sunrise/sunset (both localized to the
-        device's own configured timezone) -- useful for the LLM when setting
-        up or explaining time- or sunrise/sunset-based routines.
+        Always hits the hub for time/timezone/location information --
+        see get_timespecs for the cached wrapper every other caller should
+        use instead of this.
         :return: Dictionary of timespecs or None if failure
 
         API:
@@ -1822,6 +1821,62 @@ class IoXWrapper(NuCoreInterface):
             return time_data
         except Exception as ex:
             logger.error(f"Error performing timespecs operation: {ex}")
+
+    async def get_timespecs(self) -> dict[str, str]:
+        """
+        Time/timezone/location information, cached to avoid hitting the
+        hub's /rest/time on every call -- callers used to pay that network
+        round trip unconditionally (prompt_builder.py rebuilds the system
+        prompt every turn; _resolve_history_tzinfo calls this independently
+        for get_device_history) even though most of what it returns barely
+        changes. ``timezone``/``latitude``/``longitude`` are fetched once
+        and kept for this process's lifetime -- same precedent as this
+        module's own _HOST_ENVIRONMENT (resolved once at process start, not
+        re-checked every call, because it effectively cannot change during
+        the process's life; a relocated installation needs a process
+        restart to pick up new coordinates). ``sunrise``/``sunset`` are
+        refreshed once per calendar day (in the cached timezone).
+        ``current_time`` is never cached -- it's computed fresh, locally,
+        from the cached timezone (``datetime.now(tzinfo)``, zero network
+        cost) on every call, so it's always exactly "now" regardless of how
+        stale the rest of the cache is.
+
+        A cold-cache (first-ever) fetch failure propagates None/the raw
+        error response, same as this method has always done. A later
+        daily-refresh failure with an already-warm static cache instead
+        keeps serving the cached timezone/latitude/longitude and the
+        last-known sunrise/sunset -- a transient hub hiccup shouldn't cost
+        the caller facts it already had.
+        :return: Dictionary of timespecs or None if failure
+        """
+        static: dict[str, Any] | None = getattr(self, "_timespecs_static_cache", None)
+        daily: tuple[Any, dict[str, Any]] | None = getattr(self, "_timespecs_daily_cache", None)
+
+        tz_name = static.get("timezone") if static else None
+        tzinfo = ZoneInfo(tz_name) if tz_name else datetime.timezone.utc
+        today = datetime.datetime.now(tzinfo).date()
+
+        if static is None or daily is None or daily[0] != today:
+            raw = await self._fetch_raw_timespecs()
+            if not isinstance(raw, dict):
+                if static is None:
+                    return raw  # nothing cached yet -- propagate the failure as-is
+                # Daily refresh failed but a static cache already exists --
+                # keep using it (and whatever sunrise/sunset was last seen).
+            else:
+                static = {k: raw[k] for k in ("timezone", "latitude", "longitude") if k in raw}
+                self._timespecs_static_cache = static
+                tz_name = static.get("timezone")
+                tzinfo = ZoneInfo(tz_name) if tz_name else datetime.timezone.utc
+                today = datetime.datetime.now(tzinfo).date()
+                daily = (today, {k: raw[k] for k in ("sunrise", "sunset") if k in raw})
+                self._timespecs_daily_cache = daily
+
+        result: dict[str, Any] = dict(static or {})
+        result["current_time"] = datetime.datetime.now(tzinfo).isoformat()
+        if daily is not None:
+            result.update(daily[1])
+        return result
 
     # ------------------------------------------------------------------
     # Plugin management  

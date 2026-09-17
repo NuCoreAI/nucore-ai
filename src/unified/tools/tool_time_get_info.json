@@ -1,0 +1,8 @@
+{
+  "name": "get_time_info",
+  "description": "The exact current time (with timezone offset), today's sunrise/sunset, and this installation's timezone/latitude/longitude -- everything TIME & LOCATION's standing CURRENT_DATE/TIMEZONE/LATITUDE/LONGITUDE doesn't already give you. Call this whenever precision matters: the exact current time (\"what time is it right now\"), a precise relative bound (\"in the last 10 minutes\", \"in the last 2 hours\" -- CURRENT_DATE alone isn't enough for that), or today's sunrise/sunset (\"is it dark out yet\", illustrating what an existing sunrise/sunset-relative routine currently means). No params. Cheap and side-effect-free -- call it freely. Every value returned is already local to this installation's own timezone, DST included -- never adjust any of them yourself. Never use the returned sunrise/sunset to calculate a routine's actual trigger time (e.g. adding an offset and passing the result as `time=`) -- create_or_update_routine's own `sunrise=`/`sunset=` time reference exists for that, recomputed by the hub daily; this tool's sunrise/sunset is for conversation only (answering a direct question, illustrating what an existing schedule currently means), never for constructing one.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

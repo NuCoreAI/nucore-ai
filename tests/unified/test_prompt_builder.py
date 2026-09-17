@@ -132,7 +132,13 @@ async def test_build_system_prompt_includes_time_info_when_available():
 
     assert "TIMEZONE = 'America/Los_Angeles'" in prompt
     assert "LATITUDE = 34.05" in prompt
-    assert "SUNRISE_TODAY = '2026-05-29T05:43:41-07:00'" in prompt
+    assert "CURRENT_DATE = '2026-06-02'" in prompt
+    # Full-precision current time and sunrise/sunset are no longer standing
+    # context -- get_time_info is a tool call away instead (see
+    # tool_time_get_info.json).
+    assert "CURRENT_TIME" not in prompt
+    assert "SUNRISE_TODAY" not in prompt
+    assert "SUNSET_TODAY" not in prompt
 
 
 @pytest.mark.asyncio

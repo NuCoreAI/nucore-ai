@@ -19,6 +19,7 @@ from .handlers import (
     routine_automation,
     routine_status_ops,
     shell,
+    time_info,
     variable_ops,
 )
 
@@ -59,6 +60,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "list_preferences": preferences.list_preferences,
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,
+    "get_time_info": time_info.get_time_info,
 }
 
 

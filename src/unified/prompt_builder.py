@@ -27,6 +27,7 @@ each its own prompt-cache breakpoint -- see build_system_prompt_sections.
 
 from __future__ import annotations
 
+import datetime
 import platform
 from pathlib import Path
 from typing import Any
@@ -49,29 +50,38 @@ _HOST_ENVIRONMENT = (
     "Check the platform string above before assuming Linux syntax."
 )
 
-# (time_data key, rendered Python variable name), in display order.
+# (time_data key, rendered Python variable name), in display order. Only
+# the facts needed constantly (which day it is, which timezone every other
+# already-local timestamp in the system is in) -- NOT current_time (full
+# precision) or sunrise/sunset, which are cheap enough to fetch but not
+# needed often enough to justify standing in every turn's prompt; see
+# get_time_info (tool_time_get_info.json) for those instead.
 _TIME_INFO_VARS = (
-    ("current_time", "CURRENT_TIME"),
     ("timezone", "TIMEZONE"),
     ("latitude", "LATITUDE"),
     ("longitude", "LONGITUDE"),
-    ("sunrise", "SUNRISE_TODAY"),
-    ("sunset", "SUNSET_TODAY"),
 )
 
 
 def _render_time_info(time_data: dict[str, Any] | None) -> str:
-    """Render ``get_timespecs()``'s result as Python literals -- same
-    rendering convention as DEVICE DATABASE/ROUTINES DATABASE. Lives after
-    the ``<<cache_boundary>>`` marker in system_prompt.md, in the volatile
-    tail section, since it changes every turn -- kept out of the static
-    section so it doesn't bust that section's prompt-cache entry (see
+    """Render TIMEZONE/LATITUDE/LONGITUDE plus a derived CURRENT_DATE (just
+    the date portion of get_timespecs()'s current_time -- the full
+    timestamp and sunrise/sunset live behind get_time_info instead, a tool
+    call away, not standing context) as Python literals -- same rendering
+    convention as DEVICE DATABASE/ROUTINES DATABASE. Lives after the
+    ``<<cache_boundary>>`` marker in system_prompt.md, in the volatile tail
+    section, since it changes every turn -- kept out of the static section
+    so it doesn't bust that section's prompt-cache entry (see
     build_system_prompt_sections and claude_adapter.py's system blocks)."""
     if not time_data:
         return "```python\n# Time/timezone/location information is unavailable.\n```"
     lines = [
         f"{var_name} = {time_data[key]!r}" for key, var_name in _TIME_INFO_VARS if time_data.get(key) is not None
     ]
+    current_time = time_data.get("current_time")
+    if current_time:
+        current_date = datetime.datetime.fromisoformat(current_time).date().isoformat()
+        lines.append(f"CURRENT_DATE = {current_date!r}")
     return f"```python\n{chr(10).join(lines)}\n```"
 
 
