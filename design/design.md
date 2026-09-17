@@ -357,10 +357,10 @@ at all -- not specific to any one tool, so a per-tool fix wasn't viable long-ter
 
 Two-part fix:
 - **Prompt side**: `system_prompt.md`'s five separate, topic-specific "Self-check before every
-  reply" blocks were collapsed into one `# CRITICAL RULE -- NEVER CLAIM AN ACTION HAPPENED UNLESS
-  YOU DID IT THIS TURN` section near the top, with each former block now a one-line pointer back
-  to it. Single statement of the rule, harder for future prompt edits to drift out of sync across
-  five copies.
+  reply" blocks were first collapsed into one `# CRITICAL RULE -- NEVER CLAIM AN ACTION HAPPENED
+  UNLESS YOU DID IT THIS TURN` section near the top, with each former block reduced to a one-line
+  pointer back to it. Later trimmed further -- see "CRITICAL RULES: cutting prose that wasn't
+  earning its length" below.
 - **Code side**: `fabrication_guard.py`'s `detect_completion_claim(text)` -- a regex heuristic over
   the reply text, deliberately generic (past-tense action verbs, "is now", "has been",
   "successfully", a checkmark, etc.), paired with a *structural* precondition checked by the
@@ -410,3 +410,42 @@ were needed, confirmed against `routine_compiler/conditions/schedule.py`'s `comp
 gained one sentence stating the event-vs-window distinction explicitly, plus a fourth worked
 example (multiple known future date-windows, OR'd `between(...)` clauses) -- additive documentation
 only, no compiler or schema change.
+
+## CRITICAL RULES: cutting prose that wasn't earning its length
+
+A follow-up live test session (`~/workspace/eisy-ai/logs/nucore.prompt.jsonl`, session `a411443c`,
+`fabrication_guard_mode: "block"`) gave a direct read on whether the verbose prompt-side rules
+above were actually working: 15 of that session's replies fabricated a completion claim with zero
+tool calls on the *first* attempt -- despite the full `CRITICAL RULE`/`MANDATORY TOOL USE FOR
+STATUS AND CONTROL`/`MANDATORY TOOL USE FOR EVERY OTHER CHANGE`/`WHEN THE CUSTOMER CHALLENGES
+SOMETHING YOU SAID` prose (previously ~7,100 characters) already being in context every turn. That
+undercuts "more explicit prose reduces fabrication" as a working assumption for this model/
+problem, and since the code-level fabrication guard is now a backstop regardless of prompt
+wording (for the "zero tool calls" case specifically), the downside of trimming the prompt text is
+lower than it would be if the prompt were the only defense.
+
+Fix: those four sections collapsed into one three-line `# CRITICAL RULES` section (~200
+characters) covering the same three failure modes tersely -- tool-mediated claims without a
+matching call, treating a repeated/rephrased/pronoun-referenced request as already satisfied, and
+reporting a multi-item batch as fully done when only part of it was called. Content with no
+one-line analog was accepted as a real, scoped loss rather than smuggled back in: the
+rationalization list (confidence from an earlier turn, a resolved pronoun, "seems small," etc.),
+the procedural "self-check before every reply" framing, and `WHEN THE CUSTOMER CHALLENGES`'s
+specific "don't cave or double down blindly, re-verify" guidance for plain device-status/command
+pushback (the protocol-family/platform-capability/plugin-derived sections keep their own local
+version of that rule; device-status/command pushback no longer has a dedicated one). The
+per-tool enumeration in `MANDATORY TOOL USE FOR EVERY OTHER CHANGE` was not preserved even in
+spirit -- the terse rule is tool-agnostic by construction, matching `fabrication_guard.py`'s own
+no-per-tool-maintenance design.
+
+Same investigation surfaced two related, still-open bugs worth recording even though they weren't
+fixed in this pass: (1) live token streaming (`ClaudeAdapter.generate`'s `stream_handler` callback)
+forwards a round's text to the customer's websocket as it's generated, before `AgenticLoop.run`
+gets a chance to decide the round was fabricated and discard it -- so a caught-and-corrected
+fabrication still streams the discarded claim *and* the real answer, visibly duplicating text in
+the client. (2) In `"block"` mode, once retries are exhausted and the fallback text is substituted,
+`_run_once`'s "chunks already streamed this turn -> just close the stream" shortcut
+(`run_unified_runtime.py`) means the fallback is likely never actually delivered to the customer --
+they'd see the second, uncorrected fabrication with no indication anything went wrong. Both trace
+to the same root cause: the guard's verdict is decided after generation completes, but streaming
+already happened during generation, and the two are never reconciled.

@@ -83,10 +83,13 @@ Controlled by two top-level `runtime_config` keys (no CLI flag -- see
 | `fabrication_guard_mode` | `"log"` | `"off"` disables detection. `"log"` flags a match to the prompt log (`PromptLogManager.write_flag`, kind `"fabrication_flag"`) without changing the reply -- observation only. `"block"` retries the turn once and, if the retry also fabricates, replaces the reply with a fixed "I'm not fully sure that completed correctly -- please check, or ask me to try again." |
 | `max_fabrication_retries` | `1` | Retry budget used only in `"block"` mode. |
 
-The matching prompt-side half is `system_prompt.md`'s single `# CRITICAL RULE -- NEVER CLAIM AN
-ACTION HAPPENED UNLESS YOU DID IT THIS TURN` section -- previously five separate, topic-specific
-"Self-check before every reply" blocks, collapsed into one statement with short pointer bullets
-left in each original location, so future prompt edits can't drift the five copies out of sync.
+The matching prompt-side half is `system_prompt.md`'s `# CRITICAL RULES` section -- originally
+five separate, topic-specific "Self-check before every reply" blocks, first collapsed into one
+statement with short pointer bullets left in each original location, then trimmed further to
+three one-line rules (tool-mediated claims, per-request freshness, per-item batch reporting) once
+live production logs showed the verbose version wasn't measurably reducing fabrication rate
+anyway -- the code-level guard above is the actual backstop either way, which is what made
+cutting the prompt-side prose low-risk.
 
 ## Session history across connections
 
