@@ -1,0 +1,18 @@
+{
+  "name": "diagnostics_no_status_feedback",
+  "description": "Investigate a complaint that the customer operated a device physically/locally (flipping a switch, a sensor tripping) and NuCore didn't show the new status -- the device -> NuCore direction, not a control complaint. Runs the full mandatory investigation (core services, protocol enabled/connected, PLM link-record sanity check, and optionally a specific device's own link) in one call, in the correct order, and returns a diagnosis plus a recommended fix when it finds one. Prefer this over manually replaying get_full_system_config/get_core_services_status yourself for a status-feedback complaint. Use diagnostics_not_responding instead for a control/communication complaint (customer can't control/reach a device, or nothing happens when they try) -- that's the default reading of a vague complaint that doesn't clearly describe a physical/local action.",
+  "input_schema": {
+    "type": "object",
+    "required": ["protocol"],
+    "properties": {
+      "protocol": {
+        "type": "string",
+        "description": "The device's real protocol family (e.g. \"insteon\", \"zwave\", \"zigbee\", \"matter\") -- from get_device_family, never guessed from the device's name. Only \"insteon\" has real automated diagnosis today; other protocols return a plain not-yet-supported result."
+      },
+      "device_id": {
+        "type": ["string", "null"],
+        "description": "Optional. Omit for a system-wide sanity check only. Supply a representative device to also check whether it has the device->PLM link needed to report status changes -- if omitted and the system-wide check passes, the result asks for one."
+      }
+    }
+  }
+}

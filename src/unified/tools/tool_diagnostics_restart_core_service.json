@@ -1,0 +1,18 @@
+{
+  "name": "restart_core_service",
+  "description": "Start, stop, or restart a core service (isy, udx, eisyui, mosquitto.ud, etc.) -- not plugin services, use plugin_ops for those. Call get_core_services_status first to see the exact service names and current status, and match the one that corresponds to what the customer means -- never guess or invent a service name. Only after the customer has explicitly agreed, never speculatively (stopping/restarting interrupts the service while it's down).",
+  "input_schema": {
+    "type": "object",
+    "required": ["service", "operation"],
+    "properties": {
+      "service": {
+        "type": "string",
+        "description": "The exact service name, exactly as shown by get_core_services_status -- never invented."
+      },
+      "operation": {
+        "type": "string",
+        "enum": ["start", "stop", "restart"]
+      }
+    }
+  }
+}

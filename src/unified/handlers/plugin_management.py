@@ -27,8 +27,8 @@ failure is ordinary HTTP-failure handling, so they fail gracefully
 (``successful: false``) rather than raising, same as any other call here.
 
 ``plugin_ops`` -- starts/stops/restarts an installed plugin's own service
-(distinct from ``run_diagnostic_step``'s ``services_ops``, which is core
-services only). Needs the plugin's real ``plugin_id`` from
+(distinct from ``restart_core_service``, which is core services only).
+Needs the plugin's real ``plugin_id`` from
 ``list_installed_plugins``, same id-resolution as ``delete_plugin``.
 """
 

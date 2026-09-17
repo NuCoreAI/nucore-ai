@@ -309,8 +309,6 @@ python -m unified.run_unified_runtime \
 | `--preferences-dir` | Directory for this installation's customer preferences (aliases/events); overrides runtime config's `preferences_dir` -- no default, preferences are unavailable without one |
 | `--prompt-log-dir` | Directory for the debug prompt/tool-call log (`nucore.prompt.jsonl`); overrides runtime config's `prompt_log_dir`. Defaults to `<cwd>/logs` |
 | `--no-prompt-log` | Disable the debug prompt/tool-call log entirely. On by default (see "Prompt/Tool-Call Debug Log" below) |
-| `--diagnostic-step` | Bypass the LLM/agentic loop and call one diagnostic tool directly against a live backend (e.g. `get_full_system_config`); prints the raw result and exits. Pairs with `--diagnostic-params`. Manual testing only |
-| `--diagnostic-params` | JSON object of keyword params for `--diagnostic-step` |
 
 ## Supported Providers
 
@@ -419,14 +417,13 @@ No API key is required for local servers; the adapter falls back to a placeholde
 
 Beyond device/group/routine/variable command-and-control, the unified runtime supports:
 
-- **Diagnostics** -- stateless, no session or start call: `get_diagnostics_prompt` fetches
-  reference material (PLM/device link records, the DEVICE ACTIVITY LOG format and how to read it
-  for past behavior, known fixes) on demand for the current question only -- like consulting
-  DEVICE DATABASE/ROUTINES DATABASE, it never turns into a standing mode and doesn't carry over to
-  a later, unrelated question in the same conversation. `run_diagnostic_step` then runs one
-  diagnostic step directly against the backend (e.g. checking or starting/stopping/restarting core
-  services), and `run_shell_command` runs a shell command on the backend host (e.g. to
-  search the device activity log).
+- **Diagnostics** -- stateless, no session or start call, one tool call per complaint shape:
+  `diagnostics_not_responding` investigates a "can't control/reach a device" complaint,
+  `diagnostics_no_status_feedback` investigates a "device changed locally but NuCore didn't show
+  it" complaint. Each runs its whole mandatory investigation internally, in the backend, in the
+  right order -- the model doesn't sequence individual diagnostic steps itself. `restart_core_service`
+  starts/stops/restarts a core service, and `run_shell_command` runs a shell command on the backend
+  host (e.g. to search the device activity log).
 - **User preferences** -- `preference_op`/`list_preferences` store per-user aliases (e.g. naming
   a device or routine) and event subscriptions, persisted across sessions.
 - **Plugin management** -- `list_store_plugins`/`list_purchased_plugins`/`list_installed_plugins`
@@ -435,8 +432,8 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
   built-in tool covers a request. `install_plugin`/`buy_plugin`/`delete_plugin` don't complete
   anything themselves -- for security reasons, installing, purchasing, and deleting all happen on
   the web -- each returns a link for the customer to finish there. `plugin_ops` starts, stops, or
-  restarts an installed plugin's own service -- the only way to do that; core services go through
-  the diagnostics flow above instead.
+  restarts an installed plugin's own service -- the only way to do that; `restart_core_service`
+  covers core services instead.
 - **Reliability** -- a fabrication guard flags (and, optionally, retries) a reply that claims a
   tool-mediated action completed when no tool was actually called that turn, across every tool
   with no per-tool maintenance. Controlled by the `fabrication_guard_mode`/`max_fabrication_retries`

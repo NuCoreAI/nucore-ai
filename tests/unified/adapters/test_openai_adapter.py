@@ -1,7 +1,7 @@
 """OpenAIAdapter.export_tools -- strict-mode JSON Schema normalization, and
 the per-tool ``"strict": false`` escape hatch for tools whose schema has a
 genuinely free-form object parameter (dynamic keys the caller can't
-enumerate in advance, e.g. run_diagnostic_step's ``params``).
+enumerate in advance, e.g. call_plugin's ``args``).
 
 Regression coverage for a live bug: OpenAI's strict mode requires every
 object node to set ``additionalProperties: false`` with every key
@@ -74,23 +74,23 @@ def test_tool_file_strict_false_key_overrides_the_batch_default():
     assert tools[0]["function"]["strict"] is False
 
 
-def test_run_diagnostic_step_tool_file_is_strict_false():
-    # The exact tool that triggered the live 400 from OpenAI: params is a
-    # genuinely free-form object (different keys per diagnostic step), which
-    # strict mode cannot represent.
-    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_diagnostics_run_step.json")
+def test_plugin_call_tool_file_is_strict_false():
+    # A real tool with a genuinely free-form object (args vary per plugin
+    # tool), which strict mode cannot represent -- the pattern that
+    # originally triggered a live 400 from OpenAI.
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_plugin_call.json")
     assert spec.strict is False
 
     tools = _adapter().export_tools([spec])
-    params_schema = tools[0]["function"]["parameters"]["properties"]["params"]
-    assert params_schema["additionalProperties"] is True
+    args_schema = tools[0]["function"]["parameters"]["properties"]["args"]
+    assert args_schema["additionalProperties"] is True
     assert tools[0]["function"]["strict"] is False
 
 
 def test_all_free_form_params_tool_files_declare_strict_false():
     # Guard against a future tool file reintroducing additionalProperties:
     # true without also opting out of strict mode.
-    for name in ("tool_diagnostics_run_step.json", "tool_plugin_call.json"):
+    for name in ("tool_plugin_call.json",):
         data = json.loads((_TOOLS_DIR / name).read_text())
         assert data.get("strict") is False, name
 

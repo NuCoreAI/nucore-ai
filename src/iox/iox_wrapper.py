@@ -1976,21 +1976,18 @@ class IoXWrapper(NuCoreInterface):
             }
 
     # ------------------------------------------------------------------
-    # Diagnostics -- all actual registry/state/dispatch logic lives on
-    # IoXDiagnostics (self.diagnostics); this just satisfies NuCoreInterface.
+    # Diagnostics -- all actual investigation logic lives on IoXDiagnostics
+    # (self.diagnostics); this just satisfies NuCoreInterface.
     # ------------------------------------------------------------------
 
-    async def run_diagnostic_step(self, step: str, **params) -> Any:
-        """
-        Run one diagnostic step directly -- see
-        IoXDiagnostics.run_diagnostic_step.
-        """
-        return await self.diagnostics.run_diagnostic_step(step, **params)
+    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
+        return await self.diagnostics.diagnose_not_responding(protocol, device_id)
 
-    # Three steps promoted to standing top-level tools -- see
-    # NuCoreInterface's own comment above these. Calls the exact same
-    # IoXDiagnostics methods run_diagnostic_step would have dispatched to,
-    # just directly instead of through the string-keyed step catalog.
+    async def diagnose_no_status_feedback(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
+        return await self.diagnostics.diagnose_no_status_feedback(protocol, device_id)
+
+    async def restart_core_service(self, service: str, operation: str) -> dict[str, Any]:
+        return await self.diagnostics.services_ops(service, operation)
 
     async def get_full_system_config(self) -> dict[str, Any] | None:
         return await self.diagnostics.get_full_system_config()

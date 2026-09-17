@@ -1,9 +1,11 @@
-"""IoXDiagnostics._load_diagnostic_config/_parse_diagnostic_config -- the
-fenced ```json step catalog in diagnose.md is parsed and validated at
-construction time (every declared step must resolve to a real callable
-method), and IoXDiagnostics.run_diagnostic_step -- a plain, stateless
-dispatcher: no session, always available, dispatch by step name. Also
-covers IoXWrapper's thin delegation to it.
+"""IoXDiagnostics' structured-return wrappers (quick_plm_sanity_check/
+get_dev_links_table/get_device_to_plm_link_status) and IoXWrapper's thin
+delegation to IoXDiagnostics for the diagnostics surface (the two
+complaint-shaped diagnose_* methods, restart_core_service, and the standing
+get_full_system_config/get_core_services_status/get_device_family tools).
+
+See tests/iox/test_insteon_diagnose.py for the real branch-by-branch
+decision-tree coverage of diagnose_not_responding/diagnose_no_status_feedback.
 """
 
 from __future__ import annotations
@@ -13,159 +15,130 @@ import pytest
 from iox.diagnostics.iox_diagnostics import IoXDiagnostics
 from iox.iox_wrapper import IoXWrapper
 
-STEP_NAMES = {
-    "services_ops", "get_dev_links_table", "get_iox_links_table",
-    "compare_device_links", "get_all_plm_links", "quick_plm_sanity_check",
-}
-
 
 def _bare_diagnostics() -> IoXDiagnostics:
     diag = object.__new__(IoXDiagnostics)
     diag._plm_op_state = None
-    # __init__ is bypassed (no real IoXWrapper needed for these tests), but
-    # the diagnose.md parse/validation is still exercised via the real loader
-    # -- these tests should fail loudly too if the prompt and the code drift.
-    diag._diagnostic_instruction, diag._diagnostic_steps = diag._load_diagnostic_config()
     return diag
 
 
-def test_real_diagnose_md_parses_and_validates_cleanly():
-    # No mocking -- confirms the actual shipped diagnose.md matches the
-    # actual IoXDiagnostics methods (this is what __init__ runs for real).
-    diag = object.__new__(IoXDiagnostics)
-    text, steps = diag._load_diagnostic_config()
+class _FakeInsteonDiag:
+    def __init__(self, *, plm_connected=True, sanity_result=None, dev_links_table=None):
+        self._plm_connected = plm_connected
+        self._sanity_result = sanity_result or {
+            "passed": True, "plm_connected": plm_connected, "report": "sane"
+        }
+        self._dev_links_table = dev_links_table
 
-    assert set(steps.keys()) == STEP_NAMES
-    assert text  # the full prose+json text, shown to the model via get_diagnostics_prompt
+    async def _quick_plm_sanity_check(self, **kwargs):
+        return self._sanity_result
 
-
-def test_parse_diagnostic_config_errors_when_json_block_missing():
-    diag = object.__new__(IoXDiagnostics)
-
-    with pytest.raises(RuntimeError, match="missing its"):
-        diag._parse_diagnostic_config("just prose, no fenced json block here")
-
-
-def test_parse_diagnostic_config_errors_on_malformed_json():
-    diag = object.__new__(IoXDiagnostics)
-
-    with pytest.raises(RuntimeError, match="malformed"):
-        diag._parse_diagnostic_config("prose\n```json\n{not valid json\n```\n")
-
-
-def test_parse_diagnostic_config_errors_when_method_does_not_exist():
-    # Step name -> backend method is convention-derived (same name, no
-    # leading underscore), no per-step override -- a step with no matching
-    # method fails.
-    diag = object.__new__(IoXDiagnostics)
-    text = 'prose\n```json\n{"totally_made_up_step": {"description": "x"}}\n```\n'
-
-    with pytest.raises(RuntimeError, match="totally_made_up_step"):
-        diag._parse_diagnostic_config(text)
-
-
-@pytest.mark.asyncio
-async def test_real_iox_wrapper_construction_runs_the_same_validation():
-    # __init__ runs _load_diagnostic_config for real -- confirms a genuine
-    # IoXWrapper() (not the object.__new__ bypass every other test in this
-    # file uses) doesn't blow up, i.e. the real prompt/code pairing is valid.
-    wrapper = object.__new__(IoXWrapper)
-    diag = IoXDiagnostics(wrapper)
-
-    assert set(diag._diagnostic_steps.keys()) == STEP_NAMES
+    async def _get_dev_links_table(self, device_id=None, **kwargs):
+        return self._dev_links_table
 
 
 # ----------------------------------------------------------------------
-# run_diagnostic_step -- no session, dispatches by name, forwards params.
+# quick_plm_sanity_check -- structured return
 # ----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostic_step_errors_on_unknown_step():
+async def test_quick_plm_sanity_check_returns_structured_result_when_insteon_enabled():
     diag = _bare_diagnostics()
+    diag._get_system_options = lambda: _resolved({"insteonSupport": True})
+    diag.get_core_services_status = lambda: _resolved({"isy": "running"})
+    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    diag._insteon_diag = _FakeInsteonDiag(
+        sanity_result={"passed": True, "plm_connected": True, "report": "SANE"}
+    )
 
-    result = await diag.run_diagnostic_step("not_a_real_step")
+    result = await diag.quick_plm_sanity_check()
 
-    assert "error" in result
+    assert result["passed"] is True
+    assert result["insteon_enabled"] is True
+    assert result["plm_connected"] is True
+    assert "SANE" in result["report"]
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostic_step_dispatches_to_the_backend_method():
+async def test_quick_plm_sanity_check_short_circuits_when_insteon_disabled():
     diag = _bare_diagnostics()
+    diag._get_system_options = lambda: _resolved({"insteonSupport": False})
+    diag.get_core_services_status = lambda: _resolved({"isy": "running"})
+    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    called = {"insteon": False}
 
-    calls = []
+    async def fail_if_called(**kwargs):
+        called["insteon"] = True
 
-    async def fake_quick_plm_sanity_check():
-        calls.append("called")
-        return {"ok": True}
+    diag._insteon_diag = _FakeInsteonDiag()
+    diag._insteon_diag._quick_plm_sanity_check = fail_if_called
 
-    diag.quick_plm_sanity_check = fake_quick_plm_sanity_check
+    result = await diag.quick_plm_sanity_check()
 
-    result = await diag.run_diagnostic_step("quick_plm_sanity_check")
-
-    assert result == {"step": "quick_plm_sanity_check", "result": {"ok": True}}
-    assert calls == ["called"]
+    assert result["passed"] is False
+    assert result["insteon_enabled"] is False
+    assert result["plm_connected"] is None
+    assert "not enabled" in result["report"]
+    assert called["insteon"] is False  # never reached the PLM-level check
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostic_step_forwards_params_to_the_backend_method():
+async def test_quick_plm_sanity_check_reports_not_within_tolerance():
     diag = _bare_diagnostics()
+    diag._get_system_options = lambda: _resolved({"insteonSupport": True})
+    diag.get_core_services_status = lambda: _resolved({"isy": "running"})
+    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    diag._insteon_diag = _FakeInsteonDiag(
+        sanity_result={"passed": False, "plm_connected": True, "report": "PROBLEM"}
+    )
 
-    received = {}
+    result = await diag.quick_plm_sanity_check()
 
-    async def fake_get_dev_links_table(device_id=None, **kwargs):
-        received["device_id"] = device_id
-        return "link table text"
+    assert result["passed"] is False
+    assert result["insteon_enabled"] is True
 
-    diag.get_dev_links_table = fake_get_dev_links_table
 
-    result = await diag.run_diagnostic_step("get_dev_links_table", device_id="n001")
-
-    assert received["device_id"] == "n001"
-    assert result["result"] == "link table text"
+# ----------------------------------------------------------------------
+# get_device_to_plm_link_status -- structured wrapper over get_dev_links_table
+# ----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostic_step_catches_unexpected_exceptions():
+async def test_get_device_to_plm_link_status_true_when_controller_row_present():
     diag = _bare_diagnostics()
+    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    diag._insteon_diag = _FakeInsteonDiag(
+        dev_links_table="Device Links Table\n```csv\nidx,role,group,device,data\n1,controller,1,PLM,000000\n```\n"
+    )
 
-    async def failing():
-        raise RuntimeError("hub unreachable")
+    result = await diag.get_device_to_plm_link_status("n001")
 
-    diag.quick_plm_sanity_check = failing
-
-    result = await diag.run_diagnostic_step("quick_plm_sanity_check")
-
-    assert "error" in result
-    assert "hub unreachable" in result["error"]
+    assert result["has_device_to_plm_link"] is True
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostic_step_is_always_available_no_session_needed():
-    # Calling it back-to-back with no start call and nothing in between --
-    # there's no session state to be missing.
+async def test_get_device_to_plm_link_status_false_when_no_controller_row():
     diag = _bare_diagnostics()
-    diag.get_iox_links_table = lambda device_id=None, **kw: _resolved("insteon")
+    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    diag._insteon_diag = _FakeInsteonDiag(
+        dev_links_table="Device Links Table\n```csv\nidx,role,group,device,data\n1,responder,1,PLM,000000\n```\n"
+    )
 
-    first = await diag.run_diagnostic_step("get_iox_links_table", device_id="n001")
-    second = await diag.run_diagnostic_step("get_iox_links_table", device_id="n002")
+    result = await diag.get_device_to_plm_link_status("n001")
 
-    assert first["result"] == "insteon"
-    assert second["result"] == "insteon"
+    assert result["has_device_to_plm_link"] is False
 
 
 @pytest.mark.asyncio
-async def test_run_diagnostic_step_rejects_promoted_steps_by_name():
-    # get_full_system_config/get_core_services_status/get_device_family were
-    # promoted to standing top-level tools (see NuCoreInterface's own
-    # methods) and deliberately removed from diagnose.md's step catalog --
-    # calling them through the old string-dispatch path is now a clear
-    # "unknown step" error, not a silent success.
+async def test_get_device_to_plm_link_status_none_when_table_unavailable():
     diag = _bare_diagnostics()
+    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    diag._insteon_diag = _FakeInsteonDiag(dev_links_table="PLM not connected. Cannot retrieve device links table.")
 
-    for step in ("get_full_system_config", "get_core_services_status", "get_device_family"):
-        result = await diag.run_diagnostic_step(step)
-        assert "error" in result
+    result = await diag.get_device_to_plm_link_status("n001")
+
+    assert result["has_device_to_plm_link"] is None
 
 
 async def _resolved(value):
@@ -173,7 +146,7 @@ async def _resolved(value):
 
 
 # ----------------------------------------------------------------------
-# IoXWrapper delegation -- run_diagnostic_step must just forward to
+# IoXWrapper delegation -- every diagnostics-surface method just forwards to
 # self.diagnostics.
 # ----------------------------------------------------------------------
 
@@ -185,29 +158,50 @@ def _bare_wrapper_with_diagnostics() -> IoXWrapper:
 
 
 @pytest.mark.asyncio
-async def test_wrapper_run_diagnostic_step_delegates():
+async def test_wrapper_diagnose_not_responding_delegates():
     wrapper = _bare_wrapper_with_diagnostics()
 
-    calls = []
+    async def fake(protocol, device_id=None):
+        return {"protocol": protocol, "device_id": device_id}
 
-    async def fake_quick_plm_sanity_check():
-        calls.append("called")
-        return {"ok": True}
+    wrapper.diagnostics.diagnose_not_responding = fake
 
-    wrapper.diagnostics.quick_plm_sanity_check = fake_quick_plm_sanity_check
+    result = await wrapper.diagnose_not_responding("insteon", "n001")
 
-    result = await wrapper.run_diagnostic_step("quick_plm_sanity_check")
-
-    assert result == {"step": "quick_plm_sanity_check", "result": {"ok": True}}
-    assert calls == ["called"]
+    assert result == {"protocol": "insteon", "device_id": "n001"}
 
 
-# ----------------------------------------------------------------------
-# The three steps promoted to standing top-level tools -- IoXWrapper now
-# exposes them directly (NuCoreInterface.get_full_system_config/
-# get_core_services_status/get_device_family), delegating to the exact same
-# IoXDiagnostics methods run_diagnostic_step used to dispatch to by name.
-# ----------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_wrapper_diagnose_no_status_feedback_delegates():
+    wrapper = _bare_wrapper_with_diagnostics()
+
+    async def fake(protocol, device_id=None):
+        return {"protocol": protocol, "device_id": device_id}
+
+    wrapper.diagnostics.diagnose_no_status_feedback = fake
+
+    result = await wrapper.diagnose_no_status_feedback("insteon", None)
+
+    assert result == {"protocol": "insteon", "device_id": None}
+
+
+@pytest.mark.asyncio
+async def test_wrapper_restart_core_service_delegates_to_services_ops():
+    wrapper = _bare_wrapper_with_diagnostics()
+
+    received = {}
+
+    async def fake_services_ops(service, op):
+        received["service"] = service
+        received["op"] = op
+        return {"status": "ok"}
+
+    wrapper.diagnostics.services_ops = fake_services_ops
+
+    result = await wrapper.restart_core_service("udx", "restart")
+
+    assert result == {"status": "ok"}
+    assert received == {"service": "udx", "op": "restart"}
 
 
 @pytest.mark.asyncio

@@ -46,7 +46,7 @@ class _FakeInsteonDiag:
     async def _quick_plm_sanity_check(self, **kwargs):
         self.calls.append("quick_plm_sanity_check")
         await asyncio.sleep(0.05)
-        return "sanity ok"
+        return {"passed": True, "plm_connected": True, "report": "sanity ok"}
 
 
 def _bare_diagnostics_for_plm_lock() -> IoXDiagnostics:

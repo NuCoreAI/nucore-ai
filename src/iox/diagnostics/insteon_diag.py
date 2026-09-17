@@ -487,7 +487,7 @@ class INSTEONDiagnostics:
         iox_path = self._get_file_path("iox", device_id)
         return self._compare_links_files(device_path, iox_path)
 
-    async def _quick_plm_sanity_check(self, **kwargs) -> str:
+    async def _quick_plm_sanity_check(self, **kwargs) -> dict[str, Any]:
         """Fast, system-wide first pass for "none of my devices report status
         back to the PLM" -- compares the PLM's actual link record count
         against a rough expected count derived from NuCore's own node/group
@@ -504,14 +504,21 @@ class INSTEONDiagnostics:
         the actual count the same way they're excluded from
         _compare_links_files -- one definition of "a real link record" for
         both.
+
+        :return: ``{"passed": bool | None, "plm_connected": bool, "report": str}``
+            -- ``passed`` is ``None`` when the check couldn't run at all (PLM
+            link fetch failed, or 0 nodes/groups to compare against); the
+            plain-language ``report`` is unchanged from what this used to
+            return bare, callers that just want to relay it still can.
         """
         plm_result = await self._get_all_plm_links()
         # _get_all_plm_links already ran _get_plm_info as part of fetching --
         # report the connectivity it found instead of re-querying for it.
-        lines = [f"PLM connected: {self._plm_connected}"]
+        plm_connected = self._plm_connected
+        lines = [f"PLM connected: {plm_connected}"]
         if not plm_result or LINKS_TABLE_FENCE_OPEN not in plm_result:
             lines.append(plm_result or "Failed to retrieve the PLM's link table.")
-            return "\n".join(lines)
+            return {"passed": None, "plm_connected": plm_connected, "report": "\n".join(lines)}
 
         rows = _parse_links_csv(plm_result)
         actual = sum(1 for r in rows if r["role"] not in _ROLES_EXCLUDED_FROM_COMPARISON)
@@ -526,7 +533,7 @@ class INSTEONDiagnostics:
                 f"Cannot run the record-count check -- NuCore reports 0 nodes/groups, nothing to "
                 f"compare the PLM's {actual} link record(s) against."
             )
-            return "\n".join(lines)
+            return {"passed": None, "plm_connected": plm_connected, "report": "\n".join(lines)}
 
         diff_pct = abs(actual - expected) / expected * 100
         within_tolerance = diff_pct <= _PLM_SANITY_CHECK_TOLERANCE_PCT
@@ -551,7 +558,7 @@ class INSTEONDiagnostics:
                 "NOTE: the PLM has more link records than expected -- possible stale/duplicate links "
                 "rather than a missing-status-feedback issue; worth checking specific devices."
             )
-        return "\n".join(lines)
+        return {"passed": within_tolerance, "plm_connected": plm_connected, "report": "\n".join(lines)}
 
     async def _stream_links_into_file(
         self,

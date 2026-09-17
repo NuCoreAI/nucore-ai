@@ -616,42 +616,60 @@ class NuCoreInterface(ABC):
     # Diagnostics
     # ------------------------------------------------------------------
 
-    @abstractmethod
-    async def run_diagnostic_step(self, step: str, **params):
-        """
-        Run one diagnostic step directly against the backend -- no session,
-        always available. The model picks which step to call and with what
-        params, guided by diagnose.md's prose and step catalog (see the
-        get_diagnostics_prompt tool), instead of the backend pre-mapping
-        every complaint to a canned plan.
-
-        get_dev_links_table/compare_device_links/get_all_plm_links/
-        quick_plm_sanity_check drive the single PLM serial connection
-        directly and cannot run concurrently with each other or with a
-        second call to themselves -- implementations enforce that with an
-        immediate refusal (no locking/waiting), not anything callers need to
-        coordinate. Every other step touches no PLM hardware directly and
-        runs freely, any time.
-
-        :param step: One of the step names from diagnose.md's step catalog.
-        :param params: Forwarded to the step's underlying function.
-        :return: {"step", "result"} on success, or {"error": ...}.
-        """
-        raise NotImplementedError("Subclasses must implement the run_diagnostic_step method.")
-
     # ------------------------------------------------------------------
-    # Three steps promoted out of the run_diagnostic_step catalog into their
-    # own standing top-level tools -- they're cheap, side-effect-free, and
-    # needed too often/too broadly (the "Step 1, always" INSTEON-diagnostics
-    # rule; any protocol-family question) to justify the get_diagnostics_prompt
-    # round trip every other diagnostic step requires. Implementations may
-    # still share code with run_diagnostic_step's own dispatch target for
-    # these names (e.g. IoXWrapper delegates to the same IoXDiagnostics
-    # methods) -- only the model-facing surface changed. Plain methods with a
-    # raising default (the plugin_ops/get_device_history pattern), not
-    # @abstractmethod like run_diagnostic_step itself -- see get_device_history
-    # above for why.
+    # Complaint-shaped diagnostic tools -- one coarse, meaningful method per
+    # complaint shape (not a generic run_diagnostic_step(step, **params)
+    # dispatcher exposing raw backend mechanism). The model picks the tool
+    # matching the complaint from its own description, the same way it
+    # already picks send_command vs. get_property -- implementations own the
+    # entire investigation internally (e.g. IoXWrapper delegates to
+    # IoXDiagnostics, which runs the real decision tree in Python against its
+    # own private helpers) and return one consolidated result. Plain methods
+    # with a raising default (the plugin_ops/get_device_history pattern), not
+    # @abstractmethod -- see get_device_history above for why.
     # ------------------------------------------------------------------
+
+    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
+        """
+        Investigate a "customer can't control/reach a device, or nothing
+        happens when they try" complaint (the NuCore -> device direction).
+        :param protocol: The device's protocol family (insteon/zwave/zigbee/
+            matter -- see get_device_family), never guessed from its name.
+        :param device_id: The customer-named device, or one representative
+            device if the complaint is general.
+        :return: A dict with at least ``diagnosis``, plus whatever
+            ``recommended_fix``/``clarifying_question``/``error`` fields
+            apply -- see the implementation for the exact shape.
+        """
+        raise NotImplementedError("Subclasses must implement the diagnose_not_responding method.")
+
+    async def diagnose_no_status_feedback(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
+        """
+        Investigate a "customer operated a device physically/locally and
+        NuCore didn't show the new status" complaint (the device -> NuCore
+        direction).
+        :param protocol: The device's protocol family, never guessed.
+        :param device_id: Optional -- omit for a system-wide check only, or
+            supply a representative device to also check its own link.
+        :return: A dict with at least ``diagnosis``, plus whatever
+            ``recommended_fix``/``clarifying_question``/``needs_device_id``/
+            ``error`` fields apply -- see the implementation for the exact
+            shape.
+        """
+        raise NotImplementedError("Subclasses must implement the diagnose_no_status_feedback method.")
+
+    async def restart_core_service(self, service: str, operation: str) -> dict[str, Any]:
+        """
+        Start/stop/restart a core service (isy, udx, eisyui, mosquitto.ud,
+        etc.) -- not plugin services, use the plugin_ops tool for those. The
+        exact service name should come from get_core_services_status,
+        never guessed.
+        :param service: The service name, exactly as shown by
+            get_core_services_status.
+        :param operation: One of "start", "stop", "restart".
+        :return: A dict with the resulting status, or {"error": ...}.
+        """
+        raise NotImplementedError("Subclasses must implement the restart_core_service method.")
 
     async def get_full_system_config(self) -> dict[str, Any] | None:
         """
@@ -699,10 +717,10 @@ class NuCoreInterface(ABC):
     # carries an Actor (System/Web/Routine/...), so this single tool now
     # answers both "what was the value" and "who/what caused it" questions.
     # Plain method with a raising default (the plugin_ops/configure_plugin
-    # pattern above), not @abstractmethod like run_diagnostic_step -- 15
-    # test-only NuCoreInterface fake subclasses exist across tests/;
-    # @abstractmethod would force every one of them to grow a new stub just
-    # to stay instantiable, for a capability most of them never exercise.
+    # pattern above), not @abstractmethod -- 15 test-only NuCoreInterface
+    # fake subclasses exist across tests/; @abstractmethod would force every
+    # one of them to grow a new stub just to stay instantiable, for a
+    # capability most of them never exercise.
     # ------------------------------------------------------------------
 
     async def get_device_history(

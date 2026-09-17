@@ -268,24 +268,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable the debug prompt/tool-call log entirely. On by default.",
     )
-    parser.add_argument(
-        "--diagnostic-step",
-        type=str,
-        default=None,
-        help=(
-            "Bypass the LLM/agentic loop entirely and call this diagnostic tool "
-            "directly against the backend (e.g. 'get_full_system_config', "
-            "'get_dev_links_table', 'quick_plm_sanity_check'). "
-            "Prints the raw result and exits. Pairs with --diagnostic-params. "
-            "For manual testing against a live hub only."
-        ),
-    )
-    parser.add_argument(
-        "--diagnostic-params",
-        type=str,
-        default=None,
-        help="JSON object of keyword params for --diagnostic-step, e.g. '{\"device_id\": \"12 34 56 1\"}'.",
-    )
     return parser
 
 
@@ -469,23 +451,6 @@ async def _run_once(
         # replicate this bookkeeping.
 
     return
-
-async def _run_diagnostic_step_direct(
-    nucore_interface: NuCoreInterface, step: str, params_json: str | None
-) -> None:
-    """Call a single diagnostic step directly against the backend, bypassing
-    the LLM/AgenticLoop/dispatch layer entirely -- for manual testing against
-    a live hub without spending on LLM calls or needing conversational
-    back-and-forth to reach a specific step.
-
-    *step* is passed straight to ``run_diagnostic_step`` (e.g.
-    'get_full_system_config', 'get_dev_links_table') -- there's no session to
-    open first.
-    """
-    params = json.loads(params_json) if params_json else {}
-    result = await nucore_interface.run_diagnostic_step(step, **params)
-    print(json.dumps(result, indent=2, default=str))
-
 
 async def _run_loop(runtime: UnifiedRuntime) -> None:
     """Run an interactive REPL that repeatedly prompts for queries.
@@ -810,13 +775,6 @@ def main(args:Any=None, poly=None) -> None:
     resolved_max_iterations = (
         args.max_iterations if args.max_iterations is not None else int(runtime_config.get("max_iterations", 8))
     )
-
-    if args.diagnostic_step:
-        # Direct-to-backend testing mode: no LLM, no AgenticLoop, no
-        # UnifiedRuntime -- just the real hub connection built above.
-        asyncio.run(nucore_interface._refresh_device_structure())
-        asyncio.run(_run_diagnostic_step_direct(nucore_interface, args.diagnostic_step, args.diagnostic_params))
-        return
 
     websocket_is_unix, websocket_host = _parse_websocket_host(args.websocket_host)
 
