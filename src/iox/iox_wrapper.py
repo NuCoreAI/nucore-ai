@@ -231,18 +231,42 @@ def _localize_routine_time(value: Any, tzinfo: datetime.tzinfo) -> Any:
         return value
 
 
-def _boundary_sql(nodes: list[str], property_ids: list[str], comparison: str, epoch: int, direction: str) -> str:
+def _boundary_sql(
+    nodes: list[str], property_ids: list[str] | None, comparison: str, epoch: int, direction: str
+) -> str:
     """Build one UNION ALL query returning at most one boundary row per
     (node, property) pair in the cross-product -- a single `sqlite3` call
-    covering every pair, rather than one call each."""
-    selects = [
-        f"SELECT * FROM (SELECT {_DEVLOG_COLUMNS} FROM DevLogEvents "
-        f"WHERE NodeAddress={_sql_quote(node)} AND ControlId={_sql_quote(property_id)} AND {comparison} {epoch} "
-        f"ORDER BY EventTime {direction} LIMIT 1)"
-        for node in nodes
-        for property_id in property_ids
-    ]
+    covering every pair, rather than one call each. ``property_ids=None``
+    (the wildcard case, see get_device_history's PROPERTIES_WILDCARD) drops
+    the per-property split entirely -- one boundary row per node, across
+    whichever control actually logged it, not one per (node, property)."""
+    if property_ids is None:
+        selects = [
+            f"SELECT * FROM (SELECT {_DEVLOG_COLUMNS} FROM DevLogEvents "
+            f"WHERE NodeAddress={_sql_quote(node)} AND {comparison} {epoch} "
+            f"ORDER BY EventTime {direction} LIMIT 1)"
+            for node in nodes
+        ]
+    else:
+        selects = [
+            f"SELECT * FROM (SELECT {_DEVLOG_COLUMNS} FROM DevLogEvents "
+            f"WHERE NodeAddress={_sql_quote(node)} AND ControlId={_sql_quote(property_id)} AND {comparison} {epoch} "
+            f"ORDER BY EventTime {direction} LIMIT 1)"
+            for node in nodes
+            for property_id in property_ids
+        ]
     return " UNION ALL ".join(selects) + ";"
+
+
+# Sole `properties` value meaning "every control this device logged activity
+# under in the window, not just one resolved property" -- see
+# get_device_history. Needed because DEVLOG.DB logs a command (e.g. an
+# Insteon "Fast On") under ITS OWN ControlLabel, not the status property it
+# goes on to change -- resolve_property_id only ever resolves the status
+# property namespace (see its own docstring), so a query scoped to one
+# resolved property can never see the corroborating command row; see
+# design/history_impl_isy.md's ControlLabel resolution section.
+PROPERTIES_WILDCARD = "*"
 
 
 # ------------------------------------------------------------------
@@ -262,6 +286,7 @@ _SQL_FORBIDDEN_KEYWORD_RE = re.compile(
     r"DELETE|REPLACE|TRIGGER|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b",
     re.IGNORECASE,
 )
+_ORDER_BY_RE = re.compile(r"\bORDER\s+BY\b", re.IGNORECASE)
 # Blanks out '...'-quoted literal contents (doubled '' handled) before the
 # semicolon/keyword scans below, so e.g. WHERE Action='DROP' or a value
 # containing ';' can't produce a false positive/negative against the scan.
@@ -304,6 +329,16 @@ def _validate_readonly_select_sql(sql: str) -> tuple[str | None, str | None]:
     return cleaned, None
 
 
+def _sql_has_order_by(sql: str) -> bool:
+    """Whether *sql* (already validated/cleaned) contains an ORDER BY
+    anywhere -- top-level or in a subquery/CTE alike; this is a signal for
+    the caller, not a rewrite, so a conservative "did they write one
+    anywhere" check is enough. Blanks '...'-quoted literals first (reusing
+    _SQL_STRING_LITERAL_RE) so a value like Action='order by hand' can't
+    produce a false positive."""
+    return bool(_ORDER_BY_RE.search(_SQL_STRING_LITERAL_RE.sub("''", sql)))
+
+
 async def _run_devlog_raw_sql(sql: str, limit: int | None, tzinfo: datetime.tzinfo) -> dict[str, Any]:
     """Validate, cap, and run a caller-supplied SELECT against DEVLOG.DB.
     Wraps the (validated) statement in an outer `SELECT * FROM (...) LIMIT
@@ -326,7 +361,7 @@ async def _run_devlog_raw_sql(sql: str, limit: int | None, tzinfo: datetime.tzin
     truncated = len(rows) > capped_limit
     if truncated:
         rows = rows[:capped_limit]
-    return {"successful": True, "data": rows, "truncated": truncated}
+    return {"successful": True, "data": rows, "truncated": truncated, "unordered": not _sql_has_order_by(cleaned)}
 
 
 class IoXWrapper(NuCoreInterface):
@@ -2050,18 +2085,27 @@ class IoXWrapper(NuCoreInterface):
         # union each name's resolved id across every requested device, so
         # a name valid on any one of them is accepted; a name matching none
         # of them is the same "unknown property" error get_property gives.
-        property_ids: list[str] = []
-        for name in properties:
-            resolved = {self.resolve_property_id(device_id, name) for device_id in device_ids}
-            resolved.discard(None)
-            if not resolved:
-                return {
-                    "successful": False,
-                    "data": f"'{name}' is not a known property on any of the given devices; please clarify",
-                }
-            for property_id in resolved:
-                if property_id not in property_ids:
-                    property_ids.append(property_id)
+        # PROPERTIES_WILDCARD ("*") skips resolution entirely: property_ids
+        # stays None, and the ControlId filter below is dropped, so every
+        # control the device logged activity under in the window comes back
+        # (grouped by whatever ControlId actually appears -- see the
+        # groups_by_key loop below), not just the one resolved property.
+        property_ids: list[str] | None
+        if properties == [PROPERTIES_WILDCARD]:
+            property_ids = None
+        else:
+            property_ids = []
+            for name in properties:
+                resolved = {self.resolve_property_id(device_id, name) for device_id in device_ids}
+                resolved.discard(None)
+                if not resolved:
+                    return {
+                        "successful": False,
+                        "data": f"'{name}' is not a known property on any of the given devices; please clarify",
+                    }
+                for property_id in resolved:
+                    if property_id not in property_ids:
+                        property_ids.append(property_id)
 
         try:
             start_epoch = _iso_to_epoch(start) if start else None
@@ -2070,8 +2114,10 @@ class IoXWrapper(NuCoreInterface):
             return {"successful": False, "data": f"invalid start/end timestamp: {exc}"}
 
         node_list_sql = ",".join(_sql_quote(n) for n in nodes)
-        prop_list_sql = ",".join(_sql_quote(p) for p in property_ids)
-        where = [f"NodeAddress IN ({node_list_sql})", f"ControlId IN ({prop_list_sql})"]
+        where = [f"NodeAddress IN ({node_list_sql})"]
+        if property_ids is not None:
+            prop_list_sql = ",".join(_sql_quote(p) for p in property_ids)
+            where.append(f"ControlId IN ({prop_list_sql})")
         if start_epoch is not None:
             where.append(f"EventTime >= {start_epoch}")
         if end_epoch is not None:

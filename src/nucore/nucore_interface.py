@@ -755,7 +755,14 @@ class NuCoreInterface(ABC):
         :param properties: Property display names, as used by get_property
             -- resolved per-device; a name matching none of the given
             devices' properties is an error, same shape as get_property's.
-            Required unless ``sql`` is given.
+            The single-item wildcard ``["*"]`` skips resolution entirely and
+            returns every control the device logged activity under in the
+            window (one group per control actually found), not just one
+            resolved property -- needed because a command is typically
+            logged under its own control, not the status property it goes
+            on to change, so a query scoped to one resolved property can
+            never see the corroborating command row. Required unless
+            ``sql`` is given.
         :param start: ISO-8601 timestamp with offset -- lower time bound,
             or unbounded if omitted. Structured mode only.
         :param end: ISO-8601 timestamp with offset -- upper time bound, or

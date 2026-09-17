@@ -38,7 +38,11 @@ async def get_device_history(nucore_interface: NuCoreInterface, args: dict[str, 
             return {"error": f"failed to query device history: {exc}"}
         if not isinstance(result, dict) or not result.get("successful"):
             return {"error": _op_error(result)}
-        return {"rows": result.get("data"), "truncated": bool(result.get("truncated"))}
+        return {
+            "rows": result.get("data"),
+            "truncated": bool(result.get("truncated")),
+            "unordered": bool(result.get("unordered")),
+        }
 
     if not isinstance(device_ids, list) or not device_ids:
         return {"error": "device_ids is required and must be a non-empty list (or pass sql instead)"}

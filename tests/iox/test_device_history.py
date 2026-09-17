@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import iox.iox_wrapper as iox_wrapper_module
-from iox.iox_wrapper import IoXWrapper, _sql_quote, _iso_to_epoch, _validate_readonly_select_sql
+from iox.iox_wrapper import IoXWrapper, _sql_quote, _iso_to_epoch, _validate_readonly_select_sql, _sql_has_order_by
 from nucore.cmd import Command
 from nucore.node import Node
 from nucore.nodedef import NodeCommands, NodeDef, NodeProperty
@@ -84,6 +84,45 @@ def devlog_db(tmp_path, monkeypatch):
     return db_path
 
 
+@pytest.fixture()
+def devlog_db_multi_control(tmp_path, monkeypatch):
+    """A DEVLOG.DB where node A logged activity under TWO different
+    controls -- ST ("Status", the system echo) and DON ("On", the Web-issued
+    command that caused it) -- the exact shape that makes a
+    properties=["Status"]-scoped structured query blind to the corroborating
+    command row (see PROPERTIES_WILDCARD's docstring and
+    design/history_impl_isy.md's ControlLabel resolution section)."""
+    db_path = tmp_path / "DEVLOG.DB"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE DevLogEvents (
+           Id           INTEGER PRIMARY KEY AUTOINCREMENT,
+           EventTime    INTEGER NOT NULL,
+           NodeAddress  TEXT,  NodeName TEXT,
+           ControlId    TEXT NOT NULL, ControlLabel TEXT,
+           Action       TEXT,
+           Actor        TEXT NOT NULL,
+           EventType    INTEGER NOT NULL,
+           IsCommand    INTEGER NOT NULL
+        )
+        """
+    )
+    rows = [
+        (1000, "A", "Backyard Steps", "DON", "On", "0", "Web", 1, 1),
+        (1001, "A", "Backyard Steps", "ST", "Status", "On", "System", 1, 0),
+    ]
+    conn.executemany(
+        "INSERT INTO DevLogEvents (EventTime, NodeAddress, NodeName, ControlId, ControlLabel, Action, Actor, EventType, IsCommand) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(iox_wrapper_module, "_DEVLOG_DB_PATH", str(db_path))
+    return db_path
+
+
 # ------------------------------------------------------------------
 # Small helpers
 # ------------------------------------------------------------------
@@ -134,9 +173,49 @@ async def test_get_history_property_valid_on_only_one_of_several_devices_still_r
     assert result["successful"] is True
 
 
+@pytest.mark.asyncio
+async def test_get_history_wildcard_properties_skips_resolution_entirely():
+    # ["*"] must not go through resolve_property_id -- a device with no
+    # matching properties at all would otherwise hit the "not a known
+    # property" error path.
+    wrapper = _bare_wrapper({"A": _build_node("A", properties=[])})
+    result = await wrapper.get_device_history(["A"], ["*"], start="2026-01-01T00:00:00+00:00")
+    assert result["successful"] is True
+
+
 # ------------------------------------------------------------------
 # Real sqlite3-CLI-backed queries
 # ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_history_wildcard_returns_every_control_not_just_one_property(devlog_db_multi_control):
+    # The bug this generalizes: a Web-issued "On" command is logged under
+    # ControlId=DON, not ST -- properties=["Status"] alone would never see
+    # it (see the next test). Wildcard must return both.
+    wrapper = _bare_wrapper({"A": _build_node("A", properties=["ST", "DON"])})
+    result = await wrapper.get_device_history(["A"], ["*"])
+    assert result["successful"] is True
+    groups = result["data"]
+    controls = {g["property"] for g in groups}
+    assert controls == {"ST", "DON"}
+    don_group = next(g for g in groups if g["property"] == "DON")
+    assert don_group["history"][0]["actor"] == "Web"
+    assert don_group["history"][0]["is_command"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_history_specific_property_misses_the_other_control(devlog_db_multi_control):
+    # Confirms the bug this wildcard fixes: scoping to just "Status" (ST)
+    # never surfaces the corroborating Web-issued DON row, even though it's
+    # in the same window for the same device.
+    wrapper = _bare_wrapper({"A": _build_node("A", properties=["ST", "DON"])})
+    result = await wrapper.get_device_history(["A"], ["ST"])
+    assert result["successful"] is True
+    groups = result["data"]
+    assert len(groups) == 1
+    assert groups[0]["property"] == "ST"
+    assert all(e["actor"] == "System" for e in groups[0]["history"])
 
 
 @pytest.mark.asyncio
@@ -292,6 +371,33 @@ def test_validate_readonly_select_sql_rejects_empty_and_oversized_input():
 
 
 # ------------------------------------------------------------------
+# _sql_has_order_by -- pure function, no DB needed.
+# ------------------------------------------------------------------
+
+
+def test_sql_has_order_by_detects_top_level_order_by():
+    assert _sql_has_order_by("SELECT * FROM DevLogEvents ORDER BY EventTime") is True
+
+
+def test_sql_has_order_by_false_when_absent():
+    assert _sql_has_order_by("SELECT * FROM DevLogEvents WHERE NodeAddress='A'") is False
+
+
+def test_sql_has_order_by_detects_one_inside_a_subquery():
+    assert _sql_has_order_by(
+        "SELECT * FROM (SELECT * FROM DevLogEvents ORDER BY EventTime LIMIT 10)"
+    ) is True
+
+
+def test_sql_has_order_by_is_case_insensitive_and_tolerates_extra_whitespace():
+    assert _sql_has_order_by("select * from DevLogEvents order   by EventTime") is True
+
+
+def test_sql_has_order_by_ignores_order_by_inside_string_literal():
+    assert _sql_has_order_by("SELECT * FROM DevLogEvents WHERE Action = 'order by hand'") is False
+
+
+# ------------------------------------------------------------------
 # Raw-SQL mode via the wrapper (real sqlite3 CLI, real temp DB).
 # ------------------------------------------------------------------
 
@@ -304,6 +410,7 @@ async def test_get_history_sql_mode_returns_rows(devlog_db):
     )
     assert result["successful"] is True
     assert result["truncated"] is False
+    assert result["unordered"] is False
     assert [r["Action"] for r in result["data"]] == ["Off", "On", "On", "Off", "Off"]
 
 
@@ -314,6 +421,7 @@ async def test_get_history_sql_mode_supports_aggregation(devlog_db):
         sql="SELECT Actor, count(*) AS n FROM DevLogEvents WHERE NodeAddress='A' GROUP BY Actor ORDER BY Actor"
     )
     assert result["successful"] is True
+    assert result["unordered"] is False
     counts = {r["Actor"]: r["n"] for r in result["data"]}
     assert counts == {"Routine": 1, "System": 3, "Web": 1}
 
@@ -327,6 +435,15 @@ async def test_get_history_sql_mode_truncates_and_flags(devlog_db):
     assert result["successful"] is True
     assert len(result["data"]) == 2
     assert result["truncated"] is True
+    assert result["unordered"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_history_sql_mode_flags_unordered_when_no_order_by(devlog_db):
+    wrapper = _bare_wrapper({})
+    result = await wrapper.get_device_history(sql="SELECT * FROM DevLogEvents WHERE NodeAddress='A'")
+    assert result["successful"] is True
+    assert result["unordered"] is True
 
 
 @pytest.mark.asyncio

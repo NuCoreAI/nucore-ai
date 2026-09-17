@@ -220,14 +220,36 @@ async def test_get_history_unrecognized_shape_is_a_clear_error_not_a_crash():
 @pytest.mark.asyncio
 async def test_get_history_sql_mode_passes_through_rows_and_truncated_flag():
     backend = FakeBackend()
-    backend.history_result = {"successful": True, "data": [{"NodeAddress": "A"}], "truncated": True}
+    backend.history_result = {
+        "successful": True,
+        "data": [{"NodeAddress": "A"}],
+        "truncated": True,
+        "unordered": False,
+    }
 
     result = await execute_tool(
         "get_device_history", {"sql": "SELECT * FROM DevLogEvents"}, nucore_interface=backend
     )
 
-    assert result == {"rows": [{"NodeAddress": "A"}], "truncated": True}
+    assert result == {"rows": [{"NodeAddress": "A"}], "truncated": True, "unordered": False}
     assert backend.last_call["sql"] == "SELECT * FROM DevLogEvents"
+
+
+@pytest.mark.asyncio
+async def test_get_history_sql_mode_passes_through_unordered_flag():
+    backend = FakeBackend()
+    backend.history_result = {
+        "successful": True,
+        "data": [{"NodeAddress": "A"}],
+        "truncated": False,
+        "unordered": True,
+    }
+
+    result = await execute_tool(
+        "get_device_history", {"sql": "SELECT * FROM DevLogEvents WHERE NodeAddress='A'"}, nucore_interface=backend
+    )
+
+    assert result["unordered"] is True
 
 
 @pytest.mark.asyncio
