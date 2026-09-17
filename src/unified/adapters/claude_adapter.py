@@ -71,6 +71,11 @@ class ClaudeAdapter(LLMAdapter):
               (already present in ``raw["usage"]``, surfaced at the top
               level so callers -- e.g. AgenticLoop's prompt-log write --
               don't need to know Claude's response shape)
+            - ``stop_reason``: why the model stopped (``end_turn``,
+              ``tool_use``, ``max_tokens``, ``refusal``, ...) -- an empty
+              ``tool_calls`` list alone can't tell a caller "no tool was
+              needed" apart from "truncated before finishing one" or
+              "declined for safety"
             - ``raw``: original SDK response as a dict
         """
         cfg = dict(config or {})
@@ -121,6 +126,13 @@ class ClaudeAdapter(LLMAdapter):
             kwargs["system"] = blocks
         if tools:
             kwargs["tools"] = self._with_tools_ttl(tools, ttl)
+        if cfg.get("tool_choice"):
+            # Forwarded as-is, e.g. {"type": "any"} to force a call on a
+            # turn the caller already knows needs one (see AgenticLoop's
+            # fabrication-guard retry), or {"type": "tool", "name": ...} for
+            # a single named tool. Requires `tools` to be present -- sending
+            # this without any tools is a caller error, not guarded here.
+            kwargs["tool_choice"] = cfg["tool_choice"]
         if cfg.get("temperature") is not None and model not in self._no_temperature_models:
             # runtime_config.py's resolve_profile always inserts a
             # "temperature" key (None when unconfigured) -- checking mere
@@ -167,6 +179,7 @@ class ClaudeAdapter(LLMAdapter):
             "text": "\n".join(text_parts),
             "tool_calls": tool_calls,
             "usage": final_message_dict.get("usage") or {},
+            "stop_reason": final_message_dict.get("stop_reason"),
             "raw": final_message_dict,
         }
 

@@ -47,11 +47,13 @@ def test_export_tools_handles_empty_spec_list():
     assert _adapter().export_tools([]) == []
 
 
-def _fake_final_message(text: str = "hi", usage: dict | None = None):
+def _fake_final_message(text: str = "hi", usage: dict | None = None, stop_reason: str | None = None):
     block = SimpleNamespace(type="text", text=text, model_dump=lambda: {"type": "text", "text": text})
     dump = {"content": [{"type": "text", "text": text}]}
     if usage is not None:
         dump["usage"] = usage
+    if stop_reason is not None:
+        dump["stop_reason"] = stop_reason
     return SimpleNamespace(content=[block], model_dump=lambda: dump)
 
 
@@ -306,3 +308,59 @@ async def test_generate_usage_defaults_to_empty_dict_when_absent():
     result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
     assert result["usage"] == {}
+
+
+@pytest.mark.asyncio
+async def test_generate_surfaces_stop_reason():
+    # A caller (AgenticLoop) needs to tell "no tool was needed" apart from
+    # "truncated" or "declined" -- an empty tool_calls list alone can't.
+    adapter = _adapter()
+
+    def fake_stream(**kwargs):
+        return _FakeStream(_fake_final_message("ok", stop_reason="max_tokens"))
+
+    adapter._client.messages.stream = fake_stream
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["stop_reason"] == "max_tokens"
+    assert result["raw"]["stop_reason"] == "max_tokens"
+
+
+@pytest.mark.asyncio
+async def test_generate_stop_reason_defaults_to_none_when_absent():
+    adapter = _adapter()
+
+    def fake_stream(**kwargs):
+        return _FakeStream(_fake_final_message("ok"))  # no stop_reason= passed
+
+    adapter._client.messages.stream = fake_stream
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["stop_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_tool_choice_when_configured():
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+
+    await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"tool_choice": {"type": "any"}},
+    )
+
+    assert calls[0]["tool_choice"] == {"type": "any"}
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_forward_tool_choice_when_absent():
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert "tool_choice" not in calls[0]

@@ -635,8 +635,10 @@ class NuCoreInterface(ABC):
         happens when they try" complaint (the NuCore -> device direction).
         :param protocol: The device's protocol family (insteon/zwave/zigbee/
             matter -- see get_device_family), never guessed from its name.
-        :param device_id: The customer-named device, or one representative
-            device if the complaint is general.
+        :param device_id: The customer-named device, if they named one --
+            optional even once system-level checks pass; implementations
+            may sample representative devices themselves when omitted,
+            rather than requiring the caller to pick one.
         :return: A dict with at least ``diagnosis``, plus whatever
             ``recommended_fix``/``clarifying_question``/``error`` fields
             apply -- see the implementation for the exact shape.
@@ -649,12 +651,13 @@ class NuCoreInterface(ABC):
         NuCore didn't show the new status" complaint (the device -> NuCore
         direction).
         :param protocol: The device's protocol family, never guessed.
-        :param device_id: Optional -- omit for a system-wide check only, or
-            supply a representative device to also check its own link.
+        :param device_id: The customer-named device, if they named one --
+            optional even once system-level checks pass; implementations
+            may sample representative devices themselves when omitted,
+            rather than requiring the caller to pick one.
         :return: A dict with at least ``diagnosis``, plus whatever
-            ``recommended_fix``/``clarifying_question``/``needs_device_id``/
-            ``error`` fields apply -- see the implementation for the exact
-            shape.
+            ``recommended_fix``/``clarifying_question``/``error`` fields
+            apply -- see the implementation for the exact shape.
         """
         raise NotImplementedError("Subclasses must implement the diagnose_no_status_feedback method.")
 

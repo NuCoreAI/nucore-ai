@@ -91,6 +91,18 @@ live production logs showed the verbose version wasn't measurably reducing fabri
 anyway -- the code-level guard above is the actual backstop either way, which is what made
 cutting the prompt-side prose low-risk.
 
+On a `"block"`-mode retry, `AgenticLoop.run` also forces `tool_choice: {"type": "any"}` for that
+one retry round, but **only when the active provider is Claude** (resolved via
+`_effective_provider`, which goes through `ProviderDispatchLLMAdapter.get_adapter_for_provider`
+when the loop is wired to the dispatcher, since production doesn't wire it directly to
+`ClaudeAdapter`). This sidesteps forcing a tool call before knowing whether the customer's query
+even needs one: the guard only escalates *after* a round has already fabricated with zero tool
+calls, so by the retry the need for a tool call is no longer a guess. `ClaudeAdapter.generate`
+forwards `tool_choice` from the round's `llm_config` when present and always returns the response's
+`stop_reason`, which `AgenticLoop.run` logs each round (`unified: round %d stop_reason=%s`) as a
+diagnostic signal independent of the fabrication-claim regex. Other providers' adapters are
+untouched -- `force_tool_choice` is computed but never set to `True` off a non-Claude retry.
+
 ## Session history across connections
 
 `run_unified_runtime.py`'s `--websocket-port`/`--websocket-host` server mode shares one

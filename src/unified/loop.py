@@ -69,6 +69,23 @@ class AgenticLoop:
             for tc in canonical
         ]
 
+    def _effective_provider(self, llm_config: dict[str, Any] | None) -> str:
+        """Resolve the ``provider_name`` of the adapter a given ``llm_config``
+        actually routes to.
+
+        ``self.llm_client`` is normally a ``ProviderDispatchLLMAdapter`` in
+        production (see run_unified_runtime.py's build_default_dispatch_adapter),
+        whose own ``provider_name`` is the constant ``"dispatch"`` regardless
+        of which concrete per-provider client a given call's config resolves
+        to -- so a plain ``self.llm_client.provider_name`` check would never
+        match ``"claude"`` even when the configured provider is Claude.
+        """
+        resolve = getattr(self.llm_client, "get_adapter_for_provider", None)
+        if callable(resolve):
+            client, _ = resolve(llm_config)
+            return getattr(client, "provider_name", "")
+        return getattr(self.llm_client, "provider_name", "")
+
     async def run(
         self,
         *,
@@ -109,18 +126,32 @@ class AgenticLoop:
         # not "no *matching* tool call", is what keeps this tool-agnostic).
         any_tool_dispatched = False
         fabrication_retries = 0
+        # Only Claude's adapter understands this config key (see
+        # claude_adapter.generate's tool_choice forwarding) and its
+        # {"type": "any"} shape is Anthropic-specific -- other providers'
+        # tool_choice formats differ, so this is resolved once per turn and
+        # gates every place below that would otherwise force a call.
+        is_claude = self._effective_provider(llm_config) == "claude"
+        force_tool_choice = False
 
         for iteration in range(self.max_iterations):
             intent_name = f"unified (round {iteration + 1})"
             await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
+            round_config = dict(llm_config or {})
+            if force_tool_choice:
+                round_config["tool_choice"] = {"type": "any"}
+            force_tool_choice = False
             raw_response = await self.llm_client.generate(
                 messages=messages,
-                config=llm_config,
+                config=round_config,
                 tools=self._exported_tools,
             )
             usage = raw_response.get("usage") or {}
             if usage:
                 await get_prompt_log_manager().write_usage(intent_name, usage)
+            stop_reason = raw_response.get("stop_reason")
+            if stop_reason:
+                logger.info("unified: round %d stop_reason=%s", iteration + 1, stop_reason)
             canonical_calls = raw_response.get("tool_calls") or []
             if not canonical_calls:
                 text = raw_response.get("text") or raw_response.get("content") or ""
@@ -152,6 +183,12 @@ class AgenticLoop:
                             }
                             messages.append(nudge)
                             new_messages.append(nudge)
+                            # `auto` tool_choice already let the model skip
+                            # the tool call once this turn -- on Claude,
+                            # force the retry instead of asking `auto` to
+                            # reconsider the exact same way it just failed.
+                            if is_claude:
+                                force_tool_choice = True
                             continue
                         if self.fabrication_guard_mode == "block":
                             # Retries exhausted -- don't hand back the

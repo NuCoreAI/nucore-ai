@@ -1,4 +1,4 @@
-"""IoXDiagnostics._begin_plm_op/_end_plm_op -- atomic mutual exclusion
+"""INSTEONDiagnostics._begin_plm_op/_end_plm_op -- atomic mutual exclusion
 around exactly the 4 standalone tools that drive the shared PLM serial
 connection (get_dev_links_table, compare_device_links, get_all_plm_links,
 quick_plm_sanity_check). A second call to any of the four while one is
@@ -9,51 +9,51 @@ immediately -- no locking/waiting, no queueing.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
-from iox.diagnostics.iox_diagnostics import IoXDiagnostics
+from iox.diagnostics.insteon_diag import INSTEONDiagnostics
 
 
-class _FakeInsteonDiag:
-    """Stands in for INSTEONDiagnostics -- each method sleeps briefly so
-    asyncio.gather's scheduling (the first coroutine runs to its first await,
-    yielding control, before the second starts) can prove the second caller
-    is refused immediately rather than queued behind the first."""
+def _bare_diagnostics_for_plm_lock() -> INSTEONDiagnostics:
+    """Each faked primitive sleeps briefly so asyncio.gather's scheduling
+    (the first coroutine runs to its first await, yielding control, before
+    the second starts) can prove the second caller is refused immediately
+    rather than queued behind the first."""
+    diag = object.__new__(INSTEONDiagnostics)
+    diag._plm_op_state = None
+    diag.calls: list[str] = []
 
-    def __init__(self):
-        self.calls: list[str] = []
-
-    async def _get_dev_links_table(self, device_id=None, **kwargs):
-        self.calls.append("get_dev_links_table")
+    async def _get_dev_links_table(device_id=None, **kwargs):
+        diag.calls.append("get_dev_links_table")
         await asyncio.sleep(0.05)
         return "dev links"
 
-    async def _get_iox_links_table(self, device_id=None, **kwargs):
-        self.calls.append("get_iox_links_table")
+    async def _get_iox_links_table(device_id=None, **kwargs):
+        diag.calls.append("get_iox_links_table")
         return "iox links"
 
-    async def _compare_device_links(self, device_id=None, **kwargs):
-        self.calls.append("compare_device_links")
+    async def _compare_device_links(device_id=None, **kwargs):
+        diag.calls.append("compare_device_links")
         await asyncio.sleep(0.05)
         return "compare result"
 
-    async def _get_all_plm_links(self, **kwargs):
-        self.calls.append("get_all_plm_links")
+    async def _get_all_plm_links(**kwargs):
+        diag.calls.append("get_all_plm_links")
         await asyncio.sleep(0.05)
         return "all plm links"
 
-    async def _quick_plm_sanity_check(self, **kwargs):
-        self.calls.append("quick_plm_sanity_check")
+    async def _quick_plm_sanity_check(**kwargs):
+        diag.calls.append("quick_plm_sanity_check")
         await asyncio.sleep(0.05)
         return {"passed": True, "plm_connected": True, "report": "sanity ok"}
 
-
-def _bare_diagnostics_for_plm_lock() -> IoXDiagnostics:
-    diag = object.__new__(IoXDiagnostics)
-    diag._plm_op_state = None
-    diag._insteon_diag = _FakeInsteonDiag()
-    diag._init_insteon_diag = lambda device_id=None, **kwargs: True
+    diag._get_dev_links_table = _get_dev_links_table
+    diag._get_iox_links_table = _get_iox_links_table
+    diag._compare_device_links = _compare_device_links
+    diag._get_all_plm_links = _get_all_plm_links
+    diag._quick_plm_sanity_check = _quick_plm_sanity_check
     return diag
 
 
@@ -80,14 +80,16 @@ async def test_a_plm_tool_refuses_any_concurrent_call_to_any_of_the_four(first_n
     # call to itself -- enforced as "any of the 4, period," while one of the
     # 4 is already in flight.
     diag = _bare_diagnostics_for_plm_lock()
-    diag._get_system_options = _fake_get_system_options
-    diag.get_core_services_status = _fake_get_core_services_status
+    diag._iox_diagnostics = SimpleNamespace(
+        _get_system_options=_fake_get_system_options,
+        get_core_services_status=_fake_get_core_services_status,
+    )
 
     first_result, second_result = await asyncio.gather(_PLM_METHODS[first_name](diag), _PLM_METHODS[second_name](diag))
 
     # Only the winner actually reached the hardware call -- the loser was
-    # refused before ever touching _insteon_diag.
-    assert diag._insteon_diag.calls == [first_name]
+    # refused before ever touching the underlying primitive.
+    assert diag.calls == [first_name]
     assert isinstance(second_result, dict) and "error" in second_result
     assert "already in progress" in second_result["error"]
     assert first_name in second_result["error"]
@@ -113,7 +115,7 @@ async def test_plm_lock_clears_even_when_the_underlying_call_raises():
     async def failing(**kwargs):
         raise RuntimeError("hub unreachable")
 
-    diag._insteon_diag._get_all_plm_links = failing
+    diag._get_all_plm_links = failing
 
     with pytest.raises(RuntimeError, match="hub unreachable"):
         await diag.get_all_plm_links()

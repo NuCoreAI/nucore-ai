@@ -1,4 +1,4 @@
-"""IoXDiagnostics' structured-return wrappers (quick_plm_sanity_check/
+"""INSTEONDiagnostics' structured-return wrappers (quick_plm_sanity_check/
 get_dev_links_table/get_device_to_plm_link_status) and IoXWrapper's thin
 delegation to IoXDiagnostics for the diagnostics surface (the two
 complaint-shaped diagnose_* methods, restart_core_service, and the standing
@@ -10,31 +10,33 @@ decision-tree coverage of diagnose_not_responding/diagnose_no_status_feedback.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from iox.diagnostics.insteon_diag import INSTEONDiagnostics
 from iox.diagnostics.iox_diagnostics import IoXDiagnostics
 from iox.iox_wrapper import IoXWrapper
 
 
-def _bare_diagnostics() -> IoXDiagnostics:
-    diag = object.__new__(IoXDiagnostics)
+def _bare_insteon_diagnostics(*, sanity_result=None, dev_links_table=None) -> INSTEONDiagnostics:
+    diag = object.__new__(INSTEONDiagnostics)
     diag._plm_op_state = None
+    result = sanity_result or {"passed": True, "plm_connected": True, "report": "sane"}
+
+    async def _quick_plm_sanity_check(**kwargs):
+        return result
+
+    async def _get_dev_links_table(device_id=None, **kwargs):
+        return dev_links_table
+
+    diag._quick_plm_sanity_check = _quick_plm_sanity_check
+    diag._get_dev_links_table = _get_dev_links_table
     return diag
 
 
-class _FakeInsteonDiag:
-    def __init__(self, *, plm_connected=True, sanity_result=None, dev_links_table=None):
-        self._plm_connected = plm_connected
-        self._sanity_result = sanity_result or {
-            "passed": True, "plm_connected": plm_connected, "report": "sane"
-        }
-        self._dev_links_table = dev_links_table
-
-    async def _quick_plm_sanity_check(self, **kwargs):
-        return self._sanity_result
-
-    async def _get_dev_links_table(self, device_id=None, **kwargs):
-        return self._dev_links_table
+async def _resolved(value):
+    return value
 
 
 # ----------------------------------------------------------------------
@@ -44,12 +46,10 @@ class _FakeInsteonDiag:
 
 @pytest.mark.asyncio
 async def test_quick_plm_sanity_check_returns_structured_result_when_insteon_enabled():
-    diag = _bare_diagnostics()
-    diag._get_system_options = lambda: _resolved({"insteonSupport": True})
-    diag.get_core_services_status = lambda: _resolved({"isy": "running"})
-    diag._init_insteon_diag = lambda device_id=None, **kw: True
-    diag._insteon_diag = _FakeInsteonDiag(
-        sanity_result={"passed": True, "plm_connected": True, "report": "SANE"}
+    diag = _bare_insteon_diagnostics(sanity_result={"passed": True, "plm_connected": True, "report": "SANE"})
+    diag._iox_diagnostics = SimpleNamespace(
+        _get_system_options=lambda: _resolved({"insteonSupport": True}),
+        get_core_services_status=lambda: _resolved({"isy": "running"}),
     )
 
     result = await diag.quick_plm_sanity_check()
@@ -62,17 +62,17 @@ async def test_quick_plm_sanity_check_returns_structured_result_when_insteon_ena
 
 @pytest.mark.asyncio
 async def test_quick_plm_sanity_check_short_circuits_when_insteon_disabled():
-    diag = _bare_diagnostics()
-    diag._get_system_options = lambda: _resolved({"insteonSupport": False})
-    diag.get_core_services_status = lambda: _resolved({"isy": "running"})
-    diag._init_insteon_diag = lambda device_id=None, **kw: True
+    diag = _bare_insteon_diagnostics()
+    diag._iox_diagnostics = SimpleNamespace(
+        _get_system_options=lambda: _resolved({"insteonSupport": False}),
+        get_core_services_status=lambda: _resolved({"isy": "running"}),
+    )
     called = {"insteon": False}
 
     async def fail_if_called(**kwargs):
         called["insteon"] = True
 
-    diag._insteon_diag = _FakeInsteonDiag()
-    diag._insteon_diag._quick_plm_sanity_check = fail_if_called
+    diag._quick_plm_sanity_check = fail_if_called
 
     result = await diag.quick_plm_sanity_check()
 
@@ -85,12 +85,10 @@ async def test_quick_plm_sanity_check_short_circuits_when_insteon_disabled():
 
 @pytest.mark.asyncio
 async def test_quick_plm_sanity_check_reports_not_within_tolerance():
-    diag = _bare_diagnostics()
-    diag._get_system_options = lambda: _resolved({"insteonSupport": True})
-    diag.get_core_services_status = lambda: _resolved({"isy": "running"})
-    diag._init_insteon_diag = lambda device_id=None, **kw: True
-    diag._insteon_diag = _FakeInsteonDiag(
-        sanity_result={"passed": False, "plm_connected": True, "report": "PROBLEM"}
+    diag = _bare_insteon_diagnostics(sanity_result={"passed": False, "plm_connected": True, "report": "PROBLEM"})
+    diag._iox_diagnostics = SimpleNamespace(
+        _get_system_options=lambda: _resolved({"insteonSupport": True}),
+        get_core_services_status=lambda: _resolved({"isy": "running"}),
     )
 
     result = await diag.quick_plm_sanity_check()
@@ -106,9 +104,7 @@ async def test_quick_plm_sanity_check_reports_not_within_tolerance():
 
 @pytest.mark.asyncio
 async def test_get_device_to_plm_link_status_true_when_controller_row_present():
-    diag = _bare_diagnostics()
-    diag._init_insteon_diag = lambda device_id=None, **kw: True
-    diag._insteon_diag = _FakeInsteonDiag(
+    diag = _bare_insteon_diagnostics(
         dev_links_table="Device Links Table\n```csv\nidx,role,group,device,data\n1,controller,1,PLM,000000\n```\n"
     )
 
@@ -119,9 +115,7 @@ async def test_get_device_to_plm_link_status_true_when_controller_row_present():
 
 @pytest.mark.asyncio
 async def test_get_device_to_plm_link_status_false_when_no_controller_row():
-    diag = _bare_diagnostics()
-    diag._init_insteon_diag = lambda device_id=None, **kw: True
-    diag._insteon_diag = _FakeInsteonDiag(
+    diag = _bare_insteon_diagnostics(
         dev_links_table="Device Links Table\n```csv\nidx,role,group,device,data\n1,responder,1,PLM,000000\n```\n"
     )
 
@@ -132,17 +126,11 @@ async def test_get_device_to_plm_link_status_false_when_no_controller_row():
 
 @pytest.mark.asyncio
 async def test_get_device_to_plm_link_status_none_when_table_unavailable():
-    diag = _bare_diagnostics()
-    diag._init_insteon_diag = lambda device_id=None, **kw: True
-    diag._insteon_diag = _FakeInsteonDiag(dev_links_table="PLM not connected. Cannot retrieve device links table.")
+    diag = _bare_insteon_diagnostics(dev_links_table="PLM not connected. Cannot retrieve device links table.")
 
     result = await diag.get_device_to_plm_link_status("n001")
 
     assert result["has_device_to_plm_link"] is None
-
-
-async def _resolved(value):
-    return value
 
 
 # ----------------------------------------------------------------------
@@ -153,7 +141,7 @@ async def _resolved(value):
 
 def _bare_wrapper_with_diagnostics() -> IoXWrapper:
     wrapper = object.__new__(IoXWrapper)
-    wrapper.diagnostics = _bare_diagnostics()
+    wrapper.diagnostics = object.__new__(IoXDiagnostics)
     return wrapper
 
 

@@ -1,9 +1,12 @@
-"""Device-specific (e.g. Insteon) SOAP diagnostics operations.
+"""Multi-protocol system/device diagnostics, shared across INSTEON, Z-Wave,
+Zigbee, and Matter.
 
-Kept separate from :class:`~iox.iox_wrapper.IoXWrapper` since these are
-legacy, protocol-specific diagnostic commands built on top of
-``IoXWrapper.soap_post`` -- not part of the core device/routine/variable API
-surface every backend needs.
+INSTEON-specific diagnostic logic lives on
+:class:`~iox.diagnostics.insteon_diag.INSTEONDiagnostics` instead (this
+class composes one lazily, via ``self._insteon_diag``) -- this class only
+keeps what's genuinely protocol-agnostic (system config, core services,
+per-protocol dispatch shells) or shallow enough that no real per-protocol
+implementation exists yet.
 """
 
 
@@ -12,7 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 import xml.etree.ElementTree as ET
 from nucore import DeviceEventListener
-from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name
+from ..iox_definitions import Subsystems, DEVICE_FAMILIES, get_subsystem_name
 from .diag_utils import _element_to_dict_excluding
 
 
@@ -36,13 +39,6 @@ logger = get_logger(__name__)
 # taught to sequence itself. This replaced an earlier design where those
 # steps were reachable individually via a generic dispatcher whose valid step
 # names were parsed out of a prompt file at construction time -- removed.
-#
-# get_dev_links_table/compare_device_links/get_all_plm_links/
-# quick_plm_sanity_check all drive the single PLM serial connection directly
-# and cannot run concurrently with each other or with a second call to
-# themselves -- see _begin_plm_op/_end_plm_op below. get_full_system_config/
-# get_device_family/get_iox_links_table touch no PLM hardware directly and
-# run freely, any time, including while one of the four is in flight.
 
 
 class _SubsystemStatusListener(DeviceEventListener):
@@ -86,21 +82,15 @@ class _SubsystemStatusListener(DeviceEventListener):
 
 class IoXDiagnostics:
     """Wrapper around an :class:`IoXWrapper` instance providing
-    ``DeviceSpecific`` SOAP diagnostic operations, plus the two coarse,
+    protocol-agnostic system/core-service diagnostics, plus the two coarse,
     complaint-shaped diagnostic methods backing ``NuCoreInterface``'s
-    ``diagnose_not_responding``/``diagnose_no_status_feedback``
-    (``IoXWrapper`` just delegates to this class for those).
+    ``diagnose_not_responding``/``diagnose_no_status_feedback`` (``IoXWrapper``
+    just delegates to this class for those; the actual INSTEON logic lives
+    on ``INSTEONDiagnostics``, composed lazily via ``self._insteon_diag``).
     """
 
     def __init__(self, iox_wrapper: IoXWrapper) -> None:
         self._iox_wrapper = iox_wrapper
-        # Tracks whichever of the four PLM-exclusive methods (get_dev_links_table/
-        # compare_device_links/get_all_plm_links/quick_plm_sanity_check) is
-        # currently in flight, if any -- {"step"} or None. This is a
-        # hardware-availability fact (the PLM serial connection can only run
-        # one link/config operation at a time), not something scoped to a
-        # conversation. See _begin_plm_op/_end_plm_op.
-        self._plm_op_state: dict[str, Any] | None = None
         self._subsystem_state: dict[str, Any] | None = {
             Subsystems.INSTEON.value: {
                 "name": "Insteon",
@@ -149,27 +139,6 @@ class IoXDiagnostics:
             return
         self._subsystem_listener = _SubsystemStatusListener(self._iox_wrapper, self)
         self._subsystem_listener.start()
-
-    def _begin_plm_op(self, step: str) -> dict[str, Any] | None:
-        """Call at the top of each of the four PLM-exclusive methods
-        (get_dev_links_table/compare_device_links/get_all_plm_links/
-        quick_plm_sanity_check). Returns an error dict if another one of the
-        four is already in progress; otherwise marks *step* as the current op
-        and returns None. No locking/waiting -- a second caller (including a
-        second call to the same step) is refused immediately, never blocked
-        or queued."""
-        state = self._plm_op_state
-        if state is not None:
-            return {
-                "error": (
-                    f"a PLM operation ('{state['step']}') is already in progress -- try again shortly"
-                )
-            }
-        self._plm_op_state = {"step": step}
-        return None
-
-    def _end_plm_op(self) -> None:
-        self._plm_op_state = None
 
     async def _get_system_options(self) -> dict[str, Any]:
         """Fetch subsystem-enabled flags via the plain JSON ``/api/sys``
@@ -384,19 +353,6 @@ class IoXDiagnostics:
         return family_name
 
 
-    # get nodes config
-    async def _get_nodes_config(self) -> str | None:
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_NODES_CONFIG, None, None, 0x01, None)
-
-    # get isy config
-    async def _get_isy_config(self) -> str | None:
-        return await self._iox_wrapper._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_ISY_CONFIG, None)
-
-    # get startup time
-    async def _get_startup_time(self) -> str | None:
-        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_STARTUP_TIME, None, None, 0x01, None)
-
-
     def _apply_subsystem_status_event(self, node, control, action, eventInfo):
         """Handler behind _SubsystemStatusListener.process() -- runs on that
         listener's own persistent thread, not the asyncio event loop, so
@@ -509,289 +465,61 @@ class IoXDiagnostics:
         if self._insteon_diag is None:
             from .insteon_diag import INSTEONDiagnostics
             self._insteon_diag = INSTEONDiagnostics(self._iox_wrapper)
+            self._insteon_diag._iox_diagnostics = self
 
         return True
-
-    async def get_dev_links_table(self, device_id: str = None, **kwargs) -> Any:
-        """Raw device link table (prose/CSV), unchanged. Only used internally
-        now (by diagnose_no_status_feedback below, via the structured
-        get_device_to_plm_link_status) and by whatever future tool needs the
-        raw table -- no longer reachable from the model directly."""
-        busy = self._begin_plm_op("get_dev_links_table")
-        if busy is not None:
-            return busy
-        try:
-            if self._init_insteon_diag(device_id):
-                return await self._insteon_diag._get_dev_links_table(device_id, **kwargs)
-            return None
-        finally:
-            self._end_plm_op()
-
-    async def get_device_to_plm_link_status(self, device_id: str) -> dict[str, Any]:
-        """Structured counterpart of get_dev_links_table -- whether *device_id*
-        has the device->PLM controller link needed to report unsolicited
-        status changes (see insteon_diag.py's "How INSTEON links work" notes:
-        a "controller" role row in a device's own link table is that
-        device's link to the PLM). Used by diagnose_no_status_feedback to
-        branch deterministically instead of string-parsing prose.
-
-        :return: {"has_device_to_plm_link": bool | None, "report": str} --
-            has_device_to_plm_link is None when the table couldn't be
-            retrieved at all (PLM not connected, device not found, etc.).
-        """
-        from .insteon_diag import LINKS_TABLE_FENCE_OPEN, _ROLES_EXCLUDED_FROM_COMPARISON, _parse_links_csv
-
-        raw = await self.get_dev_links_table(device_id)
-        if not raw or LINKS_TABLE_FENCE_OPEN not in raw:
-            return {"has_device_to_plm_link": None, "report": raw or "Failed to retrieve the device's link table."}
-
-        rows = _parse_links_csv(raw)
-        has_link = any(r["role"] == "controller" for r in rows if r["role"] not in _ROLES_EXCLUDED_FROM_COMPARISON)
-        return {"has_device_to_plm_link": has_link, "report": raw}
-
-    async def get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
-        if self._init_insteon_diag(device_id):
-            return await self._insteon_diag._get_iox_links_table(device_id, **kwargs)
-        return None
-
-    async def get_all_plm_links(self, **kwargs) -> Any:
-        busy = self._begin_plm_op("get_all_plm_links")
-        if busy is not None:
-            return busy
-        try:
-            if self._init_insteon_diag(None):
-                return await self._insteon_diag._get_all_plm_links(**kwargs)
-            return None
-        finally:
-            self._end_plm_op()
-
-    async def compare_device_links(self, device_id: str = None, **kwargs) -> Any:
-        busy = self._begin_plm_op("compare_device_links")
-        if busy is not None:
-            return busy
-        try:
-            if self._init_insteon_diag(device_id):
-                return await self._insteon_diag._compare_device_links(device_id, **kwargs)
-            return None
-        finally:
-            self._end_plm_op()
-
-    async def quick_plm_sanity_check(self, **kwargs) -> Any:
-        """System-level checks (INSTEON enabled, core services) plus
-        INSTEONDiagnostics's own PLM-connected/link-count check, merged into
-        one report -- so callers never need to separately call
-        get_full_system_config/get_core_services_status for this scenario.
-
-        :return: ``{"passed": bool | None, "insteon_enabled": bool,
-            "plm_connected": bool | None, "report": str}`` on success, or
-            the busy-refusal ``{"error": ...}`` from _begin_plm_op.
-        """
-        busy = self._begin_plm_op("quick_plm_sanity_check")
-        if busy is not None:
-            return busy
-        try:
-            if not self._init_insteon_diag(None):
-                return None
-
-            options_config = await self._get_system_options()
-            insteon_enabled = bool(options_config.get("insteonSupport", False))
-
-            try:
-                services_status: Any = await self.get_core_services_status()
-            except NotImplementedError as ex:
-                services_status = f"not available yet ({ex})"
-
-            lines = [
-                f"INSTEON enabled: {insteon_enabled}",
-                f"Core services status: {services_status}",
-            ]
-            if not insteon_enabled:
-                lines.append(
-                    "INSTEON is not enabled in system config -- that alone explains no status "
-                    "feedback from any Insteon device; nothing else to check until it's enabled."
-                )
-                return {
-                    "passed": False,
-                    "insteon_enabled": False,
-                    "plm_connected": None,
-                    "report": "\n".join(lines),
-                }
-
-            insteon_result = await self._insteon_diag._quick_plm_sanity_check(**kwargs)
-            return {
-                "passed": insteon_result["passed"],
-                "insteon_enabled": True,
-                "plm_connected": insteon_result["plm_connected"],
-                "report": "\n".join(lines) + "\n" + insteon_result["report"],
-            }
-        finally:
-            self._end_plm_op()
 
     # ---------------------------------------------------
     # Complaint-shaped diagnostics -- diagnose_not_responding/
     # diagnose_no_status_feedback (see NuCoreInterface for the model-facing
-    # contract; IoXWrapper just delegates to these two).
+    # contract; IoXWrapper just delegates to these two). Only INSTEON has
+    # real logic, on INSTEONDiagnostics -- this class just routes by
+    # protocol and delegates.
     # ---------------------------------------------------
-
-    # Lifted once, as code, from diagnose.md's old "Known fixes, in order of
-    # likelihood" section -- not parsed from a prompt file at runtime.
-    _KNOWN_FIXES = {
-        "insteon_disabled": "Enable INSTEON in system configuration.",
-        "plm_not_connected": (
-            "Confirm the PLM is on a USB serial port and the udx service is running. If udx is "
-            "running and it's still not connected, the PLM hardware has likely failed -- the "
-            "customer needs a new one, and must restore it after."
-        ),
-        "plm_links_missing": (
-            "Ask whether this is a new, never-restored PLM before concluding it 'lost' its links "
-            "-- either way the fix is to restore the PLM, but the framing for the customer differs."
-        ),
-        "query_failed": (
-            "Most likely signal/noise related -- have the customer move the PLM to an outlet not "
-            "shared with other transformers/power supplies before assuming hardware failure; this "
-            "resolves the majority of intermittent cases. Only if that doesn't help, recommend a "
-            "new PLM + restore."
-        ),
-        "missing_device_to_plm_link": (
-            "This device is missing its device->PLM controller link, so it can't report unsolicited "
-            "status changes. Ask whether this is a new PLM (needs a full restore) or an existing one "
-            "(this device may never have been linked with NuCore in the first place)."
-        ),
-    }
 
     async def diagnose_not_responding(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
         """Customer can't control/reach a device, or nothing happens when
-        they try to (the NuCore -> device direction). Only INSTEON has real
-        logic so far -- see NuCoreInterface.diagnose_not_responding.
-
-        :return: {"steps_run": [...], "diagnosis": str, "recommended_fix"?:
-            str, "system_check"?: {...}, "query_check"?: {...}, "error"?: str}
+        they try to (the NuCore -> device direction). See
+        NuCoreInterface.diagnose_not_responding for the model-facing
+        contract. Only INSTEON has real per-device logic so far -- the
+        other protocols get a shallow "is the subsystem enabled" check.
         """
-        if protocol.lower() != "insteon":
-            return {"error": f"automated diagnosis for protocol '{protocol}' isn't implemented yet"}
+        protocol = (protocol or "insteon").lower()
+        if protocol == "insteon":
+            if self._init_insteon_diag(device_id):
+                return await self._insteon_diag.diagnose_not_responding(device_id)
+            return None
+        if protocol in ("matter", "zwave", "zigbee"):
+            return await self._diagnose_protocol_not_responding_stub(protocol, device_id)
+        return {"error": f"automated diagnosis for protocol '{protocol}' isn't implemented yet"}
 
-        steps_run: list[str] = []
-        options_config = await self._get_system_options()
-        insteon_enabled = bool(options_config.get("insteonSupport", False))
-        steps_run.append("get_system_options")
-
-        plm_connected = False
-        if insteon_enabled and self._init_insteon_diag(None):
-            plm_connected, _plm_info = await self._insteon_diag._get_plm_info()
-            steps_run.append("get_plm_info")
-
-        try:
-            core_services_status: Any = await self.get_core_services_status()
-        except NotImplementedError as ex:
-            core_services_status = f"not available yet ({ex})"
-        steps_run.append("get_core_services_status")
-
-        system_check = {
-            "insteon_enabled": insteon_enabled,
-            "plm_connected": plm_connected,
-            "core_services_status": core_services_status,
-        }
-
-        if not insteon_enabled:
+    async def _diagnose_protocol_not_responding_stub(self, protocol: str, device_id: str | None) -> dict[str, Any]:
+        """Shallow diagnosis for a protocol without real per-device logic
+        yet (matter/zwave/zigbee) -- system-wide only: is the subsystem
+        even enabled. Reuses IoXWrapper.is_protocol_enabled rather than
+        duplicating its system-options parsing here."""
+        if device_id is not None:
+            return {"error": f"automated per-device diagnosis for protocol '{protocol}' isn't implemented yet"}
+        enabled = await self._iox_wrapper.is_protocol_enabled(protocol)
+        if not enabled:
             return {
-                "steps_run": steps_run,
-                "system_check": system_check,
-                "diagnosis": "INSTEON is not enabled in system configuration.",
-                "recommended_fix": self._KNOWN_FIXES["insteon_disabled"],
+                "diagnosis": f"{protocol} is not enabled in system configuration.",
+                "recommended_fix": f"Enable {protocol} in system configuration.",
             }
-        if not plm_connected:
-            return {
-                "steps_run": steps_run,
-                "system_check": system_check,
-                "diagnosis": "PLM is enabled but not connected.",
-                "recommended_fix": self._KNOWN_FIXES["plm_not_connected"],
-            }
-
-        if not device_id:
-            return {
-                "steps_run": steps_run,
-                "system_check": system_check,
-                "error": (
-                    "device_id is required once system checks pass -- the customer-named device, "
-                    "or one representative device if the complaint is general"
-                ),
-            }
-
-        command = self._iox_wrapper.resolve_command_id(device_id, "Query", direction="accepts")
-        if command is None:
-            return {
-                "steps_run": steps_run,
-                "system_check": system_check,
-                "error": f"'{device_id}' has no 'Query' command -- not an INSTEON device?",
-            }
-        try:
-            await self._iox_wrapper.send_commands([{"device": device_id, "command": command.id, "parameters": []}])
-            query_ok = True
-        except Exception as ex:
-            logger.error(f"diagnose_not_responding: Query failed on {device_id}: {ex}")
-            query_ok = False
-        steps_run.append(f"send Query to {device_id}")
-
-        result: dict[str, Any] = {
-            "steps_run": steps_run,
-            "system_check": system_check,
-            "query_check": {"device_id": device_id, "successful": query_ok},
-        }
-        if query_ok:
-            result["diagnosis"] = (
-                f"Query succeeded on {device_id} -- the PLM<->device link works. If control still "
-                "isn't working, this likely isn't a link problem -- check the routine/scene driving it."
+        return {
+            "diagnosis": (
+                f"{protocol} is enabled. Automated per-device diagnosis for {protocol} isn't "
+                "implemented yet -- check the specific device/routine driving it manually."
             )
-        else:
-            result["diagnosis"] = f"Query failed on {device_id}."
-            result["recommended_fix"] = self._KNOWN_FIXES["query_failed"]
-        return result
+        }
 
     async def diagnose_no_status_feedback(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
         """Customer operated a device physically/locally and NuCore didn't
         show the new status (the device -> NuCore direction). Only INSTEON
         has real logic so far -- see NuCoreInterface.diagnose_no_status_feedback.
-
-        :return: {"steps_run": [...], "diagnosis": str, "recommended_fix"?:
-            str, "clarifying_question"?: str, "needs_device_id"?: str,
-            "plm_sanity_check"?: {...}, "sample_device_check"?: {...},
-            "error"?: str}
         """
         if protocol.lower() != "insteon":
             return {"error": f"automated diagnosis for protocol '{protocol}' isn't implemented yet"}
-
-        steps_run = ["quick_plm_sanity_check"]
-        sanity = await self.quick_plm_sanity_check()
-        if "error" in (sanity or {}):
-            return {"steps_run": steps_run, "error": sanity["error"]}
-
-        result: dict[str, Any] = {"steps_run": steps_run, "plm_sanity_check": sanity}
-        if not sanity["insteon_enabled"]:
-            result["diagnosis"] = "INSTEON is not enabled in system configuration."
-            result["recommended_fix"] = self._KNOWN_FIXES["insteon_disabled"]
-            return result
-        if not sanity["passed"]:
-            result["diagnosis"] = (
-                "PLM sanity check did not pass -- new/never-restored PLM, or one that lost its links."
-            )
-            result["recommended_fix"] = self._KNOWN_FIXES["plm_links_missing"]
-            result["clarifying_question"] = "Is this a new PLM, or one that's been in service before?"
-            return result
-
-        if not device_id:
-            result["needs_device_id"] = (
-                "PLM sanity check passed. Call again with a representative device_id to check its "
-                "device->PLM link, or answer from this result alone if that's not needed."
-            )
-            return result
-
-        link_status = await self.get_device_to_plm_link_status(device_id)
-        steps_run.append(f"get_device_to_plm_link_status({device_id})")
-        result["sample_device_check"] = {"device_id": device_id, **link_status}
-        if link_status.get("has_device_to_plm_link"):
-            result["diagnosis"] = f"{device_id} is correctly linked to report status."
-        else:
-            result["diagnosis"] = f"{device_id} is missing its device->PLM link."
-            result["recommended_fix"] = self._KNOWN_FIXES["missing_device_to_plm_link"]
-            result["clarifying_question"] = "Is this a new PLM?"
-        return result
+        if self._init_insteon_diag(device_id):
+            return await self._insteon_diag.diagnose_no_status_feedback(device_id)
+        return None

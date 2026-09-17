@@ -74,14 +74,20 @@ import asyncio
 from collections import Counter
 import os
 import queue
+import random
 import re
 import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Literal
 from urllib.parse import quote
 
-from nucore import DeviceEventListener
+from nucore import DeviceEventListener, Group, Folder
 
+from ..iox_definitions import IoXSOAPAction
 from ..iox_wrapper import IoXWrapper
+
+if TYPE_CHECKING:
+    from .iox_diagnostics import IoXDiagnostics
+
 from utils import get_logger
 logger = get_logger(__name__)
 already_running_message = "Diagnostics already running. Please wait for the current operation to finish."
@@ -94,6 +100,7 @@ _FLAG_ROLES = {
     "A2": "responder",
     "E2": "controller",
     "22": "deleted",
+    "EA": "high_water_mark",
     "00": "end_of_table",
 }
 
@@ -139,11 +146,13 @@ _CSV_BLOCK_RE = re.compile(r"```csv\s*\n(.*?)```", re.DOTALL)
 _KNOWN_ROLES = frozenset(_FLAG_ROLES.values())
 # Not real, comparable links -- excluded from the device-vs-iox comparison
 # entirely (see _compare_links_files) and from the PLM sanity check's record
-# count (see _quick_plm_sanity_check).
-_ROLES_EXCLUDED_FROM_COMPARISON = frozenset({"deleted", "end_of_table"})
+# count (see _quick_plm_sanity_check). high_water_mark is a bookkeeping
+# marker that can legitimately exist on one side and not the other -- never
+# a real mismatch.
+_ROLES_EXCLUDED_FROM_COMPARISON = frozenset({"deleted", "end_of_table", "high_water_mark"})
 
 # See _quick_plm_sanity_check.
-_PLM_SANITY_CHECK_TOLERANCE_PCT = 15
+_PLM_SANITY_CHECK_TOLERANCE_PCT = 20
 
 # See _get_all_plm_links's cache check -- a full PLM link scan is a slow,
 # real hardware operation, so a recent result is reused by default rather
@@ -207,6 +216,120 @@ def _parse_links_csv(text: str) -> list[dict[str, str]]:
     return rows
 
 
+def _has_role_row(raw_links_text: str | None, role: str) -> bool | None:
+    """Whether a rendered links-table blob has a row with the given *role*
+    ("controller" or "responder"). Generalized out of what used to be
+    _has_controller_role_row-only logic, now that
+    diagnose_no_status_feedback's step 3.b needs the identical scan for
+    "responder" instead of "controller" -- see _has_controller_role_row/
+    _iox_table_has_responder_link for what each role means on a device's
+    own table.
+
+    :return: None when *raw_links_text* couldn't be retrieved/parsed at
+        all (PLM not connected, device not found, busy-refusal dict, etc.),
+        else a real bool.
+    """
+    if not raw_links_text or LINKS_TABLE_FENCE_OPEN not in raw_links_text:
+        return None
+    rows = _parse_links_csv(raw_links_text)
+    return any(r["role"] == role for r in rows if r["role"] not in _ROLES_EXCLUDED_FROM_COMPARISON)
+
+
+def _has_controller_role_row(raw_links_text: str | None) -> bool | None:
+    """Whether a rendered links-table blob (get_dev_links_table's or
+    get_iox_links_table's fenced-CSV output) has a "controller" role row --
+    on an ordinary end device's own table, a controller-role row always
+    represents that device's link to the PLM (see the module docstring's
+    general Insteon link notes above), so no address match against the PLM
+    is needed here, unlike _plm_table_has_responder_for below (the PLM's own
+    table lists many devices, so that one does need to match by address).
+    Thin wrapper over _has_role_row -- kept under its own name since
+    get_device_to_plm_link_status and _iox_table_has_controller_link
+    already call it by this name.
+
+    :return: None when *raw_links_text* couldn't be retrieved/parsed at all
+        (PLM not connected, device not found, etc.), else a real bool.
+    """
+    return _has_role_row(raw_links_text, "controller")
+
+
+def _device_controller_groups(raw_dev_links_text: str | None) -> set[str] | None:
+    """The distinct group numbers found on a device's own controller-role
+    rows (its device->PLM status-feedback links, per the module docstring's
+    general Insteon link notes) -- i.e. every group this device can report
+    an unsolicited status change for. A device can have more than one such
+    group (e.g. a multi-button KeypadLinc, or an independent sensor group)
+    -- diagnose_no_status_feedback's step 3.a must confirm the PLM has a
+    matching responder link for EACH of these, not just any single one
+    (contrast _plm_table_has_responder_for, which intentionally checks
+    only "any responder row for this address at all", ignoring group, for
+    diagnose_not_responding's different control-direction need -- left
+    unchanged).
+
+    Group numbers are rendered as either "N" or "N (Name)" -- the same
+    optional-annotation shape as get_all_plm_links's device column -- so
+    any "(Name)" suffix is stripped before returning, the same
+    strip-and-compare convention _plm_table_has_responder_for already uses
+    for its device-address field.
+
+    :return: None when *raw_dev_links_text* couldn't be retrieved/parsed
+        at all; else the (possibly empty) set of raw group-number strings.
+    """
+    if not raw_dev_links_text or LINKS_TABLE_FENCE_OPEN not in raw_dev_links_text:
+        return None
+    rows = _parse_links_csv(raw_dev_links_text)
+    return {r["group"].split(" (")[0].strip() for r in rows if r["role"] == "controller"}
+
+
+def _plm_responder_groups_for(device_id: str, plm_links_raw: str | None) -> set[str] | None:
+    """The set of group numbers for which *plm_links_raw* (an
+    already-fetched get_all_plm_links blob) has a responder-role row
+    naming *device_id* -- i.e. every group the PLM currently has a working
+    device->PLM feedback link for, from the PLM's own link database.
+    Paired with _device_controller_groups by diagnose_no_status_feedback's
+    step 3.a to find groups the device expects to report on that the PLM
+    doesn't actually have a responder link for.
+
+    Unlike _plm_table_has_responder_for (address-only, explicitly ignores
+    group -- see its docstring), this keys on (address, group) together,
+    since a multi-group device can have a working link for one group and
+    a broken one for another.
+
+    :return: None if *plm_links_raw* couldn't be parsed at all (shouldn't
+        normally happen here -- diagnose_no_status_feedback's own step 2
+        already validated it before any device is checked).
+    """
+    if not plm_links_raw or LINKS_TABLE_FENCE_OPEN not in plm_links_raw:
+        return None
+    rows = _parse_links_csv(plm_links_raw)
+    return {
+        r["group"].split(" (")[0].strip()
+        for r in rows
+        if r["role"] == "responder" and r["device"].split(" (")[0].strip() == device_id
+    }
+
+
+def _comparison_matches(comparison: Any) -> bool:
+    """Interpret compare_device_links's return value as pass/fail.
+
+    compare_device_links can return a busy-refusal dict (``{"error": ...}``),
+    a plain failure string ("Failed to retrieve...", "PLM not connected...",
+    etc.), or its real plain-text report. Only a line that literally
+    **starts with** "MATCH:" counts as a pass -- two footguns this guards
+    against: (1) _compare_links_files can prepend an "ANOMALIES..." and/or
+    "DUPLICATE ROWS..." section *before* the verdict line, so the verdict
+    is not reliably the first line -- every line must be checked, not just
+    line 0; (2) a naive ``"MATCH:" in text`` substring check is unsafe even
+    then, since the string "MISMATCH:" itself contains "MATCH:" as a
+    substring (mis-**MATCH:**) -- ``.startswith`` on each line avoids that.
+    Anything not a plain str (a busy-refusal dict, a bare failure string,
+    no recognizable verdict line) counts as a fail.
+    """
+    if not isinstance(comparison, str):
+        return False
+    return any(line.startswith("MATCH:") for line in comparison.splitlines())
+
+
 class _LinksTableWaiter(DeviceEventListener):
     """Passive notify() target, scoped to one links-streaming operation's
     expected action ("1"=plm, "2"=device, "3"=iox). Mirrors
@@ -236,6 +359,23 @@ class INSTEONDiagnostics:
         self._plm_address = None
         self._plm_connected = False
         self._refresh_plm_links = False
+        # Tracks whichever of the four PLM-exclusive methods (get_dev_links_table/
+        # compare_device_links/get_all_plm_links/quick_plm_sanity_check) is
+        # currently in flight, if any -- {"step"} or None. This is a
+        # hardware-availability fact (the PLM serial connection can only run
+        # one link/config operation at a time), not something scoped to a
+        # conversation. See _begin_plm_op/_end_plm_op below -- independent of
+        # self._is_running above, which guards the lower-level streaming
+        # primitives (_stream_links_into_file); the two are separate guards
+        # for separate concerns and are not merged.
+        self._plm_op_state: dict[str, Any] | None = None
+        # Set once, by IoXDiagnostics._init_insteon_diag, right after
+        # constructing this instance -- lets quick_plm_sanity_check (the
+        # only reader) reach the two genuinely multi-protocol calls it still
+        # needs (_get_system_options/get_core_services_status) without
+        # duplicating their fetch/parse logic here. Stays None for a caller
+        # that constructs this class directly, never through IoXDiagnostics.
+        self._iox_diagnostics: "IoXDiagnostics | None" = None
 
     async def _get_dev_links_table(self, device_id: str = None, **kwargs) -> str | None:
         # NOTE: assumes `node` here accepts the same device address used
@@ -789,3 +929,528 @@ class INSTEONDiagnostics:
             return
         if action in ["NR", "ND", "RV", "NI", "DI", "AA", "MV", "CL", "RG", "WD","GR", "GD"]:
             self._refresh_plm_links = True
+
+    # ---------------------------------------------------
+    # Complaint-shaped diagnostics -- diagnose_not_responding/
+    # diagnose_no_status_feedback (see NuCoreInterface for the model-facing
+    # contract; IoXDiagnostics just routes by protocol and delegates to
+    # these two).
+    # ---------------------------------------------------
+
+    # get_dev_links_table/compare_device_links/get_all_plm_links/
+    # quick_plm_sanity_check all drive the single PLM serial connection
+    # directly and cannot run concurrently with each other or with a second
+    # call to themselves -- see _begin_plm_op/_end_plm_op below.
+    # get_iox_links_table touches no PLM hardware directly and runs freely,
+    # any time, including while one of the four is in flight.
+
+    def _begin_plm_op(self, step: str) -> dict[str, Any] | None:
+        """Call at the top of each of the four PLM-exclusive methods
+        (get_dev_links_table/compare_device_links/get_all_plm_links/
+        quick_plm_sanity_check). Returns an error dict if another one of the
+        four is already in progress; otherwise marks *step* as the current op
+        and returns None. No locking/waiting -- a second caller (including a
+        second call to the same step) is refused immediately, never blocked
+        or queued."""
+        state = self._plm_op_state
+        if state is not None:
+            return {
+                "error": (
+                    f"a PLM operation ('{state['step']}') is already in progress -- try again shortly"
+                )
+            }
+        self._plm_op_state = {"step": step}
+        return None
+
+    def _end_plm_op(self) -> None:
+        self._plm_op_state = None
+
+    # Lifted once, as code, from diagnose.md's old "Known fixes, in order of
+    # likelihood" section -- not parsed from a prompt file at runtime.
+    _KNOWN_FIXES = {
+        "insteon_disabled": "Enable INSTEON in system configuration.",
+        "plm_not_connected": (
+            "Confirm the PLM is on a USB serial port and the udx service is running. If udx is "
+            "running and it's still not connected, the PLM hardware has likely failed -- the "
+            "customer needs a new one, and must restore it after."
+        ),
+        "plm_links_missing": (
+            "Ask whether this is a new, never-restored PLM before concluding it 'lost' its links "
+            "-- either way the fix is to restore the PLM, but the framing for the customer differs."
+        ),
+        "query_failed": (
+            "Most likely signal/noise related -- have the customer move the PLM to an outlet not "
+            "shared with other transformers/power supplies before assuming hardware failure; this "
+            "resolves the majority of intermittent cases. Only if that doesn't help, recommend a "
+            "new PLM + restore."
+        ),
+        "missing_device_to_plm_link": (
+            "This device is missing its device->PLM controller link, so it can't report unsolicited "
+            "status changes. Ask whether this is a new PLM (needs a full restore) or an existing one "
+            "(this device may never have been linked with NuCore in the first place)."
+        ),
+        "device_missing_iox_link_table": (
+            "This device has no link records in NuCore's own database -- remove it from the system "
+            "and link it back again."
+        ),
+        "insteon_link_config_incorrect": (
+            "PLM and device link configuration is incorrect -- most probably a new PLM or a new "
+            "device that needs to be linked properly. If a new PLM, restore your backup and then do "
+            "Restore PLM. If not a new PLM, try restoring the device or remove the device and try "
+            "linking it back. If it fails again, the device might be faulty."
+        ),
+    }
+
+    async def get_dev_links_table(self, device_id: str = None, **kwargs) -> Any:
+        """Raw device link table (prose/CSV), unchanged. Only used internally
+        now (by diagnose_no_status_feedback's per-device group check, and by
+        compare_device_links) and by whatever future tool needs the raw
+        table -- no longer reachable from the model directly."""
+        busy = self._begin_plm_op("get_dev_links_table")
+        if busy is not None:
+            return busy
+        try:
+            return await self._get_dev_links_table(device_id, **kwargs)
+        finally:
+            self._end_plm_op()
+
+    async def get_device_to_plm_link_status(self, device_id: str) -> dict[str, Any]:
+        """Structured counterpart of get_dev_links_table -- whether *device_id*
+        has the device->PLM controller link needed to report unsolicited
+        status changes (see the module docstring's general Insteon link
+        notes above: a "controller" role row in a device's own link table is
+        that device's link to the PLM). No longer called by
+        diagnose_no_status_feedback -- a device can have more than one
+        status-feedback group (multi-button devices), and this only ever
+        answered "any at all"; superseded there by the per-group check (see
+        _device_controller_groups/_plm_responder_groups_for). Kept as an
+        independently-useful, independently-tested public building block.
+
+        :return: {"has_device_to_plm_link": bool | None, "report": str} --
+            has_device_to_plm_link is None when the table couldn't be
+            retrieved at all (PLM not connected, device not found, etc.).
+        """
+        raw = await self.get_dev_links_table(device_id)
+        if not raw:
+            return {"has_device_to_plm_link": None, "report": "Failed to retrieve the device's link table."}
+        return {"has_device_to_plm_link": _has_controller_role_row(raw), "report": raw}
+
+    async def _iox_table_has_controller_link(self, device_id: str) -> bool | None:
+        """Same check as get_device_to_plm_link_status, but sourced from
+        NuCore's own stored (iox) replica instead of the device's live
+        table -- needed for diagnose_not_responding, where the device is, by
+        definition, not answering live queries at all (get_dev_links_table
+        would just fail the same way Query already did)."""
+        raw = await self.get_iox_links_table(device_id)
+        return _has_controller_role_row(raw)
+
+    async def _iox_table_has_responder_link(self, device_id: str) -> bool | None:
+        """Whether NuCore's own iox-stored replica of *device_id*'s link
+        table has a "responder" role row -- i.e. NuCore's records show the
+        PLM->device control link (PLM as controller, device as responder),
+        the OPPOSITE direction from _iox_table_has_controller_link
+        (device->PLM, status-feedback). A device can be missing either link
+        independently of the other, so this is a genuinely separate check
+        -- used by diagnose_no_status_feedback's step 3.b as a completeness
+        check alongside step 3.a's status-feedback-direction check."""
+        raw = await self.get_iox_links_table(device_id)
+        return _has_role_row(raw, "responder")
+
+    async def get_iox_links_table(self, device_id: str = None, **kwargs) -> str | None:
+        return await self._get_iox_links_table(device_id, **kwargs)
+
+    async def get_all_plm_links(self, **kwargs) -> Any:
+        busy = self._begin_plm_op("get_all_plm_links")
+        if busy is not None:
+            return busy
+        try:
+            return await self._get_all_plm_links(**kwargs)
+        finally:
+            self._end_plm_op()
+
+    async def compare_device_links(self, device_id: str = None, **kwargs) -> Any:
+        busy = self._begin_plm_op("compare_device_links")
+        if busy is not None:
+            return busy
+        try:
+            return await self._compare_device_links(device_id, **kwargs)
+        finally:
+            self._end_plm_op()
+
+    async def quick_plm_sanity_check(self, **kwargs) -> Any:
+        """System-level checks (INSTEON enabled, core services) plus this
+        class's own PLM-connected/link-count check (_quick_plm_sanity_check),
+        merged into one report -- so callers never need to separately call
+        IoXDiagnostics.get_full_system_config/get_core_services_status for
+        this scenario.
+
+        :return: ``{"passed": bool | None, "insteon_enabled": bool,
+            "plm_connected": bool | None, "report": str}`` on success, or
+            the busy-refusal ``{"error": ...}`` from _begin_plm_op.
+        """
+        busy = self._begin_plm_op("quick_plm_sanity_check")
+        if busy is not None:
+            return busy
+        try:
+            options_config = await self._iox_diagnostics._get_system_options()
+            insteon_enabled = bool(options_config.get("insteonSupport", False))
+
+            try:
+                services_status: Any = await self._iox_diagnostics.get_core_services_status()
+            except NotImplementedError as ex:
+                services_status = f"not available yet ({ex})"
+
+            lines = [
+                f"INSTEON enabled: {insteon_enabled}",
+                f"Core services status: {services_status}",
+            ]
+            if not insteon_enabled:
+                lines.append(
+                    "INSTEON is not enabled in system config -- that alone explains no status "
+                    "feedback from any Insteon device; nothing else to check until it's enabled."
+                )
+                return {
+                    "passed": False,
+                    "insteon_enabled": False,
+                    "plm_connected": None,
+                    "report": "\n".join(lines),
+                }
+
+            insteon_result = await self._quick_plm_sanity_check(**kwargs)
+            return {
+                "passed": insteon_result["passed"],
+                "insteon_enabled": True,
+                "plm_connected": insteon_result["plm_connected"],
+                "report": "\n".join(lines) + "\n" + insteon_result["report"],
+            }
+        finally:
+            self._end_plm_op()
+
+    async def _plm_sanity_gate(self) -> tuple[list[str], dict[str, Any], dict[str, Any] | None]:
+        """Run quick_plm_sanity_check() and build the early-return diagnosis
+        dict when it doesn't pass -- shared by diagnose_not_responding and
+        diagnose_no_status_feedback, which both start with this exact check
+        and must react to failure identically (distinguishing "PLM enabled
+        but not connected" from a generic failed sanity check matters for
+        which _KNOWN_FIXES entry -- and clarifying question -- the customer
+        gets).
+
+        :return: ``(steps_run, sanity, early_result)``. Callers must return
+            ``early_result`` immediately when it isn't ``None``; ``None``
+            means the sanity check passed and the caller should continue its
+            own per-device logic, using the returned ``steps_run``/``sanity``.
+        """
+        steps_run = ["quick_plm_sanity_check"]
+        sanity = await self.quick_plm_sanity_check()
+        if "error" in (sanity or {}):
+            return steps_run, sanity, {"steps_run": steps_run, "error": sanity["error"]}
+
+        if not sanity["insteon_enabled"]:
+            return steps_run, sanity, {
+                "steps_run": steps_run,
+                "plm_sanity_check": sanity,
+                "diagnosis": "INSTEON is not enabled in system configuration.",
+                "recommended_fix": self._KNOWN_FIXES["insteon_disabled"],
+            }
+        if not sanity["passed"]:
+            if not sanity["plm_connected"]:
+                return steps_run, sanity, {
+                    "steps_run": steps_run,
+                    "plm_sanity_check": sanity,
+                    "diagnosis": "PLM is enabled but not connected.",
+                    "recommended_fix": self._KNOWN_FIXES["plm_not_connected"],
+                }
+            return steps_run, sanity, {
+                "steps_run": steps_run,
+                "plm_sanity_check": sanity,
+                "diagnosis": "PLM sanity check did not pass -- new/never-restored PLM, or one that lost its links.",
+                "recommended_fix": self._KNOWN_FIXES["plm_links_missing"],
+                "clarifying_question": "Is this a new PLM, or one that's been in service before?",
+            }
+
+        return steps_run, sanity, None
+
+    async def diagnose_not_responding(self, device_id: str | None) -> dict[str, Any]:
+        """The real orchestrator: always runs the full PLM sanity check
+        first (regardless of whether device_id was given), the same
+        sequential, separately-guarded-step pattern diagnose_no_status_feedback
+        already uses -- never a new outer PLM-op guard here, since
+        quick_plm_sanity_check/get_iox_links_table/get_all_plm_links (called
+        from the per-device check below) are already each self-guarded, and
+        nesting a guard inside another would self-deadlock (see
+        compare_device_links for why that method calls the private, unguarded
+        primitives directly instead -- it IS the outer guard for its call)."""
+        if device_id:
+            node = self._iox_wrapper._get_node(device_id)
+            if node is not None:
+                if isinstance(node, Group) or isinstance(node, Folder):
+                    return {"steps_run": ["node_check"], "diagnosis": f"Cannot run diagnostics because {node.name} is a Group or Folder, not an individual device."}
+
+        steps_run, sanity, early_result = await self._plm_sanity_gate()
+        if early_result is not None:
+            return early_result
+
+        device_ids = [device_id] if device_id else self._sample_device_ids(2)
+        if not device_ids:
+            return {"steps_run": steps_run, "plm_sanity_check": sanity, "status": "no insteon device found"}
+
+        device_checks = []
+        for one_device_id in device_ids:
+            device_checks.append(await self._diagnose_device_not_responding(one_device_id))
+            steps_run.append(f"diagnose_insteon_device_not_responding({one_device_id})")
+
+        return {"steps_run": steps_run, "plm_sanity_check": sanity, "device_checks": device_checks}
+
+    def _sample_device_ids(self, n: int) -> list[str]:
+        """Up to *n* representative INSTEON device ids -- used when a
+        not-responding complaint is general (no device_id given) rather
+        than asking the caller to pick one themselves."""
+        candidates = [addr for addr in self._iox_wrapper.nodes if self._iox_wrapper._is_insteon_family(addr)]
+        return random.sample(candidates, min(n, len(candidates)))
+
+    async def _diagnose_device_not_responding(self, device_id: str) -> dict[str, Any]:
+        """Deep single-device diagnosis, called once per device_id by
+        diagnose_not_responding above. Sends Query directly (same
+        two primitives command_control_status.send_command itself uses) --
+        on failure, root-causes it via link tables instead of guessing.
+        Never reads the device's own live table (get_dev_links_table) for
+        this -- a device that isn't responding to Query won't respond to a
+        links-table request either; NuCore's own stored (iox) replica and
+        the PLM's live table are used instead, since both are reachable
+        without the device's cooperation.
+
+        :return: {"passed": bool, "device_id": str, "report": str}
+        """
+        command = self._iox_wrapper.resolve_command_id(device_id, "Query", direction="accepts")
+        if command is None:
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": f"'{device_id}' has no 'Query' command -- not an INSTEON device?",
+            }
+        try:
+            response = await self._iox_wrapper.send_commands([{"device": device_id, "command": command.id, "parameters": []}])
+            if response and response[0].status_code == 200:
+                return {
+                    "passed": True,
+                    "device_id": device_id,
+                    "report": f"Query succeeded on {device_id} -- the device is responding.",
+                }
+        except Exception as ex:
+            logger.error(f"diagnose_not_responding: Query failed on {device_id}: {ex}")
+
+        if not await self._iox_table_has_controller_link(device_id):
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": self._KNOWN_FIXES["device_missing_iox_link_table"],
+            }
+
+        plm_has_responder_for_device = await self._plm_table_has_responder_for(device_id)
+        if plm_has_responder_for_device is None:
+            return {"passed": False, "device_id": device_id, "report": self._KNOWN_FIXES["plm_links_missing"]}
+        if not plm_has_responder_for_device:
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": self._KNOWN_FIXES["insteon_link_config_incorrect"],
+            }
+
+        # Both sides of the PLM<->device link check out -- Query still
+        # failed anyway, so this isn't a link-configuration problem.
+        return {"passed": False, "device_id": device_id, "report": self._KNOWN_FIXES["query_failed"]}
+
+    async def _plm_table_has_responder_for(self, device_id: str) -> bool | None:
+        """Whether the PLM's own link table has a "responder" role row
+        naming *device_id* -- i.e. the PLM recognizes this device as one it
+        controls. The PLM's table covers every device, so (unlike
+        _has_controller_role_row/_iox_table_has_controller_link, which only
+        ever need to know whether ANY controller row exists) this one does
+        need to match by address: get_all_plm_links's device column is a
+        human-formatted display string, but it's produced by the same
+        format_links_event used for every table type, so an ordinary
+        device's address renders identically wherever it appears -- strip
+        the optional trailing " (Name)" annotation and compare directly.
+
+        :return: None when the PLM's table itself couldn't be retrieved at
+            all (distinct from False -- reachable, but no row for this
+            device).
+        """
+        raw = await self.get_all_plm_links()
+        if not raw or LINKS_TABLE_FENCE_OPEN not in raw:
+            return None
+        rows = _parse_links_csv(raw)
+        for row in rows:
+            if row["role"] in _ROLES_EXCLUDED_FROM_COMPARISON:
+                continue
+            if row["role"] != "responder":
+                continue
+            if row["device"].split(" (")[0].strip() == device_id:
+                return True
+        return False
+
+    async def _diagnose_device_no_status_feedback(self, device_id: str, plm_links_raw: str) -> dict[str, Any]:
+        """Deep single-device diagnosis for a "no status feedback" complaint
+        -- called once per device_id, either the one explicit device_id
+        given to diagnose_no_status_feedback, or once per device sampled
+        when none was given. Runs design/diagnose_not_responding.md's three
+        sub-checks (step 3.a a/b/c) in sequence, stopping at the FIRST
+        failure -- each has its own different customer-facing
+        recommendation, and running all three unconditionally would blur
+        which one actually fired (mirrors _diagnose_device_not_responding's
+        same sequential-early-return shape):
+
+          3.a  Does the PLM have a responder link for EVERY one of this
+               device's own controller-role (status-feedback) groups?
+               Sourced from the device's own LIVE table
+               (get_dev_links_table), not NuCore's iox-stored replica --
+               unlike diagnose_not_responding's per-device check, a "no
+               status feedback" complaint doesn't mean the device is
+               unreachable, so the live table is the more authoritative,
+               ground-truth source here.
+
+               *plm_links_raw* is get_all_plm_links's raw blob, already
+               fetched once by diagnose_no_status_feedback's own step 2 and
+               passed straight through here -- never re-fetched, since
+               it's the same system-wide data for every device checked in
+               one diagnose_no_status_feedback call.
+
+          3.b  Does NuCore's own iox-stored replica show the opposite-
+               direction (control: PLM as controller, device as responder)
+               link too? (_iox_table_has_responder_link)
+
+          3.c  Do the device's live table and NuCore's iox-stored replica
+               agree in full? (compare_device_links -- re-fetches both
+               tables a second time internally, a known, accepted
+               redundancy given the design doc calls out compare_device_links
+               as its own distinct step.)
+
+        :return: {"passed": bool, "device_id": str, "report": str}
+        """
+        raw_dev = await self.get_dev_links_table(device_id)
+        if isinstance(raw_dev, dict) and "error" in raw_dev:
+            return {"passed": False, "device_id": device_id, "report": raw_dev["error"]}
+
+        device_groups = _device_controller_groups(raw_dev) or set()
+        if not device_groups:
+            # No controller-role row at all -- same "vacuous" case the old,
+            # single-check implementation covered; keep its exact fix text.
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": self._KNOWN_FIXES["missing_device_to_plm_link"],
+            }
+
+        missing_groups = device_groups - (_plm_responder_groups_for(device_id, plm_links_raw) or set())
+        if missing_groups:
+            ordered = sorted(missing_groups, key=lambda g: (int(g) if g.isdigit() else float("inf"), g))
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": (
+                    f"PLM is missing a responder link for {device_id} group(s) {ordered}. "
+                    f"{self._KNOWN_FIXES['missing_device_to_plm_link']}"
+                ),
+            }
+
+        if not await self._iox_table_has_responder_link(device_id):
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": self._KNOWN_FIXES["insteon_link_config_incorrect"],
+            }
+
+        comparison = await self.compare_device_links(device_id)
+        if isinstance(comparison, dict) and "error" in comparison:
+            return {"passed": False, "device_id": device_id, "report": comparison["error"]}
+        if not _comparison_matches(comparison):
+            return {
+                "passed": False,
+                "device_id": device_id,
+                "report": self._KNOWN_FIXES["insteon_link_config_incorrect"],
+            }
+
+        return {
+            "passed": True,
+            "device_id": device_id,
+            "report": f"{device_id} is correctly linked to report status (groups {sorted(device_groups)} all confirmed).",
+        }
+
+    async def diagnose_no_status_feedback(self, device_id: str | None = None) -> dict[str, Any]:
+        """Customer operated a device physically/locally and NuCore didn't
+        show the new status (the device -> NuCore direction). See
+        NuCoreInterface.diagnose_no_status_feedback for the model-facing
+        contract. Follows design/diagnose_not_responding.md's "Diagnosing
+        no status feedback" section, step for step:
+          0. reject a group/folder device_id -- diagnostics only run
+             against an individual device.
+          1. PLM sanity gate (_plm_sanity_gate).
+          2. PLM has ANY real link records at all (get_all_plm_links) --
+             its own explicit call, separate from the one buried three
+             calls deep inside _plm_sanity_gate (quick_plm_sanity_check ->
+             _quick_plm_sanity_check -> self._get_all_plm_links()); the raw
+             blob fetched here is reused for every device checked below,
+             never re-fetched.
+          3. per device (the one given, or 2 sampled when none is given):
+             does the PLM have a responder link for every one of the
+             device's own status-feedback groups, does NuCore's iox-stored
+             table show the opposite-direction link too, and does a full
+             device-vs-iox comparison agree -- see
+             _diagnose_device_no_status_feedback.
+
+        :return: {"steps_run": [...], "diagnosis"?: str, "recommended_fix"?:
+            str, "clarifying_question"?: str, "plm_sanity_check"?: {...},
+            "device_checks"?: [{"device_id", "passed", "report"}, ...],
+            "status"?: str, "error"?: str}
+        """
+        if device_id:
+            node = self._iox_wrapper._get_node(device_id)
+            if node is not None and (isinstance(node, Group) or isinstance(node, Folder)):
+                return {
+                    "steps_run": ["node_check"],
+                    "diagnosis": f"Cannot run diagnostics because {node.name} is a Group or Folder, not an individual device.",
+                }
+
+        steps_run, sanity, early_result = await self._plm_sanity_gate()
+        if early_result is not None:
+            return early_result
+
+        plm_links_raw = await self.get_all_plm_links()
+        steps_run.append("get_all_plm_links")
+        if isinstance(plm_links_raw, dict) and "error" in plm_links_raw:
+            return {"steps_run": steps_run, "plm_sanity_check": sanity, "error": plm_links_raw["error"]}
+
+        real_plm_rows = []
+        if plm_links_raw and LINKS_TABLE_FENCE_OPEN in plm_links_raw:
+            real_plm_rows = [r for r in _parse_links_csv(plm_links_raw) if r["role"] not in _ROLES_EXCLUDED_FROM_COMPARISON]
+        if not real_plm_rows:
+            return {
+                "steps_run": steps_run,
+                "plm_sanity_check": sanity,
+                "diagnosis": "PLM has no real link records -- it may have lost its links, be defective, or never have been restored.",
+                "recommended_fix": self._KNOWN_FIXES["plm_links_missing"],
+                "clarifying_question": "Is this a new PLM, or one that's been in service before?",
+            }
+
+        device_ids = [device_id] if device_id else self._sample_device_ids(2)
+        if not device_ids:
+            return {"steps_run": steps_run, "plm_sanity_check": sanity, "status": "no insteon device found"}
+
+        device_checks = []
+        for one_device_id in device_ids:
+            device_checks.append(await self._diagnose_device_no_status_feedback(one_device_id, plm_links_raw))
+            steps_run.append(f"diagnose_insteon_device_no_status_feedback({one_device_id})")
+
+        return {"steps_run": steps_run, "plm_sanity_check": sanity, "device_checks": device_checks}
+
+    # get nodes config
+    async def _get_nodes_config(self) -> str | None:
+        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_NODES_CONFIG, None, None, 0x01, None)
+
+    # get isy config
+    async def _get_isy_config(self) -> str | None:
+        return await self._iox_wrapper._submit_soap_request(IoXSOAPAction.SOAP_TYPE_GET_ISY_CONFIG, None)
+
+    # get startup time
+    async def _get_startup_time(self) -> str | None:
+        return await self._iox_wrapper._send_device_specific_with_option(IoXSOAPAction.SOAP_TYPE_GET_STARTUP_TIME, None, None, 0x01, None)

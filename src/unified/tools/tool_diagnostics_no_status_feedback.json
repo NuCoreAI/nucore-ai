@@ -11,7 +11,7 @@
       },
       "device_id": {
         "type": ["string", "null"],
-        "description": "Optional. Omit for a system-wide sanity check only. Supply a representative device to also check whether it has the device->PLM link needed to report status changes -- if omitted and the system-wide check passes, the result asks for one."
+        "description": "The customer-named device, if they named one. Optional even after system-level checks pass -- for insteon, omitting it samples 1-2 representative devices automatically rather than requiring you to pick one."
       }
     }
   }
