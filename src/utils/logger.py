@@ -23,6 +23,7 @@ class LoggingConfig:
 _DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _DEFAULT_TEXT_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 _ROOT_CONFIGURED = False
+_LAST_CONFIG: LoggingConfig | None = None
 
 
 def _to_bool(value: str | bool | None, default: bool) -> bool:
@@ -151,10 +152,10 @@ def configure_logging(
     - NUCORE_LOG_CONSOLE
     """
 
-    global _ROOT_CONFIGURED
+    global _ROOT_CONFIGURED, _LAST_CONFIG
 
     if _ROOT_CONFIGURED and not force:
-        return _build_config(
+        config = _build_config(
             level=level,
             json_output=json_output,
             log_file=log_file,
@@ -162,6 +163,8 @@ def configure_logging(
             max_bytes=max_bytes,
             backup_count=backup_count,
         )
+        _LAST_CONFIG = config
+        return config
 
     config = _build_config(
         level=level,
@@ -204,7 +207,36 @@ def configure_logging(
         root.addHandler(file_handler)
 
     _ROOT_CONFIGURED = True
+    _LAST_CONFIG = config
     return config
+
+
+def reapply_logging_config() -> LoggingConfig | None:
+    """Re-run configure_logging() with the last-resolved config, forcing
+    root's handlers to be rebuilt.
+
+    For callers (e.g. IoXWrapper's poly branch) that import a third-party
+    package known to reconfigure the root logger out from under us -- e.g.
+    udi_interface's PolyLogger, which strips every root handler and installs
+    its own -- after our own configure_logging() call already ran. Calling
+    this afterward re-asserts our handlers (console + --log-file/
+    NUCORE_LOG_FILE, if configured) as the last thing to touch root.
+
+    No-op (returns None) if configure_logging() was never called -- there's
+    nothing to reapply, and fabricating a default config could surprise a
+    host that deliberately never called it.
+    """
+    if _LAST_CONFIG is None:
+        return None
+    return configure_logging(
+        level=_LAST_CONFIG.level,
+        json_output=_LAST_CONFIG.json_output,
+        log_file=_LAST_CONFIG.log_file,
+        console=_LAST_CONFIG.console,
+        max_bytes=_LAST_CONFIG.max_bytes,
+        backup_count=_LAST_CONFIG.backup_count,
+        force=True,
+    )
 
 
 def get_logger(name: str | None = None) -> logging.Logger:

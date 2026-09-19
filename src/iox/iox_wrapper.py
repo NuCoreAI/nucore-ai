@@ -23,7 +23,7 @@ from nucore.uom import PREDEFINED_UOMS, UNKNOWN_UOM, is_enumeration_uom
 from nucore.nucore_error import NuCoreError
 from rag import ProfileRagFormatter, MinimalRagFormatter
 from typing import Literal, Any
-from utils import get_logger
+from utils import get_logger, reapply_logging_config
 from xml.sax.saxutils import escape as xml_escape
 from .diagnostics.iox_diagnostics import IoXDiagnostics
 from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER, ZMATTER_BASE_PATHS, PROTOCOL_TO_ZMATTER_FAMILY
@@ -422,6 +422,14 @@ class IoXWrapper(NuCoreInterface):
             # udi_interface redirects standard input/output to polyglot LOGGER
             from udi_interface import udi_interface, unload_interface
             from udi_interface import LOGGER
+            # udi_interface's own PolyLogger singleton (constructed as a
+            # side effect of the import above) strips every handler off the
+            # root logger and installs its own -- silently undoing whatever
+            # configure_logging() set up (console + --log-file/
+            # NUCORE_LOG_FILE) before this constructor ran. Re-assert our
+            # own root config now so get_logger(...) output everywhere still
+            # reaches it, without touching udi_interface's own logger/handler.
+            reapply_logging_config()
             self.poly = poly
             self.poly.subscribe(self.poly.ISY, self.__info__)
             message = {'getIsyInfo': {}}
@@ -2323,6 +2331,9 @@ class IoXWrapper(NuCoreInterface):
         response = await self.post(self._family_api_path("set-linking-mode"), json.dumps({"mode": mode}), {"Content-Type": "application/json"})
         return response is not None and response.status_code == 200
 
+    async def scene_test(self, device_id: str) -> dict[str, Any]:
+        return await self.diagnostics.scene_test(device_id)
+
     async def remove_device(self, device_address: str, protocol: str = None, **kwargs) -> Any:
         # Zigbee/Matter can remove one already-joined device directly, no
         # activation window needed -- mirrors eisy-ui's ZIGBEE_REMOVE/
@@ -2967,6 +2978,7 @@ class IoXWrapper(NuCoreInterface):
         if message is None or 'node' not in message or 'control' not in message:
             logger.debug(f"Received invalid message format {message}")
             return
+        logger.debug(f"Received device event message: {message}")
         control = message['control']
         action = message.get('action', '')
         if action:

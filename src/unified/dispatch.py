@@ -57,6 +57,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_full_system_config": diagnostics.get_full_system_config,
     "get_core_services_status": diagnostics.get_core_services_status,
     "get_device_family": diagnostics.get_device_family,
+    "scene_test": diagnostics.scene_test,
     "list_preferences": preferences.list_preferences,
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,

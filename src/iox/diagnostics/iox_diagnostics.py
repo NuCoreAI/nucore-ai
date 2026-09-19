@@ -12,9 +12,10 @@ implementation exists yet.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, Literal
 import xml.etree.ElementTree as ET
-from nucore import DeviceEventListener
+from nucore import DeviceEventListener, Group
 from ..iox_definitions import Subsystems, DEVICE_FAMILIES, get_subsystem_name
 from .diag_utils import _element_to_dict_excluding
 
@@ -468,6 +469,49 @@ class IoXDiagnostics:
             self._insteon_diag._iox_diagnostics = self
 
         return True
+
+    async def scene_test(self, device_id: str) -> dict[str, Any]:
+        """Send a raw PLM group-off to test a scene's physical wiring,
+        bypassing NuCore's own link bookkeeping, and listen for whatever
+        device-response events it triggers. physicalGroupNum addresses a
+        PLM ALL-Link group, an INSTEON-specific concept -- the eisy-ui
+        scene-test/raw-off family API this delegates to is INSTEON-only,
+        though this method itself no longer pre-checks group.family before
+        calling it (the backend is the source of truth for that).
+
+        Resolves device_id to its Group node; if found, delegates the
+        actual raw-off + event-collection work to
+        INSTEONDiagnostics.scene_test, which sends the group-off addressed
+        to the group's device_group (the PLM ALL-Link group number, i.e.
+        the <deviceGroup> value from /rest/nodes) via the eisy-ui
+        scene-test/raw-off family API, then collects the resulting _7/"1"
+        progress events into a file.
+
+        :return: ``{"successful": bool, "error": str}`` on early failure
+            (not a group, no physical group assigned, or invalid group
+            number); otherwise INSTEONDiagnostics.scene_test's result:
+            ``{"successful": True, "file_path": str, "event_count": int,
+            "summary": list[dict], "details": list[str]}``. ``summary`` is
+            one ``{"name", "address", "status": "success"|"failure",
+            "note"?}`` entry per scene member (excluding the scene/group's
+            own container entry); ``details`` is the raw matched event
+            lines behind it -- see
+            INSTEONDiagnostics._process_scene_test_file.
+        """
+        group = self._iox_wrapper.get_node(device_id)
+        if not isinstance(group, Group) or group.device_group is None:
+            return {"successful": False, "error": "not a group, or no physical group assigned"}
+        try:
+            physical_group_num = int(group.device_group)
+        except (TypeError, ValueError):
+            return {"successful": False, "error": "invalid physical group number"}
+        # Only used here to lazily construct self._insteon_diag, same as
+        # get_full_system_config's call site -- None skips
+        # _init_insteon_diag's own family check, which only ever looks in
+        # self._iox_wrapper.nodes (never .groups) and so can't validate a
+        # group/scene address anyway.
+        self._init_insteon_diag(None)
+        return await self._insteon_diag.scene_test(device_id, physical_group_num, group)
 
     # ---------------------------------------------------
     # Complaint-shaped diagnostics -- diagnose_not_responding/

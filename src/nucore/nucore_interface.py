@@ -439,6 +439,35 @@ class NuCoreInterface(ABC):
         """Fetch supported link types for a controller/responder pair."""
         raise NotImplementedError("Subclasses must implement group_scene_get_link_types.")
 
+    @abstractmethod
+    async def scene_test(self, device_id: str) -> dict[str, Any]:
+        """Test a scene's physical wiring with a raw PLM group-off, and
+        listen for whatever device-response events it triggers.
+        physicalGroupNum addresses a PLM ALL-Link group, an INSTEON-specific
+        concept -- the backend call this makes is INSTEON-only.
+
+        Resolves device_id to its Group node; if found, sends a raw
+        All-Link group-off addressed to the group's device_group (the PLM
+        ALL-Link group number) so a scene's physical responders can be
+        verified independent of NuCore's own link bookkeeping, then collects
+        the resulting device-response events into a file until the stream
+        goes quiet for a few seconds.
+
+        :param device_id: The scene/group's device id.
+        :return: ``{"successful": bool, ...}``. On failure (device_id did
+            not resolve to a group, the group has no usable device_group,
+            or the raw group-off command failed), just
+            ``{"successful": False, "error": str}``. On success, also
+            ``"file_path"`` (where collected events were written),
+            ``"event_count"`` (raw events received), ``"summary"`` (one
+            ``{"name", "address", "status": "success"|"failure", "note"?}``
+            entry per scene member), and ``"details"`` (the raw collected
+            event text that looks like an actual scene response, behind
+            that summary) -- see
+            INSTEONDiagnostics._process_scene_test_file.
+        """
+        raise NotImplementedError("Subclasses must implement the scene_test method.")
+
     # ------------------------------------------------------------------
     # Timezone management 
     # ------------------------------------------------------------------

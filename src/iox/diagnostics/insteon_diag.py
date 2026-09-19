@@ -72,6 +72,7 @@
 
 import asyncio
 from collections import Counter
+import json
 import os
 import queue
 import random
@@ -130,6 +131,56 @@ def _format_data_fields(role: str, data_int: int) -> str:
     return f"byte1={b1:02X};byte2={b2:02X};byte3={b3:02X}"
 
 
+def _extract_std_cleanup_ack_devices(events: list[str]) -> list[str]:
+    """Literal port of the reference Java scene-test analyzer: pull the
+    responding device's dotted Insteon address out of each
+    "[Std-Cleanup Ack]" trace line -- it sits between the line's first
+    "] " and the following "-->", e.g.
+    "...[Std-Cleanup Ack] 12.34.56 --> 11.22.33..." yields "12.34.56".
+
+    Ported as-is (searching from the start of the string, not from after
+    the marker) -- only correct if "[Std-Cleanup Ack]" is the first
+    bracketed token in the line, same assumption the source Java makes.
+    """
+    devices = []
+    for event in events:
+        if "[Std-Cleanup Ack]" not in event:
+            continue
+        bi = event.find("] ")
+        if bi <= 0:
+            continue
+        bi += 2
+        ei = event.find("-->")
+        if ei <= 0:
+            continue
+        devices.append(event[bi:ei].strip())
+    return devices
+
+
+def _dotted_insteon_address_to_nucore(dotted: str) -> str:
+    """"0F.18.08" -> "F 18 8" -- treat the dotted address as a 6-hex-digit
+    number (one byte per dot-separated octet) and format each byte back
+    without leading-zero padding, same convention as format_links_event's
+    own device_address construction elsewhere in this file. No instance
+    suffix here -- see _strip_instance_suffix, which strips a scene
+    member's own trailing instance digit instead, so both sides of the
+    comparison end up in this same unsuffixed form.
+    """
+    hex6 = dotted.replace(".", "")
+    return " ".join(f"{int(hex6[i:i + 2], 16):X}" for i in (0, 2, 4))
+
+
+def _strip_instance_suffix(address: str) -> str:
+    """"F 18 8 1" -> "F 18 8" -- drop a scene member's trailing
+    single-digit instance number so its address matches the unsuffixed
+    form _dotted_insteon_address_to_nucore produces from the raw event
+    trace (which has no instance of its own). A real node/group address
+    always carries this suffix (see NodeBase.instance), so this is
+    unconditional -- no fallback for one that doesn't."""
+    prefix, _, _suffix = address.rpartition(" ")
+    return prefix
+
+
 LINKS_TABLE_NOTE = (
     "# `data` is a semicolon-separated set of labeled hex2 byte values -- the label already tells you what\n"
     "# each byte means for that row's role; no further legend lookup needed.\n"
@@ -174,6 +225,13 @@ _PLM_LINKS_CACHE_MIN_SIZE_BYTES = 5000
 # neither end_of_table nor a "system no longer busy" signal seen -- ends
 # the drain.
 _LINKS_STREAM_MAX_GAP_TIMEOUT_S = 35.0
+
+# See _stream_scene_test_into_file -- unlike the links stream above, a raw
+# scene-test group-off has no completion signal at all (no end_of_table, no
+# "system no longer busy" event to watch for) -- the gap timeout is the only
+# stop condition. 5s of silence after the last _7/"1" progress event (or
+# since the trigger POST, for the first) ends the collection.
+_SCENE_TEST_MAX_GAP_TIMEOUT_S = 5.0
 
 
 def _is_cache_fresh(
@@ -344,6 +402,22 @@ class _LinksTableWaiter(DeviceEventListener):
     second time, directly via ``register_listener`` (bypassing
     ``__init__``), for ("_5", "0") -- the hub's "system no longer busy"
     signal -- so both event streams land on the one shared ``_queue``."""
+
+    def process(self):
+        return None
+
+
+class _SceneTestListener(DeviceEventListener):
+    """Passive notify() target for one scene_test operation's raw group-off
+    responses (control "_7", action "1" -- UD_PROGRESS_EVENT_UPDATE, see
+    design/iox_apis/subscription_events.md). Same shape as
+    _LinksTableWaiter: never started as a Thread, process() unused. Only
+    ever constructed inside INSTEONDiagnostics._stream_scene_test_into_file.
+
+    Unlike _LinksTableWaiter, there's no second registration for a
+    completion signal -- a raw group-off has no end_of_table/"system no
+    longer busy" equivalent, so the gap timeout is the only stop
+    condition."""
 
     def process(self):
         return None
@@ -774,6 +848,155 @@ class INSTEONDiagnostics:
         finally:
             self._iox_wrapper.unregister_listener(waiter._listener_id, "_2", action)
             self._iox_wrapper.unregister_listener(waiter._listener_id, "_5", "0")
+
+    async def _stream_scene_test_into_file(
+        self,
+        file_path: str,
+        trigger: Callable[[], Awaitable[Any]],
+        max_gap_timeout: float = _SCENE_TEST_MAX_GAP_TIMEOUT_S,
+    ) -> int:
+        """Register a scoped listener for ("_7", "1"), fire *trigger* (the
+        raw group-off POST) as a background task, and ignore its result
+        entirely -- same fire-and-forget rationale as
+        _stream_links_into_file. Drains progress events into *file_path*
+        until *max_gap_timeout* elapses with nothing new arriving -- the
+        only stop condition; unlike link-table streaming, a raw group-off
+        has no end_of_table/"system no longer busy" completion signal to
+        watch for instead.
+
+        Always unregisters the listener before returning, on every exit
+        path. Returns the number of events written to the file.
+        """
+        waiter = _SceneTestListener(self._iox_wrapper, "_7", "1")
+        trigger_task = asyncio.ensure_future(trigger())
+        # Fire-and-forget: consume whatever this eventually resolves to
+        # (result or exception) so it never produces an "exception was
+        # never retrieved" warning -- nothing else ever looks at it.
+        trigger_task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+        try:
+            event_count = 0
+            while True:
+                try:
+                    node, _control, _action, eventInfo = await asyncio.to_thread(
+                        waiter._queue.get, timeout=max_gap_timeout
+                    )
+                except queue.Empty:
+                    break
+                formatted_event = self.format_scene_test_event(node, eventInfo)
+                await self._write_to_file(file_path, formatted_event + "\n", mode="a")
+                event_count += 1
+            return event_count
+        finally:
+            self._iox_wrapper.unregister_listener(waiter._listener_id, "_7", "1")
+
+    def format_scene_test_event(self, node, eventInfo) -> str:
+        """Format one _7/"1" (UD_PROGRESS_EVENT_UPDATE) event for the
+        scene_test file -- one JSON object per line, ``{"node": ..., "eventInfo": ...}``.
+
+        No further decoding of eventInfo itself here (it's a free-form
+        Insteon traffic-trace string, e.g. containing "INST-SRX"/"GRP-RX"/
+        "CLEAN-UP-RPT"/"Std-Cleanup Ack") -- keeping the raw line means
+        nothing is lost even if _process_scene_test_file's keyword filter
+        below needs to change. node is kept too even though it isn't
+        currently used downstream, in case it turns out to matter later.
+        """
+        return json.dumps({"node": node, "eventInfo": eventInfo})
+
+    # Only lines whose eventInfo contains one of these are kept in
+    # _process_scene_test_file's "details" -- everything else is progress
+    # noise from control "_7" that isn't an actual scene response.
+    _SCENE_TEST_KEYWORDS = ("Std-Cleanup Ack", "INST-SRX", "GRP-RX", "CLEAN-UP-RPT")
+
+    _SCENE_TEST_NO_RESPONSE_NOTE = (
+        "No response seen for this device during the scene test. If it's a "
+        "battery-powered/wireless device (e.g. a motion or leak sensor), this "
+        "may not indicate an actual problem -- those devices don't respond to "
+        "commands at all."
+    )
+
+    async def _process_scene_test_file(self, file_path: str, event_count: int, group: Group) -> dict[str, Any]:
+        """Turn the raw events collected in *file_path* into the result
+        scene_test hands back to the caller.
+
+        Two views over the same collected events:
+        - "details": every line whose eventInfo contains one of
+          _SCENE_TEST_KEYWORDS, verbatim -- the raw evidence.
+        - "summary": per-scene-member pass/fail, derived from just the
+          "[Std-Cleanup Ack]" lines among those -- see
+          _extract_std_cleanup_ack_devices/_dotted_insteon_address_to_nucore
+          (which normalize each responding device down to a bare, unsuffixed
+          address) and _strip_instance_suffix (which drops each member's own
+          trailing instance digit so both sides compare equal). A member is
+          a "success" if its (unsuffixed) address is among the devices that
+          sent a Std-Cleanup Ack, "failure" otherwise (with a caveat note,
+          since a non-responding wireless/battery device isn't necessarily
+          broken).
+
+        event_count (the raw, unfiltered count of events received) is
+        passed through unchanged -- it's a fact about the collection itself,
+        not something this filtering should affect.
+        """
+        raw = await self._read_from_file(file_path)
+        events: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue  # the file's own header line, or any other non-JSON row
+            event_info = event.get("eventInfo") if isinstance(event, dict) else None
+            if isinstance(event_info, str):
+                events.append(event_info)
+
+        details = [e for e in events if any(keyword in e for keyword in self._SCENE_TEST_KEYWORDS)]
+
+        responding = set()
+        for addr in _extract_std_cleanup_ack_devices(events):
+            try:
+                responding.add(_dotted_insteon_address_to_nucore(addr))
+            except ValueError:
+                continue  # not a well-formed 6-hex-digit dotted address -- skip it
+
+        summary = []
+        for member in group.members.values():
+            if member.address == group.address:
+                continue  # the scene/group's own container entry, not a real responder
+            entry = {
+                "name": member.name,
+                "address": member.address,
+                "status": "success" if _strip_instance_suffix(member.address) in responding else "failure",
+            }
+            if entry["status"] == "failure":
+                entry["note"] = self._SCENE_TEST_NO_RESPONSE_NOTE
+            summary.append(entry)
+
+        return {"summary": summary, "details": details, "event_count": event_count}
+
+    def _get_scene_test_file_path(self, device_id: str) -> str:
+        return f"/tmp/scene_test_{device_id.replace(' ', '_')}.txt"
+
+    async def scene_test(self, device_id: str, physical_group_num: int, group: Group) -> dict[str, Any]:
+        """Send a raw PLM group-off (see IoXDiagnostics.scene_test for the
+        family/group validation done before this is called) and collect
+        whatever _7/"1" progress events it triggers into a file, stopping
+        once the stream goes quiet for _SCENE_TEST_MAX_GAP_TIMEOUT_S.
+        """
+        file_path = self._get_scene_test_file_path(device_id)
+        await self._write_to_file(file_path, f"Scene Test for {device_id} (physical group {physical_group_num})\n", mode="w")
+
+        async def _trigger() -> None:
+            body = {"physicalGroupNum": physical_group_num}
+            await self._iox_wrapper.post(
+                self._iox_wrapper._family_api_path("scene-test/raw-off"),
+                json.dumps(body),
+                {"Content-Type": "application/json"},
+            )
+
+        event_count = await self._stream_scene_test_into_file(file_path, _trigger)
+        result = await self._process_scene_test_file(file_path, event_count, group)
+        return {"successful": True, "file_path": file_path, **result}
 
     async def stop_insteon_diagnostics(self, cleanup:bool=True) -> str | None:
         if self._is_running:

@@ -9,11 +9,18 @@ the real investigation logic behind the first two.
 from __future__ import annotations
 
 from typing import Any
+from xml.etree import ElementTree as ET
 
 import pytest
 
+from nucore.group import Group
 from nucore.nucore_interface import NuCoreInterface
 from unified.dispatch import execute_tool
+
+
+def _make_group(address="SCENE1", device_group="5"):
+    xml = f'<group flag="4"><address>{address}</address><name>Test Scene</name><deviceGroup>{device_group}</deviceGroup></group>'
+    return Group(ET.fromstring(xml))
 
 
 class FakeBackend(NuCoreInterface):
@@ -29,6 +36,14 @@ class FakeBackend(NuCoreInterface):
         self.diagnose_no_status_feedback_calls: list[tuple[str, str | None]] = []
         self.restart_core_service_result: Any = {"status": "restarted"}
         self.restart_core_service_calls: list[tuple[str, str]] = []
+        self.scene_test_result: Any = {
+            "successful": True,
+            "file_path": "/tmp/scene_test_SCENE1.txt",
+            "event_count": 3,
+            "summary": [{"name": "Lamp", "address": "12 34 56 1", "status": "success"}],
+            "details": ["12.34.56 1 [Std-Cleanup Ack] 12.34.56 --> 11.22.33"],
+        }
+        self.scene_test_calls: list[str] = []
 
     async def get_full_system_config(self):
         return self.full_system_config_result
@@ -51,6 +66,10 @@ class FakeBackend(NuCoreInterface):
     async def restart_core_service(self, service, operation):
         self.restart_core_service_calls.append((service, operation))
         return self.restart_core_service_result
+
+    async def scene_test(self, device_id):
+        self.scene_test_calls.append(device_id)
+        return self.scene_test_result
 
     async def add_device(self, device_address, **kwargs): raise NotImplementedError
     async def discover_devices(self): raise NotImplementedError
@@ -182,6 +201,55 @@ async def test_restart_core_service_requires_service_and_operation():
 
     assert "error" in result
     assert backend.restart_core_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_scene_test_requires_group_address():
+    backend = FakeBackend()
+
+    result = await execute_tool("scene_test", {}, nucore_interface=backend)
+
+    assert "error" in result
+    assert backend.scene_test_calls == []
+
+
+@pytest.mark.asyncio
+async def test_scene_test_rejects_a_non_group_device_id():
+    backend = FakeBackend()
+    backend.nodes["dev1"] = object()  # anything non-Group -- get_node checks .nodes before .groups
+
+    result = await execute_tool("scene_test", {"group_address": "dev1"}, nucore_interface=backend)
+
+    assert "error" in result
+    assert backend.scene_test_calls == []
+
+
+@pytest.mark.asyncio
+async def test_scene_test_forwards_group_address_and_surfaces_the_result():
+    backend = FakeBackend()
+    backend.groups["SCENE1"] = _make_group()
+
+    result = await execute_tool("scene_test", {"group_address": "SCENE1"}, nucore_interface=backend)
+
+    assert backend.scene_test_calls == ["SCENE1"]
+    assert result == {
+        "group_address": "SCENE1",
+        "file_path": "/tmp/scene_test_SCENE1.txt",
+        "event_count": 3,
+        "summary": [{"name": "Lamp", "address": "12 34 56 1", "status": "success"}],
+        "details": ["12.34.56 1 [Std-Cleanup Ack] 12.34.56 --> 11.22.33"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_scene_test_surfaces_backend_failure_as_an_error():
+    backend = FakeBackend()
+    backend.groups["SCENE1"] = _make_group()
+    backend.scene_test_result = {"successful": False, "error": "scene_test is INSTEON-only for now"}
+
+    result = await execute_tool("scene_test", {"group_address": "SCENE1"}, nucore_interface=backend)
+
+    assert result == {"error": "scene_test is INSTEON-only for now"}
 
 
 @pytest.mark.asyncio

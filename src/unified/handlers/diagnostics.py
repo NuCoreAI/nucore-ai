@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nucore import NuCoreInterface
+from nucore import Group, NuCoreInterface
 
 
 async def get_full_system_config(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
@@ -59,3 +59,24 @@ async def restart_core_service(nucore_interface: NuCoreInterface, args: dict[str
     if not service or not operation:
         return {"error": "service and operation are both required"}
     return await nucore_interface.restart_core_service(service, operation)
+
+
+async def scene_test(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    group_address = args.get("group_address")
+    if not group_address:
+        return {"error": "group_address is required"}
+
+    node = nucore_interface.get_node(group_address)
+    if not isinstance(node, Group):
+        return {"error": f"'{group_address}' is not a scene -- scene_test needs a scene"}
+
+    result = await nucore_interface.scene_test(group_address)
+    if not result.get("successful"):
+        return {"error": result.get("error") or f"scene test failed for '{group_address}'"}
+    return {
+        "group_address": group_address,
+        "file_path": result.get("file_path"),
+        "event_count": result.get("event_count"),
+        "summary": result.get("summary"),
+        "details": result.get("details"),
+    }
