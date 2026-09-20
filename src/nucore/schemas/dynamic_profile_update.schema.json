@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dynamic_profile_update.schema.json",
+  "title": "Dynamic Profiles wire-format payload",
+  "description": "design/developers/plugin_model.md §2-3: the FLAT shape a plugin's own backend actually exchanges with PG3/IoX -- both the `Profile` object `polyglot.getJsonProfile()` returns (§3: `{editors, nodedefs, linkdefs}`, all present) and the `update` argument `polyglot.updateJsonProfile(update, options)` takes (§2: any subset of `editors`/`nodedefs`/`linkdefs` for add/replace, plus an optional `delete` sub-object). One schema deliberately covers both use cases -- `editors`/`nodedefs`/`linkdefs` are all optional here (unlike §3's own table, which has no '(Optional)' marker on any of the three) so that a partial update call with only e.g. `nodedefs` present still validates. This is NOT the shape nucore's own Profile.load_from_json/validate_profile parse -- see nucore_profile_catalog.schema.json for that (nucore-ai's own `families[] -> instances[] -> {...}` catalog wrapper) and design/developers/nucore_domain_model.md §1/§12 for why the two differ.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "editors": {
+      "type": "array",
+      "description": "Properties and Command parameters have a reference to an editor.",
+      "items": { "$ref": "editor.schema.json" }
+    },
+    "nodedefs": {
+      "type": "array",
+      "description": "Nodes each have a reference to a NodeDef ID.",
+      "items": { "$ref": "nodedef.schema.json" }
+    },
+    "linkdefs": {
+      "type": "array",
+      "description": "NodeDefs can have a reference to LinkDefs.",
+      "items": { "$ref": "linkdef.schema.json" }
+    },
+    "delete": {
+      "type": "object",
+      "description": "updateJsonProfile() only -- per category, '*' deletes all items in that category, or a list of ids deletes only those. Omitted or absent from a getJsonProfile() response.",
+      "additionalProperties": false,
+      "properties": {
+        "editors": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "nodedefs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "linkdefs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

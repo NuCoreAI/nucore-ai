@@ -22,7 +22,7 @@ dependencies = [
 urls = { "Homepage" = "https://github.com/NuCoreAI/nucore-ai.git" }
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "jsonschema<4.18"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -33,6 +33,8 @@ include = ["rag*", "nucore*", "iox*", "unified*", "utils*"]
 exclude = ["tests*", "*.tests", "*.tests.*"]
 
 [tool.setuptools.package-data]
+nucore = ["schemas/*.json", "schemas/defs/*.json"]
 unified = ["prompt/*.md", "tools/*.json", "runtime_config.example.json", "runtime_config.openai.example.json", "runtime_config.grok.example.json"]
 "unified.diagnostics" = ["prompts/*.md"]
 "unified.planning" = ["prompts/*.md"]
+"unified.dev_tools" = ["prompt/*.md", "tools/*.json"]

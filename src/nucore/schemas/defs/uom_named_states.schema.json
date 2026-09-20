@@ -1,0 +1,1184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Known named-state tables for enumerated UOMs",
+  "description": "Reference data, not an enforced constraint: canonical value->label tables for the UOM ids that represent a fixed, well-known set of named states (e.g. \"67\" = Thermostat mode: 0=Off, 1=Heat, 2=Cool, ...), restructured from iox-vscode-plugin's per-UOM uom.<id>.schema.json files (each reformatted from '<Label> | <value>' enum strings into {value,label} pairs matching the shape nucore.editor.EditorMinMaxRange.names / EditorSubsetRange.names actually hold). A Range's own 'names' field (range.schema.json) is plugin-author-supplied free text per design/developers/plugin_model.md and is NOT required to match this table -- this file exists for documentation/UI-suggestion purposes (e.g. 'here's what a thermostat-mode editor's names would conventionally look like'), not as a $ref'd validation constraint.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "11": {
+      "type": "object",
+      "description": "Deadbolt status",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "115": {
+      "type": "object",
+      "description": "Most recent On style action taken for lamp control",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "15": {
+      "type": "object",
+      "description": "door lock alarm",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "66": {
+      "type": "object",
+      "description": "Thermostat heat/cool state",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "67": {
+      "type": "object",
+      "description": "Thermostat mode",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "68": {
+      "type": "object",
+      "description": "Thermostat fan mode",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "76": {
+      "type": "object",
+      "description": "Wind Direction in degrees",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "80": {
+      "type": "object",
+      "description": "Thermostat fan run state",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "93": {
+      "type": "object",
+      "description": "Power Management Alarm",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "94": {
+      "type": "object",
+      "description": "Appliance Alarm",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "95": {
+      "type": "object",
+      "description": "Home Health Alarm",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "96": {
+      "type": "object",
+      "description": "VOC Level",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "97": {
+      "type": "object",
+      "description": "Barrier Status",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "98": {
+      "type": "object",
+      "description": "Insteon Thermostat Mode - DO NOT USE",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "99": {
+      "type": "object",
+      "description": "Insteon Thermostat Fan Mode - DO NOT USE",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Data payload for the property map above, keyed the same way.",
+  "uomNamedStates": {
+    "11": {
+      "description": "Deadbolt status",
+      "states": [
+        {
+          "value": "102",
+          "label": "Jammed"
+        },
+        {
+          "value": "0",
+          "label": "Unlocked"
+        },
+        {
+          "value": "100",
+          "label": "Locked"
+        },
+        {
+          "value": "101",
+          "label": "Unknown"
+        }
+      ]
+    },
+    "115": {
+      "description": "Most recent On style action taken for lamp control",
+      "states": [
+        {
+          "value": "10",
+          "label": "4 x Press (Off)"
+        },
+        {
+          "value": "9",
+          "label": "4 x Press (On)"
+        },
+        {
+          "value": "12",
+          "label": "5 x Press (Off)"
+        },
+        {
+          "value": "11",
+          "label": "5 x Press (On)"
+        },
+        {
+          "value": "3",
+          "label": "Fade Down"
+        },
+        {
+          "value": "4",
+          "label": "Fade Stop"
+        },
+        {
+          "value": "2",
+          "label": "Fade Up"
+        },
+        {
+          "value": "6",
+          "label": "Fast Off"
+        },
+        {
+          "value": "5",
+          "label": "Fast On"
+        },
+        {
+          "value": "1",
+          "label": "Off"
+        },
+        {
+          "value": "0",
+          "label": "On"
+        },
+        {
+          "value": "8",
+          "label": "Triple Press (Off)"
+        },
+        {
+          "value": "7",
+          "label": "Triple Press (On)"
+        }
+      ]
+    },
+    "15": {
+      "description": "door lock alarm",
+      "states": [
+        {
+          "value": "29",
+          "label": "All User Codes Deleted"
+        },
+        {
+          "value": "15",
+          "label": "Automatic Locking Jammed Bolt"
+        },
+        {
+          "value": "14",
+          "label": "Automatically Locked"
+        },
+        {
+          "value": "11",
+          "label": "Battery Too Low to Operate"
+        },
+        {
+          "value": "12",
+          "label": "Critical Low Battery"
+        },
+        {
+          "value": "10",
+          "label": "Deadbolt Jammed"
+        },
+        {
+          "value": "21",
+          "label": "Duplicate PIN"
+        },
+        {
+          "value": "3",
+          "label": "Escutcheon Removed"
+        },
+        {
+          "value": "27",
+          "label": "Factory Reset"
+        },
+        {
+          "value": "26",
+          "label": "Hardware Failure"
+        },
+        {
+          "value": "22",
+          "label": "Jammed Bolt by Locking with Keypad"
+        },
+        {
+          "value": "25",
+          "label": "Keypad Attempt outside Schedule"
+        },
+        {
+          "value": "32",
+          "label": "Keypad Busy"
+        },
+        {
+          "value": "31",
+          "label": "Keypad Temporarily Disabled"
+        },
+        {
+          "value": "4",
+          "label": "Key/Manually Locked"
+        },
+        {
+          "value": "6",
+          "label": "Key/Manually Unlocked"
+        },
+        {
+          "value": "23",
+          "label": "Locked by Keypad"
+        },
+        {
+          "value": "5",
+          "label": "Locked by Touch"
+        },
+        {
+          "value": "17",
+          "label": "Lock Handling Completed"
+        },
+        {
+          "value": "13",
+          "label": "Low Battery"
+        },
+        {
+          "value": "28",
+          "label": "Manually Not Fully Locked"
+        },
+        {
+          "value": "1",
+          "label": "Master Code Changed"
+        },
+        {
+          "value": "33",
+          "label": "New Program Code Entered"
+        },
+        {
+          "value": "30",
+          "label": "New User Code Not Added (Duplicate Code)"
+        },
+        {
+          "value": "41",
+          "label": "Power Cycled"
+        },
+        {
+          "value": "8",
+          "label": "Remotely Locked"
+        },
+        {
+          "value": "16",
+          "label": "Remotely Power Cycled"
+        },
+        {
+          "value": "9",
+          "label": "Remotely Unlocked"
+        },
+        {
+          "value": "7",
+          "label": "Remote Locking Jammed Bolt"
+        },
+        {
+          "value": "35",
+          "label": "RF Lock With Invalid User Codes"
+        },
+        {
+          "value": "34",
+          "label": "RF Unlock With Invalid User Code"
+        },
+        {
+          "value": "2",
+          "label": "Tamper Code Entry Limit"
+        },
+        {
+          "value": "24",
+          "label": "Unlocked by Keypad"
+        },
+        {
+          "value": "20",
+          "label": "User Added"
+        },
+        {
+          "value": "40",
+          "label": "User Code Entered On Keypad"
+        },
+        {
+          "value": "19",
+          "label": "User Deleted"
+        },
+        {
+          "value": "39",
+          "label": "Window/Door Handle Is Closed"
+        },
+        {
+          "value": "38",
+          "label": "Window/Door Handle Is Open"
+        },
+        {
+          "value": "37",
+          "label": "Window/Door Is Closed"
+        },
+        {
+          "value": "36",
+          "label": "Window/Door Is Open"
+        }
+      ]
+    },
+    "66": {
+      "description": "Thermostat heat/cool state",
+      "states": [
+        {
+          "value": "10",
+          "label": "2nd Stage Aux Heat"
+        },
+        {
+          "value": "9",
+          "label": "2nd Stage Cooling"
+        },
+        {
+          "value": "8",
+          "label": "2nd Stage Heating"
+        },
+        {
+          "value": "11",
+          "label": "3rd Stage Aux Heat"
+        },
+        {
+          "value": "7",
+          "label": "Aux Heat"
+        },
+        {
+          "value": "2",
+          "label": "Cooling"
+        },
+        {
+          "value": "3",
+          "label": "Fan Only"
+        },
+        {
+          "value": "1",
+          "label": "Heating"
+        },
+        {
+          "value": "0",
+          "label": "Idle"
+        },
+        {
+          "value": "5",
+          "label": "Pending Cool"
+        },
+        {
+          "value": "4",
+          "label": "Pending Heat"
+        },
+        {
+          "value": "6",
+          "label": "Vent"
+        }
+      ]
+    },
+    "67": {
+      "description": "Thermostat mode",
+      "states": [
+        {
+          "value": "3",
+          "label": "Auto"
+        },
+        {
+          "value": "10",
+          "label": "Auto Changeover"
+        },
+        {
+          "value": "4",
+          "label": "Aux/Emergency Heat"
+        },
+        {
+          "value": "13",
+          "label": "Away"
+        },
+        {
+          "value": "2",
+          "label": "Cool"
+        },
+        {
+          "value": "8",
+          "label": "Dry Air"
+        },
+        {
+          "value": "12",
+          "label": "Energy Save Cool"
+        },
+        {
+          "value": "11",
+          "label": "Energy Save Heat"
+        },
+        {
+          "value": "6",
+          "label": "Fan Only"
+        },
+        {
+          "value": "7",
+          "label": "Furnace"
+        },
+        {
+          "value": "1",
+          "label": "Heat"
+        },
+        {
+          "value": "9",
+          "label": "Moist Air"
+        },
+        {
+          "value": "0",
+          "label": "Off"
+        },
+        {
+          "value": "14",
+          "label": "Program Auto"
+        },
+        {
+          "value": "16",
+          "label": "Program Cool"
+        },
+        {
+          "value": "15",
+          "label": "Program Heat"
+        },
+        {
+          "value": "5",
+          "label": "Resume"
+        }
+      ]
+    },
+    "68": {
+      "description": "Thermostat fan mode",
+      "states": [
+        {
+          "value": "0",
+          "label": "Auto"
+        },
+        {
+          "value": "2",
+          "label": "Auto High"
+        },
+        {
+          "value": "4",
+          "label": "Auto Medium"
+        },
+        {
+          "value": "6",
+          "label": "Circulation"
+        },
+        {
+          "value": "3",
+          "label": "High"
+        },
+        {
+          "value": "7",
+          "label": "Humidity Circulation"
+        },
+        {
+          "value": "8",
+          "label": "Left & Right Circulation"
+        },
+        {
+          "value": "5",
+          "label": "Medium"
+        },
+        {
+          "value": "1",
+          "label": "On"
+        },
+        {
+          "value": "10",
+          "label": "Quiet"
+        },
+        {
+          "value": "9",
+          "label": "Up & Down Circulation"
+        }
+      ]
+    },
+    "76": {
+      "description": "Wind Direction in degrees",
+      "states": [
+        {
+          "value": "90",
+          "label": "East"
+        },
+        {
+          "value": "0",
+          "label": "No Wind"
+        },
+        {
+          "value": "360",
+          "label": "North"
+        },
+        {
+          "value": "180",
+          "label": "South"
+        },
+        {
+          "value": "270",
+          "label": "West"
+        }
+      ]
+    },
+    "80": {
+      "description": "Thermostat fan run state",
+      "states": [
+        {
+          "value": "4",
+          "label": "Circulation"
+        },
+        {
+          "value": "5",
+          "label": "Humidity Circulation"
+        },
+        {
+          "value": "0",
+          "label": "Off"
+        },
+        {
+          "value": "1",
+          "label": "On"
+        },
+        {
+          "value": "2",
+          "label": "On High"
+        },
+        {
+          "value": "3",
+          "label": "On Medium"
+        },
+        {
+          "value": "8",
+          "label": "Quiet Circulation"
+        },
+        {
+          "value": "6",
+          "label": "Right/Left Circulation"
+        },
+        {
+          "value": "7",
+          "label": "Up/Down Circulation"
+        }
+      ]
+    },
+    "93": {
+      "description": "Power Management Alarm",
+      "states": [
+        {
+          "value": "2",
+          "label": "Ac Mains Disconnected"
+        },
+        {
+          "value": "3",
+          "label": "Ac Mains Reconnected"
+        },
+        {
+          "value": "12",
+          "label": "Battery Is Charging"
+        },
+        {
+          "value": "13",
+          "label": "Battery Is Fully Charged"
+        },
+        {
+          "value": "15",
+          "label": "Charge Battery Now"
+        },
+        {
+          "value": "14",
+          "label": "Charge Battery Soon"
+        },
+        {
+          "value": "9",
+          "label": "Load Error"
+        },
+        {
+          "value": "6",
+          "label": "Over Current Detected"
+        },
+        {
+          "value": "8",
+          "label": "Over Load Detected"
+        },
+        {
+          "value": "7",
+          "label": "Over Voltage Detected"
+        },
+        {
+          "value": "1",
+          "label": "Power Applied"
+        },
+        {
+          "value": "11",
+          "label": "Replace Battery Now"
+        },
+        {
+          "value": "10",
+          "label": "Replace Battery Soon"
+        },
+        {
+          "value": "4",
+          "label": "Surge Detection"
+        },
+        {
+          "value": "5",
+          "label": "Volt Drop Or Drift"
+        }
+      ]
+    },
+    "94": {
+      "description": "Appliance Alarm",
+      "states": [
+        {
+          "value": "8",
+          "label": "Boiling"
+        },
+        {
+          "value": "9",
+          "label": "Boiling Failure"
+        },
+        {
+          "value": "21",
+          "label": "Compressor Failure"
+        },
+        {
+          "value": "14",
+          "label": "Draining"
+        },
+        {
+          "value": "15",
+          "label": "Draining Failure"
+        },
+        {
+          "value": "18",
+          "label": "Drying"
+        },
+        {
+          "value": "19",
+          "label": "Drying Failure"
+        },
+        {
+          "value": "20",
+          "label": "Fan Failure"
+        },
+        {
+          "value": "5",
+          "label": "Failure To Set Target Temperature"
+        },
+        {
+          "value": "3",
+          "label": "Program Completed"
+        },
+        {
+          "value": "2",
+          "label": "Program In Progress"
+        },
+        {
+          "value": "1",
+          "label": "Program Started"
+        },
+        {
+          "value": "4",
+          "label": "Replace Main Filter"
+        },
+        {
+          "value": "12",
+          "label": "Rinsing"
+        },
+        {
+          "value": "13",
+          "label": "Rinsing Failure"
+        },
+        {
+          "value": "16",
+          "label": "Spinning"
+        },
+        {
+          "value": "17",
+          "label": "Spinning Failure"
+        },
+        {
+          "value": "6",
+          "label": "Supplying Water"
+        },
+        {
+          "value": "10",
+          "label": "Washing"
+        },
+        {
+          "value": "11",
+          "label": "Washing Failure"
+        },
+        {
+          "value": "7",
+          "label": "Water Supply Failure"
+        }
+      ]
+    },
+    "95": {
+      "description": "Home Health Alarm",
+      "states": [
+        {
+          "value": "1",
+          "label": "Leaving Bed"
+        },
+        {
+          "value": "3",
+          "label": "Lying On Bed"
+        },
+        {
+          "value": "4",
+          "label": "Posture Changed"
+        },
+        {
+          "value": "2",
+          "label": "Sitting On Bed"
+        },
+        {
+          "value": "5",
+          "label": "Sitting On Edge Of Bed"
+        }
+      ]
+    },
+    "96": {
+      "description": "VOC Level",
+      "states": [
+        {
+          "value": "1",
+          "label": "Clean"
+        },
+        {
+          "value": "4",
+          "label": "Highly Polluted"
+        },
+        {
+          "value": "3",
+          "label": "Moderately Polluted"
+        },
+        {
+          "value": "2",
+          "label": "Slightly Polluted"
+        }
+      ]
+    },
+    "97": {
+      "description": "Barrier Status",
+      "states": [
+        {
+          "value": "0",
+          "label": "Closed"
+        },
+        {
+          "value": "103",
+          "label": "Closing"
+        },
+        {
+          "value": "100",
+          "label": "Open"
+        },
+        {
+          "value": "104",
+          "label": "Opening"
+        },
+        {
+          "value": "1-99",
+          "label": "Percent Closed (1% = almost Closed, 99% = almost Open)"
+        },
+        {
+          "value": "102",
+          "label": "Stopped"
+        },
+        {
+          "value": "101",
+          "label": "Unknown"
+        }
+      ]
+    },
+    "98": {
+      "description": "Insteon Thermostat Mode - DO NOT USE",
+      "states": [
+        {
+          "value": "3",
+          "label": "Auto"
+        },
+        {
+          "value": "2",
+          "label": "Cool"
+        },
+        {
+          "value": "4",
+          "label": "Fan Only"
+        },
+        {
+          "value": "1",
+          "label": "Heat"
+        },
+        {
+          "value": "0",
+          "label": "Off"
+        },
+        {
+          "value": "5",
+          "label": "Program Auto"
+        },
+        {
+          "value": "7",
+          "label": "Program Cool"
+        },
+        {
+          "value": "6",
+          "label": "Program Heat"
+        }
+      ]
+    },
+    "99": {
+      "description": "Insteon Thermostat Fan Mode - DO NOT USE",
+      "states": [
+        {
+          "value": "8",
+          "label": "Auto"
+        },
+        {
+          "value": "7",
+          "label": "On"
+        }
+      ]
+    }
+  }
+}

@@ -90,6 +90,27 @@ This is a lower-level alternative to `eisy_ai`'s FastAPI-based chat server (a se
 sibling project) -- use this mode when a raw `ws://` endpoint is all you need, without
 serving a browser UI.
 
+### Developer Tool Set (Plugin Authoring)
+
+Pass `--tool-set dev_tools` to swap the customer-facing tool set/system prompt (the default,
+`--tool-set customer`) for `unified.dev_tools`: a plugin-developer assistant covering Dynamic
+Profiles JSON validation, UOM lookup, and configuring/starting/stopping/calling an
+already-installed plugin under test. Still requires a live backend via `--backend-api-classpath`,
+same as `customer`.
+
+```shell
+python -m unified.run_unified_runtime \
+  --runtime-config src/unified/runtime_config.example.json \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword \
+  --tool-set dev_tools \
+  --query "Validate this profile: {...}"
+```
+
+See `src/unified/dev_tools/README.md` for the full tool list and layout.
+
 By default the server binds TCP on `0.0.0.0` (all interfaces); pass `--websocket-host`
 to bind a specific interface instead, e.g. `--websocket-host 127.0.0.1`.
 
@@ -289,6 +310,7 @@ python -m unified.run_unified_runtime \
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
 | `--secrets-file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
+| `--tool-set` | `customer` (default) or `dev_tools` -- which tool set/system prompt the agentic loop uses. See "Developer Tool Set (Plugin Authoring)" above |
 | `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode. Ignored when `--websocket-host` is a Unix socket path |
 | `--websocket-host` | IP address to bind the WebSocket server to over TCP (default `0.0.0.0`), or a `unix://<path>` URI to serve over a Unix domain socket at `<path>` instead -- on its own (without `--websocket-port`) it's enough to enter WebSocket server mode. Any other value (including a bare filesystem path with no `unix://` prefix) is rejected |
 | `--websocket-client-id` | Unix socket mode only: required effective UID (checked via `getpeereid()`) of the connecting client; other UIDs are rejected. Ignored when `--websocket-host` is a TCP host/IP |
@@ -451,4 +473,5 @@ Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 ## Further Documentation
 
 - Unified runtime architecture and tool reference: `src/unified/README.md`
+- Developer tool set (`--tool-set dev_tools`) reference: `src/unified/dev_tools/README.md`
 

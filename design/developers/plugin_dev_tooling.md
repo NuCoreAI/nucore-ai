@@ -294,6 +294,12 @@ Confirmed scope and sequencing, per the team:
    no `ast`/`astor` code-generation engine (an LLM generates the Python stub code directly), and
    no static-XML/NLS emission path at all (Dynamic Profiles only — the static format is
    runtime-obsolete, §2).
+   > **Schemas landed**: the JSON Schema piece of this step is done — see
+   > [`src/nucore/schemas/`](../../src/nucore/schemas/README.md) (restructured onto
+   > [`plugin_model.md`](plugin_model.md) §3's object model, not copied from `iox-vscode-plugin`
+   > as-is; that file's README covers what was kept/dropped/authored fresh and why). No validator
+   > is wired into `validate_profile` yet — the schemas exist as a reference/reusable artifact for
+   > whichever front-end (§4) ends up needing one.
 2. **Build front-end 3** — the web/AI-assisted flow in eisy-ai — on top of that new core. This
    is the primary near-term target: it's the one population (non-technical, local-only) that
    nothing existing serves, and it's uniquely cheap to build well *because* eisy-ai already has

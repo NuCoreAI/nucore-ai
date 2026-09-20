@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Editor",
+  "description": "design/developers/plugin_model.md \u00a73 (Editor object): defines the allowed value space for a property or command/linkdef parameter, referenced everywhere else by its `id` (Property.editor, Parameter.editor, LinkDef parameters' editor -- see property.schema.json/parameter.schema.json). Restructured from iox-vscode-plugin's editor.schema.json, which is a `oneOf` of three shapes -- `{idref}`, inline min/max, inline subset -- because in ioxplugin's dialect a Property's `editor` field is itself an INLINE editor definition that may either be a full definition or a `{idref}` pointer to one defined elsewhere. Dynamic Profiles does not work that way: every editor is defined exactly once, here, in the top-level `editors` array, and every other object references it purely by id STRING (confirmed in src/nucore/profile.py -- `pdict[\"editor\"]`/`p[\"editor\"]` are always resolved via `get_editor(eid)` against the family-wide `editors_dict`). So this schema has no `idref` branch at all -- an Editor definition is always the full `{id, ranges}` shape; the reference indirection lives one level up, in the `editor` string fields on Property/Parameter/LinkParameter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "id.schema.json",
+      "description": "Editor id used by node properties or commands."
+    },
+    "ranges": {
+      "type": "array",
+      "description": "List of valid value ranges and constraints. Some editors legitimately offer more than one uom/range choice (e.g. a raw 0-255 value alongside a percentage) -- see src/nucore/editor.py's Editor.ranges docstring. Optional here (not just possibly-empty) because src/nucore/profile.py's parser reads it via `edict.get(\"ranges\", [])`.",
+      "items": {
+        "$ref": "range.schema.json"
+      }
+    }
+  }
+}

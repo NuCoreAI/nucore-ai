@@ -1,0 +1,14 @@
+{
+  "name": "validate_profile",
+  "description": "Validate a Dynamic Profiles JSON document (families/instances/nodedefs/editors/linkdefs) by parsing it with nucore's own profile loader. Returns any structural problems found (missing ids, dangling editor references, malformed properties/commands) so they can be fixed before installing the plugin. Does not touch the hub -- purely local validation. Call this any time a candidate profile is shared or generated, not just when something looks wrong.",
+  "input_schema": {
+    "type": "object",
+    "required": ["profile"],
+    "properties": {
+      "profile": {
+        "type": "object",
+        "description": "The raw Dynamic Profiles JSON document to validate, as returned by/sent to polyglot.getJsonProfile()/updateJsonProfile()."
+      }
+    }
+  }
+}

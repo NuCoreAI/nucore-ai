@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LinkDef",
+  "description": "design/developers/plugin_model.md \u00a73 (LinkDef object): describes support for a native scene/link record between a controller and responder node, scoped to a plugin and/or product family (e.g. Insteon, Z-Wave). Authored fresh -- no equivalent file exists anywhere in iox-vscode-plugin's schemas/ (that dialect has no `linkdefs` concept at all; its root plugin.schema.json has no `linkdefs` key). Referenced from nodedef.schema.json's `links.ctl`/`links.rsp` arrays. Matches src/nucore/linkdef.py's LinkDef/LinkParameter dataclasses, except LinkParameter's `init_val`/`init_uom` fields, which exist on the dataclass but are never populated by src/nucore/profile.py's current parser -- not represented here since they have no documented spec counterpart (see schemas/README.md). `name` is optional here despite no '(Optional)' marker in the spec table -- src/nucore/profile.py reads it via `ldict.get(\"name\")`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "protocol"
+  ],
+  "if": {
+    "properties": {
+      "cmd": {
+        "const": true
+      }
+    },
+    "required": [
+      "cmd"
+    ]
+  },
+  "then": {
+    "not": {
+      "required": [
+        "parameters"
+      ]
+    },
+    "$comment": "Per the spec: 'If true, any direct command for a responder can be used in the link (default false). The linkdef must not specify any parameters.'"
+  },
+  "properties": {
+    "id": {
+      "$ref": "id.schema.json",
+      "description": "LinkDef ID used by the NodeDef."
+    },
+    "name": {
+      "type": "string",
+      "description": "LinkDef name."
+    },
+    "protocol": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The protocol supported (may contain any alphanumeric text or underscore), e.g. \"I_STD\", \"I_STD_ADV\"."
+    },
+    "cmd": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, any direct command for a responder can be used in the link. The linkdef must not specify any parameters."
+    },
+    "format": {
+      "type": "string",
+      "description": "How this command is displayed in the scene, when used as a responder -- see plugin_model.md \u00a74 (Formatting in Programs and Scenes)."
+    },
+    "parameters": {
+      "type": "array",
+      "description": "Responders only -- the parameters passed when the scene is triggered. Same shape as Cmd parameters, except `init` is not used here.",
+      "items": {
+        "$ref": "parameter.schema.json"
+      }
+    },
+    "desc": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NodeDef",
+  "description": "design/developers/plugin_model.md \u00a73 (NodeDef object): the template a Node is an instance of -- properties, commands, and links. Restructured from iox-vscode-plugin's node.schema.json/common.node.schema.json (the `allOf` split between the two, and the `parent` field, are ioxplugin-dialect scaffolding for a protocol-conditional root shape Dynamic Profiles doesn't have -- flattened into one schema here, `parent` dropped as a live-instance/runtime concept, not a NodeDef field). Only `id` is required: `name`/`properties`/`cmds`/`links` all have no '(Optional)' marker in the spec's own table, and \u00a73's worked CTL example includes every one of them (even empty `cmds.sends`/`links.ctl`/`links.rsp` arrays) -- but src/nucore/profile.py's actual parser tolerates all of them being entirely absent (`ndict.get(\"properties\", {})`, `ndict.get(\"cmds\", {})`, `ndict.get(\"links\", None)`), and the existing test fixture (tests/unified/dev_tools/test_profile_authoring.py's VALID_PROFILE) omits `links` and `desc` entirely. This schema follows the lenient-parser behavior, not the table's literal formatting, matching design/developers/nucore_domain_model.md \u00a714's documented design choice ('Parsing is lenient, not strict') -- see schemas/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "id.schema.json",
+      "description": "NodeDef id."
+    },
+    "name": {
+      "type": "string",
+      "description": "NodeDef name."
+    },
+    "properties": {
+      "type": "array",
+      "description": "Properties for this node.",
+      "items": {
+        "$ref": "property.schema.json"
+      }
+    },
+    "cmds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sends": {
+          "type": "array",
+          "description": "Commands the plugin can send.",
+          "items": {
+            "$ref": "cmd.schema.json"
+          }
+        },
+        "accepts": {
+          "type": "array",
+          "description": "Commands the plugin can accept.",
+          "items": {
+            "$ref": "cmd.schema.json"
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ctl": {
+          "type": "array",
+          "description": "Link definitions (controller role).",
+          "items": {
+            "$ref": "linkdef.schema.json"
+          }
+        },
+        "rsp": {
+          "type": "array",
+          "description": "Link definitions (responder role).",
+          "items": {
+            "$ref": "linkdef.schema.json"
+          }
+        }
+      }
+    },
+    "desc": {
+      "type": "string"
+    },
+    "icon": {
+      "$ref": "icon.schema.json",
+      "description": "UI icon identifier."
+    },
+    "customicon": {
+      "type": "string",
+      "description": "Future use. Note: src/nucore/nodedef.py's parser currently populates this field from whichever of the spec's `icon` or `customicon` keys is present (`ndict.get(\"icon\") or ndict.get(\"customicon\")`) -- there is no field capturing `icon` distinctly from `customicon` today."
+    }
+  }
+}

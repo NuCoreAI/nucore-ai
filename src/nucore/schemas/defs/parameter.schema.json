@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Parameter",
+  "description": "design/developers/plugin_model.md \u00a73 (Parameter object): one parameter of a Cmd (cmd.schema.json) or of a LinkDef's `parameters` (linkdef.schema.json -- 'same shape as Cmd parameters, except `init` is not used there'). Restructured from iox-vscode-plugin's commands.schema.json's inline `params[]` item shape, which lacks `optional`/`init`/`desc` entirely -- those are added here to match the real spec. Note `id` deliberately does NOT use id.schema.json: the spec states 'If empty string, this is the default parameter (and the only required parameter)', so an empty string must validate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "editor"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Parameter ID. If empty string, this is the default parameter (and the only required parameter)."
+    },
+    "editor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The editor ID used for this parameter -- a reference into the top-level `editors` array, not an inline editor definition."
+    },
+    "optional": {
+      "type": "boolean",
+      "description": "If true, this parameter is optional when sending the command."
+    },
+    "init": {
+      "type": "string",
+      "description": "Property Id. If specified, the UI showing the command initializes its default value from this property."
+    },
+    "desc": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "Rarely set -- seems used only when the parameter id is non-empty."
+    }
+  }
+}

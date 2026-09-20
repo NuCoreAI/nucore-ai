@@ -3,3 +3,8 @@
 
 pytest
 pytest-asyncio
+# Pinned below 4.18 to avoid pulling in `referencing`'s Rust extension (rpds-py) --
+# on platforms with no prebuilt wheel for it, pip falls back to compiling the whole
+# maturin/rpds-py toolchain from source, which is a heavy, slow ask for a dev-only
+# test dependency. jsonschema<4.18 uses its own pure-Python RefResolver instead.
+jsonschema<4.18

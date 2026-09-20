@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Property",
+  "description": "design/developers/plugin_model.md \u00a73 (Property object): defines one property of a NodeDef (nodedef.schema.json). Restructured from iox-vscode-plugin's node.properties.schema.json, which models `editor` as an INLINE editor definition (`$ref editor.schema.json` in the ioxplugin sense) and additionally requires an `is_settable` boolean. Dynamic Profiles has neither: `editor` is a plain id STRING referencing the top-level `editors` array (confirmed in src/nucore/profile.py: `eid = pdict[\"editor\"]; editor = get_editor(eid)`), and there is no `is_settable` concept in the spec -- both changes carried through here. `parent` (present in the source's common.node.schema.json) is also dropped: it is a live-instance/runtime concept in nucore (NodeBase.parent), not part of a catalog-side Property. `name` is optional here even though the spec table has no '(Optional)' marker on it -- src/nucore/profile.py reads it via `pdict.get(\"name\")`, and the existing test fixture (tests/unified/dev_tools/test_profile_authoring.py's VALID_PROFILE) omits it -- see schemas/README.md's leniency-policy note.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "editor"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "id.schema.json",
+      "description": "Property ID (e.g., ST, GV0)."
+    },
+    "name": {
+      "type": "string",
+      "description": "Property display name."
+    },
+    "editor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Editor ID -- a reference into the top-level `editors` array, not an inline editor definition."
+    },
+    "desc": {
+      "type": "string"
+    },
+    "hide": {
+      "type": "boolean",
+      "description": "If true, property is hidden in UI."
+    }
+  }
+}

@@ -6,7 +6,7 @@ tool-calling loop, invoked by ``run_unified_runtime.py``'s ``_run_once``/
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable, Iterable
 
 from .adapters import LLMAdapter
 from .models import IntentHandlerResult
@@ -15,11 +15,13 @@ from nucore import NuCoreInterface
 
 from .dispatch import execute_tool
 from .history_compaction import maybe_compact_history
-from .loop import AgenticLoop
+from .loop import AgenticLoop, ToolDispatch
 from .prompt_builder import build_system_prompt_sections
 from .stream_handler import StreamHandler
 
 _TOOLS_DIR = Path(__file__).parent / "tools"
+
+SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
 
 class UnifiedRuntime:
@@ -31,7 +33,20 @@ class UnifiedRuntime:
         runtime_config: dict[str, Any],
         max_iterations: int = 8,
         session_store: SessionStore | None = None,
+        tool_spec_paths: Iterable[Path] | None = None,
+        dispatch: ToolDispatch | None = None,
+        system_prompt_builder: SystemPromptBuilder | None = None,
     ) -> None:
+        """*tool_spec_paths*/*dispatch*/*system_prompt_builder* let a caller
+        swap in an alternate tool set instead of the customer-facing default
+        (this module's own ``_TOOLS_DIR`` glob / ``dispatch.execute_tool`` /
+        ``prompt_builder.build_system_prompt_sections``) -- see
+        ``unified.dev_tools`` for the one existing alternate tool set, and
+        ``run_unified_runtime.py``'s ``--tool-set`` flag for how it's wired
+        in. Omitting all three reproduces today's exact customer-path
+        behavior; that's the only combination covered by the existing test
+        suite; the override path is additive.
+        """
         self.nucore_interface = nucore_interface
         self.llm_client = llm_client
         self.runtime_config = runtime_config
@@ -44,8 +59,11 @@ class UnifiedRuntime:
         # and any test that doesn't pass one) keeps today's behavior: its
         # own private store, unaffected by any other instance.
         self.session_store = session_store or SessionStore()
-        self.tool_specs = LLMAdapter.tools_spec_from_files(sorted(_TOOLS_DIR.glob("tool_*.json")))
+        paths = list(tool_spec_paths) if tool_spec_paths is not None else sorted(_TOOLS_DIR.glob("tool_*.json"))
+        self.tool_specs = LLMAdapter.tools_spec_from_files(paths)
         self.max_iterations = max_iterations
+        self._dispatch_override = dispatch
+        self._system_prompt_builder = system_prompt_builder or build_system_prompt_sections
         # Chunk-count bookkeeping from the classic (retired) runtime -- unused
         # here, present only so run_unified_runtime.py's
         # `if runtime.stream_state is not None:` guard is a no-op.
@@ -71,6 +89,8 @@ class UnifiedRuntime:
         return dict(supported.get(key, {}))
 
     async def _dispatch(self, name: str, args: dict[str, Any]) -> Any:
+        if self._dispatch_override is not None:
+            return await self._dispatch_override(name, args)
         return await execute_tool(name, args, nucore_interface=self.nucore_interface)
 
     def reset_stream_handler(self) -> None:
@@ -118,7 +138,7 @@ class UnifiedRuntime:
                 token_budget=int(self.runtime_config.get("history_token_budget", 20000)),
             )
 
-            system_prompt = await build_system_prompt_sections(self.nucore_interface)
+            system_prompt = await self._system_prompt_builder(self.nucore_interface)
 
             history_messages: list[dict[str, Any]] = []
             for turn in history.turns:
