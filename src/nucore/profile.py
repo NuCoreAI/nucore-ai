@@ -253,6 +253,7 @@ class Profile:
                                 editor=editor,
                                 name=pdict.get("name"),
                                 hide=pdict.get("hide"),
+                                desc=pdict.get("desc"),
                             )
                     # NodeCommands
                     cmds_data = ndict.get("cmds", {})
@@ -286,6 +287,8 @@ class Profile:
                                     name=cdict.get("name"),
                                     format=cdict.get("format"),
                                     parameters=params,
+                                    desc=cdict.get("desc"),
+                                    native=cdict.get("native"),
                                 )
                             )
                     cmds = NodeCommands(sends=sends, accepts=accepts)
@@ -302,9 +305,12 @@ class Profile:
                             id=ndict.get("id"),
                             properties=props,
                             cmds=cmds,
-                            nls=ndict.get("nls"),
-                            icon=ndict.get("icon"),
                             links=node_links,
+                            # nls (legacy) and name (current) are the same concept; likewise
+                            # icon (legacy) and customicon (current) -- never both present.
+                            name=ndict.get("nls") or ndict.get("name"),
+                            desc=ndict.get("desc"),
+                            customicon=ndict.get("icon") or ndict.get("customicon"),
                         )
                     )
                 # Final Instance

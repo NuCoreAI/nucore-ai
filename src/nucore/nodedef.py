@@ -55,6 +55,7 @@ class NodeProperty:
     editor: Editor
     name: str = None
     hide: bool = None
+    desc: str = None
 
     def __str__(self):
         return f"{self.name}: {self.editor}"
@@ -96,13 +97,16 @@ class NodeDef:
     id: str
     properties: dict[str, NodeProperty]
     cmds: NodeCommands
-    nls: str = None
-    icon: str = None
     links: NodeLinks = None
+    # Parity fields with the Dynamic Profiles JSON schema (design/developers/plugin_model.md).
+    # name/customicon are each populated from whichever of the legacy (nls/icon) or current
+    # (name/customicon) raw profile key is present -- see Profile.__parse_profile__.
+    name: str = None
+    desc: str = None
+    customicon: str = None
 
     def __str__(self) -> str:
         """Return a multi-line human-readable summary of the node definition."""
-        #s = [f"Node type: {self.id} ({self.nls})"]
         s=[]
         s.append(textwrap.indent("***Properties***", "  "))
         for prop in self.properties:

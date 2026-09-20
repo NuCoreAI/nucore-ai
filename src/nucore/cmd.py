@@ -48,12 +48,17 @@ class Command:
         format:     Optional format string describing the command payload.
         parameters: Ordered list of :class:`CommandParameter` instances
                     accepted by this command.
+        desc:       Optional description (parity field, unused).
+        native:     Optional native-command flag string, e.g. ``"true"``/
+                    ``"false"`` (parity field, unused).
     """
 
     id: str
     name: str | None = None
     format: str | None = None
     parameters: list[CommandParameter] = field(default_factory=list)
+    desc: str | None = None
+    native: str | None = None
 
     def json(self) -> dict:
         """Serialise to a JSON-compatible dict for prompt/tool injection.
