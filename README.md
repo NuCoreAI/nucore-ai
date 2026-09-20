@@ -420,10 +420,12 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
 - **Diagnostics** -- stateless, no session or start call, one tool call per complaint shape:
   `diagnostics_not_responding` investigates a "can't control/reach a device" complaint,
   `diagnostics_no_status_feedback` investigates a "device changed locally but NuCore didn't show
-  it" complaint. Each runs its whole mandatory investigation internally, in the backend, in the
-  right order -- the model doesn't sequence individual diagnostic steps itself. `restart_core_service`
-  starts/stops/restarts a core service, and `run_shell_command` runs a shell command on the backend
-  host (e.g. to search the device activity log).
+  it" complaint, and `scene_test` (INSTEON-only) sends a raw PLM group-off to a scene and reports
+  per-member success/failure for a "some scene devices aren't responding" complaint. Each runs its
+  whole mandatory investigation internally, in the backend, in the right order -- the model doesn't
+  sequence individual diagnostic steps itself. `restart_core_service` starts/stops/restarts a core
+  service, and `run_shell_command` runs a shell command on the backend host (e.g. to search the
+  device activity log).
 - **User preferences** -- `preference_op`/`list_preferences` store per-user aliases (e.g. naming
   a device or routine) and event subscriptions, persisted across sessions.
 - **Plugin management** -- `list_store_plugins`/`list_purchased_plugins`/`list_installed_plugins`

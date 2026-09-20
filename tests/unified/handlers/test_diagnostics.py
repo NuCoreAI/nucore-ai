@@ -31,7 +31,7 @@ class FakeBackend(NuCoreInterface):
         self.device_family_result: Any = "insteon"
         self.device_family_calls: list[str] = []
         self.diagnose_not_responding_result: Any = {"diagnosis": "sentinel not-responding"}
-        self.diagnose_not_responding_calls: list[tuple[str, str | None]] = []
+        self.diagnose_not_responding_calls: list[tuple[str, str | None, bool]] = []
         self.diagnose_no_status_feedback_result: Any = {"diagnosis": "sentinel no-status-feedback"}
         self.diagnose_no_status_feedback_calls: list[tuple[str, str | None]] = []
         self.restart_core_service_result: Any = {"status": "restarted"}
@@ -55,8 +55,8 @@ class FakeBackend(NuCoreInterface):
         self.device_family_calls.append(device_id)
         return self.device_family_result
 
-    async def diagnose_not_responding(self, protocol, device_id=None):
-        self.diagnose_not_responding_calls.append((protocol, device_id))
+    async def diagnose_not_responding(self, protocol, device_id=None, force=False):
+        self.diagnose_not_responding_calls.append((protocol, device_id, force))
         return self.diagnose_not_responding_result
 
     async def diagnose_no_status_feedback(self, protocol, device_id=None):
@@ -148,7 +148,7 @@ async def test_diagnostics_not_responding_forwards_protocol_and_device_id():
     )
 
     assert result == backend.diagnose_not_responding_result
-    assert backend.diagnose_not_responding_calls == [("insteon", "n001")]
+    assert backend.diagnose_not_responding_calls == [("insteon", "n001", False)]
 
 
 @pytest.mark.asyncio
@@ -159,6 +159,20 @@ async def test_diagnostics_not_responding_requires_protocol():
 
     assert "error" in result
     assert backend.diagnose_not_responding_calls == []
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_not_responding_forwards_force():
+    backend = FakeBackend()
+
+    result = await execute_tool(
+        "diagnostics_not_responding",
+        {"protocol": "insteon", "device_id": "n001", "force": True},
+        nucore_interface=backend,
+    )
+
+    assert result == backend.diagnose_not_responding_result
+    assert backend.diagnose_not_responding_calls == [("insteon", "n001", True)]
 
 
 @pytest.mark.asyncio
@@ -239,6 +253,17 @@ async def test_scene_test_forwards_group_address_and_surfaces_the_result():
         "summary": [{"name": "Lamp", "address": "12 34 56 1", "status": "success"}],
         "details": ["12.34.56 1 [Std-Cleanup Ack] 12.34.56 --> 11.22.33"],
     }
+
+
+@pytest.mark.asyncio
+async def test_scene_test_forwards_note_only_when_the_backend_includes_one():
+    backend = FakeBackend()
+    backend.groups["SCENE1"] = _make_group()
+    backend.scene_test_result = {**backend.scene_test_result, "note": "some devices failed"}
+
+    result = await execute_tool("scene_test", {"group_address": "SCENE1"}, nucore_interface=backend)
+
+    assert result["note"] == "some devices failed"
 
 
 @pytest.mark.asyncio

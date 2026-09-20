@@ -149,14 +149,14 @@ def _bare_wrapper_with_diagnostics() -> IoXWrapper:
 async def test_wrapper_diagnose_not_responding_delegates():
     wrapper = _bare_wrapper_with_diagnostics()
 
-    async def fake(protocol, device_id=None):
-        return {"protocol": protocol, "device_id": device_id}
+    async def fake(protocol, device_id=None, force=False):
+        return {"protocol": protocol, "device_id": device_id, "force": force}
 
     wrapper.diagnostics.diagnose_not_responding = fake
 
     result = await wrapper.diagnose_not_responding("insteon", "n001")
 
-    assert result == {"protocol": "insteon", "device_id": "n001"}
+    assert result == {"protocol": "insteon", "device_id": "n001", "force": False}
 
 
 @pytest.mark.asyncio

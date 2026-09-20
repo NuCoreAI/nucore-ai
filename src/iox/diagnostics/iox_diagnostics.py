@@ -16,7 +16,7 @@ import json
 from typing import TYPE_CHECKING, Any, Literal
 import xml.etree.ElementTree as ET
 from nucore import DeviceEventListener, Group
-from ..iox_definitions import Subsystems, DEVICE_FAMILIES, get_subsystem_name
+from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name
 from .diag_utils import _element_to_dict_excluding
 
 
@@ -454,6 +454,32 @@ class IoXDiagnostics:
             logger.error(f"Failed to {op} service {service}: {e}")
             return {"error": f"Failed to {op} service {service}: {e}"}
 
+    async def set_debug_level(self, level: int) -> dict[str, Any]:
+        """Set the ISY/eisy firmware's own debug/logging verbosity level.
+
+        Port of the Java SDK's ``SetDebugLevel`` SOAP call -- a bare
+        ``<option>`` element, not the ``DeviceSpecific`` envelope
+        ``_send_device_specific*`` wraps things in:
+            StringBuffer body=new StringBuffer("<option>");
+            body.append(level);
+            body.append("</option>");
+            UDHTTPResponse res= submitSOAPRequest("SetDebugLevel",body);
+
+        :param level: The debug level to set.
+        :return: Dictionary with the operation's success/failure.
+        """
+        try:
+            response = await self._iox_wrapper._submit_soap_request(
+                IoXSOAPAction.SOAP_TYPE_SET_DEBUG_LEVEL, f"<option>{level}</option>"
+            )
+            if response is None:
+                logger.error("Failed to set debug level: No response")
+                return {"successful": False, "error": "Failed to set debug level: No response"}
+            return {"successful": True}
+        except Exception as e:
+            logger.error(f"Failed to set debug level: {e}")
+            return {"successful": False, "error": f"Failed to set debug level: {e}"}
+
     # ---------------------------------------------------
     # INSTEON DIAGNOSTICS
     # ---------------------------------------------------
@@ -487,6 +513,11 @@ class IoXDiagnostics:
         scene-test/raw-off family API, then collects the resulting _7/"1"
         progress events into a file.
 
+        Raises the firmware's debug level to 3 for the duration of the
+        underlying call (the raw group-off's per-member responses only show
+        up in the event stream at that verbosity) and always restores it to
+        0 afterward, even if the call raises or fails.
+
         :return: ``{"successful": bool, "error": str}`` on early failure
             (not a group, no physical group assigned, or invalid group
             number); otherwise INSTEONDiagnostics.scene_test's result:
@@ -511,7 +542,11 @@ class IoXDiagnostics:
         # self._iox_wrapper.nodes (never .groups) and so can't validate a
         # group/scene address anyway.
         self._init_insteon_diag(None)
-        return await self._insteon_diag.scene_test(device_id, physical_group_num, group)
+        await self.set_debug_level(3)
+        try:
+            return await self._insteon_diag.scene_test(device_id, physical_group_num, group)
+        finally:
+            await self.set_debug_level(0)
 
     # ---------------------------------------------------
     # Complaint-shaped diagnostics -- diagnose_not_responding/
@@ -521,17 +556,21 @@ class IoXDiagnostics:
     # protocol and delegates.
     # ---------------------------------------------------
 
-    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
+    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None, force: bool = False) -> dict[str, Any]:
         """Customer can't control/reach a device, or nothing happens when
         they try to (the NuCore -> device direction). See
         NuCoreInterface.diagnose_not_responding for the model-facing
         contract. Only INSTEON has real per-device logic so far -- the
         other protocols get a shallow "is the subsystem enabled" check.
+
+        :param force: See INSTEONDiagnostics._diagnose_device_not_responding
+            -- ignored by the non-insteon stub below, which has no
+            Query-succeeded shortcut to skip in the first place.
         """
         protocol = (protocol or "insteon").lower()
         if protocol == "insteon":
             if self._init_insteon_diag(device_id):
-                return await self._insteon_diag.diagnose_not_responding(device_id)
+                return await self._insteon_diag.diagnose_not_responding(device_id, force=force)
             return None
         if protocol in ("matter", "zwave", "zigbee"):
             return await self._diagnose_protocol_not_responding_stub(protocol, device_id)

@@ -2078,8 +2078,8 @@ class IoXWrapper(NuCoreInterface):
     # (self.diagnostics); this just satisfies NuCoreInterface.
     # ------------------------------------------------------------------
 
-    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
-        return await self.diagnostics.diagnose_not_responding(protocol, device_id)
+    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None, force: bool = False) -> dict[str, Any]:
+        return await self.diagnostics.diagnose_not_responding(protocol, device_id, force=force)
 
     async def diagnose_no_status_feedback(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
         return await self.diagnostics.diagnose_no_status_feedback(protocol, device_id)

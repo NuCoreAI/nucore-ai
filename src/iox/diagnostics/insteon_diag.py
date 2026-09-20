@@ -908,10 +908,23 @@ class INSTEONDiagnostics:
     _SCENE_TEST_KEYWORDS = ("Std-Cleanup Ack", "INST-SRX", "GRP-RX", "CLEAN-UP-RPT")
 
     _SCENE_TEST_NO_RESPONSE_NOTE = (
-        "No response seen for this device during the scene test. If it's a "
-        "battery-powered/wireless device (e.g. a motion or leak sensor), this "
-        "may not indicate an actual problem -- those devices don't respond to "
-        "commands at all."
+        "One or more members above have status=\"failure\" (no response seen "
+        "during the scene test). For each failed member, look at its name for "
+        "anything that sounds like a sensor (e.g. \"sensor\", \"motion\", "
+        "\"leak\", \"trigger\", \"occupancy\", or similar) -- if so, say that "
+        "member might be a battery-powered/wireless sensor, which wouldn't be "
+        "expected to respond to commands at all, and do not suggest "
+        "diagnostics_not_responding for it, since that tool checks control and "
+        "a sensor that can't be commanded can't be diagnosed that way. For any "
+        "other failed member, it can be investigated further with "
+        "diagnostics_not_responding(protocol=\"insteon\", device_id=..., "
+        "force=true) -- force=true is required here, since this failed scene "
+        "test is exactly the case that justifies it (a plain Query success "
+        "alone would otherwise be reported as \"responding\", contradicting "
+        "what the scene test just showed). Ask the customer for permission "
+        "separately before running it on each such member, one at a time -- "
+        "never back-to-back without asking first -- since each check can take "
+        "a long time."
     )
 
     async def _process_scene_test_file(self, file_path: str, event_count: int, group: Group) -> dict[str, Any]:
@@ -928,9 +941,25 @@ class INSTEONDiagnostics:
           address) and _strip_instance_suffix (which drops each member's own
           trailing instance digit so both sides compare equal). A member is
           a "success" if its (unsuffixed) address is among the devices that
-          sent a Std-Cleanup Ack, "failure" otherwise (with a caveat note,
-          since a non-responding wireless/battery device isn't necessarily
-          broken).
+          sent a Std-Cleanup Ack, "failure" otherwise.
+
+          The real scene members are group.members[group.address].links, NOT
+          group.members itself: a scene where the group's own address is the
+          controller (the standard shape -- the group directly links to N
+          responders) enriches that one pre-seeded container GroupMember's
+          .links in place rather than adding new group.members entries (see
+          Group.add_links), so group.members stays at just the container
+          even though it has real responders. group.members can hold
+          additional entries for devices that are themselves separately
+          cross-linked to each other, but that's a different relationship
+          than "what does this scene/group broadcast reach."
+
+        _SCENE_TEST_NO_RESPONSE_NOTE is identical caveat/next-steps guidance
+        regardless of which or how many members failed, so it's returned
+        once as a top-level "note" (present only if at least one member
+        failed) instead of repeated on every failing entry -- attaching the
+        same paragraph per failure just bloats the result for no benefit
+        once more than one member fails.
 
         event_count (the raw, unfiltered count of events received) is
         passed through unchanged -- it's a fact about the collection itself,
@@ -960,19 +989,19 @@ class INSTEONDiagnostics:
                 continue  # not a well-formed 6-hex-digit dotted address -- skip it
 
         summary = []
-        for member in group.members.values():
-            if member.address == group.address:
-                continue  # the scene/group's own container entry, not a real responder
-            entry = {
-                "name": member.name,
-                "address": member.address,
-                "status": "success" if _strip_instance_suffix(member.address) in responding else "failure",
-            }
-            if entry["status"] == "failure":
-                entry["note"] = self._SCENE_TEST_NO_RESPONSE_NOTE
-            summary.append(entry)
+        any_failures = False
+        container = group.members.get(group.address)
+        links = container.links.values() if container is not None else []
+        for link in links:
+            node = link.node
+            status = "success" if _strip_instance_suffix(node.address) in responding else "failure"
+            any_failures = any_failures or status == "failure"
+            summary.append({"name": node.name, "address": node.address, "status": status})
 
-        return {"summary": summary, "details": details, "event_count": event_count}
+        result = {"summary": summary, "details": details, "event_count": event_count}
+        if any_failures:
+            result["note"] = self._SCENE_TEST_NO_RESPONSE_NOTE
+        return result
 
     def _get_scene_test_file_path(self, device_id: str) -> str:
         return f"/tmp/scene_test_{device_id.replace(' ', '_')}.txt"
@@ -1393,7 +1422,7 @@ class INSTEONDiagnostics:
 
         return steps_run, sanity, None
 
-    async def diagnose_not_responding(self, device_id: str | None) -> dict[str, Any]:
+    async def diagnose_not_responding(self, device_id: str | None, force: bool = False) -> dict[str, Any]:
         """The real orchestrator: always runs the full PLM sanity check
         first (regardless of whether device_id was given), the same
         sequential, separately-guarded-step pattern diagnose_no_status_feedback
@@ -1402,7 +1431,14 @@ class INSTEONDiagnostics:
         from the per-device check below) are already each self-guarded, and
         nesting a guard inside another would self-deadlock (see
         compare_device_links for why that method calls the private, unguarded
-        primitives directly instead -- it IS the outer guard for its call)."""
+        primitives directly instead -- it IS the outer guard for its call).
+
+        :param force: Forwarded to _diagnose_device_not_responding -- see
+            its docstring. Only True when the customer explicitly insists on
+            a re-check despite an earlier "responding" result, or right
+            after a scene_test already showed this device failing a group
+            command.
+        """
         if device_id:
             node = self._iox_wrapper._get_node(device_id)
             if node is not None:
@@ -1419,7 +1455,7 @@ class INSTEONDiagnostics:
 
         device_checks = []
         for one_device_id in device_ids:
-            device_checks.append(await self._diagnose_device_not_responding(one_device_id))
+            device_checks.append(await self._diagnose_device_not_responding(one_device_id, force=force))
             steps_run.append(f"diagnose_insteon_device_not_responding({one_device_id})")
 
         return {"steps_run": steps_run, "plm_sanity_check": sanity, "device_checks": device_checks}
@@ -1431,7 +1467,7 @@ class INSTEONDiagnostics:
         candidates = [addr for addr in self._iox_wrapper.nodes if self._iox_wrapper._is_insteon_family(addr)]
         return random.sample(candidates, min(n, len(candidates)))
 
-    async def _diagnose_device_not_responding(self, device_id: str) -> dict[str, Any]:
+    async def _diagnose_device_not_responding(self, device_id: str, force: bool = False) -> dict[str, Any]:
         """Deep single-device diagnosis, called once per device_id by
         diagnose_not_responding above. Sends Query directly (same
         two primitives command_control_status.send_command itself uses) --
@@ -1442,6 +1478,17 @@ class INSTEONDiagnostics:
         the PLM's live table are used instead, since both are reachable
         without the device's cooperation.
 
+        :param force: When True, a successful Query is NOT treated as
+            conclusive -- it's only logged, and the link-table checks below
+            still run. A bare on-demand Query can succeed even though the
+            device fails to respond to a *group*/scene command (a different
+            link entirely), so short-circuiting on it there would contradict
+            a complaint the caller already has independent evidence for.
+            Only set True when the customer explicitly insists this device
+            isn't responding despite an earlier "responding" result, or
+            right after a scene_test already showed this device failing a
+            group command -- never as the default, since a plain Query
+            success is otherwise a perfectly good, cheap answer.
         :return: {"passed": bool, "device_id": str, "report": str}
         """
         command = self._iox_wrapper.resolve_command_id(device_id, "Query", direction="accepts")
@@ -1454,11 +1501,16 @@ class INSTEONDiagnostics:
         try:
             response = await self._iox_wrapper.send_commands([{"device": device_id, "command": command.id, "parameters": []}])
             if response and response[0].status_code == 200:
-                return {
-                    "passed": True,
-                    "device_id": device_id,
-                    "report": f"Query succeeded on {device_id} -- the device is responding.",
-                }
+                if not force:
+                    return {
+                        "passed": True,
+                        "device_id": device_id,
+                        "report": f"Query succeeded on {device_id} -- the device is responding.",
+                    }
+                logger.info(
+                    f"diagnose_not_responding: Query succeeded on {device_id}, but force=True -- "
+                    "continuing to check its link tables instead of stopping here."
+                )
         except Exception as ex:
             logger.error(f"diagnose_not_responding: Query failed on {device_id}: {ex}")
 

@@ -12,6 +12,10 @@
       "device_id": {
         "type": ["string", "null"],
         "description": "The customer-named device, if they named one. Optional even after system-level checks pass -- for insteon, omitting it samples 1-2 representative devices automatically rather than requiring you to pick one."
+      },
+      "force": {
+        "type": "boolean",
+        "description": "Default false -- leave it out for a normal first check. Set true only when the customer explicitly insists this device isn't responding even after this tool already reported it as responding -- force=true skips treating that success as conclusive and keeps investigating the device's link tables for a real root cause. Never set this on a first call, and never set it just because you personally doubt an earlier result."
       }
     }
   }

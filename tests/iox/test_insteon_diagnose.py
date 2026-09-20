@@ -152,7 +152,7 @@ class _FakeInsteonDiagDelegate:
         self.not_responding_calls: list[str | None] = []
         self.no_status_feedback_calls: list[str | None] = []
 
-    async def diagnose_not_responding(self, device_id):
+    async def diagnose_not_responding(self, device_id, force=False):
         self.not_responding_calls.append(device_id)
         return {"steps_run": [], "diagnosis": "delegated"}
 
@@ -296,6 +296,25 @@ async def test_not_responding_query_succeeds():
     assert check["device_id"] == "n001"
     assert diag.iox_links_table_calls == []  # never needed -- Query worked
     assert diag.plm_links_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_not_responding_query_succeeds_but_force_continues_to_link_checks():
+    diag = _insteon_diag_for_not_responding(
+        send_should_fail=False,
+        iox_links_table=_links_blob(["0,controller,0,PLM,data"]),
+        # PLM's table has links, but none naming this device (n001) -- a
+        # real link-config problem the plain "Query succeeded" shortcut
+        # would otherwise hide.
+        plm_links_table=_links_blob(["0,responder,0,some-other-device,data"]),
+    )
+
+    result = await diag.diagnose_not_responding("n001", force=True)
+
+    check = result["device_checks"][0]
+    assert check["passed"] is False
+    assert check["report"] == diag._KNOWN_FIXES["insteon_link_config_incorrect"]
+    assert diag.plm_links_calls == 1  # force kept going instead of stopping at "Query succeeded"
 
 
 @pytest.mark.asyncio

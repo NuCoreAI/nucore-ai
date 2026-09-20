@@ -43,7 +43,7 @@ async def diagnostics_not_responding(nucore_interface: NuCoreInterface, args: di
     protocol = args.get("protocol")
     if not protocol:
         return {"error": "protocol is required"}
-    return await nucore_interface.diagnose_not_responding(protocol, args.get("device_id"))
+    return await nucore_interface.diagnose_not_responding(protocol, args.get("device_id"), force=bool(args.get("force", False)))
 
 
 async def diagnostics_no_status_feedback(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
@@ -73,10 +73,13 @@ async def scene_test(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
     result = await nucore_interface.scene_test(group_address)
     if not result.get("successful"):
         return {"error": result.get("error") or f"scene test failed for '{group_address}'"}
-    return {
+    response = {
         "group_address": group_address,
         "file_path": result.get("file_path"),
         "event_count": result.get("event_count"),
         "summary": result.get("summary"),
         "details": result.get("details"),
     }
+    if "note" in result:
+        response["note"] = result["note"]
+    return response

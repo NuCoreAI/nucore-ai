@@ -15,11 +15,12 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from types import SimpleNamespace
 from xml.etree import ElementTree as ET
 
 import pytest
 
-from nucore.group import Group, GroupMember, GroupMemberType
+from nucore.group import Group, GroupLink, GroupMember, GroupMemberType
 from nucore.nucore_interface import NuCoreInterface
 from iox.diagnostics.insteon_diag import (
     INSTEONDiagnostics,
@@ -96,6 +97,15 @@ def _make_group(device_group="5", family="1", address="SCENE1"):
         + "</group>"
     )
     return Group(ET.fromstring(xml))
+
+
+def _add_responder(group: Group, address: str, name: str) -> None:
+    """Add a real scene member the way Group.add_links actually does for the
+    standard "group is its own controller" shape: as a GroupLink on the
+    container GroupMember's own .links, not as a separate group.members
+    entry -- see _process_scene_test_file's docstring for why."""
+    container = group.members[group.address]
+    container.links[address] = GroupLink(node=SimpleNamespace(address=address, name=name))
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +333,8 @@ async def test_process_scene_test_file_summary_marks_responding_and_silent_membe
     diag = INSTEONDiagnostics(wrapper)
     file_path = str(tmp_path / "scene_test.txt")
     group = _make_group(address="SCENE1")
-    group.members["12 34 56 1"] = GroupMember(address="12 34 56 1", name="Lamp", type=GroupMemberType.MEMBER_IS_RESPONDER)
-    group.members["99 88 77 1"] = GroupMember(address="99 88 77 1", name="Sensor", type=GroupMemberType.MEMBER_IS_RESPONDER)
+    _add_responder(group, "12 34 56 1", "Lamp")
+    _add_responder(group, "99 88 77 1", "Sensor")
     line = diag.format_scene_test_event("n1", "some prefix [Std-Cleanup Ack] 12.34.56 --> 11.22.33 0")
     with open(file_path, "w") as f:
         f.write(line + "\n")
@@ -333,27 +343,79 @@ async def test_process_scene_test_file_summary_marks_responding_and_silent_membe
 
     assert result["summary"] == [
         {"name": "Lamp", "address": "12 34 56 1", "status": "success"},
-        {
-            "name": "Sensor",
-            "address": "99 88 77 1",
-            "status": "failure",
-            "note": diag._SCENE_TEST_NO_RESPONSE_NOTE,
-        },
+        {"name": "Sensor", "address": "99 88 77 1", "status": "failure"},
     ]
+    assert result["note"] == diag._SCENE_TEST_NO_RESPONSE_NOTE
 
 
 @pytest.mark.asyncio
-async def test_process_scene_test_file_summary_excludes_the_groups_own_container_entry(tmp_path):
+async def test_process_scene_test_file_note_appears_once_even_with_multiple_failures(tmp_path):
     wrapper = FakeIoXWrapper()
     diag = INSTEONDiagnostics(wrapper)
     file_path = str(tmp_path / "scene_test.txt")
-    group = _make_group(address="SCENE1")  # Group.__init__ seeds members["SCENE1"] as the container
+    group = _make_group(address="SCENE1")
+    _add_responder(group, "11 11 11 1", "A")
+    _add_responder(group, "22 22 22 1", "B")
+    with open(file_path, "w") as f:
+        f.write(diag.format_scene_test_event("n1", "irrelevant -- nothing acked") + "\n")
+
+    result = await diag._process_scene_test_file(file_path, event_count=1, group=group)
+
+    assert [m["status"] for m in result["summary"]] == ["failure", "failure"]
+    assert all("note" not in m for m in result["summary"])
+    assert result["note"] == diag._SCENE_TEST_NO_RESPONSE_NOTE
+
+
+@pytest.mark.asyncio
+async def test_process_scene_test_file_no_note_when_all_members_succeed(tmp_path):
+    wrapper = FakeIoXWrapper()
+    diag = INSTEONDiagnostics(wrapper)
+    file_path = str(tmp_path / "scene_test.txt")
+    group = _make_group(address="SCENE1")
+    _add_responder(group, "12 34 56 1", "Lamp")
+    line = diag.format_scene_test_event("n1", "some prefix [Std-Cleanup Ack] 12.34.56 --> 11.22.33 0")
+    with open(file_path, "w") as f:
+        f.write(line + "\n")
+
+    result = await diag._process_scene_test_file(file_path, event_count=1, group=group)
+
+    assert result["summary"] == [{"name": "Lamp", "address": "12 34 56 1", "status": "success"}]
+    assert "note" not in result
+
+
+@pytest.mark.asyncio
+async def test_process_scene_test_file_summary_is_empty_with_no_real_responders(tmp_path):
+    wrapper = FakeIoXWrapper()
+    diag = INSTEONDiagnostics(wrapper)
+    file_path = str(tmp_path / "scene_test.txt")
+    group = _make_group(address="SCENE1")  # Group.__init__ seeds members["SCENE1"] as the container, no links
     with open(file_path, "w") as f:
         f.write(diag.format_scene_test_event("n1", "irrelevant") + "\n")
 
     result = await diag._process_scene_test_file(file_path, event_count=1, group=group)
 
     assert result["summary"] == []
+
+
+@pytest.mark.asyncio
+async def test_process_scene_test_file_ignores_group_members_not_in_the_containers_links(tmp_path):
+    """A device cross-linked to another device (its own group.members entry,
+    per Group.add_links) isn't necessarily one of the scene's own real
+    responders -- only group.members[group.address].links counts, per
+    _process_scene_test_file's docstring."""
+    wrapper = FakeIoXWrapper()
+    diag = INSTEONDiagnostics(wrapper)
+    file_path = str(tmp_path / "scene_test.txt")
+    group = _make_group(address="SCENE1")
+    _add_responder(group, "12 34 56 1", "Lamp")
+    group.members["99 88 77 1"] = GroupMember(address="99 88 77 1", name="Cross-linked Device", type=GroupMemberType.MEMBER_IS_CONTROLLER)
+    line = diag.format_scene_test_event("n1", "some prefix [Std-Cleanup Ack] 12.34.56 --> 11.22.33 0")
+    with open(file_path, "w") as f:
+        f.write(line + "\n")
+
+    result = await diag._process_scene_test_file(file_path, event_count=1, group=group)
+
+    assert result["summary"] == [{"name": "Lamp", "address": "12 34 56 1", "status": "success"}]
 
 
 # ---------------------------------------------------------------------------
@@ -414,3 +476,47 @@ async def test_scene_test_delegates_to_insteon_diag_on_success():
 
     assert result["successful"] is True
     assert fake_insteon_diag.calls == [("SCENE1", 5, group)]
+
+
+@pytest.mark.asyncio
+async def test_scene_test_brackets_the_call_with_debug_level_3_then_0():
+    group = _make_group(device_group="5", family="1")
+    diag = IoXDiagnostics(_FakeGateWrapper(node=group))
+    diag._insteon_diag = _FakeInsteonDiag()
+
+    levels: list[int] = []
+
+    async def _fake_set_debug_level(level):
+        levels.append(level)
+        return {"successful": True}
+
+    diag.set_debug_level = _fake_set_debug_level
+
+    await diag.scene_test("SCENE1")
+
+    assert levels == [3, 0]
+
+
+@pytest.mark.asyncio
+async def test_scene_test_resets_debug_level_even_if_insteon_diag_raises():
+    group = _make_group(device_group="5", family="1")
+    diag = IoXDiagnostics(_FakeGateWrapper(node=group))
+
+    class _RaisingInsteonDiag:
+        async def scene_test(self, device_id, physical_group_num, group):
+            raise RuntimeError("boom")
+
+    diag._insteon_diag = _RaisingInsteonDiag()
+
+    levels: list[int] = []
+
+    async def _fake_set_debug_level(level):
+        levels.append(level)
+        return {"successful": True}
+
+    diag.set_debug_level = _fake_set_debug_level
+
+    with pytest.raises(RuntimeError):
+        await diag.scene_test("SCENE1")
+
+    assert levels == [3, 0]

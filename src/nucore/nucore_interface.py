@@ -658,7 +658,7 @@ class NuCoreInterface(ABC):
     # @abstractmethod -- see get_device_history above for why.
     # ------------------------------------------------------------------
 
-    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None) -> dict[str, Any]:
+    async def diagnose_not_responding(self, protocol: str, device_id: str | None = None, force: bool = False) -> dict[str, Any]:
         """
         Investigate a "customer can't control/reach a device, or nothing
         happens when they try" complaint (the NuCore -> device direction).
@@ -668,6 +668,14 @@ class NuCoreInterface(ABC):
             optional even once system-level checks pass; implementations
             may sample representative devices themselves when omitted,
             rather than requiring the caller to pick one.
+        :param force: Don't treat a bare on-demand "device responded"
+            success as conclusive -- keep investigating for a real root
+            cause instead. Default False. Only True when the customer
+            explicitly insists this device isn't responding despite an
+            earlier "responding" result, or right after a scene_test
+            already showed this device failing a group/scene command --
+            those are cases where a successful direct Query doesn't
+            actually settle the complaint.
         :return: A dict with at least ``diagnosis``, plus whatever
             ``recommended_fix``/``clarifying_question``/``error`` fields
             apply -- see the implementation for the exact shape.

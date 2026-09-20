@@ -1,6 +1,6 @@
 {
   "name": "scene_test",
-  "description": "Use this if the customer complains about scenes not working, or only some of the devices are responding, or some devices respond intermittently. Sends a raw PLM group-off directly to the scene's physical group (bypassing NuCore's own link bookkeeping) and listens for the devices' responses, so this call blocks for a few seconds -- it only returns once the response stream goes quiet. Returns 'summary': one {name, address, status: success|failure, note?} entry per scene member (a failure note means the device may just be battery-powered/wireless and not expected to respond -- not necessarily broken); 'details': the raw matched event lines behind that summary; and 'file_path'/'event_count' for the full collected event log. INSTEON-only for now.",
+  "description": "Use this if the customer complains about scenes not working, or only some of the devices are responding, or some devices respond intermittently. Returns 'summary': one {name, address, status: success|failure} entry per scene member; 'note': present only if at least one member failed; 'details': raw protocol trace, evidence only -- not a statement about the scene's configured on/off behavior. INSTEON-only for now.",
   "input_schema": {
     "type": "object",
     "required": ["group_address"],

@@ -279,21 +279,32 @@ class Group(NodeBase):
     
     def explain_json(self):
         """
-        LLM friendly explanation of the group, its members, and their links in JSON format. 
+        LLM friendly explanation of the group, its members, and their links in JSON format.
         """
         group = {
           #  "id": self.address,
           #  "name": self.name,
         }
 
-        if (len(self.members) <= 1):
+        # len(self.members) alone can't detect "controls nothing": when the
+        # group's own container address is the 'ctl' id in the links data
+        # (the group itself is the controller of N responders -- a standard
+        # Insteon scene shape), add_links() enriches this SAME pre-seeded
+        # container entry (see __init__) instead of adding a new one, so
+        # self.members never grows past 1 even though the container has
+        # real links. Must check the container's own links before
+        # early-returning "collection", not just the member count.
+        me = self.members.get(self.address, None)
+        is_controller = me is not None and me.type == GroupMemberType.MEMBER_IS_CONTROLLER
+        controller_has_links = is_controller and len(me.links) > 0
+
+        if len(self.members) <= 1 and not controller_has_links:
             group["nucore_scene_activation"]="This is a collection but does not control anything else"
             return group
 
         # let's see if our group is controlling anything at all
-        me = self.members.get(self.address, None)
-        if me is not None and me.type == GroupMemberType.MEMBER_IS_CONTROLLER:
-            if len(me.links) > 0:
+        if is_controller:
+            if controller_has_links:
                 group["nucore_scene_activation"]=me.explain_json(True)
             else:
                 group["nucore_scene_activation"]="This is a collection but does not control anything else"
