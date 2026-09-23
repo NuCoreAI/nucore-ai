@@ -463,7 +463,8 @@ Beyond device/group/routine/variable command-and-control, the unified runtime su
   with no per-tool maintenance. Controlled by the `fabrication_guard_mode`/`max_fabrication_retries`
   runtime-config keys (no CLI flag) -- see `src/unified/README.md`'s "Fabrication guard" section.
 
-See `src/unified/prompt/definitions.md` for the exact tool-selection rules the model follows for
+See `src/unified/prompt/system_prompt.md`'s per-concept sections (Devices, Groups and scenes,
+Folders, Variables, Routines, Plugins) for the exact tool-selection rules the model follows for
 each of these, and `src/unified/README.md` for the tool/handler layout.
 
 ## Hardware

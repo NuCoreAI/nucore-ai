@@ -7,7 +7,7 @@
     "properties": {
       "plugin_id": {
         "type": "string",
-        "description": "The `plugin_id`, from list_installed_plugins."
+        "description": "The plugin's `plugin_id`, exactly as returned by list_installed_plugins -- never guessed."
       },
       "name": {
         "type": "string",

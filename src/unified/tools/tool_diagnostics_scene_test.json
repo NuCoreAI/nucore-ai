@@ -1,13 +1,13 @@
 {
   "name": "scene_test",
-  "description": "Use this if the customer complains about scenes not working, or only some of the devices are responding, or some devices respond intermittently. Returns 'summary': one {name, address, status: success|failure} entry per scene member; 'note': present only if at least one member failed; 'details': raw protocol trace, evidence only -- not a statement about the scene's configured on/off behavior. INSTEON-only for now.",
+  "description": "Test a group/scene's physical wiring: sends a real group-off to the group/scene (its member devices WILL turn off) and reports which members responded. Use when the customer complains a group/scene isn't working, only some of its devices respond, or some respond intermittently. Because it actually switches the members off, only after the customer has explicitly agreed -- never speculatively. Returns 'summary': one {name, address, status: success|failure} entry per member; 'note': present only if at least one member failed; 'details': raw protocol trace, evidence only -- not a statement about the group/scene's configured on/off behavior. INSTEON-only for now.",
   "input_schema": {
     "type": "object",
     "required": ["group_address"],
     "properties": {
       "group_address": {
         "type": "string",
-        "description": "The scene/group's real id, exactly as shown in DEVICE DATABASE."
+        "description": "The group/scene's real id, exactly as shown in DEVICE DATABASE -- never guessed."
       }
     }
   }

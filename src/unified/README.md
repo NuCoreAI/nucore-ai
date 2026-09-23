@@ -14,7 +14,7 @@ backend.
 | `loop.py` | `AgenticLoop` -- the multi-turn tool-calling loop against an `LLMAdapter`. |
 | `dispatch.py` | Tool name → handler dispatch table (`execute_tool`). |
 | `fabrication_guard.py` | `detect_completion_claim` -- tool-agnostic regex heuristic flagging a reply that claims an action happened when no tool was called this turn; see "Fabrication guard" below. |
-| `prompt_builder.py`, `prompt/` | Assembles the system prompt from `system_prompt.md`/`definitions.md` plus live `DEVICE DATABASE`/`ROUTINES DATABASE`, as three ordered, least-to-most-volatile sections (two `<<cache_boundary>>` markers in `system_prompt.md`) so each gets its own prompt-cache breakpoint -- see the module docstring for the exact split and why. |
+| `prompt_builder.py`, `prompt/` | Assembles the system prompt from `system_prompt.md` (one section per concept -- Devices, Groups and scenes, Folders, Variables, Routines, Plugins -- plus general rules) plus live `DEVICE DATABASE`/`ROUTINES DATABASE`, as three ordered, least-to-most-volatile sections (two `<<cache_boundary>>` markers in `system_prompt.md`) so each gets its own prompt-cache breakpoint -- see the module docstring for the exact split and why. |
 | `tools/` | One `tool_<category>_<function>.json` file per tool (e.g. `tool_plugin_buy.json`), auto-discovered via a `tool_*.json` glob by `run_unified_runtime.py` -- the category prefix is a filenames-only convention for browsing/sorting, unrelated to each tool's own `"name"` field. |
 | `handlers/` | One module per tool family, implementing the actual `NuCoreInterface`/`IoXWrapper` calls. |
 | `routine_compiler/` | The DSL compiler `create_or_update_routine` uses to turn `if`/`then`/`else` Python-like source into NuCore's `Trigger` schema. |
@@ -60,8 +60,8 @@ reference, secrets-file format, and logging flags -- they're identical for this 
 4. Add tests under `tests/unified/handlers/`.
 
 `create_or_update_routine` is the one tool whose grammar documentation lives entirely in its own
-tool JSON's `description` rather than in `prompt/definitions.md`, since it's large and specific to
-that one tool.
+tool JSON's `description` rather than in `system_prompt.md`'s ROUTINES section, since it's large
+and specific to that one tool.
 
 ## Fabrication guard
 
@@ -83,12 +83,13 @@ Controlled by two top-level `runtime_config` keys (no CLI flag -- see
 | `fabrication_guard_mode` | `"log"` | `"off"` disables detection. `"log"` flags a match to the prompt log (`PromptLogManager.write_flag`, kind `"fabrication_flag"`) without changing the reply -- observation only. `"block"` retries the turn once and, if the retry also fabricates, replaces the reply with a fixed "I'm not fully sure that completed correctly -- please check, or ask me to try again." |
 | `max_fabrication_retries` | `1` | Retry budget used only in `"block"` mode. |
 
-The matching prompt-side half is `system_prompt.md`'s `# CRITICAL RULES` section -- originally
-five separate, topic-specific "Self-check before every reply" blocks, first collapsed into one
-statement with short pointer bullets left in each original location, then trimmed further to
-three one-line rules (tool-mediated claims, per-request freshness, per-item batch reporting) once
-live production logs showed the verbose version wasn't measurably reducing fabrication rate
-anyway -- the code-level guard above is the actual backstop either way, which is what made
+The matching prompt-side half is `system_prompt.md`'s `# CRITICAL RULES` section, at the very top
+of the prompt -- originally five separate, topic-specific "Self-check before every reply" blocks,
+then collapsed and trimmed repeatedly once live production logs showed the verbose version wasn't
+measurably reducing fabrication rate anyway. Today it is a short list of general rules (call a tool
+whenever one applies, no unverified facts or capability claims, no invented ids, act on tool errors
+rather than guessing, re-check on pushback), echoed by a two-line `# REMINDER` at the very end of
+the prompt -- the code-level guard above is the actual backstop either way, which is what made
 cutting the prompt-side prose low-risk.
 
 On a `"block"`-mode retry, `AgenticLoop.run` also forces `tool_choice: {"type": "any"}` for that

@@ -7,7 +7,7 @@
     "properties": {
       "nsid": {
         "type": "string",
-        "description": "The `nsid`, from list_purchased_plugins."
+        "description": "The plugin's `nsid`, exactly as returned by list_purchased_plugins -- never guessed."
       },
       "name": {
         "type": "string",

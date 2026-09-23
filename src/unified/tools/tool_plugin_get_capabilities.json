@@ -1,13 +1,13 @@
 {
   "name": "get_plugin_capabilities",
-  "description": "Fetch an installed plugin's usage guidance (prompt) and the tools it declares it can do, once you've found a plugin (via list_installed_plugins, or after install_plugin/buy_plugin) that might cover something no existing tool handles. Read the returned prompt and tools, then call call_plugin with the tool you decided to use. ",
+  "description": "Fetch an installed plugin's usage guidance (prompt) and the tools it declares, for a plugin from list_installed_plugins that might cover something no existing tool handles. A plugin you just returned an install/buy link for is not installed yet -- it only becomes usable once it appears in list_installed_plugins. Read the returned prompt and tools, then call call_plugin with the tool you decided to use.",
   "input_schema": {
     "type": "object",
     "required": ["plugin_id"],
     "properties": {
       "plugin_id": {
         "type": "string",
-        "description": "The installed `plugin_id` from list_installed_plugins)."
+        "description": "The plugin's `plugin_id`, exactly as returned by list_installed_plugins -- never guessed."
       }
     }
   }

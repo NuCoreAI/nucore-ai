@@ -7,7 +7,7 @@
     "properties": {
       "group_address": {
         "type": "string",
-        "description": "The group/scene's real id, exactly as shown in DEVICE DATABASE."
+        "description": "The group/scene's real id, exactly as shown in DEVICE DATABASE -- never guessed."
       }
     }
   }

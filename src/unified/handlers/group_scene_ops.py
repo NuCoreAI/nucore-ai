@@ -5,13 +5,14 @@ Dispatch calling directly into ``NuCoreInterface``/domain objects
 (``group_scene_add_member``/``remove_member``/``update_link``,
 ``Group.explain_json``, ``add_node``) with their real keyword argument names.
 
-Scope note: ``group_scene_op`` does not run client-side controller/responder
-role prechecks (``group_scene_get_node_roles``/``group_scene_get_link_types``)
-for its single-step operations -- that's real, non-trivial interpretation
+Scope note: ``group_scene_op`` has no ``add_member`` operation -- that's
+``multi_device_scene``'s job exclusively now, even for a single new member,
+so every add gets its ``availableAsController``/``availableAsResponder``
+role precheck and its "controller can only be in one scene" guard.
+``group_scene_op``'s own ``remove_member``/``update_link`` don't run a
+client-side precheck (``group_scene_get_node_roles``/
+``group_scene_get_link_types``) -- that's real, non-trivial interpretation
 logic without a clear enough spec to safely derive for the general case.
-``multi_device_scene`` *does* run the ``availableAsController``/
-``availableAsResponder`` role precheck per member, since that composition's
-shape is well-specified (unlike the general step-sequencing case).
 """
 
 from __future__ import annotations
@@ -56,14 +57,7 @@ async def group_scene_op(nucore_interface: NuCoreInterface, args: dict[str, Any]
     if not group_address or not link_address:
         return {"error": "group_address and link_address are both required"}
 
-    if operation == "add_member":
-        result = await nucore_interface.group_scene_add_member(
-            group_address=group_address,
-            link_address=link_address,
-            is_controller=bool(args.get("is_controller", False)),
-            name=args.get("name"),
-        )
-    elif operation == "remove_member":
+    if operation == "remove_member":
         result = await nucore_interface.group_scene_remove_member(
             group_address=group_address, link_address=link_address
         )

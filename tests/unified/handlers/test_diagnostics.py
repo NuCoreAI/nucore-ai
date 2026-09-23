@@ -282,6 +282,9 @@ async def test_other_tools_proceed_normally_regardless_of_diagnostics():
     # No session, no gating -- diagnostics tools never block anything else.
     backend = FakeBackend()
 
-    result = await execute_tool("get_property", {"device_id": "n001", "property": "ST"}, nucore_interface=backend)
+    result = await execute_tool(
+        "get_property", {"properties": [{"device_id": "n001", "property": "ST"}]}, nucore_interface=backend
+    )
 
-    assert result == {"error": "no device found with id 'n001'; check DEVICE DATABASE"}
+    assert result["summary"] == {"total": 1, "successful": 0, "failed": 1}
+    assert "no device found with id 'n001'" in result["results"][0]["error"]

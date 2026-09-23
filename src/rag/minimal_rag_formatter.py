@@ -73,8 +73,8 @@ class MinimalRagFormatter(RAGFormatter):
         spec, same shape as a property. A command with MORE than one
         parameter -- e.g. a notification command with separate Group/
         Sound/Content parameters -- renders as a list of (param_name, spec)
-        tuples, one per parameter, in order: send_command's `values` array
-        is positional against this same order (see
+        tuples, one per parameter, in order: each `commands[]` entry's
+        `values` array is positional against this same order (see
         tool_device_send_command.json's description), so combining every
         parameter's enum labels into one flat list here (the previous
         approach, on the wrong assumption that a multi-parameter command

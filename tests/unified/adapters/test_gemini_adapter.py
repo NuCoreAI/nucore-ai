@@ -373,15 +373,17 @@ def test_export_tools_rewrites_a_nullable_type_union_to_a_plain_type_plus_nullab
 
 
 def test_export_tools_drops_type_entirely_for_a_genuine_multi_type_union():
-    # tool_device_send_command.json's "value" can genuinely be a number,
-    # string, object, or null -- there's no single Gemini type for that, so
-    # the field is left unconstrained (no "type" key) rather than picking an
-    # arbitrary, misleading one.
+    # tool_device_send_command.json's per-entry "value" (nested under
+    # commands[].value) can genuinely be a number, string, object, or null --
+    # there's no single Gemini type for that, so the field is left
+    # unconstrained (no "type" key) rather than picking an arbitrary,
+    # misleading one.
     spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_device_send_command.json")
 
     tools = GeminiAdapter().export_tools([spec])
 
-    value_schema = tools[0]["functionDeclarations"][0]["parameters"]["properties"]["value"]
+    commands_schema = tools[0]["functionDeclarations"][0]["parameters"]["properties"]["commands"]
+    value_schema = commands_schema["items"]["properties"]["value"]
     assert "type" not in value_schema
     assert value_schema["nullable"] is True
 
@@ -396,7 +398,8 @@ def test_export_tools_drops_properties_left_over_from_a_dropped_object_type():
 
     tools = GeminiAdapter().export_tools([spec])
 
-    value_schema = tools[0]["functionDeclarations"][0]["parameters"]["properties"]["value"]
+    commands_schema = tools[0]["functionDeclarations"][0]["parameters"]["properties"]["commands"]
+    value_schema = commands_schema["items"]["properties"]["value"]
     assert "properties" not in value_schema
 
 

@@ -26,7 +26,7 @@ from typing import Literal, Any
 from utils import get_logger, reapply_logging_config
 from xml.sax.saxutils import escape as xml_escape
 from .diagnostics.iox_diagnostics import IoXDiagnostics
-from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER, ZMATTER_BASE_PATHS, PROTOCOL_TO_ZMATTER_FAMILY
+from .iox_definitions import IoXSOAPAction, DEVICE_FAMILIES, DEVICE_FAMILY_INSTEON, DEVICE_FAMILY_LEGACY_Z_WAVE, DEVICE_FAMILY_PLUGIN, DEVICE_FAMILY_Z_WAVE, DEVICE_FAMILY_ZIGBEE, DEVICE_FAMILY_MATTER, ZMATTER_BASE_PATHS, PROTOCOL_TO_ZMATTER_FAMILY, normalize_protocol_name
 logger = get_logger(__name__)
 
 # Keys come directly from DEVICE_FAMILIES (imported above) rather than a
@@ -45,10 +45,6 @@ _PROTOCOL_ENABLED_KEYS: dict[str, str] = {
 }
 
 
-def _normalize_protocol_name(name: str) -> str:
-    return (name or "").strip().casefold().replace("-", "")
-
-
 # Precomputed once at import time so is_protocol_enabled's lookup is a plain
 # dict get, not a re-normalize-every-key scan on every call. The same
 # normalization applied to both this table's keys and the caller's input
@@ -56,7 +52,7 @@ def _normalize_protocol_name(name: str) -> str:
 # all resolve identically, while "Legacy Z-Wave" normalizes to "legacy zwave"
 # -- distinct from "zwave", so it still correctly fails to match.
 _NORMALIZED_PROTOCOL_ENABLED_KEYS: dict[str, str] = {
-    _normalize_protocol_name(k): v for k, v in _PROTOCOL_ENABLED_KEYS.items()
+    normalize_protocol_name(k): v for k, v in _PROTOCOL_ENABLED_KEYS.items()
 }
 
 
@@ -2285,7 +2281,7 @@ class IoXWrapper(NuCoreInterface):
         return not options.get("zMatterZwave", False)
 
     async def is_protocol_enabled(self, protocol: str) -> bool:
-        key = _NORMALIZED_PROTOCOL_ENABLED_KEYS.get(_normalize_protocol_name(protocol))
+        key = _NORMALIZED_PROTOCOL_ENABLED_KEYS.get(normalize_protocol_name(protocol))
         if key is None:
             raise ValueError(f"unknown protocol '{protocol}' -- must be one of: {sorted(_PROTOCOL_ENABLED_KEYS)}")
         options_config = await self.diagnostics._get_system_options()

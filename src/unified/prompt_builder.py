@@ -6,10 +6,14 @@ directory-loading machinery involved. system_prompt.md carries two
 ``<<cache_boundary>>`` markers, splitting it into three ordered,
 least-to-most-volatile sections:
 
-1. Rules/definitions/ui_navigation_rules/host_environment + DEVICE DATABASE
-   -- genuinely static: DEVICE DATABASE only changes on a structural device
-   edit (add/remove/rename/enable-disable/error), never on a plain status
-   change (confirmed against IoXWrapper's ``device_structure_changed`` gate).
+1. CRITICAL RULES + concept sections (Devices, Groups and scenes, Folders,
+   Variables, Routines, Plugins) + UI rules + host_environment + DEVICE
+   DATABASE -- genuinely static: DEVICE DATABASE only changes on a
+   structural device edit (add/remove/rename/enable-disable/error), never on
+   a plain status change (confirmed against IoXWrapper's
+   ``device_structure_changed`` gate). CRITICAL RULES sits at the very top
+   on purpose: it has no per-turn substitution, so it belongs in the most
+   stable block, and smaller models weight the start of the prompt most.
 2. ROUTINES DATABASE alone -- changes far more often than (1), since
    authoring/editing/deleting a routine via chat is a routine (no pun
    intended) customer action, not a rare structural edit. Giving it a
@@ -19,7 +23,11 @@ least-to-most-volatile sections:
    routine edits (not device on/off toggles, which don't touch DEVICE
    DATABASE at all) were the actual cause of the partial cache misses this
    split fixes.
-3. **CRITICAL** + USER PREFERENCES + TIME & LOCATION -- changes every turn.
+3. USER PREFERENCES + TIME & LOCATION + a two-line REMINDER -- changes every
+   turn. The REMINDER is static text, but it is deliberately last so the
+   core rules are also the most recent thing the model reads before the
+   conversation; it costs a few tokens in a block that is rewritten on
+   every date rollover anyway.
 
 Each section is sent as its own system message so claude_adapter can give
 each its own prompt-cache breakpoint -- see build_system_prompt_sections.
@@ -126,9 +134,6 @@ async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> lis
             f"system_prompt.md must contain exactly two {_CACHE_BOUNDARY} markers, found {len(parts) - 1}"
         )
 
-    definitions = (_PROMPT_DIR / "definitions.md").read_text(encoding="utf-8").strip()
-    ui_navigation_rules = (_PROMPT_DIR / "ui_navigation_rules.md").read_text(encoding="utf-8").strip()
-
     device_database = (
         nucore_interface.summary_rags.docs_to_string() if nucore_interface.summary_rags else ""
     )
@@ -142,9 +147,7 @@ async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> lis
     preference_aliases = _render_preference_aliases(nucore_interface)
 
     substitutions = {
-        "<<definitions>>": definitions,
         "<<host_environment>>": _HOST_ENVIRONMENT,
-        "<<ui_navigation_rules>>": ui_navigation_rules,
         "<<device_database>>": device_database,
         "<<routines_database>>": routines_database,
         "<<time_info>>": time_info,

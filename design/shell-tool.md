@@ -83,7 +83,7 @@ get real access there), are explicitly **deferred** rather than solved by this d
 | `src/unified/handlers/shell.py` | New. Handler module, single function `run_shell_command`. |
 | `src/unified/dispatch.py` | Add `shell` to the handler import block (~line 10-21), add `"run_shell_command": shell.run_shell_command,` to `TOOL_HANDLERS` (~line 43-70). |
 | `tests/unified/handlers/test_shell.py` | New. Unit tests, following `test_plugin_management.py`'s pattern of calling the handler directly. |
-| `src/unified/prompt/definitions.md` | Optional: short steering paragraph, same style as existing diagnostics/plugin sections — should mention that `sudo`-prefixed commands work only for the specific operations `eisyai`'s sudoers policy allows, and a permission-denied result from `sudo` is normal, expected output, not a bug. |
+| `src/unified/prompt/system_prompt.md` (HOST ENVIRONMENT section) | Optional: short steering paragraph, same style as existing diagnostics/plugin sections — should mention that `sudo`-prefixed commands work only for the specific operations `eisyai`'s sudoers policy allows, and a permission-denied result from `sudo` is normal, expected output, not a bug. |
 
 Tool name: `run_shell_command` (bare verb in JSON `"name"`, domain-prefixed filename — matches
 existing `node_op`/`send_command`/`preference_op` convention).

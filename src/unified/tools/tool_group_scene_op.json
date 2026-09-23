@@ -1,33 +1,25 @@
 {
   "name": "group_scene_op",
-  "description": "Manage a group/scene's membership and per-member link behavior: add or remove a device as a controller/responder member, or update how a member is triggered.",
+  "description": "Remove a member from a group/scene, or update how an existing member is linked (link type, on-level, ramp rate, etc.). To add a member -- including a single one, whether creating a new group/scene or adding to an existing one -- use `multi_device_scene` instead. remove_member is destructive -- only after the customer has explicitly agreed, never speculatively. For update_link, call get_group_detail first and base the new `link` on that member's existing one. One member per call -- call it once per member.",
   "input_schema": {
     "type": "object",
     "required": ["operation", "group_address", "link_address"],
     "properties": {
       "operation": {
         "type": "string",
-        "enum": ["add_member", "remove_member", "update_link"]
+        "enum": ["remove_member", "update_link"]
       },
       "group_address": {
         "type": "string",
-        "description": "Real id of the group/scene, exactly as shown in DEVICE DATABASE."
+        "description": "The group/scene's real id, exactly as shown in DEVICE DATABASE -- never guessed."
       },
       "link_address": {
         "type": "string",
-        "description": "Real id of the member device involved in this operation."
-      },
-      "is_controller": {
-        "type": ["boolean", "null"],
-        "description": "For add_member: whether this member controls the scene (true) or responds to it (false, default)."
-      },
-      "name": {
-        "type": ["string", "null"],
-        "description": "Optional display name to associate with the member, for add_member."
+        "description": "The member device's real id, exactly as shown in DEVICE DATABASE -- never guessed."
       },
       "link": {
         "type": ["object", "null"],
-        "description": "For update_link: the new link behavior parameters (e.g. on-level, ramp rate) to apply."
+        "description": "update_link only: the member's new link object, in the same shape get_group_detail returns for that member's existing link (its link type -- native/default/command/ignore -- plus its per-link parameters such as on-level and ramp rate). Copy that existing link and change only what the customer asked for -- never invent keys."
       }
     }
   }

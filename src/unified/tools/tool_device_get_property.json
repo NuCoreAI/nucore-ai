@@ -1,17 +1,28 @@
 {
   "name": "get_property",
-  "description": "Read a device's current property value (status, temperature, brightness, etc.).",
+  "description": "Read one or more devices' current property values (status, temperature, brightness, etc.) in a single call. Put every device+property pair you need this turn into this one call's `properties` list -- never split them across separate calls.",
   "input_schema": {
     "type": "object",
-    "required": ["device_id", "property"],
+    "required": ["properties"],
     "properties": {
-      "device_id": {
-        "type": "string",
-        "description": "The device's real id, exactly as shown for it in DEVICE DATABASE."
-      },
-      "property": {
-        "type": "string",
-        "description": "The property's exact display name, exactly as shown for this device in DEVICE DATABASE -- not an id."
+      "properties": {
+        "type": "array",
+        "minItems": 1,
+        "description": "One entry per device+property you want read. Each entry is fully independent.",
+        "items": {
+          "type": "object",
+          "required": ["device_id", "property"],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "The device's real id, exactly as shown in DEVICE DATABASE -- never guessed."
+            },
+            "property": {
+              "type": "string",
+              "description": "The property's exact display name, exactly as shown for this device in DEVICE DATABASE -- not an id. Or the wildcard \"*\" to read every property this device currently reports, skipping name resolution for this entry."
+            }
+          }
+        }
       }
     }
   }

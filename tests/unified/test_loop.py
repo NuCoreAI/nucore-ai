@@ -18,7 +18,6 @@ import asyncio
 
 import unified.loop as loop_module
 from unified.loop import AgenticLoop
-from unified.provider_dispatch_adapter import ProviderDispatchLLMAdapter
 
 
 class _FakeAdapter:
@@ -181,6 +180,42 @@ class _FlagRecordingManager:
         self.flags.append((intent_name, flag_kind, detail))
 
 
+async def test_max_tokens_truncation_returns_explicit_notice_not_partial_text(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    adapter = _FakeAdapter([{"stop_reason": "max_tokens", "text": "The light is now o"}])
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+
+    final_text, new_messages = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert final_text == loop_module._TRUNCATED_TEXT
+    assert final_text != "The light is now o"
+    assert any(f[1] == "truncated_max_tokens" for f in manager.flags)
+    assert new_messages[-1] == {"role": "assistant", "content": loop_module._TRUNCATED_TEXT}
+
+
+async def test_max_tokens_truncation_never_dispatches_a_cut_off_tool_call(monkeypatch):
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    dispatched: list[str] = []
+
+    async def fake_dispatch(name, args):
+        dispatched.append(name)
+        return {"ok": True}
+
+    adapter = _FakeAdapter([
+        {"stop_reason": "max_tokens", "tool_calls": [{"id": "1", "name": "send_command", "input": {}}]},
+    ])
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=fake_dispatch)
+
+    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert final_text == loop_module._TRUNCATED_TEXT
+    assert dispatched == []
+
+
 async def test_fabrication_guard_flags_zero_tool_call_completion_claim(monkeypatch):
     manager = _FlagRecordingManager()
     monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
@@ -244,11 +279,25 @@ async def test_fabrication_guard_block_mode_retries_and_returns_grounded_reply(m
         fabrication_guard_mode="block",
     )
 
-    final_text, new_messages = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+    streamed: list[str] = []
 
-    assert final_text == "The light is now off."
+    async def fake_stream_handler(chunk, is_end=False):
+        streamed.append(chunk)
+
+    final_text, new_messages = await loop.run(
+        system_prompt="sys",
+        history_messages=[],
+        user_message="turn it off",
+        llm_config={"stream_handler": fake_stream_handler},
+    )
+
+    assert final_text == loop_module._FABRICATION_RETRY_NOTICE + "The light is now off."
     assert any(f[1] == "fabrication_flag" for f in manager.flags)
     assert any("system note" in m.get("content", "") for m in new_messages if m.get("role") == "user")
+    # The correction streams live, immediately, since a customer may already
+    # have seen the fabricated round's own text stream out before this check
+    # ever ran -- not silently folded into the eventual final answer only.
+    assert loop_module._FABRICATION_RETRY_NOTICE in streamed
 
 
 async def test_fabrication_guard_block_mode_exhausts_retries_and_falls_back_safely(monkeypatch):
@@ -273,116 +322,10 @@ async def test_fabrication_guard_block_mode_exhausts_retries_and_falls_back_safe
 
     final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
 
-    assert final_text == loop_module._FABRICATION_FALLBACK_TEXT
+    assert final_text == loop_module._FABRICATION_RETRY_NOTICE + loop_module._FABRICATION_FALLBACK_TEXT
     assert final_text != "Done! I've turned off the light."
     assert generate_calls == 2  # max_fabrication_retries(1) + the initial round
     assert any(f[1] == "fabrication_retry_exhausted" for f in manager.flags)
-
-
-class _ConfigCapturingAdapter(_FakeAdapter):
-    """Records the config each generate() call actually received, so tests
-    can check whether tool_choice got forced on a given round."""
-
-    provider_name = "claude"
-
-    def __init__(self, responses):
-        super().__init__(responses)
-        self.configs: list[dict] = []
-
-    async def generate(self, *, messages, config, tools, expect_json: bool = False):
-        # ProviderDispatchLLMAdapter.generate() always forwards expect_json
-        # explicitly, unlike AgenticLoop's own direct calls -- accepted (and
-        # ignored) here so the dispatch-routed test below can reuse this class.
-        self.configs.append(config)
-        return await super().generate(messages=messages, config=config, tools=tools)
-
-
-async def test_fabrication_guard_block_mode_forces_tool_choice_on_claude_retry(monkeypatch):
-    # auto tool_choice already let the model skip the call once this turn --
-    # the retry should force it instead of asking auto to reconsider the
-    # same way it just failed.
-    manager = _FlagRecordingManager()
-    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
-
-    responses = [
-        {"text": "Done! I've turned off the light."},  # round 1: fabricated, no tool call
-        {"tool_calls": [{"id": "1", "name": "send_command", "input": {}}]},  # retry: real call
-        {"text": "The light is now off."},
-    ]
-    adapter = _ConfigCapturingAdapter(responses)
-    loop = AgenticLoop(
-        llm_client=adapter,
-        tool_specs=[],
-        dispatch=lambda n, a: _ok(),
-        fabrication_guard_mode="block",
-    )
-
-    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
-
-    assert final_text == "The light is now off."
-    assert "tool_choice" not in adapter.configs[0]  # first attempt: left at auto
-    assert adapter.configs[1]["tool_choice"] == {"type": "any"}  # retry: forced
-    assert "tool_choice" not in adapter.configs[2]  # forced only for the one retried round
-
-
-async def test_fabrication_guard_block_mode_does_not_force_tool_choice_on_non_claude(monkeypatch):
-    # tool_choice shapes are provider-specific ({"type": "any"} is
-    # Anthropic's) -- forcing it on another provider's adapter would be
-    # silently wrong or outright rejected, so this must stay Claude-only.
-    manager = _FlagRecordingManager()
-    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
-
-    class _OpenAIConfigCapturingAdapter(_ConfigCapturingAdapter):
-        provider_name = "openai"
-
-    responses = [
-        {"text": "Done! I've turned off the light."},
-        {"tool_calls": [{"id": "1", "name": "send_command", "input": {}}]},
-        {"text": "The light is now off."},
-    ]
-    adapter = _OpenAIConfigCapturingAdapter(responses)
-    loop = AgenticLoop(
-        llm_client=adapter,
-        tool_specs=[],
-        dispatch=lambda n, a: _ok(),
-        fabrication_guard_mode="block",
-    )
-
-    await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
-
-    assert all("tool_choice" not in c for c in adapter.configs)
-
-
-async def test_tool_choice_escalation_resolves_through_dispatch_adapter(monkeypatch):
-    # Production wires AgenticLoop to a ProviderDispatchLLMAdapter, whose own
-    # provider_name is the constant "dispatch" -- the escalation must resolve
-    # the *routed* client's provider_name, not the dispatcher's.
-    manager = _FlagRecordingManager()
-    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
-
-    responses = [
-        {"text": "Done! I've turned off the light."},
-        {"tool_calls": [{"id": "1", "name": "send_command", "input": {}}]},
-        {"text": "The light is now off."},
-    ]
-    claude_adapter = _ConfigCapturingAdapter(responses)
-    dispatch_adapter = ProviderDispatchLLMAdapter(clients={"claude": claude_adapter})
-    loop = AgenticLoop(
-        llm_client=dispatch_adapter,
-        tool_specs=[],
-        dispatch=lambda n, a: _ok(),
-        fabrication_guard_mode="block",
-    )
-
-    await loop.run(
-        system_prompt="sys",
-        history_messages=[],
-        user_message="turn it off",
-        llm_config={"provider": "claude"},
-    )
-
-    assert "tool_choice" not in claude_adapter.configs[0]
-    assert claude_adapter.configs[1]["tool_choice"] == {"type": "any"}
 
 
 async def _ok():

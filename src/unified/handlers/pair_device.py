@@ -336,7 +336,7 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         return (
             f"The '{protocol}' subsystem is not enabled on this eisy -- "
             "it needs to be turned on there before any devices can be paired. Direct the customer "
-            f"to the {protocol} configuration page (link it per UI NAVIGATION RULES) to enable it, "
+            f"to the {protocol} configuration page (link it per UI NAVIGATION) to enable it, "
             "then try again."
         )
 

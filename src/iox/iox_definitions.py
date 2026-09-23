@@ -104,3 +104,9 @@ PROTOCOL_TO_ZMATTER_FAMILY: dict[str, str] = {
     "zigbee": DEVICE_FAMILY_ZIGBEE,
     "matter": DEVICE_FAMILY_MATTER,
 }
+
+
+def normalize_protocol_name(name: str) -> str:
+    """One spelling for a protocol family however it arrives: DEVICE_FAMILIES'
+    own "Z-Wave"/"INSTEON", the tools' "zwave"/"insteon", or a model's "ZWave"."""
+    return (name or "").strip().casefold().replace("-", "")

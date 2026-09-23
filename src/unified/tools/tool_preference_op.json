@@ -1,6 +1,6 @@
 {
   "name": "preference_op",
-  "description": "Create or delete a customer preference (an alias or an event -- call list_preferences for the current list). There is no update: to change one, delete it and create a new one. Confirm with the customer before creating anything you inferred rather than that they explicitly asked for -- a bad create is just deleted, but don't silently invent preferences. Create an alias when the customer says something like 'when I say X, I mean Y' (X -> alias, Y -> target, a real device/scene/group name). Create an event for a dated fact they want tracked (birthday, anniversary, etc.) -- 'annual' repeats every year on month/day (e.g. a yahrtzeit), 'once' is a single date. remind_days_before is optional and only records the reminder intent -- no notification is actually sent (no delivery channel exists yet), but list_preferences will flag it as due_soon once it's within that window.",
+  "description": "Create or delete a customer preference (an alias or an event -- call list_preferences for the current list). There is no update: to change one, delete it and create a new one. Confirm with the customer before creating anything you inferred rather than that they explicitly asked for -- a bad create is just deleted, but don't silently invent preferences. Create an alias when the customer says something like 'when I say X, I mean Y' (X -> alias, Y -> target, a real device or group/scene name). Create an event for a dated fact they want tracked (birthday, anniversary, etc.) -- 'annual' repeats every year on month/day (e.g. a yahrtzeit), 'once' is a single date. remind_days_before is optional and only records the reminder intent -- no notification is actually sent (no delivery channel exists yet), but list_preferences will flag it as due_soon once it's within that window.",
   "input_schema": {
     "type": "object",
     "required": ["operation"],
@@ -24,7 +24,7 @@
       },
       "target": {
         "type": ["string", "null"],
-        "description": "type == 'alias', create only. What the alias resolves to -- a real device/scene/group name."
+        "description": "type == 'alias', create only. What the alias resolves to -- a real device or group/scene name, exactly as shown in DEVICE DATABASE."
       },
       "name": {
         "type": ["string", "null"],
