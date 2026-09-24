@@ -869,8 +869,9 @@ class IoXWrapper(NuCoreInterface):
         link: dict[str, Any],
     ) -> dict[str, Any]:
         """Update link settings for a controller/member pair in a group."""
+
         payload = {
-            "controllerAddress": controller_address,
+            "controllerAddress": controller_address if controller_address else group_address,
             "link": link,
         }
         return await self._group_scene_response(

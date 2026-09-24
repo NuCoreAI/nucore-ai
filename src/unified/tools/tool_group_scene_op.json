@@ -1,9 +1,9 @@
 {
   "name": "group_scene_op",
-  "description": "Remove a member from a group/scene, or update how an existing member is linked (link type, on-level, ramp rate, etc.). To add a member -- including a single one, whether creating a new group/scene or adding to an existing one -- use `multi_device_scene` instead. remove_member is destructive -- only after the customer has explicitly agreed, never speculatively. For update_link, call get_group_detail first and base the new `link` on that member's existing one. One member per call -- call it once per member.",
+  "description": "Remove a member from a group/scene, or update how an existing member is linked (link type, on-level, ramp rate, etc.). To add a member -- including a single one, whether creating a new group/scene or adding to an existing one -- use `multi_device_scene` instead. remove_member is destructive -- only after the customer has explicitly agreed, never speculatively. For update_link, call get_group_detail first and base the new `link` on that member's existing one. Call it once per member.",
   "input_schema": {
     "type": "object",
-    "required": ["operation", "group_address", "link_address"],
+    "required": ["operation", "group_address", "link_address", "link"],
     "properties": {
       "operation": {
         "type": "string",
@@ -11,11 +11,15 @@
       },
       "group_address": {
         "type": "string",
-        "description": "The group/scene's real id, exactly as shown in DEVICE DATABASE -- never guessed."
+        "description": "The parent group/scene's real id, exactly as shown in DEVICE DATABASE -- never guessed."
+      },
+      "controller_address": {
+        "type": "string",
+        "description": "Optional. **Mandatory** if you are updating the link between **two** devices. Provide the controllers's id, exactly as shown in DEVICE DATABASE -- never guessed."
       },
       "link_address": {
         "type": "string",
-        "description": "The member device's real id, exactly as shown in DEVICE DATABASE -- never guessed."
+        "description": "The member (responder) device's real id, exactly as shown in DEVICE DATABASE -- never guessed."
       },
       "link": {
         "type": ["object", "null"],

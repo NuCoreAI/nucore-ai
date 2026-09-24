@@ -53,20 +53,32 @@ async def _check_role_precheck(nucore_interface: NuCoreInterface, link_address: 
 async def group_scene_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     operation = args.get("operation")
     group_address = args.get("group_address")
-    link_address = args.get("link_address")
-    if not group_address or not link_address:
-        return {"error": "group_address and link_address are both required"}
+
+    if not group_address:
+        return {"error": "group_address is required"}
+
 
     if operation == "remove_member":
+        link_address = args.get("link_address")
+        if not link_address:
+            return {"error": "link_address is required"}
         result = await nucore_interface.group_scene_remove_member(
             group_address=group_address, link_address=link_address
         )
     elif operation == "update_link":
+        controller_address = args.get("controller_address")
         link = args.get("link")
-        if not isinstance(link, dict):
+        link_address = args.get("link_address")
+        if link_address is None or link is None or not isinstance(link, dict):
             return {"error": "update_link requires a 'link' object describing the new behavior"}
+        link_type = link.get("type") or link.get("link_type")
+        if not link_type:
+            return {"error": "update_link requires a 'type' field in the 'link' object"}
+        link["node"]=link_address
+        link["type"] = link_type
         result = await nucore_interface.group_scene_update_link(
-            group_address=group_address, controller_address=link_address, link=link
+            group_address=group_address,
+            controller_address=controller_address, link=link
         )
     else:
         return {"error": f"unknown group_scene_op operation '{operation}'"}
