@@ -1,4 +1,5 @@
 from cProfile import label
+import copy 
 
 from .linkdef import LinkDef
 from enum import member
@@ -11,10 +12,6 @@ from .uom import get_uom_by_id
 class GroupMemberType:
     MEMBER_IS_RESPONDER = 0x00
     MEMBER_IS_CONTROLLER = 0xF0
-
-class ParamType:
-    PARAM_TYPE_DEVICE = 0x00
-    PARAM_TYPE_VARIABLE = 0x01
 
 class Linktype:
     LINK_TYPE_NATIVE = 'native'
@@ -36,7 +33,7 @@ class Linktype:
 
 @dataclass
 class LinkParams:
-    type: int = field(default=ParamType.PARAM_TYPE_DEVICE)
+    type: str = field(default=None)
     id: str = field(default=None) 
     name: str = field(default=None) 
     val: str = field(default=None)
@@ -66,7 +63,6 @@ class GroupLink:
                     property_name = property.name
 
             type = param.get('type', None)
-            type = ParamType.PARAM_TYPE_DEVICE if type is None else ParamType.PARAM_TYPE_VARIABLE if type == 'variable' else ParamType.PARAM_TYPE_DEVICE
             val = param.get('val', None)
             if val is None:
                 continue
@@ -91,20 +87,25 @@ class GroupLink:
         label = f"{self.node.name} [address={self.node.address}]"
         responder[label] = {}
         try:
+            responder[label]["linkdef"] = self.linkdef.id if self.linkdef else "no link_def" 
             if self.type == Linktype.LINK_TYPE_NATIVE:
-                responder[label]["link_type"] = "native"
+                responder[label]["type"] = "native"
             elif self.type == Linktype.LINK_TYPE_DEFAULT:
-                responder[label]["link_type"] = "default"
+                responder[label]["type"] = "default"
             elif self.type == Linktype.LINK_TYPE_COMMAND:
-                responder[label]["link_type"] = "command"
+                responder[label]["type"] = "command"
             elif self.type == Linktype.LINK_TYPE_IGNORE:
-                responder[label]["link_type"] = "ignore"
+                responder[label]["type"] = "ignore"
             
             if len (self.params) > 0:
-                responder[label]["parameters"] = []
+                responder[label]["params"] = []
                 for param in self.params.values():
+                    out_param = copy.deepcopy(param.__dict__)
                     uom = get_uom_by_id(param.uom) if param.uom else None
-                    out_str=(f"{param.val} {uom.name}" if uom else f"{param.val}")
+                    out_str = f"{param.val}"
+                    if uom:
+                        out_param["uom_name"] = uom.name
+                        out_str=f"{param.val} {uom.name}" 
                     try:
                         if uom and uom.name == "Enum":
                             property = self.node.node_def.properties.get(param.id, None)
@@ -114,10 +115,13 @@ class GroupLink:
                                 out_str=(f"{param_val}")
                     except Exception as e:
                         pass
-                    plabel = f"{param.name} [id={param.id}]"
-                    responder[label]["parameters"].append({plabel: out_str})
+                    #plabel = f"{param.name} [id={param.id}]"
+                    import json
+                    out_param["friendly text"] = out_str
+                    #responder[label]["params"].append({plabel: out_str, "payload": json.dumps(param.__dict__)})
+                    responder[label]["params"].append(json.dumps(out_param))
         except Exception as e:
-            responder[label]["link_type"] = "error occured"
+            responder[label]["type"] = "error occured"
 
         return responder 
 
@@ -294,6 +298,7 @@ class Group(NodeBase):
         # self.members never grows past 1 even though the container has
         # real links. Must check the container's own links before
         # early-returning "collection", not just the member count.
+        # DO NOT TOUCH THIS LOGIC: the only way LLM is capable of updating group links is through this mechanism.
         me = self.members.get(self.address, None)
         is_controller = me is not None and me.type == GroupMemberType.MEMBER_IS_CONTROLLER
         controller_has_links = is_controller and len(me.links) > 0

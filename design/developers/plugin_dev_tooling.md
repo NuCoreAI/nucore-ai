@@ -220,6 +220,10 @@ generates the plugin's Dynamic Profiles JSON *and* its Python stub code directly
 codegen step, §2), installs and runs the result on the same local hub — goes from "I have a
 sensor" to "it's running," entirely in-browser, with no VS Code, no CLI, and no remote/
 simulator infrastructure needed, because the hub is already local to begin with.
+[`ai_plugin_authoring_pipeline.md`](ai_plugin_authoring_pipeline.md) works this out as a
+concrete stage-by-stage pipeline (research → author → install → test → run → validate live),
+including the retry/error semantics such a flow needs and the one real blocker found along the
+way: there's no automatable local-install path yet (see that doc's §2).
 
 ### Front-end 1-new — a CLI for the new core (confirmed in scope, not yet built)
 

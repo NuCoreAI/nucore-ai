@@ -472,3 +472,4 @@ how it was answered.
 | What family code is a given protocol? | `nucore_domain_model.md` §12 |
 | What's still unbuilt / where is this headed? | `runtime_plugin.md` §8 |
 | What don't we actually know yet? | §4 above (G-1 through G-7) |
+| What would a chatbot-driven "describe a device, get a working plugin" flow look like? | [`ai_plugin_authoring_pipeline.md`](ai_plugin_authoring_pipeline.md) — design proposal, not built |

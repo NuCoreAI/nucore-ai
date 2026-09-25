@@ -71,11 +71,37 @@ async def group_scene_op(nucore_interface: NuCoreInterface, args: dict[str, Any]
         link_address = args.get("link_address")
         if link_address is None or link is None or not isinstance(link, dict):
             return {"error": "update_link requires a 'link' object describing the new behavior"}
-        link_type = link.get("type") or link.get("link_type")
-        if not link_type:
+        type = link.get("type") 
+        if not type: 
             return {"error": "update_link requires a 'type' field in the 'link' object"}
         link["node"]=link_address
-        link["type"] = link_type
+        for param in link.get("params", []):
+            if not isinstance(param, dict):
+                continue
+            id = param.get("id")
+            if id is None:
+                continue
+            ptype=param.get("type")
+            if ptype is None:
+                continue
+            if ptype == "val":
+                value = param.get("val", {})
+                if value is None:
+                    continue
+                try:
+                    value = float(value)
+                except ValueError:
+                    pass
+                param["val"]={}
+                uom = param.get("uom", None) 
+                prec = param.get("prec", 0)
+                param["val"]["value"] = value
+                param["val"]["uom"] = uom
+                param["val"]["prec"] = prec
+                param.pop("uom", None) # friendly text, uom_name
+                param.pop("friendly_text", None)
+                param.pop("uom_name", None)
+                param.pop("prec", None)
         result = await nucore_interface.group_scene_update_link(
             group_address=group_address,
             controller_address=controller_address, link=link

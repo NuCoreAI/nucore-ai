@@ -370,7 +370,7 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         # event -- fast enough that a listener registered only afterward
         # would miss it forever.
         ok, real_address = await wait_for_node_event_around(
-            nucore_interface, "_3", "ND", _WAIT_TOTAL_TIMEOUT_S,
+            nucore_interface, "_3", "AA", _WAIT_TOTAL_TIMEOUT_S,
             lambda: nucore_interface.add_device(
                 device_address, name=args.get("name"), device_type=args.get("device_type"),
             ),
@@ -428,7 +428,7 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         # The pairing session has ended -- give the actual node-added event a
         # brief grace period to land too, in case node creation lags slightly
         # behind the session-ended signal (see _NODE_ADDED_GRACE_TIMEOUT_S).
-        await wait_for_event(nucore_interface, "_3", "ND", _NODE_ADDED_GRACE_TIMEOUT_S)
+        await wait_for_event(nucore_interface, "_3", "AA", _NODE_ADDED_GRACE_TIMEOUT_S)
         await nucore_interface._refresh_device_structure()
 
         changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before)

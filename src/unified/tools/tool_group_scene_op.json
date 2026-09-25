@@ -23,7 +23,7 @@
       },
       "link": {
         "type": ["object", "null"],
-        "description": "update_link only: the member's new link object, in the same shape get_group_detail returns for that member's existing link (its link type -- native/default/command/ignore -- plus its per-link parameters such as on-level and ramp rate). Copy that existing link and change only what the customer asked for -- never invent keys."
+        "description": "update_link only: the member's new link object, in the same exact shape as get_group_detail returns for that member's existing link: \n- link type \n- linkdef if it exists \n- its per-link parameters that the customer asked for; copy the requested parameter and only change what the customer asked for -- never invent keys."
       }
     }
   }
