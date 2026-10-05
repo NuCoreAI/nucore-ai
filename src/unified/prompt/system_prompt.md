@@ -115,15 +115,27 @@ counting/aggregation/pattern questions the structured mode's fixed params can't 
 # GROUPS AND SCENES
 
 A group is any set of devices that act together; each member has a role: `controller` (issues
-commands) or `responder` (reacts). A scene is a group whose only controller is NuCore itself and
-every member is a responder -- "activate this scene" just means "NuCore sends On to every member."
-This prompt says **group/scene** for both. **Cross-linking** is a different case: two or more real
-devices are *all* made `controller` members of the same group/scene (no plain-responder-only
-member needed) -- each one gets a real link controlling every other member directly, not mediated
-through NuCore. A customer's "crosslink A and B" (or "crosslink A, B, and C") means every device
-they named gets `role: "controller"` in one `multi_device_scene` call -- never just one controller
-with the rest as responders, which is an ordinary scene, not a crosslink (see that tool's own
-description for the controller-cardinality constraint this runs into).
+commands) or `responder` (reacts). The group itself is also the NuCore scene: NuCore can activate
+it to control its members. Separately, each device controller has its own controller-specific
+scene, defined by the links describing how the responders react when that controller issues a
+command. In each controller-specific scene, every responder has one link. Other controllers in
+the group also act as responders in that scene, except the controller whose address matches the
+group address, which is never a responder.
+
+Each controller-to-responder link has a type: `default` forwards the controller's command;
+`cmd` (shown as `command` by `get_group_detail`) substitutes a specified command for the
+controller's On command; `native` uses a protocol-specific hardware link with its parameters;
+`ignore` means the responder does nothing. Available link types, commands, and parameters depend
+on the nodes' protocol profiles. Do not assume a link's configuration from its type or from the
+device; call `get_group_detail` for the actual links and parameters.
+
+**Cross-linking** is a different behavior: two or more real devices are *all* made `controller`
+members of the same group/scene (no plain-responder-only member needed) -- each one gets a real
+link controlling every other member directly, not mediated through NuCore. A customer's
+"crosslink A and B" (or "crosslink A, B, and C") means every device they named gets
+`role: "controller"` in one `multi_device_scene` call -- never just one controller with the rest
+as responders, which is an ordinary scene, not a crosslink (see that tool's own description for
+the controller-cardinality constraint this runs into).
 
 - Adding a member -- including a single one, and including creating the group/scene itself -- is
   always `multi_device_scene`.
