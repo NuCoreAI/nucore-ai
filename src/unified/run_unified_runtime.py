@@ -14,6 +14,7 @@ from typing import Any
 import websockets
 from dotenv import load_dotenv
 
+from unified import dev_tools
 from unified.models import IntentHandlerResult
 from unified.runtime import UnifiedRuntime
 from unified.runtime_config import _load_runtime_config
@@ -159,6 +160,19 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Path to a PEM private key file; with --ssl-certfile, serves --websocket-port over wss:// instead of ws://.",
+    )
+    parser.add_argument(
+        "--tool-set",
+        type=str,
+        choices=["customer", "dev_tools"],
+        default="customer",
+        help=(
+            "Which tool set/system prompt the agentic loop uses. 'customer' (default) is "
+            "today's end-customer smart-home assistant. 'dev_tools' is the plugin-developer "
+            "assistant (unified.dev_tools): profile authoring/validation, UOM lookup, and "
+            "configuring/starting/stopping/calling an already-installed plugin under test -- "
+            "still requires a live backend via --backend-api-classpath, same as 'customer'."
+        ),
     )
     parser.add_argument(
         "--backend-api-classpath",
@@ -562,6 +576,39 @@ class _RawWebSocketAdapter:
         await self._websocket.send(data)
 
 
+_CUSTOMER_TOOLS_DIR = Path(__file__).parent / "tools"
+
+# The plugin-lifecycle tools dev_tools reuses as-is from the customer tool
+# set (see dev_tools/dispatch.py's module docstring for why these four and
+# not the others) -- referenced directly rather than copied, so the two tool
+# sets never drift on what these schemas say.
+_DEV_TOOLS_REUSED_CUSTOMER_TOOLS = (
+    "tool_plugin_list_installed.json",
+    "tool_plugin_ops.json",
+    "tool_plugin_get_capabilities.json",
+    "tool_plugin_call.json",
+)
+
+
+def _resolve_tool_set(
+    tool_set: str, nucore_interface: NuCoreInterface
+) -> tuple[list[Path] | None, Any, Any]:
+    """Return ``(tool_spec_paths, dispatch, system_prompt_builder)`` for
+    ``UnifiedRuntime``'s matching constructor params (see unified/runtime.py).
+    Any *tool_set* other than ``"dev_tools"`` returns ``(None, None, None)``,
+    which ``UnifiedRuntime`` treats as "use the hardcoded customer-facing
+    default" -- so this only changes behavior for ``--tool-set dev_tools``.
+    """
+    if tool_set != "dev_tools":
+        return None, None, None
+
+    tool_spec_paths = sorted(dev_tools.TOOLS_DIR.glob("tool_*.json")) + [
+        _CUSTOMER_TOOLS_DIR / name for name in _DEV_TOOLS_REUSED_CUSTOMER_TOOLS
+    ]
+    dispatch = functools.partial(dev_tools.dispatch.execute_tool, nucore_interface=nucore_interface)
+    return tool_spec_paths, dispatch, dev_tools.build_system_prompt_sections
+
+
 async def _run_websocket_server(
     nucore_interface: NuCoreInterface,
     llm_adapter,
@@ -573,6 +620,7 @@ async def _run_websocket_server(
     is_unix: bool,
     client_uid: int | None = None,
     ssl_context: ssl.SSLContext | None = None,
+    tool_set: str = "customer",
 ) -> None:
     """Serve WebSocket connections directly, no HTTP framework involved.
 
@@ -613,6 +661,10 @@ async def _run_websocket_server(
     # and SessionStore.lock for why (a reconnect must find its history, not
     # start over empty; the lock is what keeps that sharing safe).
     shared_session_store = SessionStore()
+    # nucore_interface is fixed for this server's whole life, so the tool
+    # set/dispatch/prompt builder it resolves to are computed once here
+    # rather than per connection.
+    tool_spec_paths, dispatch, system_prompt_builder = _resolve_tool_set(tool_set, nucore_interface)
 
     async def handler(websocket) -> None:
         if client_uid is not None:
@@ -641,6 +693,9 @@ async def _run_websocket_server(
             runtime_config=runtime_config,
             max_iterations=max_iterations,
             session_store=shared_session_store,
+            tool_spec_paths=tool_spec_paths,
+            dispatch=dispatch,
+            system_prompt_builder=system_prompt_builder,
         )
         runtime.stream_handler = stream_handler
         try:
@@ -799,6 +854,7 @@ def main(args:Any=None, poly=None) -> None:
                 websocket_is_unix,
                 client_uid=args.websocket_client_id if websocket_is_unix else None,
                 ssl_context=ssl_context,
+                tool_set=args.tool_set,
             ))
         except KeyboardInterrupt:
             logger.warning("\nInterrupted. Exiting.")
@@ -806,11 +862,15 @@ def main(args:Any=None, poly=None) -> None:
             nucore_interface.shutdown()
         return
 
+    tool_spec_paths, dispatch, system_prompt_builder = _resolve_tool_set(args.tool_set, nucore_interface)
     runtime = UnifiedRuntime(
         nucore_interface=nucore_interface,
         llm_client=llm_adapter,
         runtime_config=runtime_config,
         max_iterations=resolved_max_iterations,
+        tool_spec_paths=tool_spec_paths,
+        dispatch=dispatch,
+        system_prompt_builder=system_prompt_builder,
     )
     runtime.stream_handler = stream_handler
     logger.info("Unified runtime initialized")

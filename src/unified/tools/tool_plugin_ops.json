@@ -1,13 +1,13 @@
 {
   "name": "plugin_ops",
-  "description": "Start, stop, or restart an installed plugin's service. Only call this after the customer has explicitly agreed to the action -- never speculatively, since stopping/restarting interrupts the plugin while it's down. This is the only way to start/stop/restart a plugin's service -- do not use restart_core_service for plugins, that's for core services (isy, udx, etc.) only. This tool has no status operation -- to check a plugin's current status, read the `state` field from list_installed_plugins instead.",
+  "description": "Start, stop, or restart an installed plugin's service. Only call this after the customer has explicitly agreed to the action -- never speculatively, since stopping/restarting interrupts the plugin while it's down. This is the only way to start/stop/restart a plugin's service -- do not use restart_core_service for plugins, that's for core services (isy, udx, etc.) only. This tool has no status operation -- to check a plugin's current status, read the `state` field from list_installed_plugins instead. One plugin per call -- call it once per plugin.",
   "input_schema": {
     "type": "object",
     "required": ["plugin_id", "operation"],
     "properties": {
       "plugin_id": {
         "type": "string",
-        "description": "The `plugin_id`, from list_installed_plugins."
+        "description": "The plugin's `plugin_id`, exactly as returned by list_installed_plugins -- never guessed."
       },
       "operation": {
         "type": "string",

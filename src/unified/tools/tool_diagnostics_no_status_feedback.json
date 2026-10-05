@@ -7,11 +7,12 @@
     "properties": {
       "protocol": {
         "type": "string",
-        "description": "The device's real protocol family (e.g. \"insteon\", \"zwave\", \"zigbee\", \"matter\") -- from get_device_family, never guessed from the device's name. Only \"insteon\" has real automated diagnosis today; other protocols return a plain not-yet-supported result."
+        "enum": ["insteon", "zwave", "zigbee", "matter"],
+        "description": "The device's real protocol family, lowercase -- from get_device_family (INSTEON -> insteon, Z-Wave -> zwave, Zigbee -> zigbee, Matter -> matter), never guessed from the device's name. Only insteon has real automated diagnosis today; other protocols return a plain not-yet-supported result."
       },
       "device_id": {
         "type": ["string", "null"],
-        "description": "The customer-named device, if they named one. Optional even after system-level checks pass -- for insteon, omitting it samples 1-2 representative devices automatically rather than requiring you to pick one."
+        "description": "The customer-named device's real id, exactly as shown in DEVICE DATABASE, if they named one. Optional even after system-level checks pass -- for insteon, omitting it samples 1-2 representative devices automatically rather than requiring you to pick one."
       }
     }
   }

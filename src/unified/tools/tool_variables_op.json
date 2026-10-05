@@ -1,6 +1,6 @@
 {
   "name": "variable_op",
-  "description": "Create, update, or delete a NuCore variable (an integer counter or a state flag routines can reference in their conditions/actions -- call list_variables for the current list, and see create_or_update_routine's var_ref()/set_var()/while_repeat() for how a variable is referenced inside routine logic). This tool manages the variable itself, not routine logic. `value`/`init` here are the RAW stored integers, same as list_variables returns -- not display values, do not scale them yourself. Create: type + optional name/prec (the hub assigns the id, returned in the response). Update (id required): only the fields given change, everything else is left as-is -- name/prec/value/init are all optional. Delete: type + id only.",
+  "description": "Create, update, or delete a NuCore variable (an integer counter or a state flag routines can reference in their conditions/actions -- call list_variables for the current list, and see create_or_update_routine's var_ref()/set_var()/while_repeat() for how a variable is referenced inside routine logic). This tool manages the variable itself, not routine logic. `value`/`init` here are the RAW stored integers, same as list_variables returns -- not display values, do not scale them yourself. Create: type + optional name/prec (the hub assigns the id, returned in the response). Update (id required): only the fields given change, everything else is left as-is -- name/prec/value/init are all optional. Delete: type + id only -- destructive, so only after the customer has explicitly agreed, never speculatively. One variable per call -- call it once per variable.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -30,7 +30,7 @@
           "integer",
           "null"
         ],
-        "description": "Real variable id, as returned by list_variables. Required for update/delete, omit for create."
+        "description": "The variable's real id, exactly as returned by list_variables -- never guessed. Required for update/delete, omit for create."
       },
       "name": {
         "type": [

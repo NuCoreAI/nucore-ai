@@ -220,6 +220,10 @@ generates the plugin's Dynamic Profiles JSON *and* its Python stub code directly
 codegen step, §2), installs and runs the result on the same local hub — goes from "I have a
 sensor" to "it's running," entirely in-browser, with no VS Code, no CLI, and no remote/
 simulator infrastructure needed, because the hub is already local to begin with.
+[`ai_plugin_authoring_pipeline.md`](ai_plugin_authoring_pipeline.md) works this out as a
+concrete stage-by-stage pipeline (research → author → install → test → run → validate live),
+including the retry/error semantics such a flow needs and the one real blocker found along the
+way: there's no automatable local-install path yet (see that doc's §2).
 
 ### Front-end 1-new — a CLI for the new core (confirmed in scope, not yet built)
 
@@ -294,6 +298,12 @@ Confirmed scope and sequencing, per the team:
    no `ast`/`astor` code-generation engine (an LLM generates the Python stub code directly), and
    no static-XML/NLS emission path at all (Dynamic Profiles only — the static format is
    runtime-obsolete, §2).
+   > **Schemas landed**: the JSON Schema piece of this step is done — see
+   > [`src/nucore/schemas/`](../../src/nucore/schemas/README.md) (restructured onto
+   > [`plugin_model.md`](plugin_model.md) §3's object model, not copied from `iox-vscode-plugin`
+   > as-is; that file's README covers what was kept/dropped/authored fresh and why). No validator
+   > is wired into `validate_profile` yet — the schemas exist as a reference/reusable artifact for
+   > whichever front-end (§4) ends up needing one.
 2. **Build front-end 3** — the web/AI-assisted flow in eisy-ai — on top of that new core. This
    is the primary near-term target: it's the one population (non-technical, local-only) that
    nothing existing serves, and it's uniquely cheap to build well *because* eisy-ai already has

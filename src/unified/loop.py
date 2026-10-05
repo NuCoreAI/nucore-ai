@@ -28,6 +28,23 @@ _FABRICATION_FALLBACK_TEXT = (
     "I'm not fully sure that completed correctly -- please check, or ask me to try again."
 )
 
+# Prepended to whatever the customer ends up seeing once a fabrication retry
+# fires -- a live-streaming customer may already have seen the fabricated
+# round's text (streaming forwards chunks as they're generated, before this
+# round's full text is assembled and checked -- see the retry branch below),
+# so the fix is never truly silent; this makes that explicit instead of
+# splicing an unrelated second answer on with no acknowledgement.
+_FABRICATION_RETRY_NOTICE = "Internal error, let me try again.\n\n"
+
+# A max_tokens-truncated response is never trusted as-is -- partial text and
+# a partial (possibly invalid-JSON) tool call are both discarded in favor of
+# this hardcoded notice. Same "structurally can't fabricate a claim"
+# reasoning as the max_iterations fallback below.
+_TRUNCATED_TEXT = (
+    "My response got cut off before I could finish -- I ran out of space to complete that. "
+    "Please ask me to continue, or narrow the request."
+)
+
 
 class AgenticLoop:
     """Drives one query through repeated generate/tool-execute rounds."""
@@ -69,23 +86,6 @@ class AgenticLoop:
             for tc in canonical
         ]
 
-    def _effective_provider(self, llm_config: dict[str, Any] | None) -> str:
-        """Resolve the ``provider_name`` of the adapter a given ``llm_config``
-        actually routes to.
-
-        ``self.llm_client`` is normally a ``ProviderDispatchLLMAdapter`` in
-        production (see run_unified_runtime.py's build_default_dispatch_adapter),
-        whose own ``provider_name`` is the constant ``"dispatch"`` regardless
-        of which concrete per-provider client a given call's config resolves
-        to -- so a plain ``self.llm_client.provider_name`` check would never
-        match ``"claude"`` even when the configured provider is Claude.
-        """
-        resolve = getattr(self.llm_client, "get_adapter_for_provider", None)
-        if callable(resolve):
-            client, _ = resolve(llm_config)
-            return getattr(client, "provider_name", "")
-        return getattr(self.llm_client, "provider_name", "")
-
     async def run(
         self,
         *,
@@ -126,21 +126,14 @@ class AgenticLoop:
         # not "no *matching* tool call", is what keeps this tool-agnostic).
         any_tool_dispatched = False
         fabrication_retries = 0
-        # Only Claude's adapter understands this config key (see
-        # claude_adapter.generate's tool_choice forwarding) and its
-        # {"type": "any"} shape is Anthropic-specific -- other providers'
-        # tool_choice formats differ, so this is resolved once per turn and
-        # gates every place below that would otherwise force a call.
-        is_claude = self._effective_provider(llm_config) == "claude"
-        force_tool_choice = False
+        # Set once a fabrication retry actually fires; prepended to whatever
+        # text the customer ends up seeing (see _FABRICATION_RETRY_NOTICE).
+        pending_notice = ""
 
         for iteration in range(self.max_iterations):
             intent_name = f"unified (round {iteration + 1})"
             await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
             round_config = dict(llm_config or {})
-            if force_tool_choice:
-                round_config["tool_choice"] = {"type": "any"}
-            force_tool_choice = False
             raw_response = await self.llm_client.generate(
                 messages=messages,
                 config=round_config,
@@ -152,6 +145,23 @@ class AgenticLoop:
             stop_reason = raw_response.get("stop_reason")
             if stop_reason:
                 logger.info("unified: round %d stop_reason=%s", iteration + 1, stop_reason)
+            if stop_reason == "max_tokens":
+                # Never trust a truncated reply or a truncated (possibly
+                # invalid-JSON) tool call -- discard whatever came through
+                # and say so explicitly, rather than silently treating a
+                # cut-off response as complete.
+                text = _TRUNCATED_TEXT
+                assistant_message = {"role": "assistant", "content": text}
+                messages.append(assistant_message)
+                new_messages.append(assistant_message)
+                await get_prompt_log_manager().write_flag(
+                    intent_name,
+                    "truncated_max_tokens",
+                    {"iteration": iteration + 1},
+                    conversation_id=conversation_id,
+                )
+                await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
+                return text, new_messages
             canonical_calls = raw_response.get("tool_calls") or []
             if not canonical_calls:
                 text = raw_response.get("text") or raw_response.get("content") or ""
@@ -183,12 +193,21 @@ class AgenticLoop:
                             }
                             messages.append(nudge)
                             new_messages.append(nudge)
-                            # `auto` tool_choice already let the model skip
-                            # the tool call once this turn -- on Claude,
-                            # force the retry instead of asking `auto` to
-                            # reconsider the exact same way it just failed.
-                            if is_claude:
-                                force_tool_choice = True
+                            pending_notice = _FABRICATION_RETRY_NOTICE
+                            stream_handler = (llm_config or {}).get("stream_handler")
+                            if callable(stream_handler):
+                                # Best-effort -- a live customer may already
+                                # have seen the fabricated round's text
+                                # stream out (chunks forward as they're
+                                # generated, before this check ever runs), so
+                                # surface the correction immediately rather
+                                # than only once the retry finishes. A
+                                # streaming hiccup here must never break the
+                                # loop over what's just an acknowledgement.
+                                try:
+                                    await stream_handler(_FABRICATION_RETRY_NOTICE, False)
+                                except Exception:
+                                    pass
                             continue
                         if self.fabrication_guard_mode == "block":
                             # Retries exhausted -- don't hand back the
@@ -202,6 +221,7 @@ class AgenticLoop:
                             )
                             text = _FABRICATION_FALLBACK_TEXT
 
+                text = pending_notice + text
                 assistant_message = {"role": "assistant", "content": text}
                 messages.append(assistant_message)
                 new_messages.append(assistant_message)
@@ -253,7 +273,7 @@ class AgenticLoop:
         # No fabrication-guard check here: this text is a hardcoded constant,
         # never model-generated, so it structurally can't claim an action
         # that didn't happen.
-        fallback = (
+        fallback = pending_notice + (
             "I wasn't able to finish that within the allowed number of steps -- "
             "please try rephrasing or breaking it into smaller requests."
         )

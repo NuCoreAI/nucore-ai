@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NodeDef icon",
+  "description": "Either one of PG3/IoX's predefined icon names, or a URI to a custom icon image. Restructured from iox-vscode-plugin's icon.schema.json (a flat oneOf enum with no Dynamic-Profiles-dialect changes needed -- icon names are a platform-level concept, not an ioxplugin-specific one) plus common.node.schema.json's icon field shape (predefined-name-or-uri). Uses `anyOf`, not the source's `oneOf`: `format: uri` is unenforced without an attached format-checker (jsonschema's default), so every plain string would validate under BOTH branches, and `oneOf` requires exactly one match -- `anyOf` (at least one) is what's actually intended here. Referenced by nodedef.schema.json's `icon`/`customicon` fields per design/developers/plugin_model.md \u00a73 (NodeDef object), which documents `icon` as 'UI icon identifier. Ref: https://developer.isy.io/docs/API/IoX/icons' and `customicon` as 'Future use' -- note src/nucore/nodedef.py's parser currently collapses both spec keys into one `customicon` field (see schemas/README.md).",
+  "anyOf": [
+    {
+      "type": "string",
+      "enum": [
+        "Alarm",
+        "Arm",
+        "DoorLock",
+        "Electricity",
+        "EnergyMonitor",
+        "GenericCtl",
+        "GenericRsp",
+        "GenericRspCtl",
+        "Input",
+        "Irrigation",
+        "Lamp",
+        "LampAndSwitch",
+        "MotionSensor",
+        "Output",
+        "PulseCounter",
+        "Sensor",
+        "Siren",
+        "Switch",
+        "SmokeSensor",
+        "TempSensor",
+        "Thermostat",
+        "Weather"
+      ]
+    },
+    {
+      "type": "string",
+      "format": "uri"
+    }
+  ]
+}

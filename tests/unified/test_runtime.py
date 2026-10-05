@@ -11,12 +11,13 @@ cache sections build_system_prompt_sections returns, not re-joined.
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
 import unified.runtime as runtime_module
-from unified.runtime import UnifiedRuntime
+from unified.runtime import _TOOLS_DIR, UnifiedRuntime
 from unified.session_store import SessionStore
 
 
@@ -101,6 +102,69 @@ def test_explicit_session_store_is_used_as_given():
         nucore_interface=SimpleNamespace(), llm_client=SimpleNamespace(), runtime_config={}, session_store=shared
     )
     assert runtime.session_store is shared
+
+
+# --- Alternate tool set injection (unified.dev_tools uses all three) ---
+
+
+def test_default_tool_spec_paths_matches_hardcoded_customer_tools_dir():
+    expected_count = len(list(_TOOLS_DIR.glob("tool_*.json")))
+    assert len(_runtime().tool_specs) == expected_count
+
+
+def test_tool_spec_paths_override_replaces_the_default_tool_set(tmp_path):
+    schema_path = tmp_path / "tool_ping.json"
+    schema_path.write_text(
+        json.dumps({"name": "ping", "description": "ping", "input_schema": {"type": "object", "properties": {}}})
+    )
+    runtime = UnifiedRuntime(
+        nucore_interface=SimpleNamespace(),
+        llm_client=SimpleNamespace(),
+        runtime_config={},
+        tool_spec_paths=[schema_path],
+    )
+    assert [t.name for t in runtime.tool_specs] == ["ping"]
+
+
+def test_default_dispatch_has_no_override():
+    assert _runtime()._dispatch_override is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_override_is_used_instead_of_default_execute_tool():
+    calls = []
+
+    async def fake_dispatch(name, args):
+        calls.append((name, args))
+        return {"from": "override"}
+
+    runtime = UnifiedRuntime(
+        nucore_interface=SimpleNamespace(),
+        llm_client=SimpleNamespace(),
+        runtime_config={},
+        dispatch=fake_dispatch,
+    )
+    result = await runtime._dispatch("some_tool", {"a": 1})
+    assert result == {"from": "override"}
+    assert calls == [("some_tool", {"a": 1})]
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_builder_override_is_used_instead_of_default():
+    async def fake_builder(nucore_interface):
+        return ["dev-tools-section"]
+
+    runtime = UnifiedRuntime(
+        nucore_interface=SimpleNamespace(),
+        llm_client=SimpleNamespace(),
+        runtime_config={},
+        system_prompt_builder=fake_builder,
+    )
+    await runtime.handle_query("hi")
+    # Not ["static", "tail"] -- the module-level default _patch_collaborators
+    # monkeypatches build_system_prompt_sections to, which would prove the
+    # override was ignored.
+    assert _FakeLoop.captured_system_prompt == ["dev-tools-section"]
 
 
 class _RecordingLoop:

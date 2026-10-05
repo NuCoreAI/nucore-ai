@@ -275,3 +275,23 @@ async def plugin_ops(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
 
     data = response.get("data")
     return {"plugin_id": plugin_id, "operation": operation, **(data if isinstance(data, dict) else {})}
+
+
+async def configure_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    """Not wired into the customer-facing TOOL_HANDLERS table -- currently
+    only used by unified.dev_tools, for setting up a plugin under local
+    development/test. Add a "configure_plugin" entry to dispatch.py's
+    TOOL_HANDLERS if a customer-facing use ever needs it too."""
+    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
+    config = args.get("config")
+    if not plugin_id:
+        return {"error": "plugin_id is required -- call list_installed_plugins for the real plugin_id"}
+    if not isinstance(config, dict):
+        return {"error": "config must be a JSON object of configuration parameters"}
+
+    response = await nucore_interface.configure_plugin(plugin_id, config)
+    if not isinstance(response, dict) or not response.get("successful"):
+        return {"error": f"failed to configure plugin '{plugin_id}'"}
+
+    data = response.get("data")
+    return {"plugin_id": plugin_id, **(data if isinstance(data, dict) else {})}

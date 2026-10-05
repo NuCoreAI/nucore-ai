@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic Profiles id",
+  "description": "A generic identifier string used for NodeDef/Editor/Property/Cmd/LinkDef ids across the Dynamic Profiles object model (design/developers/plugin_model.md \u00a73). Deliberately permissive: real ids in the spec's own worked examples are not case- or format-constrained (e.g. \"CTL\", \"ST\", \"online\", \"I_STD\", \"mv\") -- unlike iox-vscode-plugin's stricter ioxplugin-dialect id patterns (e.g. node.properties.schema.json's ^[A-Z][A-Z0-9_]*$), which this schema does not carry over. Parameter.id is the one exception that must NOT use this $def -- it may legitimately be an empty string (the default parameter) per plugin_model.md's Parameter table, so parameter.schema.json declares its own unconstrained `type: string` instead.",
+  "type": "string",
+  "minLength": 1
+}

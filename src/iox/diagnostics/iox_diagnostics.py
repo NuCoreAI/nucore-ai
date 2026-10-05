@@ -16,7 +16,7 @@ import json
 from typing import TYPE_CHECKING, Any, Literal
 import xml.etree.ElementTree as ET
 from nucore import DeviceEventListener, Group
-from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name
+from ..iox_definitions import IoXSOAPAction, Subsystems, DEVICE_FAMILIES, get_subsystem_name, normalize_protocol_name
 from .diag_utils import _element_to_dict_excluding
 
 
@@ -567,7 +567,7 @@ class IoXDiagnostics:
             -- ignored by the non-insteon stub below, which has no
             Query-succeeded shortcut to skip in the first place.
         """
-        protocol = (protocol or "insteon").lower()
+        protocol = normalize_protocol_name(protocol or "insteon")
         if protocol == "insteon":
             if self._init_insteon_diag(device_id):
                 return await self._insteon_diag.diagnose_not_responding(device_id, force=force)
@@ -601,7 +601,7 @@ class IoXDiagnostics:
         show the new status (the device -> NuCore direction). Only INSTEON
         has real logic so far -- see NuCoreInterface.diagnose_no_status_feedback.
         """
-        if protocol.lower() != "insteon":
+        if normalize_protocol_name(protocol) != "insteon":
             return {"error": f"automated diagnosis for protocol '{protocol}' isn't implemented yet"}
         if self._init_insteon_diag(device_id):
             return await self._insteon_diag.diagnose_no_status_feedback(device_id)

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Range",
+  "description": "One entry in an Editor's `ranges` array -- design/developers/plugin_model.md \u00a73 (Range object). Either the min/max shape or the subset shape, matching src/nucore/profile.py's own `Profile.__build_editor__` dispatch (`if \"min\" in rng and \"max\" in rng: EditorMinMaxRange ... elif \"subset\" in rng: EditorSubsetRange`) -- restructured from iox-vscode-plugin's editor.schema.json, which additionally allows a third `{idref}` branch at this level; that branch is intentionally dropped here (see editor.schema.json's description).",
+  "oneOf": [
+    {
+      "title": "Min/max range",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max",
+        "uom"
+      ],
+      "properties": {
+        "min": {
+          "type": "number",
+          "description": "Lowest value allowed."
+        },
+        "max": {
+          "type": "number",
+          "description": "Highest value allowed."
+        },
+        "prec": {
+          "type": "number",
+          "description": "Precision: number of digits following the decimal point."
+        },
+        "step": {
+          "type": "number",
+          "description": "Step increment the UI should use when increasing/decreasing the value."
+        },
+        "uom": {
+          "$ref": "uom.schema.json"
+        },
+        "names": {
+          "type": "object",
+          "description": "Optional mapping of value (as a string key) to display name. See uom_named_states.schema.json for reference tables of well-known named states, e.g. for Thermostat mode (uom 67) -- not enforced here since names are plugin-author-supplied free text.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "desc": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "title": "Subset range",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subset",
+        "uom"
+      ],
+      "properties": {
+        "subset": {
+          "type": "string",
+          "description": "A span string, e.g. \"0-5,8-10,20\".",
+          "pattern": "^\\s*-?\\d+(\\s*-\\s*-?\\d+)?(\\s*,\\s*-?\\d+(\\s*-\\s*-?\\d+)?)*\\s*$"
+        },
+        "uom": {
+          "$ref": "uom.schema.json"
+        },
+        "names": {
+          "type": "object",
+          "description": "Optional mapping of value (as a string key) to display name. See uom_named_states.schema.json for reference tables of well-known named states -- not enforced here since names are plugin-author-supplied free text.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "desc": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

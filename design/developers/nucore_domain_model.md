@@ -317,3 +317,47 @@ before any load (`nucore_interface.py:60`).
 `src/nucore/__init__.py` is the intended public surface of this package — notably exports
 `Profile`, `Family`, `Instance`, `RuntimeProfile` directly (`__init__.py:16,25`) as first-class
 public types, alongside `Node`, `NodeDef`, `Command`, `LinkDef`, etc.
+
+## 16. JSON Schema validation (`schemas/`)
+
+`src/nucore/schemas/` holds a JSON Schema (draft 2020-12) restructuring of
+[`iox-vscode-plugin`](https://github.com/universaldevices/iox-vscode-plugin)'s validation schemas
+onto this package's own Dynamic Profiles object model, per
+[`plugin_dev_tooling.md`](plugin_dev_tooling.md) §6 step 1. It is packaged data
+(`pyproject.toml`'s `nucore` `package-data` entry), not part of the Python API surface in §15 —
+nothing in `src/nucore/__init__.py` exposes it, and nothing in this package loads or enforces it at
+import/parse time. See [`schemas/README.md`](../../src/nucore/schemas/README.md) for the full
+provenance/design writeup; this section is the short version, cross-referenced from the sections
+above it describes.
+
+**Two top-level shapes, matching the two shapes this doc already distinguishes (§1, §12)**:
+- [`schemas/dynamic_profile_update.schema.json`](../../src/nucore/schemas/dynamic_profile_update.schema.json)
+  — the flat `{editors, nodedefs, linkdefs[, delete]}` wire format
+  [`plugin_model.md`](plugin_model.md) §2-3 documents: what a plugin's own backend actually
+  exchanges with PG3/IoX via `getJsonProfile()`/`updateJsonProfile()`.
+- [`schemas/nucore_profile_catalog.schema.json`](../../src/nucore/schemas/nucore_profile_catalog.schema.json)
+  — this package's own `families[] -> instances[] -> {editors, nodedefs, linkdefs}` catalog
+  wrapper (§1, §12's `Family`/`Instance`), matching what `Profile.__parse_profile__` (§12) actually
+  requires and what `validate_profile`'s test fixtures exercise.
+
+Both `$ref` into one shared set of object definitions under `schemas/defs/` —
+`nodedef.schema.json` ↔ `NodeDef` (§3), `property.schema.json` ↔ `NodeProperty`/`Property` (§7),
+`cmd.schema.json`/`parameter.schema.json` ↔ `Command`/`CommandParameter` (§4),
+`editor.schema.json`/`range.schema.json` ↔ `Editor`/`EditorMinMaxRange`/`EditorSubsetRange` (§9),
+`linkdef.schema.json` ↔ `LinkDef` (§5), `uom.schema.json` ↔ `PREDEFINED_UOMS` (§8, generated from
+it, not hand-duplicated) — so the two top-level shapes can't drift on field definitions.
+
+**Known doc/code mismatches the schemas had to design around** (same spirit as §12's Family-code
+mismatch note above):
+- `NodeDef.icon`/`customicon`: `nodedef.py`'s parser collapses the spec's separate `icon` key into
+  `customicon` with fallback (`ndict.get("icon") or ndict.get("customicon")`) — there is no field
+  capturing `icon` distinctly from `customicon` today, even though `plugin_model.md` §3 documents
+  them as two separate optional fields.
+- `LinkParameter.init_val`/`init_uom` (`linkdef.py`) exist on the dataclass but are never populated
+  by the current parser (`profile.py:216-222` never sets them) — `schemas/defs/parameter.schema.json`
+  doesn't model them, since they have no live spec counterpart to validate against.
+- `Editor.is_reference` (§9) is parser-internal/rendering-only — the current parser never sets it
+  `True` from input (`Profile.__build_editor__` always constructs `is_reference=False`) — so
+  `schemas/defs/editor.schema.json` does not model an `idref`-style input variant at the editor
+  level the way `iox-vscode-plugin`'s own editor schema does; that reference indirection lives one
+  level up, in the plain `"editor": "<id>"` string fields on `Property`/`Parameter`/`LinkParameter`.

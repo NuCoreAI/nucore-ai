@@ -5,13 +5,14 @@ Dispatch calling directly into ``NuCoreInterface``/domain objects
 (``group_scene_add_member``/``remove_member``/``update_link``,
 ``Group.explain_json``, ``add_node``) with their real keyword argument names.
 
-Scope note: ``group_scene_op`` does not run client-side controller/responder
-role prechecks (``group_scene_get_node_roles``/``group_scene_get_link_types``)
-for its single-step operations -- that's real, non-trivial interpretation
+Scope note: ``group_scene_op`` has no ``add_member`` operation -- that's
+``multi_device_scene``'s job exclusively now, even for a single new member,
+so every add gets its ``availableAsController``/``availableAsResponder``
+role precheck and its "controller can only be in one scene" guard.
+``group_scene_op``'s own ``remove_member``/``update_link`` don't run a
+client-side precheck (``group_scene_get_node_roles``/
+``group_scene_get_link_types``) -- that's real, non-trivial interpretation
 logic without a clear enough spec to safely derive for the general case.
-``multi_device_scene`` *does* run the ``availableAsController``/
-``availableAsResponder`` role precheck per member, since that composition's
-shape is well-specified (unlike the general step-sequencing case).
 """
 
 from __future__ import annotations
@@ -52,27 +53,58 @@ async def _check_role_precheck(nucore_interface: NuCoreInterface, link_address: 
 async def group_scene_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     operation = args.get("operation")
     group_address = args.get("group_address")
-    link_address = args.get("link_address")
-    if not group_address or not link_address:
-        return {"error": "group_address and link_address are both required"}
 
-    if operation == "add_member":
-        result = await nucore_interface.group_scene_add_member(
-            group_address=group_address,
-            link_address=link_address,
-            is_controller=bool(args.get("is_controller", False)),
-            name=args.get("name"),
-        )
-    elif operation == "remove_member":
+    if not group_address:
+        return {"error": "group_address is required"}
+
+
+    if operation == "remove_member":
+        link_address = args.get("link_address")
+        if not link_address:
+            return {"error": "link_address is required"}
         result = await nucore_interface.group_scene_remove_member(
             group_address=group_address, link_address=link_address
         )
     elif operation == "update_link":
+        controller_address = args.get("controller_address")
         link = args.get("link")
-        if not isinstance(link, dict):
+        link_address = args.get("link_address")
+        if link_address is None or link is None or not isinstance(link, dict):
             return {"error": "update_link requires a 'link' object describing the new behavior"}
+        type = link.get("type") 
+        if not type: 
+            return {"error": "update_link requires a 'type' field in the 'link' object"}
+        link["node"]=link_address
+        for param in link.get("params", []):
+            if not isinstance(param, dict):
+                continue
+            id = param.get("id")
+            if id is None:
+                continue
+            ptype=param.get("type")
+            if ptype is None:
+                continue
+            if ptype == "val":
+                value = param.get("val", {})
+                if value is None:
+                    continue
+                try:
+                    value = float(value)
+                except ValueError:
+                    pass
+                param["val"]={}
+                uom = param.get("uom", None) 
+                prec = param.get("prec", 0)
+                param["val"]["value"] = value
+                param["val"]["uom"] = uom
+                param["val"]["prec"] = prec
+                param.pop("uom", None) # friendly text, uom_name
+                param.pop("friendly_text", None)
+                param.pop("uom_name", None)
+                param.pop("prec", None)
         result = await nucore_interface.group_scene_update_link(
-            group_address=group_address, controller_address=link_address, link=link
+            group_address=group_address,
+            controller_address=controller_address, link=link
         )
     else:
         return {"error": f"unknown group_scene_op operation '{operation}'"}

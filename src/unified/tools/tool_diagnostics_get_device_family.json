@@ -1,13 +1,13 @@
 {
   "name": "get_device_family",
-  "description": "Returns a device's real protocol family: insteon, z-wave, zigbee, matter, plugin, or unknown. Never infer a device's family from its name, address/id, icon, or a naming convention you believe you've noticed -- always call this instead. Required before any protocol-specific diagnostics or action (e.g. which `protocol` value to pass to `pair_device`/`node_op` for this device). Cheap and side-effect-free -- call it any time this fact is needed, not just while troubleshooting.",
+  "description": "Returns a device's real protocol family as one of these exact strings: \"INSTEON\", \"Z-Wave\", \"Zigbee\", \"Matter\", \"Legacy Z-Wave\", \"Plugin\", or \"Unknown family\". When another tool takes a `protocol` argument (pair_device, diagnostics_not_responding, diagnostics_no_status_feedback), map it to lowercase with no hyphen: INSTEON -> insteon, Z-Wave -> zwave, Zigbee -> zigbee, Matter -> matter. Legacy Z-Wave and Plugin devices have no pairing/diagnostics protocol (see pair_device and node_op for their removal flows). Never infer a device's family from its name, address/id, icon, or a naming convention you believe you've noticed -- always call this instead. Required before any protocol-specific diagnostics or action. Cheap and side-effect-free -- call it any time this fact is needed, not just while troubleshooting. One device per call -- call it once per device.",
   "input_schema": {
     "type": "object",
     "required": ["device_id"],
     "properties": {
       "device_id": {
         "type": "string",
-        "description": "The device's real id, exactly as shown for it in DEVICE DATABASE."
+        "description": "The device's real id, exactly as shown in DEVICE DATABASE -- never guessed."
       }
     }
   }

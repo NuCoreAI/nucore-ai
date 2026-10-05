@@ -1,0 +1,14 @@
+{
+  "name": "lookup_uom",
+  "description": "Search the Unit of Measure (UOM) catalogue by keyword, matching against each entry's name, label, description, and category. Use this when authoring an editor's ranges to find the right UOM id instead of guessing one from memory.",
+  "input_schema": {
+    "type": "object",
+    "required": ["keyword"],
+    "properties": {
+      "keyword": {
+        "type": "string",
+        "description": "A keyword or category to search for, e.g. 'temperature', 'percent', 'watts'."
+      }
+    }
+  }
+}

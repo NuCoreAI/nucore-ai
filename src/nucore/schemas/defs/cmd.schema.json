@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cmd",
+  "description": "design/developers/plugin_model.md \u00a73 (Cmd object): one entry of a NodeDef's `cmds.sends`/`cmds.accepts` (nodedef.schema.json). Restructured from iox-vscode-plugin's commands.schema.json, which lacks `native`, `format`, and (via parameter.schema.json) `optional`/`init`/`desc` on parameters entirely -- ioxplugin's Command dialect is strictly poorer than the real Cmd/Parameter shape, so those fields are added here. Neither `native` nor `name` is required here, even though neither has an explicit '(Optional)' marker in the spec's own table: \u00a73's worked Profile example includes `native` on only one of three sibling commands (`{\"id\": \"DISCOVER\", \"native\": \"false\", ...}` vs `{\"id\": \"QUERYALL\", \"name\": \"Query All\"}` with no `native`), and src/nucore/profile.py reads both via `cdict.get(...)` -- see schemas/README.md's leniency-policy note. Per the spec, `native` is typed as the STRING \"true\"/\"false\", not a JSON boolean.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "id.schema.json",
+      "description": "Command ID."
+    },
+    "name": {
+      "type": "string",
+      "description": "Command display name."
+    },
+    "native": {
+      "type": "string",
+      "enum": [
+        "true",
+        "false"
+      ],
+      "description": "String, not boolean, per the spec's own worked example (`\"native\": \"false\"`)."
+    },
+    "desc": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string",
+      "description": "How this command is displayed in the program editor -- see plugin_model.md \u00a74 (Formatting in Programs and Scenes)."
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "$ref": "parameter.schema.json"
+      }
+    }
+  }
+}

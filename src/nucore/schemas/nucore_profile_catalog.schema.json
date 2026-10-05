@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nucore_profile_catalog.schema.json",
+  "title": "nucore-ai profile catalog",
+  "description": "nucore-ai's own catalog-fetch wrapper (`GET /rest/profiles`) around the Dynamic Profiles object model -- the shape src/nucore/profile.py's `Profile.__parse_profile__` actually requires (`families[] -> instances[] -> {editors, nodedefs, linkdefs}`), and what src/unified/dev_tools/handlers/profile_authoring.py's validate_profile tool and its test fixtures (tests/unified/dev_tools/test_profile_authoring.py) actually exercise. This wrapper -- `families`/`instances`, per design/developers/nucore_domain_model.md §1/§12 -- is NOT part of the wire-format spec design/developers/plugin_model.md documents (see dynamic_profile_update.schema.json for that flat shape); it is nucore-ai's own concept for multiple family/instance catalogs merged into one document. Reuses the same defs/ object definitions as dynamic_profile_update.schema.json so the two 'views' of Dynamic Profiles never drift on NodeDef/Editor/Cmd/LinkDef field shapes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["families"],
+  "properties": {
+    "timestamp": {
+      "type": "string"
+    },
+    "families": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/family" }
+    }
+  },
+  "$defs": {
+    "family": {
+      "type": "object",
+      "description": "src/nucore/profile.py's Family: `Family(id=f[\"id\"], name=f.get(\"name\", \"\"), instances=instances)` -- id is the only field the parser can't tolerate missing (`f[\"id\"]` is a direct index, not `.get()`).",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "id.schema.json" },
+        "name": { "type": "string" },
+        "instances": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/instance" }
+        }
+      }
+    },
+    "instance": {
+      "type": "object",
+      "description": "src/nucore/profile.py's Instance: `Instance(id=i[\"id\"], name=i[\"name\"], ...)` -- both id and name are direct indexes (would raise if missing), unlike most other fields in this wrapper.",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "id.schema.json" },
+        "name": { "type": "string" },
+        "editors": {
+          "type": "array",
+          "items": { "$ref": "editor.schema.json" }
+        },
+        "linkdefs": {
+          "type": "array",
+          "items": { "$ref": "linkdef.schema.json" }
+        },
+        "nodedefs": {
+          "type": "array",
+          "items": { "$ref": "nodedef.schema.json" }
+        }
+      }
+    }
+  }
+}
