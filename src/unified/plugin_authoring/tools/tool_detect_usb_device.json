@@ -1,0 +1,18 @@
+{
+  "name": "detect_usb_device",
+  "description": "Identify a plugged-in USB/serial device's vendor_id/product_id for a plugin that needs direct hardware access (server_entry.devd). Workflow: (1) pick a device-enumeration command for the host platform (e.g. 'lsusb' on Linux, 'usbdevs -v' on FreeBSD, or 'ls -la /dev/tty*' for a serial device) and run it with run_shell_command, capturing its stdout as 'before'; (2) ask the customer to plug the device in now; (3) run the exact same command again with run_shell_command, capturing its stdout as 'after'; (4) call this tool with both snapshots. It diffs them and extracts vendor_id/product_id from whatever's new -- this tool never runs a shell command itself. If no vendor_id:product_id pair can be parsed, inspect the returned 'new_lines' and consider a more detailed enumeration command (e.g. 'lsusb -v').",
+  "input_schema": {
+    "type": "object",
+    "required": ["before", "after"],
+    "properties": {
+      "before": {
+        "type": "string",
+        "description": "stdout from the enumeration command, captured before the customer plugged the device in."
+      },
+      "after": {
+        "type": "string",
+        "description": "stdout from the exact same enumeration command, captured after the customer plugged the device in."
+      }
+    }
+  }
+}

@@ -9,14 +9,17 @@ import ipaddress
 import ssl
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import websockets
 from dotenv import load_dotenv
 
-from unified import dev_tools
+from unified import plugin_authoring
 from unified.models import IntentHandlerResult
-from unified.runtime import UnifiedRuntime
+from unified.plugin_authoring import search_result_enrichment
+from unified.plugin_authoring.handlers import discovery as plugin_authoring_discovery
+from unified.provider_dispatch_adapter import ProviderDispatchLLMAdapter
+from unified.runtime import UnifiedRuntime, resolve_llm_profile
 from unified.runtime_config import _load_runtime_config
 from unified.session_store import SessionStore
 from unified.dispatch_builder import build_default_dispatch_adapter
@@ -164,14 +167,40 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tool-set",
         type=str,
-        choices=["customer", "dev_tools"],
+        choices=["customer", "plugin_authoring"],
         default="customer",
         help=(
             "Which tool set/system prompt the agentic loop uses. 'customer' (default) is "
-            "today's end-customer smart-home assistant. 'dev_tools' is the plugin-developer "
-            "assistant (unified.dev_tools): profile authoring/validation, UOM lookup, and "
+            "today's end-customer smart-home assistant. 'plugin_authoring' (unified.plugin_authoring, "
+            "formerly 'dev_tools') covers profile authoring/validation, UOM lookup, and "
             "configuring/starting/stopping/calling an already-installed plugin under test -- "
-            "still requires a live backend via --backend-api-classpath, same as 'customer'."
+            "still requires a live backend via --backend-api-classpath, same as 'customer'. "
+            "Requires --plugin-output-root."
+        ),
+    )
+    parser.add_argument(
+        "--plugin-output-root",
+        type=str,
+        default=None,
+        help=(
+            "Allowed root directory for plugin_authoring's generated scaffolds. Required when "
+            "--tool-set plugin_authoring is used; the tool set refuses to start without it."
+        ),
+    )
+    parser.add_argument(
+        "--search-engine",
+        type=str,
+        choices=["brave", "tavily"],
+        default=None,
+        help=(
+            "Web-search provider for plugin_authoring's search_web tool (Brave/Tavily). Falls "
+            "back to runtime config's 'search_engine' key when omitted. Requires "
+            "SEARCH_ENGINE_API_KEY to also be set. When the resolved LLM provider for this tool "
+            "set is Claude, omitting this (and its key) uses Claude's own native web_search tool "
+            "instead -- no second API key needed; passing --search-engine explicitly always forces "
+            "this Brave/Tavily fallback regardless of provider. For any other provider, omitting "
+            "this means no web search tool at all, and the flow falls through to asking the user "
+            "for URLs."
         ),
     )
     parser.add_argument(
@@ -578,35 +607,160 @@ class _RawWebSocketAdapter:
 
 _CUSTOMER_TOOLS_DIR = Path(__file__).parent / "tools"
 
-# The plugin-lifecycle tools dev_tools reuses as-is from the customer tool
-# set (see dev_tools/dispatch.py's module docstring for why these four and
-# not the others) -- referenced directly rather than copied, so the two tool
+# The plugin-lifecycle tools (plus run_shell_command, Stage 6's hardware/USB
+# detection) plugin_authoring reuses as-is from the customer tool set (see
+# plugin_authoring/dispatch.py's module docstring for why these five and not
+# the others) -- referenced directly rather than copied, so the two tool
 # sets never drift on what these schemas say.
-_DEV_TOOLS_REUSED_CUSTOMER_TOOLS = (
+_PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS = (
     "tool_plugin_list_installed.json",
     "tool_plugin_ops.json",
     "tool_plugin_get_capabilities.json",
     "tool_plugin_call.json",
+    "tool_diagnostics_run_shell.json",
 )
 
 
+class _PluginAuthoringDispatch(NamedTuple):
+    """What ``_resolve_tool_set``'s ``dispatch_factory()`` returns for the
+    ``plugin_authoring`` branch -- a richer bundle than a bare dispatch
+    callable, since the Claude-native web search path also needs
+    ``extra_tools``/``on_raw_response`` threaded into ``UnifiedRuntime``
+    (see that class's own docstring), bound to this same connection's
+    ``EvidenceLedger``. ``extra_tools``/``on_raw_response`` are ``None``
+    whenever native search isn't in play -- the common case, and the only
+    case for ``tool_set != "plugin_authoring"`` (whose ``dispatch_factory``
+    is ``None`` entirely, never even called)."""
+
+    dispatch: Any
+    extra_tools: list[dict[str, Any]] | None = None
+    on_raw_response: Any = None
+
+
+async def _record_native_search_evidence(
+    raw_response: Any, *, ledger: "plugin_authoring.EvidenceLedger", secret_values: list[str]
+) -> None:
+    """``AgenticLoop``'s ``on_raw_response`` hook for the Claude-native web
+    search path: a ``web_search_tool_result`` block never becomes a
+    ``ToolCall`` (see ``parse_tool_calls``), so it never reaches
+    ``dispatch`` -- this is the only place that ever sees it. Walks every
+    such block in *raw_response*'s content, marks ``ledger.web_search_tried``,
+    and license-enriches/records each result the same way ``search_web``'s
+    fallback path already does (``search_result_enrichment
+    .classify_and_record``), so a GitHub-domain result is treated
+    identically no matter which path found it."""
+    content = raw_response.get("content") if isinstance(raw_response, dict) else None
+    for block in content or []:
+        if not isinstance(block, dict) or block.get("type") != "web_search_tool_result":
+            continue
+        ledger.web_search_tried = True
+        items = block.get("content")
+        if not isinstance(items, list):
+            continue  # error shape -- {"type": "web_search_tool_result_error", ...}
+        for item in items:
+            if isinstance(item, dict) and item.get("type") == "web_search_result":
+                await search_result_enrichment.classify_and_record(
+                    ledger,
+                    tier="web_search",
+                    url=item.get("url"),
+                    title=item.get("title"),
+                    secret_values=secret_values,
+                )
+
+
 def _resolve_tool_set(
-    tool_set: str, nucore_interface: NuCoreInterface
+    tool_set: str,
+    nucore_interface: NuCoreInterface,
+    plugin_output_root: str | None = None,
+    search_engine: str | None = None,
+    secret_values: list[str] | None = None,
+    provider: str | None = None,
 ) -> tuple[list[Path] | None, Any, Any]:
-    """Return ``(tool_spec_paths, dispatch, system_prompt_builder)`` for
-    ``UnifiedRuntime``'s matching constructor params (see unified/runtime.py).
-    Any *tool_set* other than ``"dev_tools"`` returns ``(None, None, None)``,
-    which ``UnifiedRuntime`` treats as "use the hardcoded customer-facing
-    default" -- so this only changes behavior for ``--tool-set dev_tools``.
+    """Return ``(tool_spec_paths, dispatch_factory, system_prompt_builder)``
+    for ``UnifiedRuntime``'s matching constructor params (see
+    unified/runtime.py). Any *tool_set* other than ``"plugin_authoring"``
+    returns ``(None, None, None)``, which ``UnifiedRuntime`` treats as "use
+    the hardcoded customer-facing default" -- so this only changes behavior
+    for ``--tool-set plugin_authoring``.
+
+    The second element is a **factory** (zero-arg callable returning a
+    :class:`_PluginAuthoringDispatch`), not a ready-to-use dispatch --
+    callers must invoke it once per connection/session (see
+    ``_run_websocket_server`` and ``main``) rather than sharing one dispatch
+    object across every connection. This is what gives each connection its
+    own fresh ``EvidenceLedger`` (design/developers/impl_plan.md's discovery
+    tools), so one user's evidence can never satisfy another's "credible
+    source" check.
+
+    Raises ``ValueError`` if ``tool_set == "plugin_authoring"`` and
+    *plugin_output_root* is falsy -- the tool set refuses to start without an
+    allowed output root (impl_plan.md's server-side-configuration section).
+
+    *search_engine* (``"brave"``/``"tavily"``) together with the
+    ``SEARCH_ENGINE_API_KEY`` environment variable (read here, never taken
+    from tool args or model output) controls whether the Brave/Tavily
+    ``search_web`` tool is registered. *provider* is the resolved LLM
+    provider for this tool set's conversations (``resolve_llm_profile``'s
+    ``"provider"`` key) -- when it resolves to ``claude`` and *search_engine*
+    was not explicitly given, Claude's own native ``web_search`` server tool
+    is used instead: no ``search_web``/no second API key, via *extra_tools*/
+    *on_raw_response* on the returned dispatch bundle rather than a
+    ``tool_*.json`` file (there is nothing to dispatch -- Anthropic executes
+    it server-side). Passing *search_engine* explicitly always wins, on any
+    provider, forcing the Brave/Tavily fallback -- today's exact behavior.
+    *secret_values* are the literal secret strings (backend password, loaded
+    secrets-file values, the search engine key itself) the discovery tools
+    refuse to send in an outbound query/fetch.
     """
-    if tool_set != "dev_tools":
+    if tool_set != "plugin_authoring":
         return None, None, None
 
-    tool_spec_paths = sorted(dev_tools.TOOLS_DIR.glob("tool_*.json")) + [
-        _CUSTOMER_TOOLS_DIR / name for name in _DEV_TOOLS_REUSED_CUSTOMER_TOOLS
-    ]
-    dispatch = functools.partial(dev_tools.dispatch.execute_tool, nucore_interface=nucore_interface)
-    return tool_spec_paths, dispatch, dev_tools.build_system_prompt_sections
+    if not plugin_output_root:
+        raise ValueError("--tool-set plugin_authoring requires --plugin-output-root")
+
+    search_engine_api_key = os.environ.get("SEARCH_ENGINE_API_KEY")
+    web_search_enabled = bool(search_engine and search_engine_api_key)
+    native_claude_search = (
+        bool(provider) and ProviderDispatchLLMAdapter._normalize(provider) == "claude" and not search_engine
+    )
+
+    tool_spec_paths = sorted(
+        p for p in plugin_authoring.TOOLS_DIR.glob("tool_*.json") if p.name != "tool_search_web.json"
+    ) + [_CUSTOMER_TOOLS_DIR / name for name in _PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS]
+    if web_search_enabled:
+        tool_spec_paths.append(plugin_authoring.TOOLS_DIR / "tool_search_web.json")
+    tool_spec_paths.sort()
+
+    def _make_dispatch() -> _PluginAuthoringDispatch:
+        # plugin_output_root is consumed by list_generated_plugins/
+        # read_generated_plugin/generate_plugin_scaffold/install_generated_plugin
+        # (design/developers/impl_plan.md Phase 3, plugin_authoring_p4_impl.md).
+        ledger = plugin_authoring.EvidenceLedger(web_search_available=web_search_enabled or native_claude_search)
+        tool_handlers = plugin_authoring.dispatch.build_tool_handlers(
+            ledger=ledger,
+            search_engine=search_engine,
+            search_engine_api_key=search_engine_api_key,
+            secret_values=secret_values or [],
+            plugin_output_root=plugin_output_root,
+        )
+        dispatch = functools.partial(
+            plugin_authoring.dispatch.execute_tool, nucore_interface=nucore_interface, tool_handlers=tool_handlers
+        )
+        if not native_claude_search:
+            return _PluginAuthoringDispatch(dispatch=dispatch)
+        extra_tools = [
+            {
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": plugin_authoring_discovery.MAX_WEB_SEARCH_QUERIES,
+            }
+        ]
+        on_raw_response = functools.partial(
+            _record_native_search_evidence, ledger=ledger, secret_values=secret_values or []
+        )
+        return _PluginAuthoringDispatch(dispatch=dispatch, extra_tools=extra_tools, on_raw_response=on_raw_response)
+
+    return tool_spec_paths, _make_dispatch, plugin_authoring.build_system_prompt_sections
 
 
 async def _run_websocket_server(
@@ -620,7 +774,9 @@ async def _run_websocket_server(
     is_unix: bool,
     client_uid: int | None = None,
     ssl_context: ssl.SSLContext | None = None,
-    tool_set: str = "customer",
+    tool_spec_paths: list[Path] | None = None,
+    dispatch_factory: Any = None,
+    system_prompt_builder: Any = None,
 ) -> None:
     """Serve WebSocket connections directly, no HTTP framework involved.
 
@@ -635,7 +791,13 @@ async def _run_websocket_server(
     previously a private, per-connection ``SessionStore`` too, which meant a
     reconnect silently lost everything despite ``EisyUIContext.get_user_id``'s
     session id being stable across one -- see ``SessionStore.lock`` for what
-    keeps sharing it across connections safe).
+    keeps sharing it across connections safe). Dispatch is also per-connection:
+    ``_resolve_tool_set`` hands back a dispatch *factory*, and ``handler``
+    calls it fresh for each connection rather than sharing one dispatch
+    object -- for ``plugin_authoring`` this is what gives each connection
+    its own fresh ``EvidenceLedger`` (design/developers/impl_plan.md's
+    discovery tools), so one user's evidence never satisfies another's
+    "credible source" check.
 
     ``runtime_config`` is *not* shared, unlike the other two -- it's rebuilt
     fresh per connection (a cheap local JSON read, no network I/O) because
@@ -656,15 +818,20 @@ async def _run_websocket_server(
     socket mode only), is checked against each connection's real peer UID via
     ``getpeereid()`` -- connections from any other UID are closed immediately,
     before any query is processed.
+
+    ``tool_spec_paths``/``dispatch_factory``/``system_prompt_builder`` are
+    ``_resolve_tool_set``'s own return values -- this function has no idea
+    what tool set is active or what plugin_authoring-specific config
+    (output root, search engine, secrets, provider) produced them. The
+    caller (``main``) resolves that once, the same way its own direct
+    (non-websocket) path already does, so this generic connection-serving
+    function only ever deals with the three-value contract
+    :class:`UnifiedRuntime` itself understands.
     """
     # Shared across every connection -- see this function's own docstring
     # and SessionStore.lock for why (a reconnect must find its history, not
     # start over empty; the lock is what keeps that sharing safe).
     shared_session_store = SessionStore()
-    # nucore_interface is fixed for this server's whole life, so the tool
-    # set/dispatch/prompt builder it resolves to are computed once here
-    # rather than per connection.
-    tool_spec_paths, dispatch, system_prompt_builder = _resolve_tool_set(tool_set, nucore_interface)
 
     async def handler(websocket) -> None:
         if client_uid is not None:
@@ -687,6 +854,11 @@ async def _run_websocket_server(
             stream_handler=stream_handler,
             force_stream=force_stream,
         )
+        # Call the factory fresh per connection -- see this function's own
+        # docstring and _resolve_tool_set's. dispatch_bundle carries
+        # extra_tools/on_raw_response alongside dispatch for plugin_authoring's
+        # Claude-native web search path; None for every other tool set.
+        dispatch_bundle = dispatch_factory() if dispatch_factory is not None else None
         runtime = UnifiedRuntime(
             nucore_interface=nucore_interface,
             llm_client=llm_adapter,
@@ -694,8 +866,10 @@ async def _run_websocket_server(
             max_iterations=max_iterations,
             session_store=shared_session_store,
             tool_spec_paths=tool_spec_paths,
-            dispatch=dispatch,
+            dispatch=dispatch_bundle.dispatch if dispatch_bundle is not None else None,
             system_prompt_builder=system_prompt_builder,
+            extra_tools=dispatch_bundle.extra_tools if dispatch_bundle is not None else None,
+            on_raw_response=dispatch_bundle.on_raw_response if dispatch_bundle is not None else None,
         )
         runtime.stream_handler = stream_handler
         try:
@@ -806,6 +980,29 @@ def main(args:Any=None, poly=None) -> None:
     backend_api_username = args.backend_api_username or os.environ.get("BACKEND_API_USER_NAME")
     backend_api_password = args.backend_api_password or os.environ.get("BACKEND_API_PASSWORD")
 
+    # plugin_authoring: --search-engine wins over runtime config's
+    # 'search_engine' key, same CLI-overrides-config precedence as
+    # --preferences-dir/--max-iterations above. Neither brave nor tavily is
+    # treated as the implied default when both are unset.
+    search_engine = args.search_engine or runtime_config.get("search_engine")
+    # The resolved provider for this tool set's own conversations (not
+    # necessarily the dispatch adapter's overall default_provider, which
+    # comes from a different runtime_config key -- see resolve_llm_profile's
+    # docstring) -- plugin_authoring's native-vs-fallback web search
+    # selection needs this before _resolve_tool_set runs.
+    provider = resolve_llm_profile(runtime_config).get("provider")
+    # Literal secret values the discovery tools refuse to send in an
+    # outbound query/fetch -- never put these in a search query or a log.
+    secret_values = [
+        v
+        for v in (
+            backend_api_password,
+            *(secrets_env.values() if secrets_env else ()),
+            os.environ.get("SEARCH_ENGINE_API_KEY"),
+        )
+        if v
+    ]
+
     global nucore_interface
     nucore_interface = _load_backend_api(
         classpath=args.backend_api_classpath,
@@ -833,6 +1030,14 @@ def main(args:Any=None, poly=None) -> None:
 
     websocket_is_unix, websocket_host = _parse_websocket_host(args.websocket_host)
 
+    # Resolved once, regardless of mode -- both the websocket server and the
+    # direct --query/REPL path below need the same (tool_spec_paths,
+    # dispatch_factory, system_prompt_builder) triple, and neither needs to
+    # know what went into producing it.
+    tool_spec_paths, dispatch_factory, system_prompt_builder = _resolve_tool_set(
+        args.tool_set, nucore_interface, args.plugin_output_root, search_engine, secret_values, provider
+    )
+
     if args.websocket_port or websocket_is_unix:
         # Native WebSocket server mode: this process itself is the server --
         # no external HTTP framework, no caller-supplied connection object.
@@ -854,7 +1059,9 @@ def main(args:Any=None, poly=None) -> None:
                 websocket_is_unix,
                 client_uid=args.websocket_client_id if websocket_is_unix else None,
                 ssl_context=ssl_context,
-                tool_set=args.tool_set,
+                tool_spec_paths=tool_spec_paths,
+                dispatch_factory=dispatch_factory,
+                system_prompt_builder=system_prompt_builder,
             ))
         except KeyboardInterrupt:
             logger.warning("\nInterrupted. Exiting.")
@@ -862,15 +1069,17 @@ def main(args:Any=None, poly=None) -> None:
             nucore_interface.shutdown()
         return
 
-    tool_spec_paths, dispatch, system_prompt_builder = _resolve_tool_set(args.tool_set, nucore_interface)
+    dispatch_bundle = dispatch_factory() if dispatch_factory is not None else None
     runtime = UnifiedRuntime(
         nucore_interface=nucore_interface,
         llm_client=llm_adapter,
         runtime_config=runtime_config,
         max_iterations=resolved_max_iterations,
         tool_spec_paths=tool_spec_paths,
-        dispatch=dispatch,
+        dispatch=dispatch_bundle.dispatch if dispatch_bundle is not None else None,
         system_prompt_builder=system_prompt_builder,
+        extra_tools=dispatch_bundle.extra_tools if dispatch_bundle is not None else None,
+        on_raw_response=dispatch_bundle.on_raw_response if dispatch_bundle is not None else None,
     )
     runtime.stream_handler = stream_handler
     logger.info("Unified runtime initialized")

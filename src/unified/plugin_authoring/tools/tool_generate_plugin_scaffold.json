@@ -1,0 +1,108 @@
+{
+  "name": "generate_plugin_scaffold",
+  "description": "Generate (or regenerate) a complete local plugin on disk: profile.json, plugin.py (the udi_interface Controller, with wiring methods always tool-generated and override-method bodies supplied here), any extra node-class files, main.py, version.py, server_entry.json (the exact local-install registration payload), README.md, tests, and an append-only context.md iteration note. Refuses if no evidence has been gathered this session (call search_store_plugins/search_github_plugins/search_web/fetch_reference first), if the profile fails validate_profile's checks, if override_bodies names an unknown method, or if anything generated appears to contain a real secret value -- OAuth client_id/client_secret are always written as a fixed placeholder, filled in for real after install via configure_plugin(key='oauth'). If any target file already exists, the first call returns the conflict list and writes nothing; call again with confirm_overwrite: true once the customer has agreed to overwrite. Follow with install_generated_plugin to actually register/install/start it.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location", "profile", "server_entry", "readme_body", "iteration_note"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The subdirectory name under the server's plugin output root to write this plugin into. Reuse the 'location' from list_generated_plugins/read_generated_plugin when updating an existing plugin."
+      },
+      "profile": {
+        "type": "object",
+        "description": "The Dynamic Profiles wire document -- top-level 'editors'/'nodedefs'/'linkdefs' lists, the same shape polyglot.getJsonProfile()/read_generated_plugin use. Internally wrapped and checked with the same structural validation validate_profile runs before anything is written."
+      },
+      "controller_class": {
+        "type": "string",
+        "description": "The Controller class name to generate in plugin.py. Defaults to 'Controller'."
+      },
+      "controller_module": {
+        "type": "string",
+        "description": "The module (filename without .py) main.py imports the controller class from. Defaults to 'plugin'."
+      },
+      "version": {
+        "type": "string",
+        "description": "The plugin version string written to version.py and passed to polyglot.start(). Defaults to '1.0.0'; bump on every regeneration that changes behavior."
+      },
+      "node_classes": {
+        "type": "object",
+        "description": "Extra device Node subclasses beyond the Controller, as {filename_without_py: full_python_source}, for profiles with more than one NodeDef.",
+        "additionalProperties": {"type": "string"}
+      },
+      "override_bodies": {
+        "type": "object",
+        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true. Any name not supplied gets a safe no-op stub. Any other key is rejected.",
+        "additionalProperties": {"type": "string"}
+      },
+      "server_entry": {
+        "type": "object",
+        "description": "The developer/tool-defined registration spec -- becomes server_entry.json, the exact PUT /api/plugins/store/local/entry body install_generated_plugin sends.",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "description": "Plugin display name, max 15 characters."},
+          "desc": {"type": "string"},
+          "type": {"type": "string", "enum": ["python3", "node"], "description": "Defaults to 'python3'."},
+          "executable": {"type": "string", "description": "Defaults to 'main.py'."},
+          "runAs": {"type": "string", "description": "OS account the plugin process runs as. Defaults to 'eisyai'."},
+          "customParams": {
+            "type": "array",
+            "description": "The developer-defined custom-config schema (field names/descriptions/types) -- NOT real values. Real values are filled in afterward by the customer via configure_plugin.",
+            "items": {"type": "object"}
+          },
+          "authorize": {"type": "boolean", "description": "True if this plugin needs OAuth against the target API."},
+          "oauth": {
+            "type": "object",
+            "description": "OAuth endpoint config when authorize is true: auth_endpoint, token_endpoint, scope, addRedirect, addScope, token_parameters. Never include a real client_id/client_secret -- omit them and the placeholder is filled in automatically.",
+            "properties": {
+              "auth_endpoint": {"type": "string"},
+              "token_endpoint": {"type": "string"},
+              "scope": {"type": "string"},
+              "addRedirect": {"type": "boolean"},
+              "addScope": {"type": "boolean"},
+              "token_parameters": {"type": "object"}
+            }
+          },
+          "ai_enabled": {"type": "boolean", "description": "True only if this plugin exposes AI-callable tools via CUSTOMREQUEST."},
+          "aiPrompt": {"type": "string", "description": "Static developer-authored prompt text describing this plugin's AI tools."},
+          "aiTools": {
+            "type": "array",
+            "description": "Each declared AI tool: {name, description, params?}. Every entry needs a matching '_<name>' helper in override_bodies.",
+            "items": {"type": "object", "required": ["name", "description"]}
+          },
+          "discover": {"type": "boolean"},
+          "fileUpload": {"type": "boolean"},
+          "isyAccess": {"type": "boolean"},
+          "shortPoll": {"type": "integer"},
+          "longPoll": {"type": "integer"},
+          "devd": {
+            "type": "object",
+            "description": "Only for plugins needing direct serial/USB hardware access. {vendor_id, product_id, name} (vendor_id/product_id as 4-hex-digit strings, e.g. from detect_usb_device) renders the devd.conf hardware-attach rule text. Omit entirely for API/cloud-service-backed plugins (the common case).",
+            "properties": {
+              "vendor_id": {"type": "string"},
+              "product_id": {"type": "string"},
+              "name": {"type": "string"}
+            }
+          }
+        }
+      },
+      "readme_body": {
+        "type": "string",
+        "description": "The README's main body text. A 'Sources' section citing every evidence source gathered this session is appended automatically."
+      },
+      "tests": {
+        "type": "object",
+        "description": "Generated test files, as {filename: python_source} (filenames should start with 'test_').",
+        "additionalProperties": {"type": "string"}
+      },
+      "iteration_note": {
+        "type": "string",
+        "description": "A short note on what this generation call changed -- appended to context.md so a later session (or read_generated_plugin) can see the plugin's iteration history."
+      },
+      "confirm_overwrite": {
+        "type": "boolean",
+        "description": "Set true only after the customer has explicitly agreed to overwrite an existing plugin's files (the first call without this returns the conflict list and writes nothing)."
+      }
+    }
+  }
+}

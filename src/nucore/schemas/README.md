@@ -12,7 +12,7 @@ These are packaged data (`pyproject.toml`'s `[tool.setuptools.package-data]` `nu
 Python-importable API -- `src/nucore/__init__.py`'s public surface (see
 [`nucore_domain_model.md`](../../../design/developers/nucore_domain_model.md) §15) is unaffected.
 Nothing in this repo currently loads or enforces these schemas at runtime; `validate_profile`
-(`src/unified/dev_tools/handlers/profile_authoring.py`) still validates purely by running
+(`src/unified/plugin_authoring/handlers/profile_authoring.py`) still validates purely by running
 `nucore.Profile().load_from_json(...)` and capturing its debug-log output, per its own design.
 This directory exists for anyone hand-authoring or vetting a Dynamic Profiles document outside
 that chat loop -- a plugin developer's own editor/CI, a future CLI, or the sibling `eisy-ai` repo.
@@ -25,6 +25,13 @@ Dynamic Profiles has two different top-level shapes in this codebase:
 |---|---|---|
 | [`dynamic_profile_update.schema.json`](dynamic_profile_update.schema.json) | Flat `{editors, nodedefs, linkdefs[, delete]}` | What a plugin's own backend sends/receives via `polyglot.getJsonProfile()`/`updateJsonProfile()` -- the wire format `plugin_model.md` §2-3 documents. |
 | [`nucore_profile_catalog.schema.json`](nucore_profile_catalog.schema.json) | `families[] -> instances[] -> {editors, nodedefs, linkdefs}` | nucore-ai's own catalog-fetch wrapper (`GET /rest/profiles`) -- what `src/nucore/profile.py`'s `Profile.__parse_profile__` actually requires, and what `validate_profile`/its test fixtures exercise today. |
+
+`unified.plugin_authoring`'s `generate_plugin_scaffold`
+(`src/unified/plugin_authoring/handlers/scaffold.py`) writes the **wire** shape to disk as
+`profile.json` -- the same document `read_generated_plugin` later reads back, and what an
+installed plugin's own backend would send. It only wraps that into the **catalog** shape
+transiently, in memory (`_wrap_wire_profile_as_catalog`), to reuse `validate_profile`'s existing
+check before writing; the catalog shape itself is never what's persisted for this tool set.
 
 Both `$ref` into the same [`defs/`](defs/) object definitions (`NodeDef`, `Property`, `Cmd`,
 `Parameter`, `Editor`, `Range`, `LinkDef`, plus `id`/`icon`/`uom` leaf definitions), so the two

@@ -1,0 +1,14 @@
+{
+  "name": "search_store_plugins",
+  "description": "Check the NuCore plugin store for an existing plugin that already covers what the user described, before researching or generating a custom one. Scores every store plugin against the user's own words and returns them ranked, with recommend_and_stop set when a plausible match exists. If a viable match is found, recommend it and stop there -- only continue to search_github_plugins/search_web/generation if the user explicitly says they still want a custom plugin.",
+  "input_schema": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "The device/service and capability the user described, in their own words (e.g. 'pool controller temperature and pump control')."
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "install_generated_plugin",
+  "description": "Register, install, and start a plugin generate_plugin_scaffold has already written to disk -- reads its server_entry.json, registers it with the hub's local plugin store, installs it, and starts it. Each stage (register/install/start) that fails is reported distinctly via a 'stage' field, with no partial success reported as full success; re-call this alone (no need to regenerate) if only a later stage failed. Always confirm with the customer before calling this -- it makes real changes on the hub, unlike generate_plugin_scaffold which only writes local files.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The 'location' a generate_plugin_scaffold/list_generated_plugins call returned, identifying which generated plugin to install."
+      }
+    }
+  }
+}

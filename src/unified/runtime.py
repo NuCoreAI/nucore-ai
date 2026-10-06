@@ -24,6 +24,23 @@ _TOOLS_DIR = Path(__file__).parent / "tools"
 SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
 
+def resolve_llm_profile(runtime_config: dict[str, Any], *, preferred_key: str = "unified") -> dict[str, Any]:
+    """Pick an LLM profile dict out of ``runtime_config["supported_llms"]``:
+    *preferred_key* if present, else ``default_llm``/``"default"``, else
+    whatever key comes first. Shared by :meth:`UnifiedRuntime._resolve_llm_config`
+    and ``run_unified_runtime.py`` (which needs to know the same resolved
+    provider up front, before ``UnifiedRuntime`` exists, to decide whether
+    plugin_authoring's native-vs-fallback web search applies) -- extracted
+    once here so the two can never drift on the fallback order."""
+    supported = runtime_config.get("supported_llms", {})
+    if not supported:
+        return {}
+    key = preferred_key if preferred_key in supported else (runtime_config.get("default_llm") or "default")
+    if key not in supported:
+        key = next(iter(supported.keys()))
+    return dict(supported.get(key, {}))
+
+
 class UnifiedRuntime:
     def __init__(
         self,
@@ -36,20 +53,29 @@ class UnifiedRuntime:
         tool_spec_paths: Iterable[Path] | None = None,
         dispatch: ToolDispatch | None = None,
         system_prompt_builder: SystemPromptBuilder | None = None,
+        extra_tools: list[dict[str, Any]] | None = None,
+        on_raw_response: Callable[[Any], Any] | None = None,
     ) -> None:
         """*tool_spec_paths*/*dispatch*/*system_prompt_builder* let a caller
         swap in an alternate tool set instead of the customer-facing default
         (this module's own ``_TOOLS_DIR`` glob / ``dispatch.execute_tool`` /
         ``prompt_builder.build_system_prompt_sections``) -- see
-        ``unified.dev_tools`` for the one existing alternate tool set, and
+        ``unified.plugin_authoring`` for the one existing alternate tool set, and
         ``run_unified_runtime.py``'s ``--tool-set`` flag for how it's wired
         in. Omitting all three reproduces today's exact customer-path
         behavior; that's the only combination covered by the existing test
         suite; the override path is additive.
+
+        *extra_tools*/*on_raw_response* are forwarded as-is into every
+        :class:`AgenticLoop` this instance builds -- see that class's own
+        docstring. Unset by every caller except plugin_authoring's
+        Claude-native web search path.
         """
         self.nucore_interface = nucore_interface
         self.llm_client = llm_client
         self.runtime_config = runtime_config
+        self._extra_tools = extra_tools
+        self._on_raw_response = on_raw_response
         # A caller serving multiple connections for what can be the same
         # logical customer (see run_unified_runtime._run_websocket_server)
         # passes one shared SessionStore so a reconnect finds its history
@@ -79,14 +105,9 @@ class UnifiedRuntime:
         """Pick the LLM profile for the unified path: an optional dedicated
         ``nucore_runtime.unified`` profile, falling back to ``default`` --
         the same fallback pattern the router's own ``nucore_runtime.router``
-        already uses."""
-        supported = self.runtime_config.get("supported_llms", {})
-        if not supported:
-            return {}
-        key = "unified" if "unified" in supported else (self.runtime_config.get("default_llm") or "default")
-        if key not in supported:
-            key = next(iter(supported.keys()))
-        return dict(supported.get(key, {}))
+        already uses. Thin wrapper around the module-level
+        :func:`resolve_llm_profile`."""
+        return resolve_llm_profile(self.runtime_config, preferred_key="unified")
 
     async def _dispatch(self, name: str, args: dict[str, Any]) -> Any:
         if self._dispatch_override is not None:
@@ -159,6 +180,8 @@ class UnifiedRuntime:
                 max_iterations=self.max_iterations,
                 fabrication_guard_mode=self.runtime_config.get("fabrication_guard_mode", "log"),
                 max_fabrication_retries=int(self.runtime_config.get("max_fabrication_retries", 1)),
+                extra_tools=self._extra_tools,
+                on_raw_response=self._on_raw_response,
             )
             llm_config = self._resolve_llm_config()
             # Grok's adapter reads this back out to set the x-grok-conv-id header

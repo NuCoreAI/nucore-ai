@@ -15,6 +15,7 @@ the model doesn't reliably follow) -- dispatch must be sequential.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import unified.loop as loop_module
 from unified.loop import AgenticLoop
@@ -326,6 +327,60 @@ async def test_fabrication_guard_block_mode_exhausts_retries_and_falls_back_safe
     assert final_text != "Done! I've turned off the light."
     assert generate_calls == 2  # max_fabrication_retries(1) + the initial round
     assert any(f[1] == "fabrication_retry_exhausted" for f in manager.flags)
+
+
+async def test_extra_tools_are_appended_after_exported_tools():
+    # plugin_authoring's Claude-native web search path (run_unified_runtime.py)
+    # injects a raw server-tool dict this way, bypassing export_tools()/
+    # ToolSpec entirely -- nothing to dispatch for a server tool.
+    captured_tools: list[list[dict]] = []
+
+    class _CapturingAdapter(_FakeAdapter):
+        async def generate(self, *, messages, config, tools):
+            captured_tools.append(tools)
+            return await super().generate(messages=messages, config=config, tools=tools)
+
+    native_tool = {"type": "web_search_20250305", "name": "web_search"}
+    loop = AgenticLoop(
+        llm_client=_CapturingAdapter([{"text": "done"}]),
+        tool_specs=[],
+        dispatch=lambda n, a: _ok(),
+        extra_tools=[native_tool],
+    )
+
+    await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert captured_tools[0] == [native_tool]
+
+
+async def test_on_raw_response_is_awaited_once_per_round():
+    seen: list[Any] = []
+
+    async def harvest(raw_response):
+        seen.append(raw_response)
+
+    responses = [
+        {"tool_calls": [{"id": "1", "name": "noop", "input": {}}]},
+        {"text": "done"},
+    ]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok(), on_raw_response=harvest)
+
+    await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert seen == responses
+
+
+async def test_on_raw_response_exception_is_swallowed_not_propagated():
+    async def harvest(raw_response):
+        raise ValueError("boom")
+
+    adapter = _FakeAdapter([{"text": "done"}])
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok(), on_raw_response=harvest)
+
+    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert final_text == "done"
 
 
 async def _ok():

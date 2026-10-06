@@ -8,9 +8,11 @@ finish" shape for any protocol:
   address until physically activated during pairing). Once the hub accepts
   the add request, waits for the ``_3``/``"ND"`` (node added) event to learn
   the device's real, canonical address -- never the customer/model-supplied
-  one, which may differ in case/shape -- then waits again (via
-  ``wait_until``) for that address to actually become usable before
-  returning it.
+  one, which may differ in case/shape -- then gives the hub a brief grace
+  period for ``_3``/``"AA"`` (all nodes added -- fires even for a single
+  node, see ``_NODE_ADDED_GRACE_TIMEOUT_S``) in case this address enumerates
+  more than one hub-side node, before waiting again (via ``wait_until``) for
+  the address to actually become usable and returning it.
 - ``include`` -- add a device whose address isn't known up front (insteon/
   zwave/zigbee). Opens the hub's pairing mode, then blocks until that
   protocol's own "pairing session ended" event fires (or times out) -- then,
@@ -370,7 +372,7 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         # event -- fast enough that a listener registered only afterward
         # would miss it forever.
         ok, real_address = await wait_for_node_event_around(
-            nucore_interface, "_3", "AA", _WAIT_TOTAL_TIMEOUT_S,
+            nucore_interface, "_3", "ND", _WAIT_TOTAL_TIMEOUT_S,
             lambda: nucore_interface.add_device(
                 device_address, name=args.get("name"), device_type=args.get("device_type"),
             ),
@@ -384,6 +386,16 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
                     f"after {_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
                 )
             }
+
+        # One address add can enumerate more than one hub-side node, with a
+        # wait in between -- _3/"AA" (all nodes added) signals enumeration is
+        # fully settled even for a single node, so this gives any trailing
+        # sibling node a chance to appear before usability is checked below.
+        # No per-node address in its payload (unlike "ND"), so it's only ever
+        # used as a settle signal, not for real_address -- and a timeout here
+        # is not an error, same tolerant best-effort as include's own grace
+        # wait below.
+        await wait_for_event(nucore_interface, "_3", "AA", _NODE_ADDED_GRACE_TIMEOUT_S)
 
         # Wildcard, not just "NI" -- becoming usable takes two separate
         # events (_3/ND for bare presence, already consumed above, then a

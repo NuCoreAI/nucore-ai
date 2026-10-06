@@ -92,11 +92,19 @@ serving a browser UI.
 
 ### Developer Tool Set (Plugin Authoring)
 
-Pass `--tool-set dev_tools` to swap the customer-facing tool set/system prompt (the default,
-`--tool-set customer`) for `unified.dev_tools`: a plugin-developer assistant covering Dynamic
-Profiles JSON validation, UOM lookup, and configuring/starting/stopping/calling an
-already-installed plugin under test. Still requires a live backend via `--backend-api-classpath`,
-same as `customer`.
+Pass `--tool-set plugin_authoring` to swap the customer-facing tool set/system prompt (the
+default, `--tool-set customer`) for `unified.plugin_authoring` (formerly `dev_tools`, renamed in
+place -- see `design/developers/impl_plan.md`): one tool set serving both a developer testing an
+already-installed plugin (Dynamic Profiles JSON validation, UOM lookup,
+configuring/starting/stopping/calling it) and a non-technical customer guided through a
+store-search/research/scaffold-generation/install flow. Requires `--plugin-output-root <dir>`
+(the allowed root for generated scaffolds) and a live backend via `--backend-api-classpath`, same
+as `customer`.
+
+The customer-facing flow's web search is Claude's own native `web_search` tool when the resolved
+LLM provider is Claude (no second API key) -- pass `--search-engine {brave,tavily}` (with
+`SEARCH_ENGINE_API_KEY` set) to force that Brave/Tavily fallback instead, on any provider; it's
+also what any non-Claude provider needs, since only Claude offers a native option here.
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -105,11 +113,13 @@ python -m unified.run_unified_runtime \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
   --backend-api-password yourpassword \
-  --tool-set dev_tools \
-  --query "Validate this profile: {...}"
+  --tool-set plugin_authoring \
+  --plugin-output-root ~/plugin-projects \
+  --query "I want a plugin that exposes my pool controller"
 ```
 
-See `src/unified/dev_tools/README.md` for the full tool list and layout.
+See `src/unified/plugin_authoring/README.md` for the full tool list, layout, and the
+discovery/generation workflow.
 
 By default the server binds TCP on `0.0.0.0` (all interfaces); pass `--websocket-host`
 to bind a specific interface instead, e.g. `--websocket-host 127.0.0.1`.
@@ -310,7 +320,9 @@ python -m unified.run_unified_runtime \
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
 | `--secrets-file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
 | `--query` | Single query mode; omit for interactive loop |
-| `--tool-set` | `customer` (default) or `dev_tools` -- which tool set/system prompt the agentic loop uses. See "Developer Tool Set (Plugin Authoring)" above |
+| `--tool-set` | `customer` (default) or `plugin_authoring` -- which tool set/system prompt the agentic loop uses. See "Developer Tool Set (Plugin Authoring)" above |
+| `--plugin-output-root` | Allowed root directory for `plugin_authoring`'s generated scaffolds; required with `--tool-set plugin_authoring` |
+| `--search-engine` | `brave` or `tavily` -- forces that web-search fallback for `plugin_authoring`'s discovery tools (needs `SEARCH_ENGINE_API_KEY` too); omit it to use Claude's own native web search automatically when the resolved provider is Claude |
 | `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode. Ignored when `--websocket-host` is a Unix socket path |
 | `--websocket-host` | IP address to bind the WebSocket server to over TCP (default `0.0.0.0`), or a `unix://<path>` URI to serve over a Unix domain socket at `<path>` instead -- on its own (without `--websocket-port`) it's enough to enter WebSocket server mode. Any other value (including a bare filesystem path with no `unix://` prefix) is rejected |
 | `--websocket-client-id` | Unix socket mode only: required effective UID (checked via `getpeereid()`) of the connecting client; other UIDs are rejected. Ignored when `--websocket-host` is a TCP host/IP |
@@ -474,5 +486,5 @@ Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 ## Further Documentation
 
 - Unified runtime architecture and tool reference: `src/unified/README.md`
-- Developer tool set (`--tool-set dev_tools`) reference: `src/unified/dev_tools/README.md`
+- Developer tool set (`--tool-set plugin_authoring`) reference: `src/unified/plugin_authoring/README.md`
 

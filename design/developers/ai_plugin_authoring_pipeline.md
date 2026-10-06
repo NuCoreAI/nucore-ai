@@ -6,6 +6,10 @@
 > Nothing described here exists yet. Read [`plugin_concepts_and_lifecycle.md`](plugin_concepts_and_lifecycle.md)
 > first if you haven't — this document assumes its vocabulary (`NodeDef`/`Editor`/`LinkDef`,
 > Stage 0-6 of the plugin lifecycle) without re-explaining it.
+>
+> `unified.dev_tools`, referenced throughout this document, is the same tool set
+> [`impl_plan.md`](impl_plan.md) calls `plugin_authoring` — that plan renames/extends it in place,
+> it is not a separate package.
 
 ## 0. The goal, restated precisely
 
@@ -100,7 +104,8 @@ other stage is independent of which option wins here.
 
 ### 3.1 Stage 1 — Conversational intake
 
-Reuse the `AgenticLoop` + a `dev_tools`-shaped tool set, but with a system prompt aimed at "what
+Reuse the `AgenticLoop` + the `plugin_authoring` tool set (`unified.dev_tools`, renamed/extended
+per [`impl_plan.md`](impl_plan.md)), but with a system prompt aimed at "what
 do you want this plugin to do," not "help me author a profile" — the target user doesn't know
 what a `NodeDef` is. The chatbot's job here is to turn a vague ask ("I want to control my
 [whatever] from IoX") into a structured **plugin brief**: target device/service, desired

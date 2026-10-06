@@ -6,11 +6,12 @@
   "history_token_budget": 20000,
   "fabrication_guard_mode": "log",
   "max_fabrication_retries": 1,
+  "search_engine": null,
   "nucore_runtime": {
     "default": {
       "provider": "claude",
-      "model": "claude-haiku-4-5-20251001",
-      "model_2": "claude-sonnet-5",
+      "model_2": "claude-haiku-4-5-20251001",
+      "model": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "max_turns": 20,
@@ -19,8 +20,8 @@
     },
     "unified": {
       "provider": "claude",
-      "model": "claude-haiku-4-5-20251001",
-      "model_2": "claude-sonnet-5",
+      "model_2": "claude-haiku-4-5-20251001",
+      "model": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "stream": true,
       "url": null,

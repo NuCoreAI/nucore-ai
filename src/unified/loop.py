@@ -58,12 +58,33 @@ class AgenticLoop:
         max_iterations: int = 8,
         fabrication_guard_mode: str = "log",
         max_fabrication_retries: int = 1,
+        extra_tools: list[dict[str, Any]] | None = None,
+        on_raw_response: Callable[[Any], Any] | None = None,
     ) -> None:
+        """*extra_tools*/*on_raw_response* exist for plugin_authoring's
+        Claude-native web search path (run_unified_runtime.py's
+        ``_resolve_tool_set``) -- unset by every other caller, including the
+        customer tool set, which never touches either.
+
+        *extra_tools* are raw provider-tool dicts (e.g. Anthropic's
+        ``{"type": "web_search_20250305", ...}`` server tool) appended after
+        ``export_tools()``'s own output, bypassing the ``ToolSpec``/JSON-file
+        loading path entirely -- there is nothing to dispatch for one of
+        these; the provider executes it server-side.
+
+        *on_raw_response*, when given, is awaited once per round right after
+        ``generate()`` returns, before tool calls (if any) are dispatched --
+        it's how a caller harvests evidence out of a server tool's result
+        blocks, which never become a ``ToolCall`` and so never reach
+        ``dispatch``. Best-effort: an exception here is logged and
+        swallowed, never allowed to break the turn.
+        """
         self.llm_client = llm_client
         self.tool_specs = tool_specs
-        self._exported_tools = llm_client.export_tools(tool_specs)
+        self._exported_tools = llm_client.export_tools(tool_specs) + list(extra_tools or [])
         self.dispatch = dispatch
         self.max_iterations = max_iterations
+        self._on_raw_response = on_raw_response
         # "off": the guard never runs. "log": detect and write a
         # fabrication_flag log line, but never change what the customer
         # sees (default -- zero behavior risk). "block": also inject a
@@ -139,6 +160,11 @@ class AgenticLoop:
                 config=round_config,
                 tools=self._exported_tools,
             )
+            if self._on_raw_response is not None:
+                try:
+                    await self._on_raw_response(raw_response)
+                except Exception as exc:
+                    logger.error("unified: on_raw_response hook failed: %s", exc)
             usage = raw_response.get("usage") or {}
             if usage:
                 await get_prompt_log_manager().write_usage(intent_name, usage)

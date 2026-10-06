@@ -1,0 +1,23 @@
+{
+  "name": "configure_plugin",
+  "description": "Update an installed plugin's configuration parameters -- use this to set/change the values a plugin's own custom-config form exposes (API keys, polling interval, device-specific settings, etc.), typically while developing/testing a plugin locally. Call list_installed_plugins first to get the real plugin_id. For a plugin generated with OAuth support, pass key='oauth' to update its real client_id/client_secret/scope after generation (the generated server_entry.json only ever contains placeholders there, never real secrets).",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id", "config"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The `plugin_id`, from list_installed_plugins."
+      },
+      "config": {
+        "type": "object",
+        "description": "The configuration parameters to set, as a JSON object of key/value pairs."
+      },
+      "key": {
+        "type": "string",
+        "enum": ["customparams", "oauth"],
+        "description": "Which custom record to write. Defaults to 'customparams' (ordinary developer-defined config values); use 'oauth' to set the real OAuth client_id/client_secret/scope/endpoints for a plugin generated with OAuth support."
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "search_web",
+  "description": "General web search for a device/service's official API documentation -- a fallback-tier tool, callable in any order relative to search_github_plugins, not a required second step. Only available when a Brave/Tavily search engine has been configured server-side; if this tool isn't offered, you may already have Claude's own native web search available instead (used transparently, with no separate tool call). Skip straight to asking the user for documentation URLs only once web search -- of either kind -- hasn't turned up anything useful. Capped at a small number of calls per session.",
+  "input_schema": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Web search query, e.g. 'Acme Pool Controller API documentation'."
+      }
+    }
+  }
+}

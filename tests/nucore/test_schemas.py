@@ -3,7 +3,7 @@ iox-vscode-plugin's validation schemas onto the Dynamic Profiles shape (see
 src/nucore/schemas/README.md). Purely structural (field names/types/required-ness);
 cross-document referential integrity (e.g. an editor id referenced but never
 defined anywhere in the document) is NOT checked by JSON Schema and stays
-validate_profile's job (src/unified/dev_tools/handlers/profile_authoring.py).
+validate_profile's job (src/unified/plugin_authoring/handlers/profile_authoring.py).
 """
 
 from __future__ import annotations
@@ -71,8 +71,8 @@ def _validator_for(store: dict[str, dict], filename: str) -> Draft202012Validato
     return Draft202012Validator(schema, resolver=resolver)
 
 
-# Same fixture unified.dev_tools' validate_profile tool accepts today
-# (tests/unified/dev_tools/test_profile_authoring.py's VALID_PROFILE) -- the two
+# Same fixture unified.plugin_authoring's validate_profile tool accepts today
+# (tests/unified/plugin_authoring/test_profile_authoring.py's VALID_PROFILE) -- the two
 # "views" of Dynamic Profiles the shared defs/ definitions serve should agree on
 # this happy path.
 VALID_PROFILE = {

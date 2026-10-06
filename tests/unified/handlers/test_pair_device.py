@@ -308,6 +308,12 @@ async def test_add_by_address_waits_for_an_event_before_succeeding():
     async def fire_events_shortly():
         await asyncio.sleep(0.02)
         backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        # "AA" (all nodes added) resolves add_by_address's post-ND grace
+        # wait promptly via receipt instead of its own full timeout --
+        # without this, the grace wait eats the gap before NI below, and NI
+        # fires into a void (no wait_until listener registered yet).
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "AA", "1A 2B 3C 1", {})
         await asyncio.sleep(0.02)
         backend._dispatch_event_listeners("_3", "NI", "1A 2B 3C 1", {})
 
@@ -342,6 +348,10 @@ async def test_add_by_address_waits_for_device_profile_not_just_bare_address():
     async def node_added_then_profile_resolves_shortly():
         await asyncio.sleep(0.01)
         backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        # "AA" resolves add_by_address's post-ND grace wait promptly via
+        # receipt -- see the sibling test's comment for why this matters.
+        await asyncio.sleep(0.005)
+        backend._dispatch_event_listeners("_3", "AA", "1A 2B 3C 1", {})
         await asyncio.sleep(0.02)
         backend.nodes["1A 2B 3C 1"].node_def = object()
         backend._dispatch_event_listeners("_3", "NI", "1A 2B 3C 1", {})
@@ -844,7 +854,7 @@ async def test_zigbee_removal_error_surfaces_from_remove_device():
 async def test_legacy_zwave_returns_a_clear_error_instead_of_pairing(action):
     backend = FakeBackend()
     backend.discover_error = NuCoreError(
-        "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
+        "Legacy Z-Wave pairing is not supported -- use eisy-ui instead."
     )
     args = {"protocol": "zwave", "action": action}
     if action == "exclude":

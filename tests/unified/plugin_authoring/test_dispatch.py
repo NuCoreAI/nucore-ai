@@ -1,5 +1,5 @@
-"""End-to-end: dev_tools' own TOOL_HANDLERS dispatched through
-dev_tools.dispatch.execute_tool -- confirms both the new local tools
+"""End-to-end: plugin_authoring's own TOOL_HANDLERS dispatched through
+plugin_authoring.dispatch.execute_tool -- confirms both the new local tools
 (validate_profile/lookup_uom) and the plugin-lifecycle tools reused directly
 from unified.handlers.plugin_management (list_installed_plugins/plugin_ops/
 get_plugin_capabilities/call_plugin/configure_plugin) route correctly, and
@@ -12,7 +12,8 @@ from __future__ import annotations
 import pytest
 
 from nucore.nucore_interface import NuCoreInterface
-from unified.dev_tools.dispatch import TOOL_HANDLERS, execute_tool
+from unified.plugin_authoring.dispatch import TOOL_HANDLERS, build_tool_handlers, execute_tool
+from unified.plugin_authoring.evidence_ledger import EvidenceLedger
 
 INSTALLED_RESPONSE = {
     "successful": True,
@@ -30,7 +31,7 @@ class FakeBackend(NuCoreInterface):
     async def get_installed_plugins(self):
         return self.installed_response
 
-    async def configure_plugin(self, plugin_id, config):
+    async def configure_plugin(self, plugin_id, config, key="customparams"):
         return self.configure_response
 
     async def plugin_ops(self, plugin_id, operation):
@@ -79,13 +80,13 @@ class FakeBackend(NuCoreInterface):
 
 
 @pytest.mark.asyncio
-async def test_validate_profile_routes_through_dev_tools_dispatch():
+async def test_validate_profile_routes_through_plugin_authoring_dispatch():
     result = await execute_tool("validate_profile", {"profile": "not-a-dict"}, nucore_interface=FakeBackend())
     assert result == {"valid": False, "errors": ["'profile' must be a JSON object"]}
 
 
 @pytest.mark.asyncio
-async def test_lookup_uom_routes_through_dev_tools_dispatch():
+async def test_lookup_uom_routes_through_plugin_authoring_dispatch():
     result = await execute_tool("lookup_uom", {"keyword": "amps"}, nucore_interface=FakeBackend())
     assert any(m["id"] == "1" for m in result["matches"])
 
@@ -130,10 +131,101 @@ async def test_handler_exception_is_caught_and_returned_as_error(monkeypatch):
     assert "kaboom" in result["error"]
 
 
-def test_dev_tools_excludes_marketplace_only_plugin_tools():
+def test_plugin_authoring_excludes_marketplace_only_plugin_tools():
     # buy/delete/store/purchased are marketplace concerns, not part of the
     # local dev/test loop -- see dispatch.py's module docstring. install_plugin
     # is also excluded: it's the purchase-flow URL-handback stub, not a real
     # local install (see design/developers/plugin_dev_tooling.md).
     for excluded in ("buy_plugin", "delete_plugin", "list_store_plugins", "list_purchased_plugins", "install_plugin"):
         assert excluded not in TOOL_HANDLERS
+
+
+# --- build_tool_handlers: Phase 2 discovery tools (design/developers/impl_plan.md) ---
+
+
+def test_build_tool_handlers_keeps_every_existing_tool():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    for name in TOOL_HANDLERS:
+        assert name in handlers
+
+
+def test_build_tool_handlers_adds_the_three_always_on_discovery_tools():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    for name in ("search_store_plugins", "search_github_plugins", "fetch_reference"):
+        assert name in handlers
+    assert "search_web" not in handlers
+
+
+def test_build_tool_handlers_always_adds_the_workspace_discovery_tools():
+    # list_generated_plugins/read_generated_plugin (Phase 3) are local-disk-only
+    # -- unlike search_web, nothing about them depends on search_engine/key.
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "list_generated_plugins" in handlers
+    assert "read_generated_plugin" in handlers
+
+
+def test_build_tool_handlers_always_adds_generate_plugin_scaffold():
+    # generate_plugin_scaffold (Stage 2, design/developers/plugin_authoring_p4_impl.md)
+    # is local-disk-only too -- always registered, same as the workspace tools above.
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "generate_plugin_scaffold" in handlers
+
+
+def test_build_tool_handlers_always_adds_install_generated_plugin():
+    # install_generated_plugin (Stage 3) touches the real hub, but registering
+    # the tool itself needs nothing beyond plugin_output_root -- always added.
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "install_generated_plugin" in handlers
+
+
+def test_plugin_authoring_reuses_run_shell_command_and_detect_usb_device():
+    # Stage 6 (design/developers/plugin_authoring_p4_impl.md): hardware/USB
+    # detection reuses the customer tool set's run_shell_command directly.
+    assert "run_shell_command" in TOOL_HANDLERS
+    assert "detect_usb_device" in TOOL_HANDLERS
+
+
+@pytest.mark.parametrize("engine", ["brave", "tavily"])
+def test_build_tool_handlers_adds_search_web_only_when_engine_and_key_both_given(engine):
+    missing_key = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=engine, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "search_web" not in missing_key
+
+    missing_engine = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key="key", secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "search_web" not in missing_engine
+
+    both = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=engine, search_engine_api_key="key", secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "search_web" in both
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_uses_the_given_tool_handlers_dict():
+    async def stub(nucore_interface, args):
+        return {"stub": True}
+
+    handlers = dict(TOOL_HANDLERS)
+    handlers["validate_profile"] = stub
+
+    result = await execute_tool("validate_profile", {}, nucore_interface=FakeBackend(), tool_handlers=handlers)
+    assert result == {"stub": True}
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_falls_back_to_module_default_when_no_tool_handlers_given():
+    result = await execute_tool("validate_profile", {"profile": "not-a-dict"}, nucore_interface=FakeBackend())
+    assert result == {"valid": False, "errors": ["'profile' must be a JSON object"]}

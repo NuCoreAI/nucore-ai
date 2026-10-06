@@ -4,7 +4,7 @@
 
 ## Overview
 
-The ISY controller uses a UPnP-based subscription event system to notify connected clients (Admin Console, websocket subscribers) of state changes. Events are categorized by **control** (event category) and **action** (specific event within that category).
+The ISY controller uses a UPnP-based subscription event system to notify connected clients (eisy-ui, websocket subscribers) of state changes. Events are categorized by **control** (event category) and **action** (specific event within that category).
 
 Events are fired from the firmware via `UpdateLogicalDevice()` and delivered to subscribers as XML with the structure:
 ```xml

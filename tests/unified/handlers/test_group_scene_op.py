@@ -92,15 +92,34 @@ async def test_update_link_requires_a_link_object():
 
 @pytest.mark.asyncio
 async def test_update_link_calls_the_backend_and_reports_ok():
+    # link is the same shape get_group_detail returns for an existing link --
+    # a "type" plus its per-link params, each with an id/type/val/uom/prec --
+    # see tool_group_scene_op.json's own description of the "link" field.
     backend = FakeBackend()
     result = await execute_tool(
         "group_scene_op",
-        {"operation": "update_link", "group_address": "SCENE1", "link_address": "D1", "link": {"on_level": 50}},
+        {
+            "operation": "update_link", "group_address": "SCENE1", "link_address": "D1",
+            "link": {
+                "type": "11",
+                "params": [{"id": "ST", "type": "val", "val": 50, "uom": "51", "prec": "0"}],
+            },
+        },
         nucore_interface=backend,
     )
 
     assert result == {"group_address": "SCENE1", "link_address": "D1", "operation": "update_link", "status": "ok"}
-    assert backend.update_link_calls == [("SCENE1", "D1", {"on_level": 50})]
+    # The handler mutates link in place -- injects "node" (the responder's
+    # own address) and normalizes each "val"-typed param's val/uom/prec into
+    # a nested val object, stripping the flat uom/prec/friendly_text/uom_name
+    # keys (group_scene_ops.py's update_link branch).
+    assert backend.update_link_calls == [(
+        "SCENE1", None,
+        {
+            "type": "11", "node": "D1",
+            "params": [{"id": "ST", "type": "val", "val": {"value": 50.0, "uom": "51", "prec": "0"}}],
+        },
+    )]
 
 
 @pytest.mark.asyncio

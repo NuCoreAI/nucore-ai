@@ -584,6 +584,36 @@ class NuCoreInterface(ABC):
         )
         return match.get("nsid") if match else None
 
+    async def register_local_plugin(self, entry: dict[str, Any]):
+        """
+        Register (create or update) a plugin in the local dev store -- the
+        developer/plugin-authoring-tool-defined record for a plugin that
+        hasn't been published to the production marketplace. Does not
+        install or start it; see install_local_plugin().
+        :param entry: The full local-store entry body (name, type, path,
+            executable, runAs, desc, nsdata, oauth, customParams, devd,
+            aiPrompt, aiTools, isyAccess, discover, authorize, fileUpload,
+            shortPoll, longPoll, nsInfoPoll) -- see design/developers/plugin-api.md.
+        :return: response from the API or None if failure
+
+        API:
+        PUT /api/plugins/store/local/entry
+        """
+        raise NotImplementedError("Subclasses must implement the register_local_plugin method.")
+
+    async def install_local_plugin(self, nsid: str, profile_num: int | None = None):
+        """
+        Install a plugin from the local dev store (registered via
+        register_local_plugin()) and start it.
+        :param nsid: The local dev store entry's nsid.
+        :param profile_num: Optional plugin slot; omit for auto selection.
+        :return: {"successful": bool, "data": {"profileNum": int}} or None if failure
+
+        API:
+        POST /api/plugins/store/local/install
+        """
+        raise NotImplementedError("Subclasses must implement the install_local_plugin method.")
+
     async def plugin_ops(self, plugin_id:str, operation:Literal["start", "stop", "restart"]):
         """
         Start, stop, or restart a plugin's service.
@@ -598,12 +628,23 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the plugin_ops method.")
 
-    async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
+    async def configure_plugin(self, plugin_id:str, config:dict[str, Any], key:str="customparams"):
         """
-        Configure a plugin on the device.
+        Configure a plugin on the device -- writes a custom record value
+        under the given key (plugin-api.md's key-generic
+        GET/POST /api/plugin/:profileNum/custom/:key). Default key
+        "customparams" covers the ordinary developer-defined custom config
+        values; "oauth" targets the same OAuth config udi_interface.OAuth
+        reads via its CUSTOMNS subscription (client_id/client_secret/scope/
+        auth_endpoint/token_endpoint/etc.) -- one key-generic method rather
+        than a second dedicated tool for OAuth.
         :param plugin_id: The ID of the plugin to configure.
         :param config: A dictionary containing the configuration parameters.
+        :param key: Which custom record to write -- "customparams" (default) or "oauth".
         :return: response from the API or None if failure
+
+        API:
+        POST /api/plugin/:profileNum/custom/:key
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
 

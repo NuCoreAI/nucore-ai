@@ -1945,6 +1945,49 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error performing get installed plugins operation: {ex}")
             return None
     
+    async def register_local_plugin(self, entry: dict[str, Any]):
+        """
+        Register (create or update) a plugin in the local dev store.
+        :param entry: The full local-store entry body -- see
+            design/developers/plugin-api.md's PUT /api/plugins/store/local/entry.
+        :return: response from the API or None if failure
+
+        API:
+        PUT /api/plugins/store/local/entry
+        """
+        try:
+            headers = {"Content-Type": "application/json"}
+            response = await self.put('/api/plugins/store/local/entry', body=json.dumps(entry), headers=headers)
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error registering local plugin: {ex}")
+            return None
+
+    async def install_local_plugin(self, nsid: str, profile_num: int | None = None):
+        """
+        Install a plugin from the local dev store and start it.
+        :param nsid: The local dev store entry's nsid.
+        :param profile_num: Optional plugin slot; omit for auto selection.
+        :return: response from the API or None if failure
+
+        API:
+        POST /api/plugins/store/local/install
+        """
+        try:
+            headers = {"Content-Type": "application/json"}
+            body = {"nsid": nsid}
+            if profile_num is not None:
+                body["profileNum"] = profile_num
+            response = await self.post('/api/plugins/store/local/install', body=json.dumps(body), headers=headers)
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error installing local plugin '{nsid}': {ex}")
+            return None
+
     async def plugin_ops(self, plugin_id:str, operation:Literal["start", "stop", "restart"]):
         """
         Start, stop, or restart a plugin's service.
@@ -1967,14 +2010,27 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error performing plugin {operation} operation: {ex}")
             return None
 
-    async def configure_plugin(self, plugin_id:str, config:dict[str, Any]):
+    async def configure_plugin(self, plugin_id:str, config:dict[str, Any], key:str="customparams"):
         """
-        Configure a plugin on the device.
+        Configure a plugin on the device -- writes a custom record value
+        under the given key.
         :param plugin_id: The ID of the plugin to configure.
         :param config: A dictionary containing the configuration parameters.
+        :param key: Which custom record to write -- "customparams" (default) or "oauth".
         :return: response from the API or None if failure
+
+        API:
+        POST /api/plugin/:profileNum/custom/:key
         """
-        raise NotImplementedError("Subclasses must implement the configure_plugin method.")
+        try:
+            headers = {"Content-Type": "application/json"}
+            response = await self.post(f'/api/plugin/{plugin_id}/custom/{key}', body=json.dumps(config), headers=headers)
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error configuring plugin '{plugin_id}' key '{key}': {ex}")
+            return None
 
     async def get_plugin_prompt(self, plugin_id: str) -> dict:
         """
@@ -2302,7 +2358,7 @@ class IoXWrapper(NuCoreInterface):
         if family is not None:
             if protocol == "zwave" and await self._is_legacy_zwave():
                 raise NuCoreError(
-                    "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
+                    "Legacy Z-Wave pairing is not supported -- use eisy-ui instead."
                 )
             response = await self.get(f"{ZMATTER_BASE_PATHS[family]}node/{mode}")
             return response is not None and response.status_code == 200
@@ -2316,7 +2372,7 @@ class IoXWrapper(NuCoreInterface):
         if family is not None:
             if protocol == "zwave" and await self._is_legacy_zwave():
                 raise NuCoreError(
-                    "Legacy Z-Wave pairing is not supported -- use the ISY administrative console instead."
+                    "Legacy Z-Wave pairing is not supported -- use eisy-ui instead."
                 )
             response = await self.get(f"{ZMATTER_BASE_PATHS[family]}node/cancel")
             return response is not None and response.status_code == 200

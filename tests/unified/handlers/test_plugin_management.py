@@ -10,6 +10,7 @@ import pytest
 
 from nucore.nucore_interface import NuCoreInterface
 from unified.dispatch import execute_tool
+from unified.handlers import plugin_management
 
 STORE_RESPONSE = {
     "successful": True,
@@ -65,6 +66,12 @@ class FakeBackend(NuCoreInterface):
         self.plugin_prompt_response = {"successful": True, "data": {"prompt": "stub prompt"}}
         self.plugin_tools_response = {"successful": True, "data": {"tools": [{"name": "stub_tool", "description": "stub", "params": {}}]}}
         self.plugin_llm_result_response = {"successful": True, "data": {"result": "stub result"}}
+        self.configure_response = {"successful": True, "data": {}}
+        self.configure_calls = []
+
+    async def configure_plugin(self, plugin_id, config, key="customparams"):
+        self.configure_calls.append((plugin_id, config, key))
+        return self.configure_response
 
     async def get_active_plugins(self):
         return self.store_response
@@ -520,4 +527,61 @@ async def test_plugin_ops_errors_on_backend_failure():
     backend = FakeBackend()
     backend.plugin_ops_response = {"successful": False}
     result = await execute_tool("plugin_ops", {"plugin_id": "3", "operation": "restart"}, nucore_interface=backend)
+    assert "error" in result
+
+
+# --- configure_plugin: not in the customer TOOL_HANDLERS table (see its own
+# docstring), so these call the handler directly rather than through
+# unified.dispatch.execute_tool. ---
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_defaults_to_customparams_key():
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(
+        backend, {"plugin_id": "3", "config": {"api_key": "x"}}
+    )
+    assert result == {"plugin_id": 3}
+    assert backend.configure_calls == [(3, {"api_key": "x"}, "customparams")]
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_passes_through_an_oauth_key():
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(
+        backend, {"plugin_id": "3", "config": {"client_id": "real"}, "key": "oauth"}
+    )
+    assert result == {"plugin_id": 3}
+    assert backend.configure_calls == [(3, {"client_id": "real"}, "oauth")]
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_rejects_an_invalid_key():
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(
+        backend, {"plugin_id": "3", "config": {}, "key": "notarealkey"}
+    )
+    assert "error" in result
+    assert backend.configure_calls == []
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_requires_plugin_id():
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(backend, {"config": {}})
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_requires_a_config_object():
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(backend, {"plugin_id": "3"})
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_errors_on_backend_failure():
+    backend = FakeBackend()
+    backend.configure_response = {"successful": False}
+    result = await plugin_management.configure_plugin(backend, {"plugin_id": "3", "config": {}})
     assert "error" in result

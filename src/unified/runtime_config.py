@@ -196,6 +196,15 @@ def _load_runtime_config(
     if configured_max_fabrication_retries is not None and not isinstance(configured_max_fabrication_retries, int):
         raise ValueError("max_fabrication_retries must be an integer when provided")
 
+    # plugin_authoring's search_web fallback tier -- see run_unified_runtime.py's
+    # --search-engine flag, which wins over this when both are given (same
+    # CLI-overrides-config precedence as preferences_dir/max_iterations
+    # above). The key itself is never read from here -- SEARCH_ENGINE_API_KEY
+    # is env-var-only, deliberately not part of this config file.
+    configured_search_engine = payload.get("search_engine")
+    if configured_search_engine is not None and configured_search_engine not in ("brave", "tavily"):
+        raise ValueError(f'search_engine must be "brave" or "tavily", got {configured_search_engine!r}')
+
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
@@ -223,4 +232,8 @@ def _load_runtime_config(
         "max_fabrication_retries": (
             int(configured_max_fabrication_retries) if configured_max_fabrication_retries is not None else 1
         ),
+        # No default -- None means no engine configured here; --search-engine
+        # or the absence of either still disables plugin_authoring's
+        # search_web tool (see _resolve_tool_set).
+        "search_engine": configured_search_engine,
     }

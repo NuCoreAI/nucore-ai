@@ -47,6 +47,108 @@ def test_export_tools_handles_empty_spec_list():
     assert _adapter().export_tools([]) == []
 
 
+# --- _sanitize_content_block: server_tool_use/web_search_tool_result (the
+# native Claude web search path, run_unified_runtime.py's _resolve_tool_set)
+# -- same explicit-allowlist treatment as the existing text/tool_use
+# branches, not the generic "pass through as-is" fallback, since
+# encrypted_content must survive byte-for-byte for the API to decrypt it on
+# a later turn.
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_content_block_rebuilds_server_tool_use():
+    block = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01",
+        "name": "web_search",
+        "input": {"query": "claude shannon birth date"},
+        "some_response_only_field": "should be dropped",
+    }
+    assert ClaudeAdapter._sanitize_content_block(block) == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01",
+        "name": "web_search",
+        "input": {"query": "claude shannon birth date"},
+    }
+
+
+def test_sanitize_content_block_rebuilds_web_search_tool_result_success_shape():
+    block = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01",
+        "content": [
+            {
+                "type": "web_search_result",
+                "url": "https://en.wikipedia.org/wiki/Claude_Shannon",
+                "title": "Claude Shannon - Wikipedia",
+                "encrypted_content": "EqgfCioIARgBIiQ3YTAwMjY1Mi1mZjM5LTQ1NGUtODgxNC1kNjNjNTk1ZWI3Y...",
+                "page_age": "April 30, 2025",
+                "some_response_only_field": "should be dropped",
+            }
+        ],
+    }
+    assert ClaudeAdapter._sanitize_content_block(block) == {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01",
+        "content": [
+            {
+                "type": "web_search_result",
+                "url": "https://en.wikipedia.org/wiki/Claude_Shannon",
+                "title": "Claude Shannon - Wikipedia",
+                "encrypted_content": "EqgfCioIARgBIiQ3YTAwMjY1Mi1mZjM5LTQ1NGUtODgxNC1kNjNjNTk1ZWI3Y...",
+                "page_age": "April 30, 2025",
+            }
+        ],
+    }
+
+
+def test_sanitize_content_block_rebuilds_web_search_tool_result_error_shape():
+    block = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_a93jad",
+        "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
+    }
+    assert ClaudeAdapter._sanitize_content_block(block) == {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_a93jad",
+        "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
+    }
+
+
+def test_build_tool_round_trip_messages_preserves_web_search_blocks_verbatim():
+    # Confirms the sanitized shape actually reaches the assistant turn
+    # build_tool_round_trip_messages constructs, not just _sanitize_content_
+    # block in isolation.
+    raw_response = {
+        "content": [
+            {"type": "text", "text": "Searching..."},
+            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "x"}},
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com",
+                        "title": "Example",
+                        "encrypted_content": "abc123",
+                        "page_age": None,
+                    }
+                ],
+            },
+        ]
+    }
+    messages = _adapter().build_tool_round_trip_messages(raw_response=raw_response, tool_calls=[], tool_results=[])
+    assistant_message = messages[0]
+    assert assistant_message["content"][1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01",
+        "name": "web_search",
+        "input": {"query": "x"},
+    }
+    assert assistant_message["content"][2]["content"][0]["encrypted_content"] == "abc123"
+
+
 def _fake_final_message(text: str = "hi", usage: dict | None = None, stop_reason: str | None = None):
     block = SimpleNamespace(type="text", text=text, model_dump=lambda: {"type": "text", "text": text})
     dump = {"content": [{"type": "text", "text": text}]}

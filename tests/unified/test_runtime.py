@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 import unified.runtime as runtime_module
-from unified.runtime import _TOOLS_DIR, UnifiedRuntime
+from unified.runtime import _TOOLS_DIR, UnifiedRuntime, resolve_llm_profile
 from unified.session_store import SessionStore
 
 
@@ -104,7 +104,7 @@ def test_explicit_session_store_is_used_as_given():
     assert runtime.session_store is shared
 
 
-# --- Alternate tool set injection (unified.dev_tools uses all three) ---
+# --- Alternate tool set injection (unified.plugin_authoring uses all three) ---
 
 
 def test_default_tool_spec_paths_matches_hardcoded_customer_tools_dir():
@@ -210,3 +210,67 @@ async def test_concurrent_handle_query_calls_for_same_session_are_serialized(mon
     # once "first" has fully finished, including its history.append() --
     # a race would show "second" reading history before "first" landed.
     assert any(m.get("content") == "first" for m in second_call["history_messages"])
+
+
+# --- extra_tools/on_raw_response passthrough (plugin_authoring's Claude-
+# native web search path, run_unified_runtime.py's _resolve_tool_set) ---
+
+
+@pytest.mark.asyncio
+async def test_handle_query_forwards_extra_tools_and_on_raw_response_to_agentic_loop():
+    native_tool = {"type": "web_search_20250305", "name": "web_search"}
+
+    async def harvest(raw_response):
+        pass
+
+    runtime = UnifiedRuntime(
+        nucore_interface=SimpleNamespace(),
+        llm_client=SimpleNamespace(),
+        runtime_config={},
+        extra_tools=[native_tool],
+        on_raw_response=harvest,
+    )
+    await runtime.handle_query("hi")
+
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] == [native_tool]
+    assert _FakeLoop.captured_init_kwargs["on_raw_response"] is harvest
+
+
+@pytest.mark.asyncio
+async def test_handle_query_defaults_extra_tools_and_on_raw_response_to_none():
+    await _runtime().handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] is None
+    assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
+
+
+# --- resolve_llm_profile (extracted from _resolve_llm_config so
+# run_unified_runtime.py can resolve the same provider before UnifiedRuntime
+# even exists -- see run_unified_runtime.py's native-vs-fallback search
+# selection) ---
+
+
+def test_resolve_llm_profile_returns_empty_dict_when_nothing_configured():
+    assert resolve_llm_profile({}) == {}
+
+
+def test_resolve_llm_profile_prefers_the_preferred_key():
+    config = {"supported_llms": {"unified": {"provider": "claude"}, "default": {"provider": "openai"}}}
+    assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "claude"}
+
+
+def test_resolve_llm_profile_falls_back_to_default_llm_key():
+    config = {
+        "default_llm": "custom",
+        "supported_llms": {"custom": {"provider": "grok"}, "default": {"provider": "openai"}},
+    }
+    assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "grok"}
+
+
+def test_resolve_llm_profile_falls_back_to_default_key_when_no_default_llm():
+    config = {"supported_llms": {"default": {"provider": "openai"}, "other": {"provider": "gemini"}}}
+    assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "openai"}
+
+
+def test_resolve_llm_profile_falls_back_to_first_key_when_nothing_else_matches():
+    config = {"supported_llms": {"only_one": {"provider": "gemini"}}}
+    assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "gemini"}

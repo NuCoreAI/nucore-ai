@@ -1,0 +1,14 @@
+{
+  "name": "search_github_plugins",
+  "description": "Search public GitHub repositories for an existing eisy/IoX/NuCore/Polyglot plugin implementation, or for a device's own API client, once the NuCore store has no viable match. A fallback-tier tool, callable in any order relative to search_web/Claude's own native web search -- not a required first step. Returns repositories with their license and last-updated date; a repository whose license isn't on the permissive allowlist (MIT/Apache-2.0/BSD) is flagged and must never be copied from, only read for reference. Capped at a small number of calls per session.",
+  "input_schema": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "GitHub search query, e.g. 'eisy pool controller plugin' or the device/service name plus 'api client'."
+      }
+    }
+  }
+}

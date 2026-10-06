@@ -1,0 +1,14 @@
+{
+  "name": "read_generated_plugin",
+  "description": "Load one previously-generated plugin's files (profile, Python backend, tests, README) back into context, using the 'location' a list_generated_plugins call returned. Call this before discussing or modifying an existing plugin so the conversation is grounded in what's actually there, not guessed. This only reads the files -- it does not change anything; proposing and writing an update is a separate step the customer must still confirm.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The 'location' value from a list_generated_plugins result, identifying which generated plugin to load."
+      }
+    }
+  }
+}

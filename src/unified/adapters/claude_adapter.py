@@ -294,12 +294,39 @@ class ClaudeAdapter(LLMAdapter):
         types are rebuilt from only their accepted fields; anything
         unrecognized is passed through as-is (best effort) rather than
         silently dropped.
+
+        ``server_tool_use``/``web_search_tool_result`` appear only when the
+        native web search server tool (plugin_authoring's Claude-native
+        search path, see run_unified_runtime.py's ``_resolve_tool_set``) was
+        declared and actually invoked -- both get the same explicit-allowlist
+        treatment as ``tool_use``/``text`` rather than the generic fallback,
+        since ``encrypted_content`` must survive byte-for-byte for the API to
+        decrypt it on a later turn; a mangled or dropped value 400s.
         """
         block_type = block.get("type")
         if block_type == "text":
             return {"type": "text", "text": block.get("text", "")}
         if block_type == "tool_use":
             return {"type": "tool_use", "id": block.get("id"), "name": block.get("name"), "input": block.get("input", {})}
+        if block_type == "server_tool_use":
+            return {"type": "server_tool_use", "id": block.get("id"), "name": block.get("name"), "input": block.get("input", {})}
+        if block_type == "web_search_tool_result":
+            content = block.get("content")
+            if isinstance(content, dict):
+                # Error shape: {"type": "web_search_tool_result_error", "error_code": ...}
+                sanitized_content: Any = {"type": content.get("type"), "error_code": content.get("error_code")}
+            else:
+                sanitized_content = [
+                    {
+                        "type": item.get("type"),
+                        "url": item.get("url"),
+                        "title": item.get("title"),
+                        "encrypted_content": item.get("encrypted_content"),
+                        "page_age": item.get("page_age"),
+                    }
+                    for item in (content or [])
+                ]
+            return {"type": "web_search_tool_result", "tool_use_id": block.get("tool_use_id"), "content": sanitized_content}
         return block
 
     def build_tool_round_trip_messages(
