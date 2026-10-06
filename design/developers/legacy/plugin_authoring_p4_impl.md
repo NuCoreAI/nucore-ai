@@ -176,7 +176,13 @@ to finish.
     `__configDoneHandler`/`__addNodeDoneHandler`/`__removeNodeDoneHandler`/`__customNSHandler`/
     `__updateStatus`/`__getStatus` — the regenerated half, unchanged across plugins.
   - `render_main_py(controller_module, controller_class) -> str` /
-    `render_version_py(version) -> str`.
+    `render_version_py(version) -> str`. `render_main_py`'s bootstrap also loads `profile.json`
+    (written next to it) and sends it via `polyglot.updateJsonProfile(profile, {"waitResponse":
+    True})` on every startup, before constructing the Controller -- writing `profile.json` to
+    disk does nothing to PG3/IoX on its own (plugin_model.md §1/§2/§5); this is what actually
+    registers the plugin's nodedefs/editors/linkdefs. Sent unconditionally, not diffed against
+    what PG3 already has -- `updateJsonProfile`'s own add/replace-by-id semantics make resending
+    the same profile a no-op.
   - `render_init` also always sets `self.data_dir` (next to the plugin's own files, created via
     `os.makedirs(..., exist_ok=True)`) -- any override body that needs to persist something
     beyond `customParams`/`customData` (a local cache, session tokens, etc.) writes it there, not

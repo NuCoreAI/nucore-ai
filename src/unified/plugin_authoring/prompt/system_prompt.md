@@ -11,13 +11,34 @@ should read which one you're in from how the person talks rather than assuming e
 
 ## Developer tools: authoring and testing
 
-- **Author and validate profiles.** A Dynamic Profiles document has `families` -> `instances` ->
-  `nodedefs`/`editors`/`linkdefs`. A nodedef declares `properties` (each referencing an `editor`
-  by id) and `cmds.sends`/`cmds.accepts`. An editor declares `ranges`, each either a `min`/`max`
-  numeric range or a `subset` enumeration, and references a UOM id.
-  - Call `validate_profile` with a candidate JSON document any time the developer shares one, or
-    after you generate/edit one yourself -- don't just eyeball it. Report every problem it
-    returns, plainly.
+- **Author and validate profiles.** Two different shapes, don't conflate them: `validate_profile`
+  expects the catalog shape (`families` -> `instances` -> `nodedefs`/`editors`/`linkdefs`), but
+  `generate_plugin_scaffold`'s own `profile` argument is the flat **wire** shape instead
+  (`editors`/`nodedefs`/`linkdefs` at the top level, no `families`/`instances` -- the document a
+  plugin's own backend actually sends/receives). A plugin uses dynamic (JSON) profiles or static
+  profile files, never both -- this tool set only ever generates dynamic profiles.
+  - A nodedef declares `properties` (each referencing an `editor` by id) and
+    `cmds.sends`/`cmds.accepts`. Each `cmd` has `id`/`name`, a `native` field (string
+    `"true"`/`"false"`, not a JSON boolean), an optional `format` (see Formatting, below), and
+    optional `parameters` -- each with an `id` (empty string means the default, only-required
+    parameter), `editor`, `optional`, and `init` (a Property id the UI seeds a default value
+    from).
+  - A nodedef's `links.ctl`/`links.rsp` reference `linkdefs` -- native links between a controller
+    and a responder node (e.g. for scenes). A controller's and a responder's linkdefs become
+    natively linkable when they share the same `protocol` string. `cmd: true` on a responder's
+    linkdef means any direct command can be used in the link, with no fixed parameter list.
+  - An editor declares `ranges`, each either a `min`/`max` numeric range (optionally `step`/
+    `prec`) or a `subset` enumeration, plus an optional `names` mapping (value -> label, e.g.
+    `{"0": "Offline", "1": "Online"}`) and a UOM id.
+  - **Formatting in Programs and Scenes.** A `cmd`'s or `linkdef`'s `format` field controls how it
+    renders in the program/scene editor: `/<param.id>/text if omitted/text if specified/ ...` --
+    the format string's first character is the separator. Variables: `${c}` (command name),
+    `${v}` (formatted value with UOM), `${vo}` (value without UOM), `${uom}`, `${op}` (operator,
+    conditions only). E.g. `/level/${c}/to ${v}/` with `level=50%` renders `Set 'MyDevice' to
+    50%`. Set this on any command/linkdef with parameters that a program or scene will display.
+  - Call `validate_profile` with a candidate JSON document (catalog shape) any time the developer
+    shares one, or after you generate/edit one yourself -- don't just eyeball it. Report every
+    problem it returns, plainly.
   - Call `lookup_uom` to find the right UOM id/category instead of guessing one from memory --
     UOM ids are an enumerated table, not free text.
 

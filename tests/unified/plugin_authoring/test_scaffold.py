@@ -407,6 +407,29 @@ async def test_rendered_plugin_py_points_data_dir_at_the_data_subdirectory(tmp_p
     assert 'self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")' in source
 
 
+# --- main.py sends the Dynamic Profile on startup -- writing profile.json
+# to disk alone does nothing to PG3/IoX (design/developers/plugin_model.md
+# §1/§2/§5); the plugin's own code must call updateJsonProfile() ---
+
+
+@pytest.mark.asyncio
+async def test_main_py_sends_the_profile_via_updatejsonprofile(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert "import json" in source
+    assert "import os" in source
+    assert 'polyglot.updateJsonProfile(json.load(f), {"waitResponse": True})' in source
+
+
+@pytest.mark.asyncio
+async def test_main_py_sends_the_profile_before_constructing_the_controller(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert source.index("updateJsonProfile") < source.index("Controller(polyglot")
+
+
 # --- node classes ---
 
 
