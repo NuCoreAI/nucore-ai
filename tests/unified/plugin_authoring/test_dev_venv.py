@@ -99,3 +99,76 @@ async def test_shell_plumbing_failure_passed_through(tmp_path, monkeypatch):
     result = await setup_dev_venv(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
 
     assert result == {"error": "failed to start command: [Errno 2] No such file or directory"}
+
+
+def _write_working_venv(plugin_dir):
+    venv_bin = plugin_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True, exist_ok=True)
+    python3 = venv_bin / "python3"
+    python3.write_text("#!/bin/sh\n")
+    python3.chmod(0o755)
+
+
+@pytest.mark.asyncio
+async def test_already_set_up_is_a_no_op(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_requirements(plugin_dir)
+    _write_working_venv(plugin_dir)
+
+    async def fail_if_called(nucore_interface, args):
+        raise AssertionError("run_shell_command should not be called when .venv already works")
+
+    monkeypatch.setattr(dev_venv.shell, "run_shell_command", fail_if_called)
+
+    result = await setup_dev_venv(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result == {
+        "location": "acme_pool",
+        "venv_created": False,
+        "already_set_up": True,
+        "venv_path": str(plugin_dir / ".venv"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_broken_venv_missing_python3_is_rebuilt(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_requirements(plugin_dir)
+    (plugin_dir / ".venv" / "bin").mkdir(parents=True)  # no python3 inside -- broken/partial
+
+    calls = []
+
+    async def fake_run_shell_command(nucore_interface, args):
+        calls.append(args)
+        _write_working_venv(plugin_dir)
+        return {"exit_code": 0, "stdout": "installed", "stderr": ""}
+
+    monkeypatch.setattr(dev_venv.shell, "run_shell_command", fake_run_shell_command)
+
+    result = await setup_dev_venv(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["venv_created"] is True
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_force_rebuilds_an_already_working_venv(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_requirements(plugin_dir)
+    _write_working_venv(plugin_dir)
+
+    calls = []
+
+    async def fake_run_shell_command(nucore_interface, args):
+        calls.append(args)
+        _write_working_venv(plugin_dir)
+        return {"exit_code": 0, "stdout": "installed", "stderr": ""}
+
+    monkeypatch.setattr(dev_venv.shell, "run_shell_command", fake_run_shell_command)
+
+    result = await setup_dev_venv(
+        None, {"location": "acme_pool", "force": True}, plugin_output_root=str(tmp_path)
+    )
+
+    assert result["venv_created"] is True
+    assert len(calls) == 1

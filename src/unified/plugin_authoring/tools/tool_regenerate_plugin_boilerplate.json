@@ -1,0 +1,14 @@
+{
+  "name": "regenerate_plugin_boilerplate",
+  "description": "Picks up a template/tooling fix (a change to how this tool set generates plugin.py/main.py/version.py/install.sh) on a plugin that was already generated, without re-supplying the whole original generate_plugin_scaffold call. Reads back generation_inputs.json (written by generate_plugin_scaffold itself) and re-renders ONLY plugin.py, main.py, version.py, and install.sh with today's template code -- the existing override_bodies/authorize/ai_enabled/etc. are reused exactly as originally supplied, nothing LLM-authored needs to be retyped. Never touches server_entry.json (its live, host-assigned nsid would be lost), profile.json, README.md, LICENSE.md, tests, or node-class files -- those are content, not template output. Fails clearly if generation_inputs.json doesn't exist yet (plugins generated before this tool existed need one generate_plugin_scaffold call first). Tell the developer before calling this -- it overwrites the 4 files above unconditionally.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The subdirectory name under the server's plugin output root -- the same 'location' generate_plugin_scaffold/read_generated_plugin use."
+      }
+    }
+  }
+}

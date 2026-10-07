@@ -32,7 +32,7 @@
       },
       "override_bodies": {
         "type": "object",
-        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true. Any name not supplied gets a safe no-op stub. Any other key is rejected.",
+        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true. Any name not supplied gets a safe no-op stub. Any other key is rejected. These fire in a fixed real-world order -- START, then CONFIG (processConfig), then CUSTOMPARAMS (parameterHandler), then CONFIGDONE -- and the tool-generated wiring already blocks start() until CONFIGDONE (or a timeout); write each override for its own place in that order rather than assuming config/params are already available earlier than CONFIGDONE. See the system prompt's 'Write override bodies for the real startup order' section for the full contract.",
         "additionalProperties": {"type": "string"}
       },
       "server_entry": {
@@ -102,7 +102,7 @@
       },
       "custom_param_docs": {
         "type": "string",
-        "description": "Rich, user-friendly markdown/html/text documentation for the customer-facing config fields declared in server_entry.customParams -- rendered verbatim into a self.poly.setCustomParamDocs(...) call PG3 shows on the plugin's configuration page. Required whenever server_entry.customParams is non-empty (write real, helpful explanations -- e.g. where to find an API key, what format an IP address should be in -- never just the minimal values from customParams itself). Omit when server_entry.customParams is empty; a plugin with no customParams falls back to any POLYGLOT_CONFIG.md file in its own directory instead."
+        "description": "Rich, user-friendly markdown/html/text documentation for the customer-facing config fields declared in server_entry.customParams -- rendered verbatim into a self.poly.setCustomParamsDoc(...) call PG3 shows on the plugin's configuration page. Required whenever server_entry.customParams is non-empty (write real, helpful explanations -- e.g. where to find an API key, what format an IP address should be in -- never just the minimal values from customParams itself). Omit when server_entry.customParams is empty; a plugin with no customParams falls back to any POLYGLOT_CONFIG.md file in its own directory instead."
       },
       "tests": {
         "type": "object",

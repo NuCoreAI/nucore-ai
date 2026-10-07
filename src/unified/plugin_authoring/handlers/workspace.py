@@ -46,6 +46,28 @@ _README_FILENAME = "README.md"
 _LICENSE_FILENAME = "LICENSE.md"
 _CONTEXT_FILENAME = "context.md"
 _SOURCES_FILENAME = "sources.md"
+_MAIN_FILENAME = "main.py"
+_VERSION_FILENAME = "version.py"
+_SERVER_ENTRY_FILENAME = "server_entry.json"
+_INSTALL_FILENAME = "install.sh"
+_REQUIREMENTS_FILENAME = "requirements.txt"
+_GENERATION_INPUTS_FILENAME = "generation_inputs.json"
+
+_ALL_READABLE_KEYS = (
+    "profile",
+    "plugin_py",
+    "main_py",
+    "version_py",
+    "server_entry",
+    "install_sh",
+    "requirements_txt",
+    "generation_inputs",
+    "readme",
+    "license",
+    "tests",
+    "context",
+    "sources",
+)
 
 
 def _latest_context_note(context_text: str | None) -> str | None:
@@ -133,6 +155,23 @@ async def list_generated_plugins(
     return {"plugins": entries}
 
 
+def _read_text_if_present(path: Path) -> str | None:
+    return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def _read_json_if_present(path: Path) -> Any | None:
+    """Best-effort: a missing *or malformed* secondary file just means
+    ``None`` here, not a broken call -- same "degrade gracefully" posture
+    every other optional field in this function already has (``readme``/
+    ``license``/``context``/``sources`` are all ``None`` when absent)."""
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 async def read_generated_plugin(
     nucore_interface: NuCoreInterface, args: dict[str, Any], *, plugin_output_root: str
 ) -> Any:
@@ -141,10 +180,23 @@ async def read_generated_plugin(
     model has something to modify, rather than starting blind -- including
     its accumulated ``sources.md`` evidence history, so a resumed session
     can check what's already been searched/fetched before spending another
-    search or fetch call on the same ground."""
+    search or fetch call on the same ground.
+
+    Returns every file by default; pass ``files`` (a subset of
+    ``_ALL_READABLE_KEYS``) to get back only the ones asked for -- useful
+    when a plugin's tests/README are large and only, say, ``plugin_py`` is
+    actually needed this turn."""
     location = (args.get("location") or "").strip()
     if not location:
         return {"error": "location is required"}
+
+    requested_files = args.get("files")
+    if requested_files is not None:
+        if not isinstance(requested_files, list) or not all(isinstance(f, str) for f in requested_files):
+            return {"error": "files must be a list of strings"}
+        unknown = sorted(set(requested_files) - set(_ALL_READABLE_KEYS))
+        if unknown:
+            return {"error": f"unknown files entry {unknown} -- must be one of {sorted(_ALL_READABLE_KEYS)}"}
 
     try:
         plugin_dir = confine_path(plugin_output_root, location)
@@ -160,34 +212,30 @@ async def read_generated_plugin(
     except Exception as exc:
         return {"error": f"{_PROFILE_FILENAME} at '{location}' is not valid JSON: {exc}"}
 
-    plugin_py_path = plugin_dir / _PLUGIN_FILENAME
-    plugin_py = plugin_py_path.read_text(encoding="utf-8") if plugin_py_path.is_file() else None
-
-    readme_path = plugin_dir / _README_FILENAME
-    readme = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else None
-
-    license_path = plugin_dir / _LICENSE_FILENAME
-    license_md = license_path.read_text(encoding="utf-8") if license_path.is_file() else None
-
     tests = {
         test_path.name: test_path.read_text(encoding="utf-8")
         for test_path in sorted((plugin_dir / "tests").glob("test_*.py"))
         if test_path.is_file()
     }
 
-    context_path = plugin_dir / _CONTEXT_FILENAME
-    context = context_path.read_text(encoding="utf-8") if context_path.is_file() else None
-
-    sources_path = plugin_dir / _SOURCES_FILENAME
-    sources = sources_path.read_text(encoding="utf-8") if sources_path.is_file() else None
-
-    return {
+    result = {
         "location": location,
         "profile": profile,
-        "plugin_py": plugin_py,
-        "readme": readme,
-        "license": license_md,
+        "plugin_py": _read_text_if_present(plugin_dir / _PLUGIN_FILENAME),
+        "main_py": _read_text_if_present(plugin_dir / _MAIN_FILENAME),
+        "version_py": _read_text_if_present(plugin_dir / _VERSION_FILENAME),
+        "server_entry": _read_json_if_present(plugin_dir / _SERVER_ENTRY_FILENAME),
+        "install_sh": _read_text_if_present(plugin_dir / _INSTALL_FILENAME),
+        "requirements_txt": _read_text_if_present(plugin_dir / _REQUIREMENTS_FILENAME),
+        "generation_inputs": _read_json_if_present(plugin_dir / _GENERATION_INPUTS_FILENAME),
+        "readme": _read_text_if_present(plugin_dir / _README_FILENAME),
+        "license": _read_text_if_present(plugin_dir / _LICENSE_FILENAME),
         "tests": tests,
-        "context": context,
-        "sources": sources,
+        "context": _read_text_if_present(plugin_dir / _CONTEXT_FILENAME),
+        "sources": _read_text_if_present(plugin_dir / _SOURCES_FILENAME),
     }
+
+    if requested_files is not None:
+        result = {"location": location, **{key: result[key] for key in requested_files}}
+
+    return result

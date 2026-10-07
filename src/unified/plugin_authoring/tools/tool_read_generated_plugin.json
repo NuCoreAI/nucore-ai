@@ -1,6 +1,6 @@
 {
   "name": "read_generated_plugin",
-  "description": "Load one previously-generated plugin's files (profile, Python backend, tests, README, LICENSE.md, and its accumulated sources.md evidence history) back into context, using the 'location' a list_generated_plugins call returned. Call this before discussing or modifying an existing plugin so the conversation is grounded in what's actually there, not guessed -- and check the returned 'sources' field before issuing a fresh search or fetch, to see what's already been researched for this plugin rather than re-researching the same ground. This only reads the files -- it does not change anything; proposing and writing an update is a separate step the customer must still confirm.",
+  "description": "Load one previously-generated plugin's files (profile, plugin.py/main.py/version.py, server_entry.json, install.sh, requirements.txt, generation_inputs.json, tests, README, LICENSE.md, and its accumulated sources.md evidence history) back into context, using the 'location' a list_generated_plugins call returned. Call this before discussing or modifying an existing plugin so the conversation is grounded in what's actually there, not guessed -- and check the returned 'sources' field before issuing a fresh search or fetch, to see what's already been researched for this plugin rather than re-researching the same ground. This only reads the files -- it does not change anything; proposing and writing an update is a separate step the customer must still confirm.",
   "input_schema": {
     "type": "object",
     "required": ["location"],
@@ -8,6 +8,14 @@
       "location": {
         "type": "string",
         "description": "The 'location' value from a list_generated_plugins result, identifying which generated plugin to load."
+      },
+      "files": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["profile", "plugin_py", "main_py", "version_py", "server_entry", "install_sh", "requirements_txt", "generation_inputs", "readme", "license", "tests", "context", "sources"]
+        },
+        "description": "Optional: return only these files instead of everything. Omit to get the full bundle (the default, unchanged behavior)."
       }
     }
   }

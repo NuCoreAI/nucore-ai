@@ -10,7 +10,7 @@ import json
 import pytest
 
 from unified.plugin_authoring import developer_config
-from unified.plugin_authoring.handlers.developer_config import configure_developer
+from unified.plugin_authoring.handlers.developer_config import configure_developer, get_developer_config
 
 
 # --- developer_config.py ---
@@ -125,3 +125,34 @@ async def test_configure_developer_allows_overwrite(tmp_path):
     )
     assert result["configured"] is True
     assert developer_config.load_developer_config(str(tmp_path))["name"] == "Dev Updated"
+
+
+# --- get_developer_config handler (read-only check-first tool) ---
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_reports_unconfigured_when_nothing_on_file(tmp_path):
+    result = await get_developer_config(None, {}, plugin_output_root=str(tmp_path))
+    assert result == {"configured": False}
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_reports_the_commissioned_identity(tmp_path):
+    await configure_developer(
+        None,
+        {"email": "dev@example.com", "name": "Dev Name", "github_url": "https://github.com/dev"},
+        plugin_output_root=str(tmp_path),
+    )
+    result = await get_developer_config(None, {}, plugin_output_root=str(tmp_path))
+    assert result == {
+        "configured": True,
+        "email": "dev@example.com",
+        "name": "Dev Name",
+        "github_url": "https://github.com/dev",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_never_writes_anything(tmp_path):
+    await get_developer_config(None, {}, plugin_output_root=str(tmp_path))
+    assert not (tmp_path / developer_config.DEVELOPER_CONFIG_FILENAME).exists()

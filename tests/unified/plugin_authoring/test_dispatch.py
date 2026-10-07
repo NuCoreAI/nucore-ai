@@ -101,6 +101,12 @@ async def test_lookup_uom_routes_through_plugin_authoring_dispatch():
 
 
 @pytest.mark.asyncio
+async def test_lookup_property_id_routes_through_plugin_authoring_dispatch():
+    result = await execute_tool("lookup_property_id", {"keyword": "temperature"}, nucore_interface=FakeBackend())
+    assert any(m["id"] == "CLITEMP" for m in result["matches"])
+
+
+@pytest.mark.asyncio
 async def test_list_installed_plugins_is_reused_from_unified_handlers():
     result = await execute_tool("list_installed_plugins", {}, nucore_interface=FakeBackend())
     assert result == {
@@ -316,6 +322,35 @@ async def test_configure_developer_mismatched_email_is_refused_through_dispatch(
     assert not (tmp_path / "developer_config.json").exists()
 
 
+# --- get_developer_config (read-only check-first tool) ---
+
+
+def test_build_tool_handlers_always_adds_get_developer_config():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "get_developer_config" in handlers
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_routes_through_dispatch(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root=str(tmp_path)
+    )
+
+    result = await execute_tool("get_developer_config", {}, nucore_interface=FakeBackend(), tool_handlers=handlers)
+    assert result == {"configured": False}
+
+    await execute_tool(
+        "configure_developer",
+        {"email": "dev@example.com", "name": "Dev"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    result = await execute_tool("get_developer_config", {}, nucore_interface=FakeBackend(), tool_handlers=handlers)
+    assert result == {"configured": True, "email": "dev@example.com", "name": "Dev"}
+
+
 # --- setup_dev_venv (local/dev-testing only) ---
 
 
@@ -337,6 +372,62 @@ async def test_setup_dev_venv_routes_through_dispatch(tmp_path):
     )
     result = await execute_tool(
         "setup_dev_venv",
+        {"location": "does_not_exist"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert "error" in result
+
+
+# --- setup_vscode_debug_config (local/dev-testing only) ---
+
+
+def test_build_tool_handlers_always_adds_setup_vscode_debug_config():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "setup_vscode_debug_config" in handlers
+
+
+@pytest.mark.asyncio
+async def test_setup_vscode_debug_config_routes_through_dispatch(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+    )
+    result = await execute_tool(
+        "setup_vscode_debug_config",
+        {"location": "does_not_exist"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert "error" in result
+
+
+# --- regenerate_plugin_boilerplate (local/dev-testing only) ---
+
+
+def test_build_tool_handlers_always_adds_regenerate_plugin_boilerplate():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "regenerate_plugin_boilerplate" in handlers
+
+
+@pytest.mark.asyncio
+async def test_regenerate_plugin_boilerplate_routes_through_dispatch(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+    )
+    result = await execute_tool(
+        "regenerate_plugin_boilerplate",
         {"location": "does_not_exist"},
         nucore_interface=FakeBackend(),
         tool_handlers=handlers,

@@ -1,14 +1,19 @@
-"""validate_profile/lookup_uom -- local, hub-free authoring aids. Both take
-nucore_interface only for dispatch-signature uniformity (the same precedent
-handlers/shell.py's run_shell_command sets) and never call it, so every
-test here passes None.
+"""validate_profile/lookup_uom/lookup_property_id -- local, hub-free
+authoring aids. All three take nucore_interface only for dispatch-signature
+uniformity (the same precedent handlers/shell.py's run_shell_command sets)
+and never call it, so every test here passes None.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from unified.plugin_authoring.handlers.profile_authoring import lookup_uom, validate_profile
+from unified.plugin_authoring.handlers.profile_authoring import (
+    lookup_property_id,
+    lookup_uom,
+    validate_profile,
+)
+from unified.plugin_authoring.standard_property_ids import STANDARD_PROPERTY_IDS
 
 VALID_PROFILE = {
     "families": [
@@ -240,3 +245,105 @@ async def test_lookup_uom_no_match_returns_empty_list():
 async def test_lookup_uom_requires_keyword():
     result = await lookup_uom(None, {})
     assert result == {"error": "keyword is required"}
+
+
+# --- property id format cross-check (_check_property_id_format): a model
+# guessing/inventing a property id that doesn't match the real hub's own
+# constraint (all-caps letters/digits/underscore, starting with a letter,
+# max 30 chars -- confirmed against ../iox-vscode-plugin/schemas/
+# node.properties.schema.json) must fail validation mechanically ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_lowercase_property_id():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "flowRate", "editor": "ED_X"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("flowRate" in e and "must be all-caps" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_too_long_property_id():
+    too_long = "A" * 31
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": too_long, "editor": "ED_X"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any(too_long in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_meaningful_custom_property_id():
+    # Not a standard id, but conforms to the format -- must be accepted
+    # (this feature is about steering *which* id gets chosen, via
+    # lookup_property_id/the system prompt, not about restricting the
+    # format to only the standard catalogue).
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "FILTER_LIFE", "editor": "ED_X"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+@pytest.mark.asyncio
+async def test_lookup_property_id_matches_standard_id_by_keyword():
+    result = await lookup_property_id(None, {"keyword": "temperature"})
+    ids = {m["id"] for m in result["matches"]}
+    assert "CLITEMP" in ids
+
+
+@pytest.mark.asyncio
+async def test_lookup_property_id_matches_by_id_substring():
+    result = await lookup_property_id(None, {"keyword": "clihum"})
+    ids = {m["id"] for m in result["matches"]}
+    assert "CLIHUM" in ids
+
+
+@pytest.mark.asyncio
+async def test_lookup_property_id_no_match_returns_empty_list():
+    result = await lookup_property_id(None, {"keyword": "not_a_real_property_xyz"})
+    assert result == {"matches": []}
+
+
+@pytest.mark.asyncio
+async def test_lookup_property_id_requires_keyword():
+    result = await lookup_property_id(None, {})
+    assert result == {"error": "keyword is required"}
+
+
+def test_standard_property_ids_never_includes_the_gv_fallback():
+    # The whole point of this catalogue is to steer the model away from
+    # defaulting to GV0/GV1/... -- it must never itself suggest one. (Not a
+    # bare "GV" prefix check: GVOL/"Water Volume" legitimately starts with
+    # those two letters and must stay in the catalogue.)
+    import re
+
+    gv_fallback = re.compile(r"^GV\d+$")
+    assert not any(gv_fallback.match(property_id) for property_id in STANDARD_PROPERTY_IDS)

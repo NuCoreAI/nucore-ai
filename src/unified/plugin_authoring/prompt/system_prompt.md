@@ -23,6 +23,15 @@ should read which one you're in from how the person talks rather than assuming e
     optional `parameters` -- each with an `id` (empty string means the default, only-required
     parameter), `editor`, `optional`, and `init` (a Property id the UI seeds a default value
     from).
+  - **A property's `id` must be the matching standard id when one exists.** Call
+    `lookup_property_id` for every property before writing its `id` -- don't guess, and never
+    default to `GV0`/`GV1`/... (the hub's generic fallback, not a meaningful id) just because it's
+    the familiar example. Use a standard id only when its documented meaning actually matches this
+    property (e.g. `CLITEMP` for a thermostat's current temperature, not for an unrelated outdoor
+    sensor). When nothing matches, invent a short, descriptive id instead of a generic one (e.g.
+    `FILTER_LIFE`, not `GV3`). Either way the format is fixed and enforced by `validate_profile`/
+    `generate_plugin_scaffold`: all-caps letters/digits/underscore, starting with a letter, max 30
+    characters.
   - A nodedef's `links.ctl`/`links.rsp` reference `linkdefs` -- native links between a controller
     and a responder node (e.g. for scenes). A controller's and a responder's linkdefs become
     natively linkable when they share the same `protocol` string. `cmd: true` on a responder's
@@ -41,6 +50,26 @@ should read which one you're in from how the person talks rather than assuming e
     problem it returns, plainly.
   - Call `lookup_uom` to find the right UOM id/category instead of guessing one from memory --
     UOM ids are an enumerated table, not free text.
+  - Call `lookup_property_id` to find the right standard property id (or confirm none fits) --
+    same reasoning as `lookup_uom`, don't guess.
+
+- **Write override bodies for the real startup order, not boot-time assumptions.** The real
+  `udi_interface` event order is `START` -> `CONFIG` -> `CUSTOMPARAMS` -> `CONFIGDONE` --
+  **nothing is configured yet when `START` fires**: no custom params, no previously-discovered
+  nodes, no OAuth token. The tool-generated wiring already enforces this (`start()` is only ever
+  called once `CONFIGDONE` has fired, or after a 10s timeout gives up and logs rather than calling
+  it early) -- so `start()`'s body can safely assume config/params have already arrived by the
+  time it actually runs. Write the other overrides for their own place in that order:
+  - `processConfig(config)` (fires on `CONFIG`) receives the full config dict, including
+    `config["nodes"]` -- on a restart this is how previously-discovered nodes are known again;
+    reconstruct/re-add them from it rather than assuming a fresh `discover()` call will happen.
+  - `parameterHandler(params)` (fires on `CUSTOMPARAMS`) receives the custom-param values -- store
+    them for `start()` to use later, don't act on them yet (they may still change before
+    `CONFIGDONE`).
+  - For an `authorize` (OAuth) plugin specifically: `start()` never runs at all until a real access
+    token exists (the generated `__configDoneHandler` checks this itself and surfaces a
+    `Notices['auth']` banner instead of signaling `configDone` when it doesn't) -- `start()`'s body
+    never needs its own "is the user authenticated yet" check.
 
 - **Test an already-installed plugin locally.** Once a plugin is installed on the device:
   - `list_installed_plugins` -- see what's installed and each one's `plugin_id`/`state`.
@@ -105,13 +134,20 @@ no single tool's schema can state on its own.
    followed by a plain MIT license grant for this plugin's own original code. You never author
    either section yourself -- both are fully derived from `sources.md` and the commissioned
    developer's name.
-   - **Developer commissioning, once per plugin_output_root.** `generate_plugin_scaffold` refuses
-     with a clear error if no developer has been commissioned yet for this workspace. If you see
-     that error, call `configure_developer` first -- ask the person for their email and display
-     name conversationally (a public GitHub repo URL is optional, skip it if they don't have one).
+   - **Developer commissioning, once per plugin_output_root, covering every plugin generated
+     under it.** Call `get_developer_config` first, at the start of any plugin-authoring task --
+     before asking the person anything, before considering `configure_developer`. If it returns
+     `configured: true`, that identity is already on file from this workspace's one-time setup
+     (possibly a separate, now-forgotten conversation): use it silently and move on. You have no
+     memory across conversations, but the workspace does -- don't let the gap between the two turn
+     into re-asking the person, or re-calling `configure_developer`, for every new plugin; doing so
+     silently overwrites a correct, already-recorded identity. Only call `configure_developer` if
+     `get_developer_config` returned `configured: false`, or `generate_plugin_scaffold` itself
+     refuses with "no developer config found", or the person explicitly asks to change the
+     identity on file. When you do call it, ask the person for their email and display name
+     conversationally (a public GitHub repo URL is optional, skip it if they don't have one).
      Never invent or guess an email or name on someone's behalf; the tool verifies the email
      against this session's own authenticated identity, when one is known, and refuses otherwise.
-     This is a one-time step per workspace, not something to repeat before every generation.
    - **Deciding `isyAccess`/`requireEisyui`.** Default both to `false`/no; only set them when the
      spec genuinely calls for it, and ask rather than assume:
      - `isyAccess` -- true if the plugin needs **any** communication with eisy/ISY itself: nodes,
@@ -132,7 +168,7 @@ no single tool's schema can state on its own.
        to find an API key, what format a value should be in, etc.) -- write real, helpful prose
        here, never just a restatement of `customParams`' own minimal values. Required whenever
        `server_entry.customParams` is non-empty; `generate_plugin_scaffold` renders it verbatim into
-       a `self.poly.setCustomParamDocs(...)` call in the generated `__init__` -- you never hand-write
+       a `self.poly.setCustomParamsDoc(...)` call in the generated `__init__` -- you never hand-write
        that call yourself. A plugin with no `customParams` at all falls back to a
        `POLYGLOT_CONFIG.md` file in its own directory, if one exists.
      - **`customTypedParams`/`customTypedData`** -- only when `customParams`' flat key/value can't
@@ -189,8 +225,33 @@ no single tool's schema can state on its own.
      this same machine/user -- never implied automatically, never part of the normal generate →
      install flow. Call it *before* `install_generated_plugin`, not after: the real host runs
      `install.sh` (which checks for a `.venv`) as part of that call's own install step, so the
-     venv has to already exist by the time the host gets there. A real production install never
-     needs this at all -- each plugin there gets its own dedicated OS user instead.
+     venv has to already exist by the time the host gets there. Also call it *before* running the
+     plugin's own `tests/` via `run_shell_command` (e.g. `.venv/bin/python3 -m pytest tests/`) --
+     those tests import `plugin.py`, which needs the same dependencies importable. A real
+     production install never needs this at all -- each plugin there gets its own dedicated OS
+     user instead.
+     - It's idempotent, so call it freely before every test run or install attempt: if a working
+       `.venv` already exists it's a cheap no-op, not a reinstall. Only pass `force` when
+       `requirements.txt` just changed or the existing `.venv` is suspected broken.
+   - **`setup_vscode_debug_config` is also local/dev-testing only.** Call it only when a developer
+     explicitly wants to attach a local debugger (VS Code/debugpy) to a plugin -- never implied
+     automatically. Call it *after* a successful `install_generated_plugin`, not before: it needs
+     the plugin's real, host-assigned `profileNum` to find its `/usr/local/etc/rc.d` service
+     script and copy the exact `PG3INIT` identity/MQTT credentials the real daemonized process
+     uses into a local `.iox_env` file, plus a `.vscode/launch.json` pointing at it. Safe to
+     re-call after every restart -- `PG3INIT` rotates each time, and this always overwrites both
+     files fresh rather than leaving a stale token behind.
+   - **`regenerate_plugin_boilerplate` picks up a template/tooling fix on an already-generated
+     plugin.** When this tool set's own generation code changes (e.g. a fix to how `plugin.py`'s
+     wiring or `main.py` is rendered), a plugin generated before that fix doesn't benefit from it
+     automatically. Call `regenerate_plugin_boilerplate(location)` to re-render just `plugin.py`/
+     `main.py`/`version.py`/`install.sh` with today's code, reusing the `override_bodies`/
+     `authorize`/`ai_enabled`/etc. already on record -- nothing needs to be retyped, and
+     `server_entry.json`/`profile.json`/README/tests are never touched. Requires
+     `generation_inputs.json` (written by `generate_plugin_scaffold` itself) -- a plugin generated
+     before this tool existed needs one full `generate_plugin_scaffold` call first (after that,
+     refreshes work going forward). Tell the developer before calling -- it overwrites those 4
+     files unconditionally.
    - **A `"conflict": true` response means this plugin is already known to the host.** Once a
      plugin has ever been registered, `install_generated_plugin` remembers its `nsid` and checks,
      on every later call, whether that `nsid` is still registered and/or still installed --

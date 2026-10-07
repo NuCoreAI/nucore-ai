@@ -1,0 +1,14 @@
+{
+  "name": "setup_vscode_debug_config",
+  "description": "Local/dev-testing only -- never relevant to a real production install. Call this AFTER a successful install_generated_plugin (needs the plugin's real, host-assigned profileNum to find its /usr/local/etc/rc.d service script). Writes a .iox_env file into this plugin's own directory, containing the exact PG3INIT value the real daemonized process uses (copied verbatim from its rc.d script), and a .vscode/launch.json with one debugpy 'launch' entry (named after the plugin, program main.py, envFile pointing at .iox_env, justMyCode false) so the plugin can be attached to and debugged directly from VS Code with the same PG3/MQTT identity the real service uses. Always overwrites both files -- PG3INIT rotates on every real restart, so re-calling this after a restart is expected and safe.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The subdirectory name under the server's plugin output root -- the same 'location' generate_plugin_scaffold/install_generated_plugin use."
+      }
+    }
+  }
+}

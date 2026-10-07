@@ -1,6 +1,6 @@
 {
   "name": "setup_dev_venv",
-  "description": "Local/dev-testing only -- never relevant to a real production install. Creates (or resets) a .venv inside this plugin's own directory and installs requirements.txt into it, isolating its Python dependencies from every other plugin sharing this same development machine/user. Production never needs this: each plugin there gets its own dedicated OS user instead, which already isolates it without a venv. Once created, both main.py and install.sh pick .venv up automatically on every subsequent run/install, with no further configuration. Call this BEFORE install_generated_plugin, not after -- the host runs install.sh (which checks for .venv) as part of that call's own install step, and the check only helps if .venv already exists by the time the host gets there.",
+  "description": "Local/dev-testing only -- never relevant to a real production install. Creates a .venv inside this plugin's own directory and installs requirements.txt into it, isolating its Python dependencies from every other plugin sharing this same development machine/user. Production never needs this: each plugin there gets its own dedicated OS user instead, which already isolates it without a venv. Once created, both main.py and install.sh pick .venv up automatically on every subsequent run/install, with no further configuration. Call this BEFORE install_generated_plugin, not after -- the host runs install.sh (which checks for .venv) as part of that call's own install step, and the check only helps if .venv already exists by the time the host gets there. Also call this BEFORE running the plugin's own tests/ via run_shell_command, since those import plugin.py and need the same dependencies importable. Idempotent: if a working .venv already exists, this is a cheap no-op -- safe to call before every test run or install attempt without re-downloading/reinstalling anything. Pass force only when requirements.txt changed or the venv is suspected broken, to rebuild it from scratch.",
   "input_schema": {
     "type": "object",
     "required": ["location"],
@@ -8,6 +8,10 @@
       "location": {
         "type": "string",
         "description": "The subdirectory name under the server's plugin output root -- the same 'location' generate_plugin_scaffold/install_generated_plugin use."
+      },
+      "force": {
+        "type": "boolean",
+        "description": "Rebuild the .venv from scratch even if one already exists -- use after editing requirements.txt, or if the existing .venv is suspected broken. Defaults to false (reuse an existing, working .venv as-is)."
       }
     }
   }

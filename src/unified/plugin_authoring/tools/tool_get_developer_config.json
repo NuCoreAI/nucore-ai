@@ -1,0 +1,8 @@
+{
+  "name": "get_developer_config",
+  "description": "Read-only: returns the developer identity already commissioned for this plugin workspace ({configured: true, email, name, github_url?, default_run_as?}), or {configured: false} if none has been commissioned yet. Call this first, before considering configure_developer, at the start of any plugin-authoring task -- commissioning is one-time per workspace, covering every plugin generated under it, not a per-plugin step. If this returns configured: true, use that identity silently and do not call configure_developer and do not ask the person for their email/name again -- only call configure_developer if this returns configured: false, or the person explicitly asks to change the identity on file.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

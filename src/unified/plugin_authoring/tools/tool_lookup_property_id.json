@@ -1,0 +1,14 @@
+{
+  "name": "lookup_property_id",
+  "description": "Search the catalogue of standard NodeDef Property ids (e.g. ST, CLITEMP, CLIHUM) by keyword, matching against each entry's id and label. Use this before inventing a custom property id for a nodedef: if a property's meaning matches one of these, use the standard id instead of making one up (never default to GV0/GV1/... -- those are the hub's own generic fallback, not a meaningful id). If nothing matches, invent a short, descriptive, ALL-CAPS id instead: letters, digits, and underscore only, starting with a letter, max 30 characters (e.g. 'FLOW_RATE', 'FILTER_LIFE') -- this exact format is enforced by validate_profile/generate_plugin_scaffold.",
+  "input_schema": {
+    "type": "object",
+    "required": ["keyword"],
+    "properties": {
+      "keyword": {
+        "type": "string",
+        "description": "A keyword to search for, e.g. 'temperature', 'humidity', 'battery'."
+      }
+    }
+  }
+}

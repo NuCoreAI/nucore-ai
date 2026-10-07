@@ -10,7 +10,11 @@ source referenced, plus a plain MIT grant for this plugin's own code --
 see ``_render_license``), ``requirements.txt``, ``install.sh`` (the
 executable script ``server_entry.json``'s ``install`` field names by
 filename -- confirmed against the real ``ioxplugin`` tooling, which
-defaults to this same name), ``tests/test_*.py`` -- plus an append-only
+defaults to this same name), ``tests/test_*.py``, ``generation_inputs.json``
+(a faithful snapshot of this call's own normalized inputs -- what
+``handlers/boilerplate.py``'s ``regenerate_plugin_boilerplate`` reads back
+to re-render just the template-driven files with today's template code,
+without the caller re-supplying everything) -- plus an append-only
 ``context.md`` iteration log and a deduped, cross-session ``sources.md``
 evidence record (every source ever examined for this plugin -- see
 ``evidence_ledger.py``'s
@@ -91,6 +95,7 @@ _LICENSE_FILENAME = "LICENSE.md"
 _CONTEXT_FILENAME = "context.md"
 _SOURCES_FILENAME = "sources.md"
 _REQUIREMENTS_FILENAME = "requirements.txt"
+_GENERATION_INPUTS_FILENAME = "generation_inputs.json"
 _DATA_DIRNAME = "data"
 _PERSIST_DIRNAME = "persist"
 _DEFAULT_CONTROLLER_MODULE = "plugin"
@@ -199,6 +204,7 @@ def _assemble_plugin_py(
         "from __future__ import annotations\n\n",
         "import json\n",
         "import os\n",
+        "import threading\n",
         "import udi_interface\n\n",
         "LOGGER = udi_interface.LOGGER\n\n\n",
         f"class {controller_class}(udi_interface.Node):\n",
@@ -281,7 +287,7 @@ def _build_server_entry(
     field's seeded initial value (commonly ``""``, sometimes a minimal
     placeholder-like hint) -- never rich documentation; that's the
     separate, LLM-authored ``custom_param_docs`` input
-    ``generate_plugin_scaffold`` renders into ``setCustomParamDocs`` (see
+    ``generate_plugin_scaffold`` renders into ``setCustomParamsDoc`` (see
     ``plugin_skeleton.render_custom_param_docs_call``). Validated by
     ``generate_plugin_scaffold`` before this is ever called.
 
@@ -654,6 +660,18 @@ async def generate_plugin_scaffold(
 
     # Overwrite flow
     confirm_overwrite = bool(args.get("confirm_overwrite"))
+    generation_inputs = {
+        "profile": raw_profile,
+        "server_entry": server_entry_input,
+        "readme_body": readme_body,
+        "override_bodies": override_bodies,
+        "node_classes": node_classes,
+        "tests": tests,
+        "custom_param_docs": custom_param_docs,
+        "controller_class": controller_class,
+        "controller_module": controller_module,
+        "version": version,
+    }
     candidate_files: dict[Path, str] = {
         plugin_dir / _PROFILE_FILENAME: json.dumps(raw_profile, indent=2) + "\n",
         plugin_dir / _PLUGIN_FILENAME: plugin_py,
@@ -664,6 +682,7 @@ async def generate_plugin_scaffold(
         plugin_dir / _LICENSE_FILENAME: license_md,
         plugin_dir / _REQUIREMENTS_FILENAME: requirements_txt,
         plugin_dir / _INSTALL_FILENAME: _INSTALL_SCRIPT_CONTENT,
+        plugin_dir / _GENERATION_INPUTS_FILENAME: json.dumps(generation_inputs, indent=2) + "\n",
     }
     for node_name, node_source in node_classes.items():
         candidate_files[plugin_dir / f"{node_name}.py"] = node_source

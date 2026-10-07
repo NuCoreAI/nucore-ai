@@ -1,8 +1,8 @@
-"""``setup_dev_venv`` -- local/dev-testing only: creates (or resets) a
-per-plugin ``.venv`` and installs ``requirements.txt`` into it. Never a
-side effect of ``generate_plugin_scaffold``/``install_generated_plugin`` --
-a developer calls this explicitly, so a real production install can never
-end up with a ``.venv`` it didn't ask for.
+"""``setup_dev_venv`` -- local/dev-testing only: creates a per-plugin
+``.venv`` and installs ``requirements.txt`` into it. Never a side effect of
+``generate_plugin_scaffold``/``install_generated_plugin`` -- a developer
+calls this explicitly, so a real production install can never end up with
+a ``.venv`` it didn't ask for.
 
 Call this *before* ``install_generated_plugin``, not after: the real host
 runs ``install.sh`` unconditionally as part of that call's own install
@@ -11,6 +11,18 @@ step, and ``install.sh``'s own ``.venv`` check (``handlers/scaffold.py``'s
 time the host gets there. ``main.py``'s matching re-exec check
 (``plugin_skeleton.render_main_py``) then picks it up on every subsequent
 start, with no further configuration.
+
+Also call this before running a generated plugin's own ``tests/`` via
+``run_shell_command`` (e.g. ``.venv/bin/python3 -m pytest tests/``) --
+those tests import ``plugin.py``, which needs ``requirements.txt``'s
+packages (``udi_interface`` and friends) importable, exactly like a real
+run does.
+
+Idempotent by design, since both call sites above may call it many times
+in a session (once per test run, once before every install attempt): if a
+working ``.venv`` already exists, this is a cheap no-op rather than a full
+recreate-and-reinstall. Pass ``force`` to rebuild it anyway (e.g. after
+editing ``requirements.txt``).
 
 Reuses ``unified.handlers.shell.run_shell_command``'s subprocess machinery
 (timeout, bounded output capture) rather than reimplementing it -- the
@@ -21,6 +33,7 @@ an exposure of its general-purpose arbitrary-command surface.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from nucore import NuCoreInterface
@@ -54,6 +67,16 @@ async def setup_dev_venv(
             "error": f"no {_REQUIREMENTS_FILENAME} found at '{location}' -- call generate_plugin_scaffold first"
         }
 
+    venv_python = plugin_dir / _VENV_DIRNAME / "bin" / "python3"
+    force = bool(args.get("force"))
+    if not force and venv_python.is_file() and os.access(venv_python, os.X_OK):
+        return {
+            "location": location,
+            "venv_created": False,
+            "already_set_up": True,
+            "venv_path": str(plugin_dir / _VENV_DIRNAME),
+        }
+
     command = (
         f"python3 -m venv --system-site-packages --clear {_VENV_DIRNAME} && "
         f"{_VENV_DIRNAME}/bin/pip3 install -r {_REQUIREMENTS_FILENAME}"
@@ -64,7 +87,6 @@ async def setup_dev_venv(
     if result.get("error"):
         return result
 
-    venv_python = plugin_dir / _VENV_DIRNAME / "bin" / "python3"
     if result.get("exit_code") != 0 or not venv_python.is_file():
         return {
             "error": "failed to create .venv or install requirements.txt into it -- see stdout/stderr",

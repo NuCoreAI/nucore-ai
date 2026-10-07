@@ -55,6 +55,8 @@ class EisyUIContext:
         self.context:dict = None
         self.message:str = None
         self.user_id:str | None = None
+        self.is_developer:bool | None = None
+        self.client_id:str | None = None
 
     def process_message(self, message_data: str)->str:
         """
@@ -74,9 +76,17 @@ class EisyUIContext:
             type = message.get("type", "")
             if type == "context":
                 self.context = message.get("context", None)
-                # Keep the last known user_id if a later context payload
-                # omits it, rather than clearing it -- safer degradation.
-                self.user_id = (self.context or {}).get("user_id") or self.user_id
+                user = (self.context or {}).get("user") or {}
+                # Keep the last known identity fields if a later context
+                # payload omits them, rather than clearing them -- safer
+                # degradation.
+                self.user_id = user.get("username") or self.user_id
+                # isDeveloper is a real boolean -- False is a legitimate
+                # value that must not be discarded in favor of a stale
+                # prior True the way a truthy `or` fallback would.
+                if user.get("isDeveloper") is not None:
+                    self.is_developer = user.get("isDeveloper")
+                self.client_id = (self.context or {}).get("clientId") or self.client_id
                 self.message = None
                 return None
             if type == "message":
@@ -98,11 +108,24 @@ class EisyUIContext:
 
     def get_user_id(self) -> str | None:
         """The authenticated user's durable id (an email address), sourced
-        from the context payload -- used as this conversation's session_id
-        instead of a fresh uuid4 per connection, so identity (and therefore
-        conversation history) survives a reconnect. None if no context
-        carrying one has been seen yet on this connection."""
+        from the context payload's ``user.username`` -- used as this
+        conversation's session_id instead of a fresh uuid4 per connection,
+        so identity (and therefore conversation history) survives a
+        reconnect. None if no context carrying one has been seen yet on
+        this connection."""
         return self.user_id
+
+    def get_is_developer(self) -> bool | None:
+        """Whether the authenticated user is a developer, sourced from the
+        context payload's ``user.isDeveloper``. None if no context carrying
+        one has been seen yet on this connection."""
+        return self.is_developer
+
+    def get_client_id(self) -> str | None:
+        """The UI client's id, sourced from the context payload's top-level
+        ``clientId``. None if no context carrying one has been seen yet on
+        this connection."""
+        return self.client_id
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -260,6 +260,114 @@ async def test_authorize_false_omits_oauth_subscription(tmp_path):
     assert "udi_interface.OAuth" not in source
 
 
+# --- __start must wait for configDone before calling the LLM-authored
+# start() override -- nothing is configured yet (no custom params, no
+# previously-discovered nodes, no OAuth token) when the real START event
+# fires; calling start() before CONFIGDONE is the real bug a live
+# generated plugin (simplisafe) hit this session ---
+
+
+@pytest.mark.asyncio
+async def test_generated_plugin_imports_threading(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "import threading" in source
+
+
+@pytest.mark.asyncio
+async def test_init_sets_up_config_done_synchronization(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.configDone = threading.Condition()" in source
+    assert "self.configDoneAlready = False" in source
+
+
+@pytest.mark.asyncio
+async def test_start_waits_for_config_done_before_calling_the_override(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "def __start(self):" in source
+    assert "self.configDone.wait(timeout=10)" in source
+    start_section = source[source.index("def __start(self):") : source.index("def __stop(self):")]
+    assert "self.start()" in start_section
+    assert "timed out waiting for configDone" in start_section
+
+
+@pytest.mark.asyncio
+async def test_config_done_handler_notifies_unconditionally_when_not_authorize(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    handler_section = source[source.index("def __configDoneHandler(self):") :]
+    handler_section = handler_section[: handler_section.index("def __addNodeDoneHandler")]
+    assert "self.configDoneAlready = True" in handler_section
+    assert "self.configDone.notifyAll()" in handler_section
+    assert "getAccessToken" not in handler_section
+
+
+@pytest.mark.asyncio
+async def test_config_done_handler_gates_on_oauth_token_when_authorize(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    handler_section = source[source.index("def __configDoneHandler(self):") :]
+    handler_section = handler_section[: handler_section.index("def __addNodeDoneHandler")]
+    assert "self.oauthService.getAccessToken()" in handler_section
+    assert 'self.poly.Notices["auth"]' in handler_section
+    assert "self.configDoneAlready = True" in handler_section
+    assert "self.configDone.notifyAll()" in handler_section
+
+
+@pytest.mark.asyncio
+async def test_custom_data_handler_takes_only_data_not_a_key(tmp_path):
+    # udi_interface's own CUSTOMDATA publish (interface.py) is
+    # `pub.publish(self.CUSTOMDATA, None, value)` -- no key, unlike
+    # CUSTOMNS's `pub.publish_nt(self.CUSTOMNS, None, key, value)`. A
+    # `(self, key, data)` subscriber would get `data` bound into `key`.
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "def __customDataHandler(self, data):" in source
+
+
+# --- generation_inputs.json: a faithful snapshot of this call's own
+# normalized inputs, read back by regenerate_plugin_boilerplate to
+# re-render the template-driven files alone with today's template code,
+# without the caller re-supplying everything ---
+
+
+@pytest.mark.asyncio
+async def test_generation_inputs_json_is_written_with_the_normalized_inputs(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "desc": "Acme pool controller"},
+        override_bodies={"start": 'def start(self):\n    LOGGER.info("hi")\n'},
+        custom_param_docs=None,
+        controller_class="Controller",
+        controller_module="plugin",
+        version="1.2.3",
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+
+    generation_inputs = json.loads((tmp_path / "acme_pool" / "generation_inputs.json").read_text())
+    assert generation_inputs == {
+        "profile": WIRE_PROFILE,
+        "server_entry": {"name": "AcmePool", "desc": "Acme pool controller"},
+        "readme_body": "This plugin integrates with the Acme Pool API.",
+        "override_bodies": {"start": 'def start(self):\n    LOGGER.info("hi")\n'},
+        "node_classes": {},
+        "tests": {},
+        "custom_param_docs": None,
+        "controller_class": "Controller",
+        "controller_module": "plugin",
+        "version": "1.2.3",
+    }
+
+
 @pytest.mark.asyncio
 async def test_ai_enabled_adds_customrequest_subscription_and_helper(tmp_path):
     args = _base_args(
@@ -695,6 +803,24 @@ async def test_main_py_re_execs_into_venv_before_importing_udi_interface(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_main_py_venv_reexec_uses_bare_python3_as_argv0(tmp_path):
+    # Regression: argv[0] must be the literal "python3", not _VENV_PYTHON's
+    # full path -- confirmed against a real host's /etc/rc.subr that
+    # check_pidfile()/_find_processes() matches the running process's own
+    # argv[0] against the service's procname (the real system python3's
+    # path) or its bare basename ("python3"). Passing the venv's full path
+    # as argv[0] breaks that match even though the PID is exactly right and
+    # the process is genuinely alive, which makes rc.subr conclude the
+    # service isn't running and spawn a duplicate on every subsequent
+    # start. os.execv's first argument (_VENV_PYTHON) is still the real
+    # interpreter that actually runs -- only argv[0] changes.
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert 'os.execv(_VENV_PYTHON, ["python3"] + sys.argv)' in source
+
+
+@pytest.mark.asyncio
 async def test_install_sh_uses_venv_pip_when_present_else_falls_back_to_user_install(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
@@ -789,7 +915,7 @@ async def test_custom_params_rejects_non_string_values(tmp_path):
     assert "error" in result
 
 
-# --- setCustomParamDocs comes from the separate, richly-authored
+# --- setCustomParamsDoc comes from the separate, richly-authored
 # custom_param_docs input -- never derived from customParams' own minimal
 # {field_name: value} map, and never something the LLM-authored half has
 # to remember to call itself ---
@@ -812,7 +938,7 @@ async def test_custom_param_docs_renders_set_custom_param_docs_call_verbatim(tmp
     result = await _generate(tmp_path, args)
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
-    assert "self.poly.setCustomParamDocs(" in source
+    assert "self.poly.setCustomParamsDoc(" in source
     assert repr(docs) in source
 
 
@@ -821,7 +947,7 @@ async def test_no_custom_params_means_no_set_custom_param_docs_call(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
-    assert "setCustomParamDocs" not in source
+    assert "setCustomParamsDoc" not in source
 
 
 @pytest.mark.asyncio

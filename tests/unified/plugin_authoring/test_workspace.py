@@ -113,6 +113,27 @@ async def test_read_generated_plugin_returns_all_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_read_generated_plugin_returns_main_version_server_entry_install_and_generation_inputs(tmp_path):
+    plugin_dir = tmp_path / "pool_controller"
+    _write_profile(plugin_dir, nodedefs=[{"id": "ND_POOL", "name": "Pool Controller"}])
+    (plugin_dir / "main.py").write_text("# main")
+    (plugin_dir / "version.py").write_text('ud_plugin_version = "1.0.0"\n')
+    (plugin_dir / "server_entry.json").write_text(json.dumps({"name": "PoolController"}))
+    (plugin_dir / "install.sh").write_text("#!/usr/bin/env bash\n")
+    (plugin_dir / "requirements.txt").write_text("udi_interface>=3.0.57\n")
+    (plugin_dir / "generation_inputs.json").write_text(json.dumps({"version": "1.0.0"}))
+
+    result = await workspace.read_generated_plugin(None, {"location": "pool_controller"}, plugin_output_root=str(tmp_path))
+
+    assert result["main_py"] == "# main"
+    assert result["version_py"] == 'ud_plugin_version = "1.0.0"\n'
+    assert result["server_entry"] == {"name": "PoolController"}
+    assert result["install_sh"] == "#!/usr/bin/env bash\n"
+    assert result["requirements_txt"] == "udi_interface>=3.0.57\n"
+    assert result["generation_inputs"] == {"version": "1.0.0"}
+
+
+@pytest.mark.asyncio
 async def test_read_generated_plugin_missing_optional_files_are_none(tmp_path):
     _write_profile(tmp_path / "bare")
 
@@ -124,6 +145,60 @@ async def test_read_generated_plugin_missing_optional_files_are_none(tmp_path):
     assert result["context"] is None
     assert result["sources"] is None
     assert result["license"] is None
+    assert result["main_py"] is None
+    assert result["version_py"] is None
+    assert result["server_entry"] is None
+    assert result["install_sh"] is None
+    assert result["requirements_txt"] is None
+    assert result["generation_inputs"] is None
+
+
+@pytest.mark.asyncio
+async def test_read_generated_plugin_malformed_server_entry_json_is_none_not_an_error(tmp_path):
+    plugin_dir = tmp_path / "pool_controller"
+    _write_profile(plugin_dir)
+    (plugin_dir / "server_entry.json").write_text("{not valid json")
+
+    result = await workspace.read_generated_plugin(None, {"location": "pool_controller"}, plugin_output_root=str(tmp_path))
+
+    assert "error" not in result
+    assert result["server_entry"] is None
+
+
+@pytest.mark.asyncio
+async def test_read_generated_plugin_files_filter_returns_only_requested_keys(tmp_path):
+    plugin_dir = tmp_path / "pool_controller"
+    _write_profile(plugin_dir)
+    (plugin_dir / "plugin.py").write_text("# the backend")
+    (plugin_dir / "README.md").write_text("# Pool Controller\n")
+
+    result = await workspace.read_generated_plugin(
+        None, {"location": "pool_controller", "files": ["plugin_py"]}, plugin_output_root=str(tmp_path)
+    )
+
+    assert result == {"location": "pool_controller", "plugin_py": "# the backend"}
+
+
+@pytest.mark.asyncio
+async def test_read_generated_plugin_files_filter_rejects_unknown_key(tmp_path):
+    _write_profile(tmp_path / "pool_controller")
+
+    result = await workspace.read_generated_plugin(
+        None, {"location": "pool_controller", "files": ["not_a_real_key"]}, plugin_output_root=str(tmp_path)
+    )
+
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_read_generated_plugin_files_filter_rejects_non_list(tmp_path):
+    _write_profile(tmp_path / "pool_controller")
+
+    result = await workspace.read_generated_plugin(
+        None, {"location": "pool_controller", "files": "plugin_py"}, plugin_output_root=str(tmp_path)
+    )
+
+    assert "error" in result
 
 
 @pytest.mark.asyncio

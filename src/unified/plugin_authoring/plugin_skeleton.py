@@ -54,7 +54,7 @@ def ai_tool_helper_name(tool_name: str) -> str:
 
 
 def render_custom_param_docs_call(custom_param_docs: str | None) -> str | None:
-    """A single ``self.poly.setCustomParamDocs(...)`` call wrapping
+    """A single ``self.poly.setCustomParamsDoc(...)`` call wrapping
     *custom_param_docs* verbatim -- deliberately **not** derived from
     ``server_entry.customParams``' own ``{field_name: value}`` map:
     that map's value is the field's initial/default value (often just
@@ -66,11 +66,11 @@ def render_custom_param_docs_call(custom_param_docs: str | None) -> str | None:
     `generate_plugin_scaffold` input, not a server_entry field (it's a
     runtime call the plugin itself makes, not part of the registration
     payload). Returns ``None`` (no line emitted) when none was given --
-    preserves the ``POLYGLOT_CONFIG.md``-file fallback ``setCustomParamDocs``
+    preserves the ``POLYGLOT_CONFIG.md``-file fallback ``setCustomParamsDoc``
     has when never called at all."""
     if not custom_param_docs:
         return None
-    return f"        self.poly.setCustomParamDocs({custom_param_docs!r})"
+    return f"        self.poly.setCustomParamsDoc({custom_param_docs!r})"
 
 
 def render_init(
@@ -106,17 +106,27 @@ def render_init(
     directories apply on disk at generation time; the ``makedirs`` calls here
     are just a runtime safety net in case either is ever missing.
 
-    When *custom_param_docs* is given, a ``self.poly.setCustomParamDocs(...)``
+    When *custom_param_docs* is given, a ``self.poly.setCustomParamsDoc(...)``
     call (see ``render_custom_param_docs_call``) is emitted right after
     ``persist_dir``/``data_dir`` setup -- see that function for why this is
     its own separately-authored rich-text input, not something derived
-    from ``customParams``' own minimal ``{field_name: value}`` map."""
+    from ``customParams``' own minimal ``{field_name: value}`` map.
+
+    ``self.configDone``/``self.configDoneAlready`` back ``__start``'s
+    wait-for-configDone gate (``render_private_wiring_methods``, below) --
+    nothing is actually configured yet when the real ``START`` event fires
+    (no custom params, no previously-discovered nodes, no OAuth token), so
+    the LLM-authored ``start()`` override must not run until ``CONFIGDONE``
+    has fired, or a timeout gives up."""
     lines = [
         "    def __init__(self, polyglot, primary, address, name):",
         "        super().__init__(polyglot, primary, address, name)",
         "        self.poly = polyglot",
         "        self.persist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"persist\")",
         "        os.makedirs(self.persist_dir, exist_ok=True)",
+        "        # Synchronization for __start()'s wait-for-configDone gate (see __configDoneHandler).",
+        "        self.configDone = threading.Condition()",
+        "        self.configDoneAlready = False",
     ]
     if file_upload:
         lines.extend(
@@ -168,11 +178,32 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
     Each delegates to the matching public override where one exists
     (``__poll`` -> ``shortPoll``/``longPoll``, ``__configHandler`` ->
     ``processConfig``) so the LLM-authored half never has to know
-    ``udi_interface``'s own event names."""
+    ``udi_interface``'s own event names.
+
+    ``__start``/``__configDoneHandler`` additionally enforce the real event
+    order: ``START`` fires before any config/params/OAuth token have
+    arrived, so ``__start`` blocks on ``self.configDone`` until
+    ``__configDoneHandler`` signals it (or a 10s timeout gives up and logs,
+    rather than calling the LLM-authored ``start()`` override too early).
+    For an *authorize* plugin, ``__configDoneHandler`` additionally confirms
+    a real OAuth access token is available first (``self.oauthService.
+    getAccessToken()`` -- raises ``ValueError`` until one has arrived,
+    confirmed against the installed ``udi_interface`` package directly),
+    surfacing a ``Notices['auth']`` banner and leaving ``configDoneAlready``
+    false (so ``__start`` times out rather than hangs) when it isn't ready
+    yet."""
     methods = [
         '''    def __start(self):
         LOGGER.info("%s: start", self.name)
-        self.start()
+        try:
+            if not self.configDoneAlready:
+                with self.configDone:
+                    if not self.configDone.wait(timeout=10):
+                        LOGGER.error("%s: timed out waiting for configDone", self.name)
+                        return
+            self.start()
+        except Exception as ex:
+            LOGGER.error("%s: start failed: %s", self.name, ex)
 ''',
         '''    def __stop(self):
         LOGGER.info("%s: stop", self.name)
@@ -187,16 +218,41 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
         '''    def __configHandler(self, config):
         self.processConfig(config)
 ''',
-        '''    def __configDoneHandler(self):
+    ]
+    if authorize:
+        methods.append(
+            '''    def __configDoneHandler(self):
         LOGGER.info("%s: config done", self.name)
-''',
+        try:
+            self.oauthService.getAccessToken()
+        except ValueError:
+            LOGGER.warning("%s: access token not yet available -- waiting for authentication", self.name)
+            self.poly.Notices["auth"] = "Please authenticate using the Authorize button on this plugin's configuration page."
+            return
+        with self.configDone:
+            self.configDoneAlready = True
+            self.configDone.notifyAll()
+'''
+        )
+    else:
+        methods.append(
+            '''    def __configDoneHandler(self):
+        LOGGER.info("%s: config done", self.name)
+        with self.configDone:
+            self.configDoneAlready = True
+            self.configDone.notifyAll()
+'''
+        )
+    methods.append(
         '''    def __addNodeDoneHandler(self, data):
         LOGGER.debug("%s: add node done: %s", self.name, data)
-''',
+'''
+    )
+    methods.append(
         '''    def __removeNodeDoneHandler(self, data):
         LOGGER.debug("%s: remove node done: %s", self.name, data)
-''',
-    ]
+'''
+    )
     if authorize:
         methods.append(
             '''    def __customNSHandler(self, key, data):
@@ -218,8 +274,8 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
 '''
         )
     methods.append(
-        '''    def __customDataHandler(self, key, data):
-        LOGGER.debug("%s: custom data '%s': %s", self.name, key, data)
+        '''    def __customDataHandler(self, data):
+        LOGGER.debug("%s: custom data: %s", self.name, data)
 '''
     )
     methods.append(
@@ -273,7 +329,20 @@ if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
     # python3 is typically a symlink to the exact same real interpreter
     # binary as the system one, so comparing resolved paths would never
     # see a difference and this would silently never fire.
-    os.execv(_VENV_PYTHON, [_VENV_PYTHON] + sys.argv)
+    #
+    # argv[0] is the literal "python3" here, NOT _VENV_PYTHON -- confirmed
+    # against a live host: rc.subr's check_pidfile()/_find_processes()
+    # (/etc/rc.subr) matches the running process's own argv[0] against the
+    # service's procname (the real system python3's path, from a live
+    # /usr/local/etc/rc.d/plugin_N's udx_command), accepting either that
+    # exact path or its bare basename ("python3") -- never an unrelated
+    # full path like this venv's own. Passing _VENV_PYTHON as argv[0]
+    # breaks that match even though the PID is exactly right and the
+    # process is genuinely alive, which makes rc.subr conclude the service
+    # isn't running and spawn a duplicate on every subsequent start,
+    # orphaning this one. The actual interpreter binary that runs is still
+    # _VENV_PYTHON (os.execv's own first argument, unaffected by argv[0]).
+    os.execv(_VENV_PYTHON, ["python3"] + sys.argv)
 
 import json
 

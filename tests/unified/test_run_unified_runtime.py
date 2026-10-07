@@ -24,16 +24,20 @@ def test_two_contexts_do_not_share_state():
     a = EisyUIContext()
     b = EisyUIContext()
 
-    a.process_message(json.dumps({"type": "context", "context": {"user_id": "a@example.com"}}))
+    a.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
 
     assert a.get_user_id() == "a@example.com"
     assert b.get_user_id() is None
     assert b.get_context() is None
+    assert b.get_is_developer() is None
+    assert b.get_client_id() is None
 
 
 def test_user_id_persists_when_a_later_context_omits_it():
     ctx = EisyUIContext()
-    ctx.process_message(json.dumps({"type": "context", "context": {"user_id": "a@example.com", "screen": "home"}}))
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}, "screen": "home"}})
+    )
     ctx.process_message(json.dumps({"type": "context", "context": {"screen": "devices"}}))
 
     assert ctx.get_user_id() == "a@example.com"  # kept, not cleared
@@ -43,11 +47,44 @@ def test_user_id_persists_when_a_later_context_omits_it():
 def test_context_message_returns_none_and_message_returns_stripped_text():
     ctx = EisyUIContext()
 
-    context_result = ctx.process_message(json.dumps({"type": "context", "context": {"user_id": "a@example.com"}}))
+    context_result = ctx.process_message(
+        json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}})
+    )
     message_result = ctx.process_message(json.dumps({"type": "message", "message": "  turn on the light  "}))
 
     assert context_result is None
     assert message_result == "turn on the light"
+
+
+def test_is_developer_read_from_nested_user_object():
+    ctx = EisyUIContext()
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"user": {"username": "a@example.com", "isDeveloper": True}}})
+    )
+
+    assert ctx.get_is_developer() is True
+
+
+def test_is_developer_false_is_not_discarded_in_favor_of_a_stale_true():
+    # Regression: isDeveloper is a real boolean, so a later False must win
+    # over a prior True -- a truthy `or` fallback would wrongly keep True.
+    ctx = EisyUIContext()
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"user": {"username": "a@example.com", "isDeveloper": True}}})
+    )
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"user": {"username": "a@example.com", "isDeveloper": False}}})
+    )
+
+    assert ctx.get_is_developer() is False
+
+
+def test_client_id_persists_when_a_later_context_omits_it():
+    ctx = EisyUIContext()
+    ctx.process_message(json.dumps({"type": "context", "context": {"clientId": "c-1"}}))
+    ctx.process_message(json.dumps({"type": "context", "context": {"screen": "devices"}}))
+
+    assert ctx.get_client_id() == "c-1"  # kept, not cleared
 
 
 class _FakeRuntime:
@@ -65,7 +102,7 @@ class _FakeRuntime:
 async def test_run_once_prefers_user_id_over_the_fallback_session_id():
     runtime = _FakeRuntime()
     ctx = EisyUIContext()
-    ctx.process_message(json.dumps({"type": "context", "context": {"user_id": "a@example.com"}}))
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
 
     await _run_once(runtime, "hello", ctx, session_id="fallback-uuid")
 
@@ -98,7 +135,10 @@ async def test_run_once_does_not_dispatch_a_context_only_message():
     ctx = EisyUIContext()
 
     await _run_once(
-        runtime, json.dumps({"type": "context", "context": {"user_id": "a@example.com"}}), ctx, session_id="s1"
+        runtime,
+        json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}),
+        ctx,
+        session_id="s1",
     )
 
     assert runtime.calls == []  # context alone never reaches handle_query
@@ -179,7 +219,9 @@ async def test_make_dispatch_binds_live_eisy_ui_context_get_user_id(tmp_path):
     assert first["configured"] is True
 
     # Mutate the same ctx instance after the dispatch bundle was built.
-    ctx.process_message(json.dumps({"type": "context", "context": {"user_id": "someone-else@example.com"}}))
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"user": {"username": "someone-else@example.com"}}})
+    )
 
     second = await dispatch("configure_developer", {"email": "dev@example.com", "name": "Dev"})
     assert "error" in second

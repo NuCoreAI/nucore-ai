@@ -10,6 +10,19 @@ on an actual mismatch. When no authenticated identity is available at all
 (e.g. the CLI/REPL path, which has no context-message mechanism to ever
 populate one), commissioning is still allowed: the check only ever blocks
 a confirmed mismatch, never the absence of an identity to compare against.
+
+Also ``get_developer_config`` -- the read-only counterpart a caller should
+check *first*, every time, before ever calling ``configure_developer``.
+Commissioning is meant to happen once per ``plugin_output_root``, for every
+plugin generated under it, not once per plugin: without a cheap way to see
+what's already on file, a caller (human or model) that can't recall whether
+an earlier, separate conversation already commissioned this workspace has
+no option but to re-ask/re-call ``configure_developer`` defensively on every
+new plugin -- silently clobbering a correct, already-recorded identity with
+a different (often less specific, e.g. a stand-in company name instead of
+the real one on file) one along the way. This function removes the need for
+that guess: a plain read, so ``configure_developer`` is reserved for an
+actual first-time setup or a real, explicit identity change.
 """
 
 from __future__ import annotations
@@ -53,4 +66,17 @@ async def configure_developer(
     except ValueError as exc:
         return {"error": str(exc)}
 
+    return {"configured": True, **config}
+
+
+async def get_developer_config(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, plugin_output_root: str
+) -> Any:
+    """Read-only: the ``{email, name, github_url?, default_run_as?}`` already
+    on file for this *plugin_output_root*, or ``{"configured": False}`` if
+    none has been commissioned yet. Never writes anything -- call this
+    before ``configure_developer``, not instead of checking it."""
+    config = developer_config.load_developer_config(plugin_output_root)
+    if config is None:
+        return {"configured": False}
     return {"configured": True, **config}

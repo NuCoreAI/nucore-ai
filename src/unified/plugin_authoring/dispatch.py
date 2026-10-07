@@ -28,7 +28,17 @@ from utils import get_logger
 from ..dispatch import ToolHandler
 from ..handlers import plugin_management, shell
 from .evidence_ledger import EvidenceLedger
-from .handlers import dev_venv, device_detection, discovery, install, profile_authoring, scaffold, workspace
+from .handlers import (
+    boilerplate,
+    dev_venv,
+    device_detection,
+    discovery,
+    install,
+    profile_authoring,
+    scaffold,
+    vscode_debug,
+    workspace,
+)
 from .handlers import developer_config as developer_config_handlers
 
 logger = get_logger(__name__)
@@ -36,6 +46,7 @@ logger = get_logger(__name__)
 TOOL_HANDLERS: dict[str, ToolHandler] = {
     "validate_profile": profile_authoring.validate_profile,
     "lookup_uom": profile_authoring.lookup_uom,
+    "lookup_property_id": profile_authoring.lookup_property_id,
     "configure_plugin": plugin_management.configure_plugin,
     "list_installed_plugins": plugin_management.list_installed_plugins,
     "plugin_ops": plugin_management.plugin_ops,
@@ -76,6 +87,10 @@ def build_tool_handlers(
         plugin_output_root=plugin_output_root,
         get_user_id=get_user_id,
     )
+    handlers["get_developer_config"] = functools.partial(
+        developer_config_handlers.get_developer_config,
+        plugin_output_root=plugin_output_root,
+    )
     handlers["search_store_plugins"] = functools.partial(discovery.search_store_plugins, ledger=ledger)
     handlers["search_github_plugins"] = functools.partial(
         discovery.search_github_plugins, ledger=ledger, secret_values=secret_values
@@ -114,6 +129,12 @@ def build_tool_handlers(
         install.delete_registered_plugin, plugin_output_root=plugin_output_root
     )
     handlers["setup_dev_venv"] = functools.partial(dev_venv.setup_dev_venv, plugin_output_root=plugin_output_root)
+    handlers["setup_vscode_debug_config"] = functools.partial(
+        vscode_debug.setup_vscode_debug_config, plugin_output_root=plugin_output_root
+    )
+    handlers["regenerate_plugin_boilerplate"] = functools.partial(
+        boilerplate.regenerate_plugin_boilerplate, plugin_output_root=plugin_output_root
+    )
     return handlers
 
 
