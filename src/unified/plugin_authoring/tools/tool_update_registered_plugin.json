@@ -1,0 +1,14 @@
+{
+  "name": "update_registered_plugin",
+  "description": "Resolves install_generated_plugin's 'already registered' conflict by pushing this plugin's current server_entry.json to the host in place, via the update (not create) endpoint -- never calls register_local_plugin, so no duplicate entry is ever created. Requires a locally-known nsid (set by a prior successful install_generated_plugin call); fails if there isn't one. The host also syncs this update to the installed plugin record automatically if the plugin is currently installed, but does not itself restart the running process -- follow with plugin_ops(operation='restart') if the change needs to take effect immediately. Always confirm with the customer before calling this -- it makes a real change on the hub.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The 'location' a generate_plugin_scaffold/list_generated_plugins call returned, identifying which generated plugin to update."
+      }
+    }
+  }
+}

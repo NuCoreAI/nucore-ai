@@ -1,6 +1,6 @@
 {
   "name": "generate_plugin_scaffold",
-  "description": "Generate (or regenerate) a complete local plugin on disk: profile.json, plugin.py (the udi_interface Controller, with wiring methods always tool-generated and override-method bodies supplied here), any extra node-class files, main.py, version.py, server_entry.json (the exact local-install registration payload), README.md, tests, and an append-only context.md iteration note. Refuses if no evidence has been gathered this session (call search_store_plugins/search_github_plugins/search_web/fetch_reference first), if the profile fails validate_profile's checks, if override_bodies names an unknown method, or if anything generated appears to contain a real secret value -- OAuth client_id/client_secret are always written as a fixed placeholder, filled in for real after install via configure_plugin(key='oauth'). If any target file already exists, the first call returns the conflict list and writes nothing; call again with confirm_overwrite: true once the customer has agreed to overwrite. Follow with install_generated_plugin to actually register/install/start it.",
+  "description": "Generate (or regenerate) a complete local plugin on disk: profile.json, plugin.py (the udi_interface Controller, with wiring methods always tool-generated and override-method bodies supplied here), any extra node-class files, main.py, version.py, server_entry.json (the exact local-install registration payload), requirements.txt (always includes udi_interface, plus any extra_requirements), install.sh (the executable script server_entry.json's 'install' field names by filename -- not a literal command), README.md, LICENSE.md (third-party attribution for every licensed source referenced, plus a plain MIT grant for this plugin's own code), tests, an append-only context.md iteration note, and sources.md (a deduped record of every evidence source gathered for this plugin, accumulated across sessions). Refuses if no developer has been commissioned yet for this workspace (call configure_developer first), if no evidence has been gathered this session (call search_store_plugins/search_github_plugins/search_web/fetch_reference first), if the profile fails validate_profile's checks, if override_bodies names an unknown method, or if anything generated appears to contain a real secret value -- OAuth client_id/client_secret are always written as a fixed placeholder, filled in for real after install via configure_plugin(key='oauth'). If any target file already exists, the first call returns the conflict list and writes nothing; call again with confirm_overwrite: true once the customer has agreed to overwrite. Follow with install_generated_plugin to actually register/install/start it.",
   "input_schema": {
     "type": "object",
     "required": ["location", "profile", "server_entry", "readme_body", "iteration_note"],
@@ -44,11 +44,11 @@
           "desc": {"type": "string"},
           "type": {"type": "string", "enum": ["python3", "node"], "description": "Defaults to 'python3'."},
           "executable": {"type": "string", "description": "Defaults to 'main.py'."},
-          "runAs": {"type": "string", "description": "OS account the plugin process runs as. Defaults to 'eisyai'."},
+          "runAs": {"type": "string", "description": "OS account the plugin process runs as. Defaults to the commissioned developer's configure_developer(default_run_as=...) value, or 'admin' if that wasn't set either."},
           "customParams": {
-            "type": "array",
-            "description": "The developer-defined custom-config schema (field names/descriptions/types) -- NOT real values. Real values are filled in afterward by the customer via configure_plugin.",
-            "items": {"type": "object"}
+            "type": "object",
+            "description": "A flat {field_name: value} object -- one entry per customer-facing config field (API keys, hosts, intervals). 'value' is each field's seeded initial value, commonly an empty string ('') or a minimal placeholder-like hint -- NOT documentation and not a real value (the customer fills in the real value afterward via configure_plugin). This is PG3's 'customparams' shape exactly -- not the richer typed-list shape ('customtypedparams') with per-field type/isRequired/defaultValue, which this tool does not generate. For the actual user-facing explanation of these fields, use the separate top-level custom_param_docs input, not this map.",
+            "additionalProperties": {"type": "string"}
           },
           "authorize": {"type": "boolean", "description": "True if this plugin needs OAuth against the target API."},
           "oauth": {
@@ -70,11 +70,21 @@
             "description": "Each declared AI tool: {name, description, params?}. Every entry needs a matching '_<name>' helper in override_bodies.",
             "items": {"type": "object", "required": ["name", "description"]}
           },
+          "nsdata": {
+            "type": "object",
+            "description": "A one-time, developer-authored seed value handed to the plugin before it has ever run. Rarely needed -- not something a customer edits (that's customParams), not a secret (that's oauth). Omit unless a spec specifically calls for pre-seeding a value the plugin can't derive or ask for itself."
+          },
           "discover": {"type": "boolean"},
           "fileUpload": {"type": "boolean"},
-          "isyAccess": {"type": "boolean"},
+          "isyAccess": {"type": "boolean", "description": "True if this plugin needs any communication with eisy/ISY itself -- nodes, programs, commands, properties, etc. Defaults to false."},
+          "requireEisyui": {"type": "boolean", "description": "True only if this plugin is meaningless outside eisyUI (no standalone configuration path at all). The developer must know this about their own plugin. Defaults to false."},
           "shortPoll": {"type": "integer"},
           "longPoll": {"type": "integer"},
+          "extra_requirements": {
+            "type": "array",
+            "description": "Extra pip requirements (e.g. 'requests>=2.31.0') this plugin's generated code needs beyond udi_interface, written to requirements.txt. install.sh (an executable script running 'pip3 install -r requirements.txt', named by server_entry.json's 'install' field) is always generated automatically.",
+            "items": {"type": "string"}
+          },
           "devd": {
             "type": "object",
             "description": "Only for plugins needing direct serial/USB hardware access. {vendor_id, product_id, name} (vendor_id/product_id as 4-hex-digit strings, e.g. from detect_usb_device) renders the devd.conf hardware-attach rule text. Omit entirely for API/cloud-service-backed plugins (the common case).",
@@ -88,7 +98,11 @@
       },
       "readme_body": {
         "type": "string",
-        "description": "The README's main body text. A 'Sources' section citing every evidence source gathered this session is appended automatically."
+        "description": "The README's main body text. If any source ever gathered for this plugin (this session or an earlier one, via sources.md) was flagged with a non-permissive license (license_ok: false), a 'License Notice' section listing just those sources is appended automatically; otherwise nothing sources-related is added here. The complete source history lives separately in sources.md, not README.md."
+      },
+      "custom_param_docs": {
+        "type": "string",
+        "description": "Rich, user-friendly markdown/html/text documentation for the customer-facing config fields declared in server_entry.customParams -- rendered verbatim into a self.poly.setCustomParamDocs(...) call PG3 shows on the plugin's configuration page. Required whenever server_entry.customParams is non-empty (write real, helpful explanations -- e.g. where to find an API key, what format an IP address should be in -- never just the minimal values from customParams itself). Omit when server_entry.customParams is empty; a plugin with no customParams falls back to any POLYGLOT_CONFIG.md file in its own directory instead."
       },
       "tests": {
         "type": "object",

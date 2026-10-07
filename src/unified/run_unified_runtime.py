@@ -495,7 +495,7 @@ async def _run_once(
 
     return
 
-async def _run_loop(runtime: UnifiedRuntime) -> None:
+async def _run_loop(runtime: UnifiedRuntime, eisy_ui_context: "EisyUIContext") -> None:
     """Run an interactive REPL that repeatedly prompts for queries.
 
     Reads lines from stdin and dispatches each to :func:`_run_once`.  Exits
@@ -507,10 +507,14 @@ async def _run_loop(runtime: UnifiedRuntime) -> None:
 
     Args:
         runtime: The active :class:`~UnifiedRuntime` instance.
+        eisy_ui_context: The same instance already passed to this process's
+            ``dispatch_factory`` call in ``main`` -- REPL mode has no
+            context-message mechanism to ever populate its ``user_id``, but
+            it's still the one shared instance, not a second, independent
+            one.
     """
     print("Standalone Unified Runtime")
     print("Type 'quit' to exit")
-    eisy_ui_context = EisyUIContext()
     while True:
         try:
             query = input("\n> ").strip()
@@ -731,10 +735,16 @@ def _resolve_tool_set(
         tool_spec_paths.append(plugin_authoring.TOOLS_DIR / "tool_search_web.json")
     tool_spec_paths.sort()
 
-    def _make_dispatch() -> _PluginAuthoringDispatch:
+    def _make_dispatch(eisy_ui_context: "EisyUIContext | None" = None) -> _PluginAuthoringDispatch:
         # plugin_output_root is consumed by list_generated_plugins/
         # read_generated_plugin/generate_plugin_scaffold/install_generated_plugin
         # (design/developers/impl_plan.md Phase 3, plugin_authoring_p4_impl.md).
+        # eisy_ui_context, when given, is this connection's own live
+        # EisyUIContext -- its bound get_user_id method (not a snapshot) is
+        # threaded into configure_developer/generate_plugin_scaffold so they
+        # always see this connection's current authenticated identity, even
+        # though it's typically still unknown at the moment this factory runs
+        # (no context message has necessarily arrived yet).
         ledger = plugin_authoring.EvidenceLedger(web_search_available=web_search_enabled or native_claude_search)
         tool_handlers = plugin_authoring.dispatch.build_tool_handlers(
             ledger=ledger,
@@ -742,6 +752,7 @@ def _resolve_tool_set(
             search_engine_api_key=search_engine_api_key,
             secret_values=secret_values or [],
             plugin_output_root=plugin_output_root,
+            get_user_id=(eisy_ui_context or EisyUIContext()).get_user_id,
         )
         dispatch = functools.partial(
             plugin_authoring.dispatch.execute_tool, nucore_interface=nucore_interface, tool_handlers=tool_handlers
@@ -858,7 +869,9 @@ async def _run_websocket_server(
         # docstring and _resolve_tool_set's. dispatch_bundle carries
         # extra_tools/on_raw_response alongside dispatch for plugin_authoring's
         # Claude-native web search path; None for every other tool set.
-        dispatch_bundle = dispatch_factory() if dispatch_factory is not None else None
+        # Pass this connection's own eisy_ui_context (constructed just above)
+        # so plugin_authoring's tools see its live, current user_id.
+        dispatch_bundle = dispatch_factory(eisy_ui_context) if dispatch_factory is not None else None
         runtime = UnifiedRuntime(
             nucore_interface=nucore_interface,
             llm_client=llm_adapter,
@@ -1069,7 +1082,12 @@ def main(args:Any=None, poly=None) -> None:
             nucore_interface.shutdown()
         return
 
-    dispatch_bundle = dispatch_factory() if dispatch_factory is not None else None
+    # Built once, before the dispatch factory call, and reused in both
+    # branches below -- plugin_authoring's tools (configure_developer,
+    # generate_plugin_scaffold) need the exact same instance the dispatch
+    # factory bound get_user_id to, not a second, independent one.
+    eisy_ui_context = EisyUIContext()
+    dispatch_bundle = dispatch_factory(eisy_ui_context) if dispatch_factory is not None else None
     runtime = UnifiedRuntime(
         nucore_interface=nucore_interface,
         llm_client=llm_adapter,
@@ -1089,7 +1107,7 @@ def main(args:Any=None, poly=None) -> None:
         if runtime.stream_state is not None:
             runtime.stream_state["chunks"] = 0
         try:
-            asyncio.run(_run_once(runtime, args.query, EisyUIContext()))
+            asyncio.run(_run_once(runtime, args.query, eisy_ui_context))
         except KeyboardInterrupt:
             logger.warning("\nInterrupted. Exiting.")
         finally:
@@ -1098,7 +1116,7 @@ def main(args:Any=None, poly=None) -> None:
 
     # Interactive REPL mode.
     try:
-        asyncio.run(_run_loop(runtime))
+        asyncio.run(_run_loop(runtime, eisy_ui_context))
     except KeyboardInterrupt:
         logger.warning("\nInterrupted. Exiting.")
     finally:

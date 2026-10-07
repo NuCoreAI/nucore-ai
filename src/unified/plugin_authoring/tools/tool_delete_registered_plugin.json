@@ -1,0 +1,14 @@
+{
+  "name": "delete_registered_plugin",
+  "description": "Resolves install_generated_plugin's 'already registered' conflict the other way: deletes this plugin's local dev store registration entirely, then clears the locally-known nsid so the next install_generated_plugin call registers it fresh. Does not uninstall the plugin if it's currently installed -- call uninstall_installed_plugin for that, separately, if needed. Requires a locally-known nsid; fails if there isn't one. This is a real, permanent change on the hub -- always confirm with the customer first.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The 'location' a generate_plugin_scaffold/list_generated_plugins call returned, identifying which generated plugin's registration to delete."
+      }
+    }
+  }
+}

@@ -50,8 +50,11 @@ available; generate a scaffold only once real evidence exists; confirm with the 
 overwriting existing files or before installing anything on the real hub. `generate_plugin_scaffold`
 and `install_generated_plugin` are deliberately separate tools -- generation only ever writes
 local files, nothing touches the hub until install is called and confirmed. Any persistent data a
-generated plugin needs beyond `customParams`/`customData` belongs under its own `data/`
-subdirectory (`self.data_dir`, always created) -- never loose elsewhere in the plugin's directory.
+generated plugin needs beyond `customParams`/`customData` belongs under its own `persist/`
+subdirectory (`self.persist_dir`, always created) -- never loose elsewhere in the plugin's
+directory. `data/` (`self.data_dir`) is a separate, narrower directory created only when
+`server_entry.fileUpload` is true -- it's what the host's File Manager API/UI operate on, not a
+general persistence location.
 
 ### Native Claude web search vs. the Brave/Tavily fallback
 
@@ -73,12 +76,12 @@ exact precedence.
 | `search_result_enrichment.py` | Shared GitHub-domain classifier: any URL from `search_web`, native web search, or a user-supplied link gets the same follow-up license lookup `search_github_plugins` gets for free from its own search API, and is recorded onto the ledger identically regardless of which tool found it. |
 | `secret_guard.py` | Shared "does this text contain a configured secret value" check, used by the discovery tools (before an outbound call) and `generate_plugin_scaffold` (before a write) to refuse rather than silently redact. Also defines the fixed OAuth placeholder string. |
 | `path_confinement.py` | Shared "resolve and require this path stays under the allowed root" check used by `generate_plugin_scaffold`, `read_generated_plugin`, and `install_generated_plugin` -- rejects traversal, absolute escapes, and symlinked parents/targets. |
-| `plugin_skeleton.py` | Renders the deterministic, regenerated-every-time half of a generated plugin's `plugin.py` (the `udi_interface` wiring methods, `main.py`, `version.py`) that `handlers/scaffold.py` splices LLM-authored override bodies into -- including always setting `self.data_dir`, for anything an override body needs to persist beyond `customParams`/`customData`. |
+| `plugin_skeleton.py` | Renders the deterministic, regenerated-every-time half of a generated plugin's `plugin.py` (the `udi_interface` wiring methods, `main.py`, `version.py`) that `handlers/scaffold.py` splices LLM-authored override bodies into -- including always setting `self.persist_dir` (and `self.data_dir` too, only when `fileUpload` is true), for anything an override body needs to persist beyond `customParams`/`customData`. |
 | `handlers/profile_authoring.py` | `validate_profile`/`lookup_uom` -- local, hub-free authoring aids. |
 | `handlers/discovery.py` | `search_store_plugins`, `search_github_plugins`, `search_web`, `fetch_reference` -- the customer-facing research tools. |
 | `handlers/workspace.py` | `list_generated_plugins`/`read_generated_plugin` -- local-disk-only, always registered (no key/engine gating), so a returning customer's prior work is discoverable. |
-| `handlers/scaffold.py` | `generate_plugin_scaffold` -- the real artifact generator (profile, plugin code, tests, README, `server_entry.json`, an empty `data/` directory), with its guard sequence (evidence required, profile validation, override-method allowlist, `ast.parse` round-trip, secret scan, overwrite confirmation). |
-| `handlers/install.py` | `install_generated_plugin` -- register -> install -> start on the real hub, each stage's failure reported distinctly. |
+| `handlers/scaffold.py` | `generate_plugin_scaffold` -- the real artifact generator (profile, plugin code, tests, README, `server_entry.json`, an empty `persist/` directory and, only when `fileUpload` is true, an empty `data/` directory), with its guard sequence (evidence required, profile validation, override-method allowlist, `ast.parse` round-trip, secret scan, overwrite confirmation). |
+| `handlers/install.py` | `install_generated_plugin` -- register -> install -> start on the real hub, each stage's failure reported distinctly. Persists the host-assigned `nsid` back into `server_entry.json` after a successful registration, and checks it against the host's local-store/installed-plugins lists on every later call, refusing with a `"conflict"` response rather than silently re-registering/re-installing. `update_registered_plugin`/`delete_registered_plugin` resolve a reported conflict's registered half. |
 | `handlers/device_detection.py` | `detect_usb_device` -- diffs two shell-command snapshots to extract a USB device's vendor/product id. |
 | `prompt/prompt_builder.py`, `prompt/system_prompt.md` | Builds the plugin_authoring system prompt. Deliberately not `unified.prompt_builder` -- that one assembles customer-specific `DEVICE DATABASE`/`ROUTINES DATABASE`/preference sections that don't belong here. |
 | `tools/` | One `tool_<name>.json` spec per tool authored in this package, auto-discovered via a `tool_*.json` glob (minus `tool_search_web.json` when no engine/key is configured) plus the reused plugin-lifecycle specs (see `run_unified_runtime.py`'s `_resolve_tool_set`). |
@@ -95,6 +98,7 @@ not reimplemented, so the tool sets never drift on what they do):
 | `plugin_ops` | Starts/stops/restarts an installed plugin's own service. |
 | `get_plugin_capabilities` / `call_plugin` | Inspect and exercise the tools an AI-capable plugin itself declares. |
 | `run_shell_command` | Direct shell access, reused for `detect_usb_device`'s device-enumeration commands (and general diagnostics). |
+| `uninstall_installed_plugin` | Frees an installed plugin's slot entirely (unlike `plugin_ops`'s "stop", which keeps it) -- resolves `install_generated_plugin`'s "already installed" conflict. Not in the customer tool set, same boundary as `delete_plugin` (a real delete stays developer-only), but unlike `delete_plugin` this one actually deletes. |
 
 Customer-facing discovery/generation tools (authored in this package -- see `handlers/` above for
 which module each lives in):
@@ -108,7 +112,9 @@ which module each lives in):
 | `list_generated_plugins` | Lists everything already generated under `--plugin-output-root` for this installation, most-recently-worked-on first -- always registered, local-disk-only. |
 | `read_generated_plugin` | Loads one previously-generated plugin's files back into context before discussing/modifying it. |
 | `generate_plugin_scaffold` | Writes a complete local plugin (profile, code, tests, README, `server_entry.json`) once real evidence has been gathered; refuses and writes nothing otherwise, or on an unconfirmed overwrite. |
-| `install_generated_plugin` | Registers, installs, and starts an already-generated plugin on the real hub -- the one tool in this flow that isn't purely local; always confirm with the customer first. |
+| `install_generated_plugin` | Registers, installs, and starts an already-generated plugin on the real hub -- the one tool in this flow that isn't purely local; always confirm with the customer first. Refuses with a `"conflict"` response if this plugin's `nsid` is already registered and/or installed, rather than silently duplicating/re-installing. |
+| `update_registered_plugin` | Resolves a reported conflict: pushes the current `server_entry.json` to the host in place (update, not create); also syncs to the installed record automatically if installed. |
+| `delete_registered_plugin` | Resolves a reported conflict the other way: deletes the registration entirely and clears the locally-known `nsid`, so the next `install_generated_plugin` call registers fresh. |
 | `detect_usb_device` | Diffs a before/after shell-command snapshot pair to extract a plugged-in device's vendor/product id, for plugins needing direct hardware access. |
 
 Developer-authoring tools (authored in this package):

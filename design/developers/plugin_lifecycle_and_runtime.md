@@ -90,6 +90,58 @@ files — same eventual effect from IoX's point of view). See
 step-by-step authoring recipe. This is entirely between the plugin and PG3/IoX; nucore-ai is not
 involved and does not see this JSON directly.
 
+**Stage 2a — Plugin's persistent data & config model (the `Custom` class) — parallel to, not
+part of, the device model.** Separately from the NodeDef/Editor/LinkDef set (Stage 2), a plugin
+backend typically also establishes what it needs to persist across restarts and what
+configuration surface it shows the installer. `udi_interface.Custom` is a dict-like container,
+persisted in PG3's own NS-store DB and round-tripped over MQTT `custom`/`getAll` messages — never
+through IoX's profile catalog, so none of this touches Stage 3 below. A plugin instantiates one
+`Custom` per named key it cares about; full field-level reference:
+[Plugin APIs → "What each `custom` key is for"](plugin_apis.md#what-each-custom-key-is-for).
+
+| Key | What it's for | Who sets it, when |
+|---|---|---|
+| `customparams` | Flat config fields shown in the PG3 UI (API keys, hosts, intervals). | Author defines the *schema* (field names) at generation time; customer fills *values* later via `configure_plugin`; plugin reads live values via the `CUSTOMPARAMS` event. |
+| `customtypedparams` / `customtypeddata` | A typed/structured config schema (lists, nested objects, typed fields) for config `customparams`' flat key/value can't express, plus the matching customer-entered values. | Plugin backend defines the schema once at startup; PG3 renders the UI from it and sends values back via `CUSTOMTYPEDDATA` on every edit. |
+| `customdata` | The plugin's own persisted state — anything it computed/cached that must survive a restart. | Plugin backend reads/writes it directly, any time, via its own `Custom('customdata')`. |
+| `nsdata` | A second, developer-defined bucket, seeded from *outside* the plugin (at registration time, via `server_entry.json`'s `nsdata` field) for a starting value the plugin should have before it has even run once. | Authoring/registration step writes it once; plugin reads it back the same generic way as `customdata` (no dedicated event — arrives via the catch-all custom-key path, same as `oauth`). |
+| `notices` | Transient installer-facing banners (e.g. "API key invalid"), not config, not state. | Plugin backend adds/clears entries via `Interface.Notices` as conditions change: `polyglot.Notices['config'] = "please input your IP"` surfaces a banner requesting missing info; `polyglot.Notices.clear()` clears all notices at once. Full pattern: [Plugin APIs → "What each `custom` key is for"](plugin_apis.md#what-each-custom-key-is-for). |
+
+**Documenting the `customparams` config surface.** Separately from the schema itself, a plugin
+calls `polyglot.setCustomParamDocs(doc)` to supply the markdown/html/text help PG3 shows on the
+custom-parameters configuration page. Called with an empty string, or never called at all, PG3
+falls back to a `POLYGLOT_CONFIG.md` file in the plugin's own directory, if one exists. This is
+deliberately a separate, richly-authored input from `customparams`' own `{field_name: value}` map
+-- that map's `value` is each field's seeded *initial* value (commonly `""`), never documentation.
+A plugin built via `generate_plugin_scaffold` passes its own `custom_param_docs` input straight
+into this call -- required whenever `server_entry.customParams` is non-empty, authored as real,
+user-friendly prose, not derived from `customParams`' minimal values.
+
+**Filesystem-level persistence — a separate mechanism from the `Custom` class above.** The
+`Custom` class above is NS-store-DB-backed and MQTT round-tripped; a plugin also gets two fixed
+directories on local disk, both included in the host's plugin backup, but for different purposes:
+`persist/` is always available and is where anything else the plugin needs to survive a restart
+belongs (local caches, session tokens, a small on-disk database); `data/` exists only when the
+plugin's `server_entry` declares `fileUpload: true` — it's the directory the host's File Manager
+API ([Plugin APIs → File Manager](plugin_apis.md#file-manager)) and the customer-facing upload UI
+operate on, not a general persistence location. Don't write ordinary runtime state into `data/`
+just because it happens to exist — use `persist/` for that even when `fileUpload` is also true.
+
+**Other plugin → host/mobile notification APIs** (unrelated to the `Custom` class above):
+`polyglot.udm_alert(title, body)` pushes a notification to UD Mobile — for an event a customer
+should be alerted to outside the app UI (e.g. a plugin detecting a critical condition).
+
+**What `plugin_authoring` actually generates today**: only `customparams` (the schema half — see
+[Design decisions](plugin_authoring_design.md)) and `oauth`/`devd` placeholders are wired into
+`generate_plugin_scaffold`'s `server_entry.json`. The generated skeleton subscribes to
+`CUSTOMDATA` but its handler only logs — it doesn't read or write anything. `customtypedparams`/
+`customtypeddata`/`notices`/`nsdata` are real, SDK-level, PG3-rendered mechanisms, but nothing in
+this tool set generates or seeds them yet — hand-write them into the generated `plugin.py` when a
+spec genuinely calls for richer config or cross-restart state. Don't reach for `nsdata` as a
+destination for anything a customer edits or anything secret — that's `customparams`'/
+`customtypedparams`'/`oauth`'s job; `nsdata` is for a one-time developer-authored seed value, not
+an editable setting.
+
 **Stage 3 — IoX ingests the profile into its catalog.** PG3/IoX folds the submitted
 `{nodedefs, editors, linkdefs}` into the hub's overall profile catalog under `family = "10"`
 (`DEVICE_FAMILY_PLUGIN`, confirmed at `src/iox/iox_definitions.py:78,86`) and the **instance

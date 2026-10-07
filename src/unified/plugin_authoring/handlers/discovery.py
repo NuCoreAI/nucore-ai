@@ -37,11 +37,11 @@ REQUEST_TIMEOUT = 15.0
 
 # Bounded, named constants -- not buried magic numbers. Proposed defaults;
 # easy to tune once real usage shows whether they're too tight or too loose.
-MAX_GITHUB_QUERIES = 3
+MAX_GITHUB_QUERIES = 10 
 GITHUB_RESULTS_PER_QUERY = 5
-MAX_WEB_SEARCH_QUERIES = 3
+MAX_WEB_SEARCH_QUERIES = 10 
 WEB_SEARCH_RESULTS_PER_QUERY = 5
-MAX_FETCHES = 5
+MAX_FETCHES = 20 
 FETCH_BODY_CHAR_CAP = 50_000
 
 # Permissive license allowlist (design/developers/impl_plan.md: "MIT,

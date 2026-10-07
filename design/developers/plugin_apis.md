@@ -134,6 +134,36 @@ Sets a custom record value. Body is stored as JSON.
 
 ---
 
+### What each `custom` key is for
+
+These keys are PG3/`udi_interface`'s `Custom` class — a dict-like container persisted in the
+NS store DB, one instance per key, round-tripped over MQTT (`custom`/`getAll` messages), never
+through the profile catalog. Picking the right one matters because each has a different UI
+behavior, writer, and lifecycle:
+
+| Key | Shape | Purpose | Who writes it, when |
+|---|---|---|---|
+| `customparams` | `{name: value}` | Flat config fields the installer fills in via the PG3 UI (API keys, hosts, polling intervals). Can default from `server.json`. | Plugin author defines the *schema* (field names) at creation; customer fills *values* via `configure_plugin`; plugin reads live values via the `CUSTOMPARAMS` event. |
+| `customtypedparams` | `[{name, title, type?, defaultValue?, desc?, isRequired?, isList?, params?}]` | A schema for config `customparams`' flat key/value can't express — typed (`STRING`/`NUMBER`/`BOOLEAN`) fields, lists, nested objects. | Plugin backend defines and loads it once at startup; PG3 renders the UI from it. |
+| `customtypeddata` | Values matching the `customtypedparams` schema | The customer-entered values for the typed-params schema above. | PG3 sends it on every edit via the `CUSTOMTYPEDDATA` event; plugin loads it into its own `Custom('customtypeddata')`. |
+| `customdata` | `{key: value}`, developer-defined | The plugin's own persisted state — anything it computed or cached that must survive a restart. Never shown in any UI. | Plugin backend reads/writes it directly, any time, via its own `Custom('customdata')`; delivered back on startup via the `CUSTOMDATA`/`getAll` event. |
+| `nsdata` | Developer-defined | A one-time seed value set from *outside* the plugin, at registration time (`PUT /api/plugins/store/local/entry`'s `nsdata` field below), for a starting value the plugin should have before it has even run once. Mechanically identical to any other non-fixed custom key (delivered the same catch-all way `oauth` is, not via its own dedicated event). | Authoring/registration step writes it once; plugin reads it back the same generic way as `customdata`. **Rarely used** — prefer `customdata` for anything the plugin itself originates at runtime. |
+| `notices` | `{noticeId: text}` | Transient installer-facing banners (e.g. "API key invalid"), not configuration, not state. | Plugin backend adds/clears entries via its own `Custom('notices')` (also exposed as `Interface.Notices`); cleared once the condition resolves. |
+| `oauth` | `{client_id, client_secret, auth_endpoint, token_endpoint, scope, ...}` | OAuth app config `udi_interface.OAuth` reads via its own `CUSTOMNS` subscription. | Author seeds placeholders at creation; real secrets set post-install via `configure_plugin(key="oauth")`. |
+
+`nsdata` and `customdata` are easy to conflate: both are developer-defined and both skip the UI,
+but `customdata` is the plugin's own read/write scratch space (the plugin sets it, any time,
+while running), whereas `nsdata` exists so something *outside* the plugin's own process — the
+registration/authoring step — can hand it a value before it has ever started.
+
+`notices` in practice: setting `polyglot.Notices['<id>'] = '<message>'` shows a banner on the
+plugin's configuration page with that message — e.g. if a required custom parameter like an IP
+address is missing, `polyglot.Notices['config'] = "please input your IP"` surfaces that request
+directly in the UI. `polyglot.Notices.clear()` removes all notices at once; to remove a single one
+from the host side instead, use `DELETE /api/plugin/:profileNum/notice/:noticeId` above.
+
+---
+
 ### `POST /api/plugin/:profileNum/config`
 Saves plugin configuration.
 
@@ -350,22 +380,38 @@ Returns a single local dev plugin.
 ### `PUT /api/plugins/store/local/entry`
 Creates a new local dev plugin. Requires developer role. Validates that `path`, `executable`, and `runAs` are accessible on the filesystem.
 
+`nsdata`/`oauth`/`customParams` here are the same `custom` keys documented above — this body is
+how the authoring/registration step seeds their *initial* value before the plugin ever runs. See
+"What each `custom` key is for" above before choosing between `nsdata` and `customParams` for a
+new field: `customParams` is a schema the customer fills in later; `nsdata` is a one-time
+developer-authored blob, rarely needed.
+
+`nsid` is **not** part of this request body — it's assigned by the host and returned in the
+response (see below); it's only ever supplied in the *URL* for the separate
+`POST /api/plugins/store/local/entry/:nsid` update endpoint documented just below.
+
 **Body:**
 ```ts
 {
   name: string          // max 15 chars
+  status?: 'active' | 'inactive' | 'new'   // 'active' for a freshly generated local dev plugin
+  developer: string     // email — must match the authenticated developer's own id
+  author: string        // developer's display name
+  purchaseOptions?: []  // [] for a freshly generated local dev plugin
   type: 'python3' | 'node'
   path: string          // absolute path on eisy
   executable: string    // entry point filename
   runAs: string         // OS user
+  install: string       // filename of an executable script in the plugin's own directory, run once after registering, before installing -- e.g. "install.sh" (the command itself lives inside that script file, not in this field)
   desc?: string
-  nsdata?: string       // JSON
+  nsdata?: string       // JSON — see "What each `custom` key is for" above
   oauth?: string        // JSON
   customParams?: string // JSON
   devd?: string         // JSON
   aiPrompt?: string
   aiTools?: string      // JSON
   isyAccess?: boolean
+  requireEisyui?: boolean // true only if this plugin only works under eisyUI; defaults to false
   discover?: boolean
   authorize?: boolean
   fileUpload?: boolean
@@ -373,6 +419,11 @@ Creates a new local dev plugin. Requires developer role. Validates that `path`, 
   longPoll?: number
   nsInfoPoll?: number
 }
+```
+
+**Response:** includes the assigned `nsid`:
+```ts
+{ successful: boolean; data: { nsid: string, ... } }
 ```
 
 ---
@@ -438,7 +489,12 @@ Removes the plugin from PG3 entirely (after migration is complete).
 
 ## File Manager
 
-All file manager endpoints operate on the plugin's `data/` directory.
+All file manager endpoints operate on the plugin's `data/` directory. This directory only exists
+when the plugin's `server_entry` declares `fileUpload: true`; it's included in the host's plugin
+backup. A plugin that doesn't need customer-facing file uploads has no `data/` directory at all —
+any other on-disk state it needs to persist (and have backed up) belongs in its own `persist/`
+subdirectory instead, which isn't exposed through these endpoints — see
+[Lifecycle and runtime → Stage 2a](plugin_lifecycle_and_runtime.md).
 
 ### `GET /api/plugin/:profileNum/filemanager/files`
 Lists the root of the data directory.

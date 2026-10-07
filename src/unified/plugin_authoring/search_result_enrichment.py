@@ -31,7 +31,7 @@ REQUEST_TIMEOUT = 15.0
 # Same reasoning as discovery.py's other caps -- bounded, not a buried
 # magic number. A session doing a lot of general web search could otherwise
 # trigger an unbounded number of follow-up GitHub lookups.
-MAX_LICENSE_LOOKUPS = 5
+MAX_LICENSE_LOOKUPS = 10 
 
 # Permissive license allowlist -- identical list to discovery.py's, kept
 # here too since this module must not import from handlers/discovery.py

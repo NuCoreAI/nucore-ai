@@ -1,0 +1,14 @@
+{
+  "name": "uninstall_installed_plugin",
+  "description": "Resolves install_generated_plugin's 'already installed' conflict: frees the plugin's slot entirely -- distinct from plugin_ops's 'stop', which keeps the slot. Does not touch the plugin's local dev store registration, if any -- call delete_registered_plugin separately if that also needs removing. This is a real, permanent change on the hub -- always confirm with the customer first.",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The plugin's real profileNum, from list_installed_plugins. Never guess this from a plugin's display name."
+      }
+    }
+  }
+}

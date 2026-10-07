@@ -86,6 +86,7 @@ async def list_installed_plugins(nucore_interface: NuCoreInterface, args: dict[s
                 # configure_plugin() calls -- surfaced as plugin_id to match
                 # those tools' input parameter name.
                 "plugin_id": p.get("profileNum"),
+                "nsid": p.get("nsid"),
                 "name": p.get("name"),
                 "is_local": p.get("isLocal"),
                 "ai_support": p.get("aiSupport"),
@@ -275,6 +276,25 @@ async def plugin_ops(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
 
     data = response.get("data")
     return {"plugin_id": plugin_id, "operation": operation, **(data if isinstance(data, dict) else {})}
+
+
+async def uninstall_installed_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    """Frees the plugin's slot entirely -- distinct from plugin_ops's
+    "stop" (which keeps the slot). Does not touch the plugin's local dev
+    store registration, if any -- see plugin_authoring's
+    delete_registered_plugin for that. Not wired into the customer-facing
+    TOOL_HANDLERS table, same security boundary as delete_plugin (a real
+    delete stays developer/plugin-authoring-only); currently only reused
+    by plugin_authoring.dispatch."""
+    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
+    if not plugin_id:
+        return {"error": "plugin_id is required -- call list_installed_plugins for the real plugin_id"}
+
+    response = await nucore_interface.uninstall_installed_plugin(plugin_id)
+    if not isinstance(response, dict) or not response.get("successful"):
+        return {"error": f"failed to uninstall plugin '{plugin_id}'"}
+
+    return {"plugin_id": plugin_id, "uninstalled": True}
 
 
 _VALID_CONFIG_KEYS = ("customparams", "oauth")

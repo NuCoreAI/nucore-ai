@@ -516,10 +516,14 @@ class NuCoreInterface(ABC):
         /api/plugins
 
         Response shape:
-        {"successful": true, "data": [{"profileNum": 3, "name": "YouTube", "isLocal": false}, ...]}
+        {"successful": true, "data": [{"profileNum": 3, "nsid": "...", "name": "YouTube", "isLocal": false}, ...]}
 
         ``profileNum`` is this plugin's id -- used as ``plugin_id`` for
-        subsequent plugin_ops()/configure_plugin() calls.
+        subsequent plugin_ops()/configure_plugin() calls. ``nsid`` is the
+        same stable local-store identity register_local_plugin()/
+        get_local_store_plugins() use -- the one to match a known nsid
+        against here, not profileNum (which is only assigned at install
+        time and isn't known in advance).
         """
         raise NotImplementedError("Subclasses must implement the get_installed_plugins method.")
 
@@ -590,11 +594,15 @@ class NuCoreInterface(ABC):
         developer/plugin-authoring-tool-defined record for a plugin that
         hasn't been published to the production marketplace. Does not
         install or start it; see install_local_plugin().
-        :param entry: The full local-store entry body (name, type, path,
-            executable, runAs, desc, nsdata, oauth, customParams, devd,
-            aiPrompt, aiTools, isyAccess, discover, authorize, fileUpload,
-            shortPoll, longPoll, nsInfoPoll) -- see design/developers/plugin-api.md.
-        :return: response from the API or None if failure
+        :param entry: The full local-store entry body (name, status,
+            developer, author, purchaseOptions, type, path, executable,
+            runAs, install, desc, nsdata, oauth, customParams, devd,
+            aiPrompt, aiTools, isyAccess, requireEisyui, discover, authorize,
+            fileUpload, shortPoll, longPoll, nsInfoPoll) -- see
+            design/developers/plugin-api.md.
+        :return: {"successful": bool, "data": {"nsid": str, ...}} or None if
+            failure -- the host assigns nsid; it is never supplied in the
+            request body.
 
         API:
         PUT /api/plugins/store/local/entry
@@ -613,6 +621,62 @@ class NuCoreInterface(ABC):
         POST /api/plugins/store/local/install
         """
         raise NotImplementedError("Subclasses must implement the install_local_plugin method.")
+
+    async def get_local_store_plugins(self) -> dict[str, Any]:
+        """
+        List every plugin registered in the local dev store (not
+        installed-plugins -- see get_installed_plugins() for that).
+        :return: {"successful": bool, "data": [{"nsid": str, "name": str,
+            "type": str, "path": str, "updatedAt": str}, ...]} or None if
+            failure
+
+        API:
+        GET /api/plugins/store/local/list
+        """
+        raise NotImplementedError("Subclasses must implement the get_local_store_plugins method.")
+
+    async def update_local_plugin(self, nsid: str, entry: dict[str, Any]) -> dict[str, Any]:
+        """
+        Update an existing local dev store registration. All fields in
+        *entry* are optional. Also syncs the changes to the installed
+        plugin record if this nsid is currently installed -- does not by
+        itself restart the running process, though; follow with
+        plugin_ops(operation="restart") if the change needs to take effect
+        immediately.
+        :param nsid: The local dev store entry's nsid to update.
+        :param entry: Partial or full local-store entry body -- same shape
+            as register_local_plugin()'s entry, without nsid.
+        :return: {"successful": bool, "data": {...}} or None if failure
+
+        API:
+        POST /api/plugins/store/local/entry/<nsid>
+        """
+        raise NotImplementedError("Subclasses must implement the update_local_plugin method.")
+
+    async def delete_local_plugin(self, nsid: str) -> dict[str, Any]:
+        """
+        Delete a local dev store registration. Does not uninstall the
+        plugin if it's currently installed -- see
+        uninstall_installed_plugin() for that.
+        :param nsid: The local dev store entry's nsid to delete.
+        :return: {"successful": bool, ...} or None if failure
+
+        API:
+        DELETE /api/plugins/store/local/entry/<nsid>
+        """
+        raise NotImplementedError("Subclasses must implement the delete_local_plugin method.")
+
+    async def uninstall_installed_plugin(self, profile_num: int) -> dict[str, Any]:
+        """
+        Uninstall a plugin from its slot. Does not touch its local dev
+        store registration, if any -- see delete_local_plugin() for that.
+        :param profile_num: The plugin's profileNum, from get_installed_plugins().
+        :return: {"successful": bool, ...} or None if failure
+
+        API:
+        DELETE /api/plugin/<profileNum>
+        """
+        raise NotImplementedError("Subclasses must implement the uninstall_installed_plugin method.")
 
     async def plugin_ops(self, plugin_id:str, operation:Literal["start", "stop", "restart"]):
         """

@@ -1,0 +1,26 @@
+{
+  "name": "configure_developer",
+  "description": "One-time (or update) developer commissioning for this plugin workspace: records the email, display name, and optional public GitHub repo URL that generate_plugin_scaffold stamps into every server_entry.json's developer/author fields. Call this first if generate_plugin_scaffold's error says no developer config exists yet for this plugin_output_root. The email given must match this session's own authenticated identity when one is known -- refuses on an actual mismatch. Never invent or guess the developer's email/name; ask the person directly.",
+  "input_schema": {
+    "type": "object",
+    "required": ["email", "name"],
+    "properties": {
+      "email": {
+        "type": "string",
+        "description": "The developer's email address. Must match this session's own authenticated identity, when one is known, or the call is refused."
+      },
+      "name": {
+        "type": "string",
+        "description": "The developer's display name -- stamped into every generated server_entry.json's 'author' field."
+      },
+      "github_url": {
+        "type": "string",
+        "description": "Optional public GitHub repository URL for this developer. Omit if they don't have one or it isn't public."
+      },
+      "default_run_as": {
+        "type": "string",
+        "description": "Optional OS account every generated plugin's server_entry.json uses as its 'runAs' fallback, unless a given plugin's own server_entry.runAs overrides it. Omit to keep the tool's own built-in default ('admin')."
+      }
+    }
+  }
+}

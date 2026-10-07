@@ -1930,10 +1930,14 @@ class IoXWrapper(NuCoreInterface):
         /api/plugins
 
         Response shape:
-        {"successful": true, "data": [{"profileNum": 3, "name": "YouTube", "isLocal": false}, ...]}
+        {"successful": true, "data": [{"profileNum": 3, "nsid": "...", "name": "YouTube", "isLocal": false}, ...]}
 
         ``profileNum`` is this plugin's id -- used as ``plugin_id`` for
-        subsequent plugin_ops()/configure_plugin() calls.
+        subsequent plugin_ops()/configure_plugin() calls. ``nsid`` is the
+        same stable local-store identity register_local_plugin()/
+        get_local_store_plugins() use -- the one to match a known nsid
+        against here, not profileNum (which is only assigned at install
+        time and isn't known in advance).
         """
         try:
             response = await self.get(f'/api/plugins')
@@ -1950,7 +1954,8 @@ class IoXWrapper(NuCoreInterface):
         Register (create or update) a plugin in the local dev store.
         :param entry: The full local-store entry body -- see
             design/developers/plugin-api.md's PUT /api/plugins/store/local/entry.
-        :return: response from the API or None if failure
+        :return: {"successful": bool, "data": {"nsid": str, ...}} or None if
+            failure -- the host assigns nsid; it is never supplied in *entry*.
 
         API:
         PUT /api/plugins/store/local/entry
@@ -1986,6 +1991,87 @@ class IoXWrapper(NuCoreInterface):
             return response.json()
         except Exception as ex:
             logger.error(f"Error installing local plugin '{nsid}': {ex}")
+            return None
+
+    async def get_local_store_plugins(self) -> dict[str, Any]:
+        """
+        List every plugin registered in the local dev store.
+        :return: {"successful": bool, "data": [{"nsid": str, "name": str,
+            "type": str, "path": str, "updatedAt": str}, ...]} or None if
+            failure
+
+        API:
+        GET /api/plugins/store/local/list
+        """
+        try:
+            response = await self.get('/api/plugins/store/local/list')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error listing local store plugins: {ex}")
+            return None
+
+    async def update_local_plugin(self, nsid: str, entry: dict[str, Any]) -> dict[str, Any]:
+        """
+        Update an existing local dev store registration. All fields in
+        *entry* are optional. Also syncs the changes to the installed
+        plugin record if this nsid is currently installed.
+        :param nsid: The local dev store entry's nsid to update.
+        :param entry: Partial or full local-store entry body -- same shape
+            as register_local_plugin()'s entry, without nsid.
+        :return: {"successful": bool, "data": {...}} or None if failure
+
+        API:
+        POST /api/plugins/store/local/entry/<nsid>
+        """
+        try:
+            headers = {"Content-Type": "application/json"}
+            response = await self.post(f'/api/plugins/store/local/entry/{nsid}', body=json.dumps(entry), headers=headers)
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error updating local plugin '{nsid}': {ex}")
+            return None
+
+    async def delete_local_plugin(self, nsid: str) -> dict[str, Any]:
+        """
+        Delete a local dev store registration. Does not uninstall the
+        plugin if it's currently installed -- see
+        uninstall_installed_plugin() for that.
+        :param nsid: The local dev store entry's nsid to delete.
+        :return: {"successful": bool, ...} or None if failure
+
+        API:
+        DELETE /api/plugins/store/local/entry/<nsid>
+        """
+        try:
+            response = await self.delete(f'/api/plugins/store/local/entry/{nsid}')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error deleting local plugin '{nsid}': {ex}")
+            return None
+
+    async def uninstall_installed_plugin(self, profile_num: int) -> dict[str, Any]:
+        """
+        Uninstall a plugin from its slot. Does not touch its local dev
+        store registration, if any -- see delete_local_plugin() for that.
+        :param profile_num: The plugin's profileNum, from get_installed_plugins().
+        :return: {"successful": bool, ...} or None if failure
+
+        API:
+        DELETE /api/plugin/<profileNum>
+        """
+        try:
+            response = await self.delete(f'/api/plugin/{profile_num}')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error uninstalling plugin '{profile_num}': {ex}")
             return None
 
     async def plugin_ops(self, plugin_id:str, operation:Literal["start", "stop", "restart"]):

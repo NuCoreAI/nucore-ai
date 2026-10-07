@@ -53,7 +53,34 @@ def ai_tool_helper_name(tool_name: str) -> str:
     return f"_{tool_name}"
 
 
-def render_init(*, node_classes: list[str], authorize: bool, ai_enabled: bool) -> str:
+def render_custom_param_docs_call(custom_param_docs: str | None) -> str | None:
+    """A single ``self.poly.setCustomParamDocs(...)`` call wrapping
+    *custom_param_docs* verbatim -- deliberately **not** derived from
+    ``server_entry.customParams``' own ``{field_name: value}`` map:
+    that map's value is the field's initial/default value (often just
+    ``""``, sometimes a minimal placeholder-like hint) seeded into the UI,
+    never rich documentation -- reusing it as the config-page help text
+    produced thin, unhelpful docs. ``custom_param_docs`` is its own,
+    separately LLM-authored rich markdown/html/text explaining each field
+    to the installer in plain, friendly language -- a sibling top-level
+    `generate_plugin_scaffold` input, not a server_entry field (it's a
+    runtime call the plugin itself makes, not part of the registration
+    payload). Returns ``None`` (no line emitted) when none was given --
+    preserves the ``POLYGLOT_CONFIG.md``-file fallback ``setCustomParamDocs``
+    has when never called at all."""
+    if not custom_param_docs:
+        return None
+    return f"        self.poly.setCustomParamDocs({custom_param_docs!r})"
+
+
+def render_init(
+    *,
+    node_classes: list[str],
+    authorize: bool,
+    ai_enabled: bool,
+    file_upload: bool,
+    custom_param_docs: str | None = None,
+) -> str:
     """The Controller's ``__init__`` method body (full ``def __init__...``
     through the final ``self.poly.addNode(self)``) -- the exact verified
     ``subscribe()`` list, plus the OAuth service construction/subscription
@@ -64,26 +91,49 @@ def render_init(*, node_classes: list[str], authorize: bool, ai_enabled: bool) -
     the profile needs beyond the Controller itself -- actually constructing
     and ``addNode``-ing them needs profile-specific addresses/names that
     only the LLM-authored ``discover``/``start`` override bodies have, so
-    this just leaves a pointer comment, not a wiring guess.
+    this just leaves a pointer comment, not a wiring guess (that comment also
+    points at ``self.poly.getValidName()``/``getValidAddress()`` -- those two
+    must sanitize any dynamically-derived name/address before it's used).
 
-    ``self.data_dir`` is always set, next to this plugin's own files -- any
+    ``self.persist_dir`` is always set, next to this plugin's own files -- any
     override body that needs to persist something beyond ``customParams``/
     ``customData`` (a local cache, session tokens, etc.) writes it under
-    there, never loose in the plugin's own directory. ``generate_plugin_scaffold``
-    creates the directory on disk at generation time; the ``makedirs`` here
-    is just a runtime safety net in case it's ever missing."""
+    there, never loose in the plugin's own directory; it's included in the
+    host's plugin backup the same as ``data/`` below. ``self.data_dir`` is
+    only set when *file_upload* (``server_entry.fileUpload``) is true -- it's
+    the directory the host's File Manager API/UI operate on, not a general
+    persistence location. ``generate_plugin_scaffold`` creates whichever
+    directories apply on disk at generation time; the ``makedirs`` calls here
+    are just a runtime safety net in case either is ever missing.
+
+    When *custom_param_docs* is given, a ``self.poly.setCustomParamDocs(...)``
+    call (see ``render_custom_param_docs_call``) is emitted right after
+    ``persist_dir``/``data_dir`` setup -- see that function for why this is
+    its own separately-authored rich-text input, not something derived
+    from ``customParams``' own minimal ``{field_name: value}`` map."""
     lines = [
         "    def __init__(self, polyglot, primary, address, name):",
         "        super().__init__(polyglot, primary, address, name)",
         "        self.poly = polyglot",
-        "        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"data\")",
-        "        os.makedirs(self.data_dir, exist_ok=True)",
+        "        self.persist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"persist\")",
+        "        os.makedirs(self.persist_dir, exist_ok=True)",
     ]
+    if file_upload:
+        lines.extend(
+            [
+                "        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"data\")",
+                "        os.makedirs(self.data_dir, exist_ok=True)",
+            ]
+        )
+    custom_param_docs_call = render_custom_param_docs_call(custom_param_docs)
+    if custom_param_docs_call:
+        lines.append(custom_param_docs_call)
     if node_classes:
         names = ", ".join(node_classes)
         lines.append(
             f"        # Additional node classes ({names}) -- construct and self.poly.addNode()"
-            " them from discover()/start() once their real addresses/names are known."
+            " them from discover()/start() once their real addresses/names are known"
+            " (run candidate names/addresses through self.poly.getValidName()/getValidAddress() first)."
         )
     if authorize:
         lines.append("        self.oauthService = udi_interface.OAuth(self.poly)")
@@ -191,16 +241,41 @@ def render_main_py(controller_module: str, controller_class: str) -> str:
     ``polyglot.ready()`` -- then construct the Controller, ``ready()``,
     ``runForever()``. Sent unconditionally on every startup, not diffed
     against what PG3 already has: ``updateJsonProfile``'s own add/replace-
-    by-id semantics make resending the same profile a no-op."""
+    by-id semantics make resending the same profile a no-op.
+
+    The very first thing this file does, before even ``import udi_interface``,
+    is check for a sibling ``.venv`` (created by the ``setup_dev_venv`` tool,
+    never automatically) and ``os.execv`` into its interpreter if present --
+    the real host (confirmed against a live ``/usr/local/etc/rc.d/plugin_N``
+    script) always launches this file with the bare system ``python3``,
+    regardless of dev or production, so this is the only reliable place a
+    local dev venv can actually take effect once a plugin is registered and
+    started through the normal install flow. Production never has a
+    ``.venv`` here, so this check is always a no-op there -- zero behavior
+    change, nothing to opt into or out of at generation time."""
     return f'''"""Generated by plugin_authoring -- bootstraps the plugin process. Do not
 edit by hand; regenerate via generate_plugin_scaffold instead. See
 context.md for this plugin's iteration history."""
 
 from __future__ import annotations
 
-import json
 import os
 import sys
+
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+_VENV_PYTHON = os.path.join(_PLUGIN_DIR, ".venv", "bin", "python3")
+if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
+    # Local dev only -- see setup_dev_venv. Never present in production, so
+    # this re-exec never happens there; the real host always launches this
+    # file with its own bare system python3 regardless. sys.prefix ==
+    # sys.base_prefix (not a realpath/executable-path comparison) is the
+    # correct "not already running inside a venv" check -- a venv's own
+    # python3 is typically a symlink to the exact same real interpreter
+    # binary as the system one, so comparing resolved paths would never
+    # see a difference and this would silently never fire.
+    os.execv(_VENV_PYTHON, [_VENV_PYTHON] + sys.argv)
+
+import json
 
 import udi_interface
 
@@ -213,7 +288,7 @@ if __name__ == "__main__":
     try:
         polyglot = udi_interface.Interface([])
         polyglot.start(version.ud_plugin_version)
-        profile_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profile.json")
+        profile_path = os.path.join(_PLUGIN_DIR, "profile.json")
         with open(profile_path, "r", encoding="utf-8") as f:
             polyglot.updateJsonProfile(json.load(f), {{"waitResponse": True}})
         {controller_class}(polyglot, "controller", "controller", "{controller_class}")

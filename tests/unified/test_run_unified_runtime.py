@@ -151,6 +151,40 @@ async def test_resolve_tool_set_plugin_authoring_dispatch_routes_a_known_tool():
     assert any(m["id"] == "1" for m in result["matches"])
 
 
+def test_make_dispatch_still_works_when_called_with_no_eisy_ui_context():
+    # Zero-arg calls (every pre-existing test above, and any caller that
+    # hasn't been updated to pass one) must keep working.
+    _, dispatch_factory, _ = _resolve_tool_set(
+        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/plugin-projects"
+    )
+    bundle = dispatch_factory()
+    assert callable(bundle.dispatch)
+
+
+@pytest.mark.asyncio
+async def test_make_dispatch_binds_live_eisy_ui_context_get_user_id(tmp_path):
+    # The bound get_user_id must reflect this EisyUIContext's *current*
+    # user_id at call time, not whatever it was when the factory ran (which
+    # is always None, since _make_dispatch always runs before any
+    # context message could have arrived) -- a snapshot would make
+    # configure_developer's identity check permanently useless.
+    ctx = EisyUIContext()
+    _, dispatch_factory, _ = _resolve_tool_set(
+        "plugin_authoring", SimpleNamespace(), plugin_output_root=str(tmp_path)
+    )
+    dispatch = dispatch_factory(ctx).dispatch
+
+    # No identity known yet -- commissioning under a different email is allowed.
+    first = await dispatch("configure_developer", {"email": "dev@example.com", "name": "Dev"})
+    assert first["configured"] is True
+
+    # Mutate the same ctx instance after the dispatch bundle was built.
+    ctx.process_message(json.dumps({"type": "context", "context": {"user_id": "someone-else@example.com"}}))
+
+    second = await dispatch("configure_developer", {"email": "dev@example.com", "name": "Dev"})
+    assert "error" in second
+
+
 # --- _resolve_tool_set: search_web registration (design/developers/impl_plan.md Phase 2) ---
 
 

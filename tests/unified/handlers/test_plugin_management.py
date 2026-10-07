@@ -51,7 +51,7 @@ LICENSES_RESPONSE = {
 INSTALLED_RESPONSE = {
     "successful": True,
     "data": [
-        {"profileNum": 3, "name": "YouTube", "isLocal": False, "state": "running"},
+        {"profileNum": 3, "nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291", "name": "YouTube", "isLocal": False, "state": "running"},
     ],
 }
 
@@ -68,6 +68,8 @@ class FakeBackend(NuCoreInterface):
         self.plugin_llm_result_response = {"successful": True, "data": {"result": "stub result"}}
         self.configure_response = {"successful": True, "data": {}}
         self.configure_calls = []
+        self.uninstall_response = {"successful": True}
+        self.uninstall_calls = []
 
     async def configure_plugin(self, plugin_id, config, key="customparams"):
         self.configure_calls.append((plugin_id, config, key))
@@ -84,6 +86,10 @@ class FakeBackend(NuCoreInterface):
 
     async def plugin_ops(self, plugin_id, operation):
         return self.plugin_ops_response
+
+    async def uninstall_installed_plugin(self, profile_num):
+        self.uninstall_calls.append(profile_num)
+        return self.uninstall_response
 
     async def get_plugin_prompt(self, plugin_id):
         return self.plugin_prompt_response
@@ -204,7 +210,14 @@ async def test_list_installed_plugins_maps_profile_num_to_plugin_id():
     result = await execute_tool("list_installed_plugins", {}, nucore_interface=backend)
     assert result == {
         "plugins": [
-            {"plugin_id": 3, "name": "YouTube", "is_local": False, "ai_support": None, "state": "running"},
+            {
+                "plugin_id": 3,
+                "nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291",
+                "name": "YouTube",
+                "is_local": False,
+                "ai_support": None,
+                "state": "running",
+            },
         ]
     }
 
@@ -584,4 +597,52 @@ async def test_configure_plugin_errors_on_backend_failure():
     backend = FakeBackend()
     backend.configure_response = {"successful": False}
     result = await plugin_management.configure_plugin(backend, {"plugin_id": "3", "config": {}})
+    assert "error" in result
+
+
+# --- uninstall_installed_plugin: not in the customer TOOL_HANDLERS table
+# (same security boundary as delete_plugin), so these call the handler
+# directly rather than through unified.dispatch.execute_tool. ---
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_success():
+    backend = FakeBackend()
+    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "3"})
+    assert result == {"plugin_id": 3, "uninstalled": True}
+    assert backend.uninstall_calls == [3]
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_resolves_a_guessed_plugin_id_by_name():
+    backend = FakeBackend()
+    backend.installed_response = {
+        "successful": True,
+        "data": [{"profileNum": 6, "nsid": "...", "name": "Sun", "isLocal": False}],
+    }
+    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "sun"})
+    assert result == {"plugin_id": 6, "uninstalled": True}
+    assert backend.uninstall_calls == [6]
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_requires_plugin_id():
+    backend = FakeBackend()
+    result = await plugin_management.uninstall_installed_plugin(backend, {})
+    assert "error" in result
+    assert backend.uninstall_calls == []
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_errors_when_plugin_id_unresolvable():
+    backend = FakeBackend()
+    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "not-a-real-plugin"})
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_errors_on_backend_failure():
+    backend = FakeBackend()
+    backend.uninstall_response = {"successful": False}
+    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "3"})
     assert "error" in result

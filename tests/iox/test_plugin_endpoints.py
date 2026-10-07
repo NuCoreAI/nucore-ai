@@ -29,7 +29,7 @@ def _bare_wrapper() -> IoXWrapper:
 async def test_get_installed_plugins_hits_get_endpoint():
     wrapper = _bare_wrapper()
     calls = []
-    payload = {"successful": True, "data": [{"profileNum": 3, "name": "YouTube", "isLocal": False}]}
+    payload = {"successful": True, "data": [{"profileNum": 3, "nsid": "0bec5267-b1c0-44e3-aa60-e1f84d1c5291", "name": "YouTube", "isLocal": False}]}
 
     async def fake_get(path):
         calls.append(path)

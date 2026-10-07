@@ -137,6 +137,92 @@ async def test_validate_profile_accepts_enum_uom_with_subset_range():
     assert result == {"valid": True, "errors": []}
 
 
+# --- malformed catalog documents must report a clear validation error,
+# never leak a raw KeyError as "unexpected error: '<field>'" (regression:
+# a model-authored profile omitted instance.name entirely) ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_reports_instance_missing_name_clearly():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "ED_ONOFF"}], "cmds": {}}],
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("'name'" in e for e in result["errors"])
+    assert not any("unexpected error" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_reports_instance_missing_id_clearly():
+    profile = {"families": [{"id": "fam1", "instances": [{"name": "Test Instance"}]}]}
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("'id'" in e for e in result["errors"])
+    assert not any("unexpected error" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_reports_nodedef_missing_id_clearly():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "nodedefs": [{"properties": [{"id": "ST", "editor": "ED_ONOFF"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("'id'" in e for e in result["errors"])
+    assert not any("unexpected error" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_reports_property_missing_editor_clearly():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("'editor'" in e for e in result["errors"])
+    assert not any("unexpected error" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_reports_command_missing_id_clearly():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "nodedefs": [{"id": "ND_X", "properties": [], "cmds": {"sends": [], "accepts": [{"native": "true"}]}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("'id'" in e for e in result["errors"])
+    assert not any("unexpected error" in e for e in result["errors"])
+
+
 @pytest.mark.asyncio
 async def test_lookup_uom_matches_by_category():
     result = await lookup_uom(None, {"keyword": "temperature"})

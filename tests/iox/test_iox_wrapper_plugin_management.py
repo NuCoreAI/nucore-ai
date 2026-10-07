@@ -2,6 +2,10 @@
 design/developers/plugin_authoring_p4_impl.md) and the configure_plugin fix
 (was `raise NotImplementedError`, now a real call) -- exact path/body shape
 per design/developers/plugin-api.md.
+
+Also covers get_local_store_plugins/update_local_plugin/delete_local_plugin/
+uninstall_installed_plugin -- the 4 methods behind install_generated_plugin's
+nsid-aware conflict detection (handlers/install.py).
 """
 
 from __future__ import annotations
@@ -164,3 +168,174 @@ async def test_configure_plugin_returns_none_on_connection_failure():
     wrapper.post = fake_post
 
     assert await wrapper.configure_plugin("7", {}) is None
+
+
+# --- get_local_store_plugins ---
+
+
+@pytest.mark.asyncio
+async def test_get_local_store_plugins_hits_the_list_endpoint():
+    wrapper = _bare_wrapper()
+    calls = []
+
+    async def fake_get(path):
+        calls.append(path)
+        return FakeResp(json_data={"successful": True, "data": [{"nsid": "local.x", "name": "X"}]})
+
+    wrapper.get = fake_get
+
+    result = await wrapper.get_local_store_plugins()
+
+    assert result == {"successful": True, "data": [{"nsid": "local.x", "name": "X"}]}
+    assert calls == ["/api/plugins/store/local/list"]
+
+
+@pytest.mark.asyncio
+async def test_get_local_store_plugins_returns_none_on_connection_failure():
+    wrapper = _bare_wrapper()
+
+    async def fake_get(path):
+        return None
+
+    wrapper.get = fake_get
+
+    assert await wrapper.get_local_store_plugins() is None
+
+
+@pytest.mark.asyncio
+async def test_get_local_store_plugins_returns_response_on_non_200():
+    wrapper = _bare_wrapper()
+    resp = FakeResp(status_code=500)
+
+    async def fake_get(path):
+        return resp
+
+    wrapper.get = fake_get
+
+    assert await wrapper.get_local_store_plugins() is resp
+
+
+# --- update_local_plugin ---
+
+
+@pytest.mark.asyncio
+async def test_update_local_plugin_posts_to_the_entry_nsid_path():
+    wrapper = _bare_wrapper()
+    calls = []
+
+    async def fake_post(path, body, headers=None):
+        calls.append((path, body, headers))
+        return FakeResp(json_data={"successful": True, "data": {}})
+
+    wrapper.post = fake_post
+
+    entry = {"desc": "updated"}
+    result = await wrapper.update_local_plugin("local.acme-pool", entry)
+
+    assert result == {"successful": True, "data": {}}
+    (path, body, headers) = calls[0]
+    assert path == "/api/plugins/store/local/entry/local.acme-pool"
+    assert json.loads(body) == entry
+    assert headers == {"Content-Type": "application/json"}
+
+
+@pytest.mark.asyncio
+async def test_update_local_plugin_returns_none_on_connection_failure():
+    wrapper = _bare_wrapper()
+
+    async def fake_post(path, body, headers=None):
+        return None
+
+    wrapper.post = fake_post
+
+    assert await wrapper.update_local_plugin("local.x", {}) is None
+
+
+# --- delete_local_plugin ---
+
+
+@pytest.mark.asyncio
+async def test_delete_local_plugin_deletes_the_entry_nsid_path():
+    wrapper = _bare_wrapper()
+    calls = []
+
+    async def fake_delete(path):
+        calls.append(path)
+        return FakeResp(json_data={"successful": True})
+
+    wrapper.delete = fake_delete
+
+    result = await wrapper.delete_local_plugin("local.acme-pool")
+
+    assert result == {"successful": True}
+    assert calls == ["/api/plugins/store/local/entry/local.acme-pool"]
+
+
+@pytest.mark.asyncio
+async def test_delete_local_plugin_returns_none_on_connection_failure():
+    wrapper = _bare_wrapper()
+
+    async def fake_delete(path):
+        return None
+
+    wrapper.delete = fake_delete
+
+    assert await wrapper.delete_local_plugin("local.x") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_local_plugin_returns_response_on_non_200():
+    wrapper = _bare_wrapper()
+    resp = FakeResp(status_code=404)
+
+    async def fake_delete(path):
+        return resp
+
+    wrapper.delete = fake_delete
+
+    assert await wrapper.delete_local_plugin("local.x") is resp
+
+
+# --- uninstall_installed_plugin ---
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_deletes_the_profile_num_path():
+    wrapper = _bare_wrapper()
+    calls = []
+
+    async def fake_delete(path):
+        calls.append(path)
+        return FakeResp(json_data={"successful": True})
+
+    wrapper.delete = fake_delete
+
+    result = await wrapper.uninstall_installed_plugin(7)
+
+    assert result == {"successful": True}
+    assert calls == ["/api/plugin/7"]
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_returns_none_on_connection_failure():
+    wrapper = _bare_wrapper()
+
+    async def fake_delete(path):
+        return None
+
+    wrapper.delete = fake_delete
+
+    assert await wrapper.uninstall_installed_plugin(7) is None
+
+
+@pytest.mark.asyncio
+async def test_uninstall_installed_plugin_returns_response_on_non_200():
+    wrapper = _bare_wrapper()
+    resp = FakeResp(status_code=400)
+
+    async def fake_delete(path):
+        return resp
+
+    wrapper.delete = fake_delete
+
+    assert await wrapper.uninstall_installed_plugin(7) is resp

@@ -15,6 +15,18 @@ writes one entry to per call (most recent last) -- its latest entry is
 preferred over README.md's heading for a listing's one-line description,
 since it reflects what actually changed most recently rather than a
 possibly-stale README.
+
+``sources.md`` is the deduped, cross-session record of every evidence
+source ``generate_plugin_scaffold`` has ever gathered for this plugin (see
+``evidence_ledger.py``'s ``merge_sources``/``render_sources_md``) --
+``read_generated_plugin`` hands it back here so a resumed session can see
+what's already been searched/fetched before spending another search or
+fetch call on the same ground.
+
+``LICENSE.md`` is fully derived from ``sources.md`` plus the commissioned
+developer's name (``handlers/scaffold.py``'s ``_render_license``) -- never
+LLM-authored freeform text the way ``readme_body`` is, but still handed
+back here for completeness.
 """
 
 from __future__ import annotations
@@ -31,7 +43,9 @@ from ..path_confinement import confine_path
 _PROFILE_FILENAME = "profile.json"
 _PLUGIN_FILENAME = "plugin.py"
 _README_FILENAME = "README.md"
+_LICENSE_FILENAME = "LICENSE.md"
 _CONTEXT_FILENAME = "context.md"
+_SOURCES_FILENAME = "sources.md"
 
 
 def _latest_context_note(context_text: str | None) -> str | None:
@@ -124,7 +138,10 @@ async def read_generated_plugin(
 ) -> Any:
     """*nucore_interface* is unused -- this tool never touches the hub.
     Loads one previously-generated plugin's files back into context so the
-    model has something to modify, rather than starting blind."""
+    model has something to modify, rather than starting blind -- including
+    its accumulated ``sources.md`` evidence history, so a resumed session
+    can check what's already been searched/fetched before spending another
+    search or fetch call on the same ground."""
     location = (args.get("location") or "").strip()
     if not location:
         return {"error": "location is required"}
@@ -149,6 +166,9 @@ async def read_generated_plugin(
     readme_path = plugin_dir / _README_FILENAME
     readme = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else None
 
+    license_path = plugin_dir / _LICENSE_FILENAME
+    license_md = license_path.read_text(encoding="utf-8") if license_path.is_file() else None
+
     tests = {
         test_path.name: test_path.read_text(encoding="utf-8")
         for test_path in sorted((plugin_dir / "tests").glob("test_*.py"))
@@ -158,11 +178,16 @@ async def read_generated_plugin(
     context_path = plugin_dir / _CONTEXT_FILENAME
     context = context_path.read_text(encoding="utf-8") if context_path.is_file() else None
 
+    sources_path = plugin_dir / _SOURCES_FILENAME
+    sources = sources_path.read_text(encoding="utf-8") if sources_path.is_file() else None
+
     return {
         "location": location,
         "profile": profile,
         "plugin_py": plugin_py,
         "readme": readme,
+        "license": license_md,
         "tests": tests,
         "context": context,
+        "sources": sources,
     }

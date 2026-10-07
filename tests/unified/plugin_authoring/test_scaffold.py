@@ -10,9 +10,13 @@ import json
 
 import pytest
 
+from unified.plugin_authoring import developer_config
 from unified.plugin_authoring.evidence_ledger import EvidenceLedger
 from unified.plugin_authoring.handlers.scaffold import generate_plugin_scaffold
 from unified.plugin_authoring.secret_guard import OAUTH_PLACEHOLDER
+
+DEVELOPER_EMAIL = "dev@example.com"
+DEVELOPER_NAME = "Dev Name"
 
 WIRE_PROFILE = {
     "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
@@ -54,13 +58,20 @@ def _base_args(**overrides):
     return args
 
 
-async def _generate(tmp_path, args, *, ledger=None, secret_values=None):
+async def _generate(
+    tmp_path, args, *, ledger=None, secret_values=None, get_user_id=None, skip_developer_config=False, default_run_as=None
+):
+    if not skip_developer_config:
+        developer_config.write_developer_config(
+            str(tmp_path), email=DEVELOPER_EMAIL, name=DEVELOPER_NAME, default_run_as=default_run_as
+        )
     return await generate_plugin_scaffold(
         None,
         args,
         ledger=ledger if ledger is not None else _ledger_with_evidence(),
         secret_values=secret_values or [],
         plugin_output_root=str(tmp_path),
+        get_user_id=get_user_id,
     )
 
 
@@ -208,8 +219,9 @@ async def test_oauth_client_secret_defaults_to_placeholder_when_omitted(tmp_path
     result = await _generate(tmp_path, args)
     assert "error" not in result
     entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
-    assert entry["oauth"]["client_id"] == OAUTH_PLACEHOLDER
-    assert entry["oauth"]["client_secret"] == OAUTH_PLACEHOLDER
+    oauth = json.loads(entry["oauth"])
+    assert oauth["client_id"] == OAUTH_PLACEHOLDER
+    assert oauth["client_secret"] == OAUTH_PLACEHOLDER
 
 
 @pytest.mark.asyncio
@@ -292,9 +304,66 @@ async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path):
     assert entry["name"] == "AcmePool"
     assert entry["type"] == "python3"
     assert entry["executable"] == "main.py"
-    assert entry["runAs"] == "eisyai"
+    assert entry["runAs"] == "admin"
+    assert entry["status"] == "active"
+    assert entry["purchaseOptions"] == []
+    assert entry["install"] == "install.sh"
+    assert entry["developer"] == DEVELOPER_EMAIL
+    assert entry["author"] == DEVELOPER_NAME
     for key in ("oauth", "aiPrompt", "aiTools", "authorize"):
         assert key not in entry
+
+
+@pytest.mark.asyncio
+async def test_server_entry_runas_uses_developer_configs_default_run_as(tmp_path):
+    result = await _generate(tmp_path, _base_args(), default_run_as="polyglot")
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["runAs"] == "polyglot"
+
+
+@pytest.mark.asyncio
+async def test_server_entry_runas_explicit_value_overrides_developer_default(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "runAs": "custom_user"})
+    result = await _generate(tmp_path, args, default_run_as="polyglot")
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["runAs"] == "custom_user"
+
+
+@pytest.mark.asyncio
+async def test_regenerating_preserves_a_previously_persisted_nsid(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    entry_path = tmp_path / "acme_pool" / "server_entry.json"
+    entry = json.loads(entry_path.read_text())
+    entry["nsid"] = "local.acme_pool-abc123"
+    entry_path.write_text(json.dumps(entry))
+
+    result = await _generate(tmp_path, _base_args(confirm_overwrite=True))
+    assert "error" not in result
+    regenerated = json.loads(entry_path.read_text())
+    assert regenerated["nsid"] == "local.acme_pool-abc123"
+
+
+@pytest.mark.asyncio
+async def test_first_generation_never_invents_an_nsid(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert "nsid" not in entry
+
+
+@pytest.mark.asyncio
+async def test_regenerating_tolerates_a_malformed_existing_server_entry(tmp_path):
+    plugin_dir = tmp_path / "acme_pool"
+    plugin_dir.mkdir()
+    (plugin_dir / "server_entry.json").write_text("{not valid json")
+
+    result = await _generate(tmp_path, _base_args(confirm_overwrite=True))
+    assert "error" not in result
+    entry = json.loads((plugin_dir / "server_entry.json").read_text())
+    assert "nsid" not in entry
 
 
 @pytest.mark.asyncio
@@ -348,7 +417,7 @@ async def test_server_entry_includes_ai_fields_when_ai_enabled(tmp_path):
     assert "error" not in result
     entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
     assert entry["aiPrompt"] == "Ask about pool status."
-    assert entry["aiTools"] == [{"name": "get_dates", "description": "x"}]
+    assert json.loads(entry["aiTools"]) == [{"name": "get_dates", "description": "x"}]
 
 
 # --- overwrite flow ---
@@ -387,21 +456,198 @@ async def test_context_md_accumulates_across_calls(tmp_path):
     assert "Second note." in context
 
 
-# --- data/ directory for any override body that needs to persist something
-# beyond customParams/customData ---
+# --- sources.md: deduped, cross-session evidence record ---
 
 
 @pytest.mark.asyncio
-async def test_data_directory_is_created_on_disk(tmp_path):
+async def test_sources_md_accumulates_new_sources_across_calls(tmp_path):
+    ledger1 = EvidenceLedger()
+    ledger1.record_source(tier="github", url="https://github.com/example/repo-a", title="repo-a")
+    await _generate(tmp_path, _base_args(), ledger=ledger1)
+
+    ledger2 = EvidenceLedger()
+    ledger2.record_source(tier="web_search", url="https://example.com/docs", title="docs")
+    await _generate(tmp_path, _base_args(confirm_overwrite=True), ledger=ledger2)
+
+    sources = (tmp_path / "acme_pool" / "sources.md").read_text()
+    assert "repo-a" in sources
+    assert "docs" in sources
+
+
+@pytest.mark.asyncio
+async def test_sources_md_does_not_duplicate_an_already_recorded_source(tmp_path):
+    def ledger_with(url):
+        ledger = EvidenceLedger()
+        ledger.record_source(tier="github", url=url, title="repo-a")
+        return ledger
+
+    await _generate(tmp_path, _base_args(), ledger=ledger_with("https://github.com/example/repo-a"))
+    await _generate(
+        tmp_path, _base_args(confirm_overwrite=True), ledger=ledger_with("https://github.com/example/repo-a")
+    )
+
+    sources = (tmp_path / "acme_pool" / "sources.md").read_text()
+    assert sources.count("https://github.com/example/repo-a") == 1
+
+
+@pytest.mark.asyncio
+async def test_sources_md_in_files_written(tmp_path):
     result = await _generate(tmp_path, _base_args())
+    assert "sources.md" in result["files_written"]
+
+
+# --- README is license-only now; the full source list lives in sources.md ---
+
+
+@pytest.mark.asyncio
+async def test_readme_has_no_license_section_when_nothing_flagged(tmp_path):
+    # _ledger_with_evidence()'s default source has license_ok=True.
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    readme = (tmp_path / "acme_pool" / "README.md").read_text()
+    assert "License Notice" not in readme
+    assert "## Sources" not in readme  # old unconditional bullet-list behavior is gone
+
+
+@pytest.mark.asyncio
+async def test_readme_license_notice_lists_only_flagged_sources(tmp_path):
+    ledger = EvidenceLedger()
+    ledger.record_source(tier="github", url="https://github.com/example/good", title="good", license="MIT", license_ok=True)
+    ledger.record_source(tier="github", url="https://github.com/example/bad", title="bad", license="GPL-3.0", license_ok=False)
+    result = await _generate(tmp_path, _base_args(), ledger=ledger)
+    assert "error" not in result
+    readme = (tmp_path / "acme_pool" / "README.md").read_text()
+    assert "## License Notice" in readme
+    assert "bad" in readme
+    assert "good" not in readme
+
+
+@pytest.mark.asyncio
+async def test_readme_license_notice_persists_across_a_regeneration_that_does_not_reflag_it(tmp_path):
+    flagging_ledger = EvidenceLedger()
+    flagging_ledger.record_source(tier="github", url="https://github.com/example/bad", title="bad", license="GPL-3.0", license_ok=False)
+    await _generate(tmp_path, _base_args(), ledger=flagging_ledger)
+
+    unrelated_ledger = EvidenceLedger()
+    unrelated_ledger.record_source(tier="web_search", url="https://example.com/unrelated", title="unrelated")
+    result = await _generate(tmp_path, _base_args(confirm_overwrite=True), ledger=unrelated_ledger)
+
+    assert "error" not in result
+    readme = (tmp_path / "acme_pool" / "README.md").read_text()
+    assert "## License Notice" in readme
+    assert "bad" in readme
+
+
+# --- LICENSE.md: full third-party attribution + an unconditional MIT grant
+# for this plugin's own code ---
+
+
+@pytest.mark.asyncio
+async def test_license_md_contains_mit_grant_unconditionally(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    license_md = (tmp_path / "acme_pool" / "LICENSE.md").read_text()
+    assert "## MIT License" in license_md
+    assert f"Copyright (c) " in license_md
+    assert DEVELOPER_NAME in license_md
+
+
+@pytest.mark.asyncio
+async def test_license_md_attributes_sources_regardless_of_license_ok(tmp_path):
+    ledger = EvidenceLedger()
+    ledger.record_source(tier="github", url="https://github.com/example/good", title="good", license="MIT", license_ok=True)
+    ledger.record_source(tier="github", url="https://github.com/example/bad", title="bad", license="GPL-3.0", license_ok=False)
+    result = await _generate(tmp_path, _base_args(), ledger=ledger)
+    assert "error" not in result
+    license_md = (tmp_path / "acme_pool" / "LICENSE.md").read_text()
+    assert "## Third-Party Attributions" in license_md
+    assert "good" in license_md
+    assert "bad" in license_md
+
+
+@pytest.mark.asyncio
+async def test_license_md_omits_attributions_section_when_no_source_has_a_license(tmp_path):
+    ledger = EvidenceLedger()
+    ledger.record_source(tier="web_search", url="https://example.com/unrelated", title="unrelated")
+    result = await _generate(tmp_path, _base_args(), ledger=ledger)
+    assert "error" not in result
+    license_md = (tmp_path / "acme_pool" / "LICENSE.md").read_text()
+    assert "Third-Party Attributions" not in license_md
+    assert "## MIT License" in license_md
+
+
+@pytest.mark.asyncio
+async def test_license_md_attribution_persists_across_a_regeneration_that_does_not_reflag_it(tmp_path):
+    attributing_ledger = EvidenceLedger()
+    attributing_ledger.record_source(tier="github", url="https://github.com/example/good", title="good", license="MIT", license_ok=True)
+    await _generate(tmp_path, _base_args(), ledger=attributing_ledger)
+
+    unrelated_ledger = EvidenceLedger()
+    unrelated_ledger.record_source(tier="web_search", url="https://example.com/unrelated", title="unrelated")
+    result = await _generate(tmp_path, _base_args(confirm_overwrite=True), ledger=unrelated_ledger)
+
+    assert "error" not in result
+    license_md = (tmp_path / "acme_pool" / "LICENSE.md").read_text()
+    assert "good" in license_md
+
+
+@pytest.mark.asyncio
+async def test_license_md_participates_in_overwrite_conflict_check(tmp_path):
+    await _generate(tmp_path, _base_args())
+    second = await _generate(tmp_path, _base_args())
+    assert "LICENSE.md" in second["conflicts"]
+
+
+@pytest.mark.asyncio
+async def test_license_md_in_files_written(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "LICENSE.md" in result["files_written"]
+
+
+# --- persist/ directory, always created, for any override body that needs
+# to persist something beyond customParams/customData; data/ is a separate,
+# narrower directory created only when server_entry.fileUpload is true ---
+
+
+@pytest.mark.asyncio
+async def test_persist_directory_is_always_created_on_disk(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    assert (tmp_path / "acme_pool" / "persist").is_dir()
+    assert "persist/" in result["files_written"]
+
+
+@pytest.mark.asyncio
+async def test_rendered_plugin_py_always_points_persist_dir_at_the_persist_subdirectory(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert 'self.persist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "persist")' in source
+
+
+@pytest.mark.asyncio
+async def test_data_directory_is_not_created_when_file_upload_is_not_set(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    assert not (tmp_path / "acme_pool" / "data").exists()
+    assert "data/" not in result["files_written"]
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.data_dir" not in source
+
+
+@pytest.mark.asyncio
+async def test_data_directory_is_created_on_disk_when_file_upload_is_true(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "desc": "Acme pool controller", "fileUpload": True})
+    result = await _generate(tmp_path, args)
     assert "error" not in result
     assert (tmp_path / "acme_pool" / "data").is_dir()
     assert "data/" in result["files_written"]
 
 
 @pytest.mark.asyncio
-async def test_rendered_plugin_py_points_data_dir_at_the_data_subdirectory(tmp_path):
-    result = await _generate(tmp_path, _base_args())
+async def test_rendered_plugin_py_points_data_dir_at_the_data_subdirectory_when_file_upload_is_true(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "desc": "Acme pool controller", "fileUpload": True})
+    result = await _generate(tmp_path, args)
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
     assert 'self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")' in source
@@ -430,6 +676,34 @@ async def test_main_py_sends_the_profile_before_constructing_the_controller(tmp_
     assert source.index("updateJsonProfile") < source.index("Controller(polyglot")
 
 
+# --- main.py/install.sh both self-detect a local-dev .venv (see
+# setup_dev_venv) -- production never has one, so both checks are always a
+# no-op there; the host always launches main.py with its bare system
+# python3 regardless, confirmed against a real /usr/local/etc/rc.d/plugin_N
+# script, so main.py re-exec'ing into .venv itself is the only place this
+# can take effect once a plugin is actually registered/started ---
+
+
+@pytest.mark.asyncio
+async def test_main_py_re_execs_into_venv_before_importing_udi_interface(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert 'os.path.join(_PLUGIN_DIR, ".venv", "bin", "python3")' in source
+    assert "os.execv(_VENV_PYTHON" in source
+    assert source.index("os.execv") < source.index("import udi_interface")
+
+
+@pytest.mark.asyncio
+async def test_install_sh_uses_venv_pip_when_present_else_falls_back_to_user_install(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    install_sh = (tmp_path / "acme_pool" / "install.sh").read_text()
+    assert '.venv/bin/pip3 install -r requirements.txt' in install_sh
+    assert "pip3 install -r requirements.txt --user" in install_sh
+    assert '[ -x ".venv/bin/pip3" ]' in install_sh
+
+
 # --- node classes ---
 
 
@@ -447,3 +721,229 @@ async def test_invalid_node_class_syntax_is_rejected(tmp_path):
     result = await _generate(tmp_path, args)
     assert "error" in result
     assert not (tmp_path / "acme_pool").exists()
+
+
+# --- guard 2: developer commissioning ---
+
+
+@pytest.mark.asyncio
+async def test_missing_developer_config_is_refused(tmp_path):
+    result = await _generate(tmp_path, _base_args(), skip_developer_config=True)
+    assert "error" in result
+    assert "configure_developer" in result["error"]
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_mismatched_authenticated_user_is_refused(tmp_path):
+    result = await _generate(tmp_path, _base_args(), get_user_id=lambda: "someone-else@example.com")
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_no_authenticated_user_id_does_not_block_generation(tmp_path):
+    result = await _generate(tmp_path, _base_args(), get_user_id=lambda: None)
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_matching_authenticated_user_is_allowed(tmp_path):
+    result = await _generate(tmp_path, _base_args(), get_user_id=lambda: DEVELOPER_EMAIL)
+    assert "error" not in result
+
+
+# --- customParams/nsdata must be JSON-encoded strings, not raw objects/arrays
+# (confirmed against a real failed registration -- the host rejects a raw
+# array) ---
+
+
+@pytest.mark.asyncio
+async def test_custom_params_is_a_json_encoded_string(tmp_path):
+    # customParams is PG3's actual flat 'customparams' shape -- {field_name:
+    # value} -- not the richer [{name, type, isRequired, ...}] list
+    # ('customtypedparams'), confirmed directly against a real plugin's
+    # working registration. 'value' is a seeded initial value (often ''),
+    # not documentation -- that's the separate custom_param_docs input below.
+    custom_params = {"host": ""}
+    args = _base_args(server_entry={"name": "AcmePool", "customParams": custom_params}, custom_param_docs="Host docs.")
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert isinstance(entry["customParams"], str)
+    assert json.loads(entry["customParams"]) == custom_params
+
+
+@pytest.mark.asyncio
+async def test_custom_params_rejects_the_richer_typed_list_shape(tmp_path):
+    custom_params = [{"name": "host", "desc": "IP address", "type": "string"}]
+    args = _base_args(server_entry={"name": "AcmePool", "customParams": custom_params}, custom_param_docs="docs")
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_custom_params_rejects_non_string_values(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "customParams": {"host": 123}}, custom_param_docs="docs")
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+
+
+# --- setCustomParamDocs comes from the separate, richly-authored
+# custom_param_docs input -- never derived from customParams' own minimal
+# {field_name: value} map, and never something the LLM-authored half has
+# to remember to call itself ---
+
+
+@pytest.mark.asyncio
+async def test_custom_param_docs_is_required_when_custom_params_given(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "customParams": {"host": ""}})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_custom_param_docs_renders_set_custom_param_docs_call_verbatim(tmp_path):
+    docs = "## Setup\n\n- **host**: enter the IP address printed on your controller's sticker.\n"
+    args = _base_args(
+        server_entry={"name": "AcmePool", "customParams": {"host": ""}},
+        custom_param_docs=docs,
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.poly.setCustomParamDocs(" in source
+    assert repr(docs) in source
+
+
+@pytest.mark.asyncio
+async def test_no_custom_params_means_no_set_custom_param_docs_call(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "setCustomParamDocs" not in source
+
+
+@pytest.mark.asyncio
+async def test_nsdata_is_a_json_encoded_string(tmp_path):
+    nsdata = {"seed": "value"}
+    args = _base_args(server_entry={"name": "AcmePool", "nsdata": nsdata})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert isinstance(entry["nsdata"], str)
+    assert json.loads(entry["nsdata"]) == nsdata
+
+
+# --- requireEisyui ---
+
+
+@pytest.mark.asyncio
+async def test_require_eisyui_true_is_passed_through(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "requireEisyui": True})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["requireEisyui"] is True
+
+
+@pytest.mark.asyncio
+async def test_require_eisyui_omitted_is_absent(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert "requireEisyui" not in entry
+
+
+# --- requirements.txt + install script ---
+
+
+@pytest.mark.asyncio
+async def test_requirements_txt_always_includes_the_base_requirement(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    requirements = (tmp_path / "acme_pool" / "requirements.txt").read_text()
+    assert "udi_interface>=3.0.57" in requirements
+    assert "requirements.txt" in result["files_written"]
+
+
+@pytest.mark.asyncio
+async def test_requirements_txt_includes_extra_requirements_and_dedupes(tmp_path):
+    args = _base_args(
+        server_entry={
+            "name": "AcmePool",
+            "extra_requirements": ["requests>=2.31.0", "udi_interface>=3.0.57", "requests>=2.31.0"],
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    lines = (tmp_path / "acme_pool" / "requirements.txt").read_text().splitlines()
+    assert lines == ["udi_interface>=3.0.57", "requests>=2.31.0"]
+
+
+@pytest.mark.asyncio
+async def test_extra_requirements_rejects_non_string_entries(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "extra_requirements": [123]})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_secret_in_extra_requirements_is_refused(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "extra_requirements": ["sekrit-token-value"]})
+    result = await _generate(tmp_path, args, secret_values=["sekrit-token-value"])
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+# --- install.sh: server_entry.json's 'install' field is its filename, not
+# a literal command -- confirmed against the real ioxplugin reference
+# tooling (getStoreEntryContent() defaults to "install.sh" by the same
+# name) ---
+
+
+@pytest.mark.asyncio
+async def test_install_sh_is_generated_with_expected_content(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    install_sh = (tmp_path / "acme_pool" / "install.sh").read_text()
+    assert install_sh.startswith("#!/usr/bin/env bash\n")
+    assert "pip3 install -r requirements.txt" in install_sh
+    assert "install.sh" in result["files_written"]
+
+
+@pytest.mark.asyncio
+async def test_install_sh_is_executable(tmp_path):
+    import os
+
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    install_path = tmp_path / "acme_pool" / "install.sh"
+    assert os.access(install_path, os.X_OK)
+
+
+@pytest.mark.asyncio
+async def test_install_sh_does_not_enumerate_extra_requirements_itself(tmp_path):
+    # install.sh always just invokes requirements.txt, which already
+    # carries any extras -- it never needs to list them a second time.
+    args = _base_args(server_entry={"name": "AcmePool", "extra_requirements": ["requests>=2.31.0"]})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    install_sh = (tmp_path / "acme_pool" / "install.sh").read_text()
+    assert "requests" not in install_sh
+
+
+@pytest.mark.asyncio
+async def test_server_entry_install_field_is_the_script_filename(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["install"] == "install.sh"
+
+
+@pytest.mark.asyncio
+async def test_install_sh_participates_in_overwrite_conflict_check(tmp_path):
+    await _generate(tmp_path, _base_args())
+    second = await _generate(tmp_path, _base_args())
+    assert "install.sh" in second["conflicts"]

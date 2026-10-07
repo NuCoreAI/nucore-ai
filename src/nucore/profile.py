@@ -183,14 +183,21 @@ class Profile:
                 return editor
 
             # Validate keys / format
-            if "id" not in f:
-                logger.debug(f"Family {fidx} missing 'id'")
             if isinstance(f, str):
                 logger.debug(f"Family {fidx} is a string, expected dict")
+                continue
+            if "id" not in f:
+                logger.debug(f"Family {fidx} missing 'id'")
                 continue
             instances = []
             #mpg names hack
             for _, i in enumerate(f.get("instances", [])):
+                if "id" not in i:
+                    logger.debug(f"Instance in family '{f['id']}' missing 'id'")
+                    continue
+                if "name" not in i:
+                    logger.debug(f"Instance '{i['id']}' in family '{f['id']}' missing 'name'")
+                    continue
                 # Build Editors for reference first
                 for edict in i.get("editors", []):
                     if "id" not in edict:
@@ -202,11 +209,20 @@ class Profile:
                 # Build LinkDefs
                 linkdefs = []
                 for ldict in i.get("linkdefs", []):
+                    if "id" not in ldict:
+                        logger.debug(f"LinkDef in instance '{i['id']}' missing 'id'")
+                        continue
+                    if "protocol" not in ldict:
+                        logger.debug(f"LinkDef '{ldict['id']}' missing 'protocol'")
+                        continue
                     # parameters resolution below
                     params = []
                     for p in ldict.get("parameters", []):
+                        if "id" not in p:
+                            logger.debug(f"LinkDef '{ldict['id']}' param missing 'id'")
+                            continue
                         if "editor" not in p:
-                            logger.debug(f"LinkDef param missing 'editor': {p}")
+                            logger.debug(f"LinkDef '{ldict['id']}' param missing 'editor': {p}")
                             continue
                         eid = p["editor"]
                         editor = get_editor(eid)
@@ -234,20 +250,25 @@ class Profile:
                 # Build NodeDefs
                 nodedefs = []
                 for ndict in i.get("nodedefs", []):
+                    if "id" not in ndict:
+                        logger.debug(f"NodeDef in instance '{i['id']}' missing 'id'")
+                        continue
                     # NodeProperties
-                    props = {} 
+                    props = {}
                     for pdict in ndict.get("properties", {}):
-                        eid = pdict["editor"]
-                        editor = get_editor(eid)
-                        if not editor:
-                            logger.debug(
-                                f"Editor '{eid}' not found for property '{pdict.get('id')}' in nodedef '{ndict['id']}'"
-                            )
-
                         pid=pdict.get("id")
                         if pid is None:
                             logger.debug(f"Property missing 'id' in nodedef '{ndict['id']}'")
                             continue
+                        if "editor" not in pdict:
+                            logger.debug(f"Property '{pid}' missing 'editor' in nodedef '{ndict['id']}'")
+                            continue
+                        eid = pdict["editor"]
+                        editor = get_editor(eid)
+                        if not editor:
+                            logger.debug(
+                                f"Editor '{eid}' not found for property '{pid}' in nodedef '{ndict['id']}'"
+                            )
                         props[pid]=NodeProperty(
                                 id=pid,
                                 editor=editor,
@@ -264,8 +285,17 @@ class Profile:
                         ("accepts", cmds_data.get("accepts", [])),
                     ]:
                         for cdict in clist:
+                            if "id" not in cdict:
+                                logger.debug(f"Command in nodedef '{ndict['id']}' missing 'id'")
+                                continue
                             params = []
                             for p in cdict.get("parameters", []):
+                                if "id" not in p:
+                                    logger.debug(f"Command '{cdict['id']}' param missing 'id'")
+                                    continue
+                                if "editor" not in p:
+                                    logger.debug(f"Command '{cdict['id']}' param missing 'editor'")
+                                    continue
                                 eid = p["editor"]
                                 editor = get_editor(eid)
                                 if not editor:

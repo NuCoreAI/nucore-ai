@@ -19,6 +19,7 @@ own install_generated_plugin is the real local-dev install/start path.
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable
 from typing import Any
 
 from nucore import NuCoreInterface
@@ -27,7 +28,8 @@ from utils import get_logger
 from ..dispatch import ToolHandler
 from ..handlers import plugin_management, shell
 from .evidence_ledger import EvidenceLedger
-from .handlers import device_detection, discovery, install, profile_authoring, scaffold, workspace
+from .handlers import dev_venv, device_detection, discovery, install, profile_authoring, scaffold, workspace
+from .handlers import developer_config as developer_config_handlers
 
 logger = get_logger(__name__)
 
@@ -41,6 +43,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "call_plugin": plugin_management.call_plugin,
     "run_shell_command": shell.run_shell_command,
     "detect_usb_device": device_detection.detect_usb_device,
+    "uninstall_installed_plugin": plugin_management.uninstall_installed_plugin,
 }
 
 
@@ -51,6 +54,7 @@ def build_tool_handlers(
     search_engine_api_key: str | None,
     secret_values: list[str],
     plugin_output_root: str,
+    get_user_id: Callable[[], str | None] | None = None,
 ) -> dict[str, ToolHandler]:
     """Fresh per-connection handlers dict: the tools above, unchanged, plus
     the Phase 2 discovery tools and the Phase 3 workspace-discovery tools
@@ -60,8 +64,18 @@ def build_tool_handlers(
     *search_engine* and *search_engine_api_key* are truthy -- "registered
     only when the key is configured" applies equally to either provider,
     not just one of them. ``list_generated_plugins``/``read_generated_plugin``
-    are always added -- local-disk-only, nothing external to be missing."""
+    are always added -- local-disk-only, nothing external to be missing.
+    *get_user_id*, when given, is this connection's own live
+    ``EisyUIContext.get_user_id`` bound method -- ``configure_developer``/
+    ``generate_plugin_scaffold`` call it at use time, never caching its
+    result, so it always reflects the connection's current authenticated
+    identity rather than a snapshot taken when the handlers were built."""
     handlers: dict[str, ToolHandler] = dict(TOOL_HANDLERS)
+    handlers["configure_developer"] = functools.partial(
+        developer_config_handlers.configure_developer,
+        plugin_output_root=plugin_output_root,
+        get_user_id=get_user_id,
+    )
     handlers["search_store_plugins"] = functools.partial(discovery.search_store_plugins, ledger=ledger)
     handlers["search_github_plugins"] = functools.partial(
         discovery.search_github_plugins, ledger=ledger, secret_values=secret_values
@@ -88,10 +102,18 @@ def build_tool_handlers(
         ledger=ledger,
         secret_values=secret_values,
         plugin_output_root=plugin_output_root,
+        get_user_id=get_user_id,
     )
     handlers["install_generated_plugin"] = functools.partial(
         install.install_generated_plugin, plugin_output_root=plugin_output_root
     )
+    handlers["update_registered_plugin"] = functools.partial(
+        install.update_registered_plugin, plugin_output_root=plugin_output_root
+    )
+    handlers["delete_registered_plugin"] = functools.partial(
+        install.delete_registered_plugin, plugin_output_root=plugin_output_root
+    )
+    handlers["setup_dev_venv"] = functools.partial(dev_venv.setup_dev_venv, plugin_output_root=plugin_output_root)
     return handlers
 
 

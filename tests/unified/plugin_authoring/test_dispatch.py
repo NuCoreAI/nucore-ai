@@ -17,7 +17,16 @@ from unified.plugin_authoring.evidence_ledger import EvidenceLedger
 
 INSTALLED_RESPONSE = {
     "successful": True,
-    "data": [{"profileNum": 7, "name": "MyDevPlugin", "isLocal": True, "aiSupport": False, "state": "stopped"}],
+    "data": [
+        {
+            "profileNum": 7,
+            "nsid": "local.my_dev_plugin",
+            "name": "MyDevPlugin",
+            "isLocal": True,
+            "aiSupport": False,
+            "state": "stopped",
+        }
+    ],
 }
 
 
@@ -96,7 +105,14 @@ async def test_list_installed_plugins_is_reused_from_unified_handlers():
     result = await execute_tool("list_installed_plugins", {}, nucore_interface=FakeBackend())
     assert result == {
         "plugins": [
-            {"plugin_id": 7, "name": "MyDevPlugin", "is_local": True, "ai_support": False, "state": "stopped"}
+            {
+                "plugin_id": 7,
+                "nsid": "local.my_dev_plugin",
+                "name": "MyDevPlugin",
+                "is_local": True,
+                "ai_support": False,
+                "state": "stopped",
+            }
         ]
     }
 
@@ -188,6 +204,25 @@ def test_build_tool_handlers_always_adds_install_generated_plugin():
     assert "install_generated_plugin" in handlers
 
 
+def test_build_tool_handlers_always_adds_update_and_delete_registered_plugin():
+    # Resolve a reported install_generated_plugin "conflict" -- same
+    # plugin_output_root-only binding as install_generated_plugin itself.
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "update_registered_plugin" in handlers
+    assert "delete_registered_plugin" in handlers
+
+
+def test_uninstall_installed_plugin_is_in_the_static_tool_handlers_table():
+    # Needs no plugin_output_root binding -- registered directly, same as
+    # plugin_ops, not through build_tool_handlers. Not customer-facing (see
+    # its own docstring) -- plugin_authoring-only, same as delete_plugin's
+    # boundary, but unlike delete_plugin it's a real delete, so it's reused
+    # here rather than left out entirely.
+    assert "uninstall_installed_plugin" in TOOL_HANDLERS
+
+
 def test_plugin_authoring_reuses_run_shell_command_and_detect_usb_device():
     # Stage 6 (design/developers/plugin_authoring_p4_impl.md): hardware/USB
     # detection reuses the customer tool set's run_shell_command directly.
@@ -229,3 +264,81 @@ async def test_execute_tool_uses_the_given_tool_handlers_dict():
 async def test_execute_tool_falls_back_to_module_default_when_no_tool_handlers_given():
     result = await execute_tool("validate_profile", {"profile": "not-a-dict"}, nucore_interface=FakeBackend())
     assert result == {"valid": False, "errors": ["'profile' must be a JSON object"]}
+
+
+# --- configure_developer (developer commissioning) ---
+
+
+def test_build_tool_handlers_always_adds_configure_developer():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "configure_developer" in handlers
+
+
+@pytest.mark.asyncio
+async def test_configure_developer_routes_through_dispatch_and_writes_the_config(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+        get_user_id=lambda: "dev@example.com",
+    )
+    result = await execute_tool(
+        "configure_developer",
+        {"email": "dev@example.com", "name": "Dev"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert result["configured"] is True
+    assert (tmp_path / "developer_config.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_configure_developer_mismatched_email_is_refused_through_dispatch(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+        get_user_id=lambda: "someone-else@example.com",
+    )
+    result = await execute_tool(
+        "configure_developer",
+        {"email": "dev@example.com", "name": "Dev"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert "error" in result
+    assert not (tmp_path / "developer_config.json").exists()
+
+
+# --- setup_dev_venv (local/dev-testing only) ---
+
+
+def test_build_tool_handlers_always_adds_setup_dev_venv():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "setup_dev_venv" in handlers
+
+
+@pytest.mark.asyncio
+async def test_setup_dev_venv_routes_through_dispatch(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+    )
+    result = await execute_tool(
+        "setup_dev_venv",
+        {"location": "does_not_exist"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert "error" in result

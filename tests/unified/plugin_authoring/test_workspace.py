@@ -99,6 +99,8 @@ async def test_read_generated_plugin_returns_all_files(tmp_path):
     (plugin_dir / "README.md").write_text("# Pool Controller\n")
     (plugin_dir / "tests").mkdir()
     (plugin_dir / "tests" / "test_pool.py").write_text("def test_x(): pass")
+    (plugin_dir / "sources.md").write_text("# Sources\n\n| Tier |\n")
+    (plugin_dir / "LICENSE.md").write_text("# License\n\n## MIT License\n")
 
     result = await workspace.read_generated_plugin(None, {"location": "pool_controller"}, plugin_output_root=str(tmp_path))
 
@@ -106,6 +108,8 @@ async def test_read_generated_plugin_returns_all_files(tmp_path):
     assert result["plugin_py"] == "# the backend"
     assert result["readme"] == "# Pool Controller\n"
     assert result["tests"] == {"test_pool.py": "def test_x(): pass"}
+    assert result["sources"] == "# Sources\n\n| Tier |\n"
+    assert result["license"] == "# License\n\n## MIT License\n"
 
 
 @pytest.mark.asyncio
@@ -118,6 +122,8 @@ async def test_read_generated_plugin_missing_optional_files_are_none(tmp_path):
     assert result["readme"] is None
     assert result["tests"] == {}
     assert result["context"] is None
+    assert result["sources"] is None
+    assert result["license"] is None
 
 
 @pytest.mark.asyncio

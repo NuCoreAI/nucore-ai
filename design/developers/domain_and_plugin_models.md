@@ -315,6 +315,13 @@ polyglot.updateJsonProfile({
 }, {"waitResponse": True})
 ```
 
+**`polyglot.getValidName(name)`** / **`polyglot.getValidAddress(address)`** — sanitize a
+candidate node display name / address so IoX will accept it (invalid characters stripped or
+replaced, length limits enforced) before constructing a `Node` and calling
+`self.poly.addNode(...)`. Always run a dynamically-derived name/address (e.g. built from a
+discovered device's own hostname, serial number, or user input) through these first — nothing
+else in this pipeline validates them.
+
 ### Profile structure (the wire shape's objects)
 
 | Object | Fields |

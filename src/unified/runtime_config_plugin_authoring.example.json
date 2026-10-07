@@ -1,5 +1,5 @@
 {
-  "max_iterations": 20,
+  "max_iterations": 50,
   "preferences_dir": null,
   "prompt_log_dir": null,
   "prompt_log_enabled": true,
@@ -10,8 +10,8 @@
   "nucore_runtime": {
     "default": {
       "provider": "claude",
-      "model_2": "claude-sonnet-5",
-      "model": "claude-haiku-4-5-20251001",
+      "model_2": "claude-haiku-4-5-20251001",
+      "model": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "url": null,
       "max_turns": 20,
@@ -20,8 +20,8 @@
     },
     "unified": {
       "provider": "claude",
-      "model_2": "claude-sonnet-5",
-      "model": "claude-haiku-4-5-20251001",
+      "model_2": "claude-haiku-4-5-20251001",
+      "model": "claude-sonnet-5",
       "api_key": "${ANTHROPIC_API_KEY}",
       "stream": true,
       "url": null,
