@@ -408,6 +408,38 @@ async def test_switch_tool_set_result_raises_instead_of_continuing_the_round():
     assert exc_info.value.target_tool_set == "plugin_authoring"
 
 
+async def test_switch_tool_set_result_carries_the_handoff_summary_through():
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    async def fake_dispatch(name, args):
+        return {SWITCH_TOOL_SET_KEY: "plugin_authoring", "handoff_summary": "customer wants a SimpliSafe plugin"}
+
+    responses = [{"tool_calls": [{"id": "1", "name": "switch_to_developer_mode", "input": {}}]}]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=fake_dispatch)
+
+    with pytest.raises(ToolSetSwitchRequested) as exc_info:
+        await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert exc_info.value.handoff_summary == "customer wants a SimpliSafe plugin"
+
+
+async def test_switch_tool_set_without_a_handoff_summary_leaves_it_none():
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    async def fake_dispatch(name, args):
+        return {SWITCH_TOOL_SET_KEY: "plugin_authoring"}
+
+    responses = [{"tool_calls": [{"id": "1", "name": "switch_to_developer_mode", "input": {}}]}]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=fake_dispatch)
+
+    with pytest.raises(ToolSetSwitchRequested) as exc_info:
+        await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert exc_info.value.handoff_summary is None
+
+
 async def test_switch_tool_set_does_not_dispatch_remaining_calls_in_the_same_round():
     from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
 

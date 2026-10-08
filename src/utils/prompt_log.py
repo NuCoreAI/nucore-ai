@@ -402,10 +402,24 @@ class PromptLogManager:
 _manager: PromptLogManager | None = None
 
 
-def configure_prompt_logging(log_dir: str | Path, *, enabled: bool = True) -> PromptLogManager:
-    """Configure the process-wide prompt log manager once at startup."""
+def configure_prompt_logging(log_file: str | Path | None) -> PromptLogManager:
+    """Configure the process-wide prompt log manager once at startup.
+
+    *log_file* is the exact file to write to (its parent directories are
+    created if missing -- see ``PromptLogManager.__init__``), and its mere
+    presence is the only "whether" switch: given, logging is on and goes
+    exactly there; omitted (``None``/empty), logging is off. There is no
+    default location -- see run_unified_runtime.py's ``--prompt-log-file``,
+    a CLI-only flag (never read from runtime config) on the same
+    "deployment/host concern, not a customer-configurable one" footing as
+    ``--preferences-dir``.
+    """
     global _manager
-    _manager = PromptLogManager(log_dir, enabled=enabled)
+    if not log_file:
+        _manager = PromptLogManager(Path.cwd() / "logs", enabled=False)
+        return _manager
+    path = Path(log_file).expanduser()
+    _manager = PromptLogManager(path.parent, enabled=True, filename=path.name)
     return _manager
 
 

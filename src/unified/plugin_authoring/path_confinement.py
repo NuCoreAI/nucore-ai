@@ -2,9 +2,9 @@
 tools -- today's readers (handlers/workspace.py's ``read_generated_plugin``)
 and the future writer (design/developers/impl_plan.md's Phase 4
 ``generate_plugin_scaffold``) both need the exact same guarantee: a
-caller-supplied relative path must resolve to somewhere inside
-``--plugin-output-root``, never outside it. Written once here so Phase 4
-reuses it instead of re-deriving the same checks.
+caller-supplied relative path must resolve to somewhere inside this
+profile's ``plugin_output_root`` (runtime config), never outside it. Written
+once here so Phase 4 reuses it instead of re-deriving the same checks.
 """
 
 from __future__ import annotations

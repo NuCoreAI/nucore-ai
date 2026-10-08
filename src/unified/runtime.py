@@ -30,6 +30,37 @@ _TOOLS_DIR = Path(__file__).parent / "tools"
 SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
 
+def _build_user_message(
+    query: str, *, framework_context: dict[str, Any] | None, handoff_notes: list[str]
+) -> str:
+    """Wrap *query* with whatever extra context this turn has accumulated so
+    far: the UI's own context payload (unconditional, every turn), and --
+    only once a mid-turn switch has happened -- the switching tool set's own
+    ``handoff_summary`` (see loop.py's ``ToolSetSwitchRequested``). The new
+    tool set's conversation history deliberately never includes the other
+    tool set's turns (see merged-toolsets.md's "Session history"), so this
+    is the only way it learns what's going on rather than seeing the bare
+    trigger message (e.g. a lone "4" in reply to a menu it never saw) with
+    zero context -- see merged-toolsets.md's "Mid-round chaining" for the
+    "4." regression this fixes.
+
+    Rebuilt from scratch (not appended to) on every switch, from the
+    original *query* and the full list of notes accumulated so far, so a
+    chain of more than one switch in one turn doesn't nest an already-
+    wrapped message inside another wrapper.
+    """
+    message = query
+    if framework_context:
+        message = f"<ui_context>{framework_context}</ui_context>\n\n{message}"
+    if handoff_notes:
+        notes = "\n".join(f"- {note}" for note in handoff_notes)
+        message = (
+            f"(Handoff note -- the tool set you were just in has its own separate history and "
+            f"cannot see it; this is the only context carried over:\n{notes})\n\n{message}"
+        )
+    return message
+
+
 def resolve_llm_profile(runtime_config: dict[str, Any], *, preferred_key: str = "unified") -> dict[str, Any]:
     """Pick an LLM profile dict out of ``runtime_config["supported_llms"]``:
     *preferred_key* if present, else whatever key comes first. Shared by
@@ -151,9 +182,9 @@ class UnifiedRuntime:
         # passes one shared SessionStore so a reconnect finds its history
         # instead of starting empty -- see that class's own docstring for
         # why the per-session lock it provides is what keeps sharing it
-        # safe. Every other caller (single-shot --query, the stdin REPL,
-        # and any test that doesn't pass one) keeps today's behavior: its
-        # own private store, unaffected by any other instance.
+        # safe. Every other caller (the stdin REPL, and any test that
+        # doesn't pass one) keeps today's behavior: its own private store,
+        # unaffected by any other instance.
         self.session_store = session_store or SessionStore()
         self._tool_sets: dict[str, ToolSetBundle] = dict(tool_sets or {})
         if "unified" not in self._tool_sets:
@@ -294,9 +325,8 @@ class UnifiedRuntime:
                 history_messages.append({"role": "user", "content": turn.query})
                 history_messages.append({"role": "assistant", "content": turn.response})
 
-            user_message = query
-            if framework_context:
-                user_message = f"<ui_context>{framework_context}</ui_context>\n\n{query}"
+            handoff_notes: list[str] = []
+            user_message = _build_user_message(query, framework_context=framework_context, handoff_notes=handoff_notes)
 
             self._current_switch_state = _SwitchState(
                 enabled_tool_sets=self.enabled_tool_sets,
@@ -322,6 +352,8 @@ class UnifiedRuntime:
                 except ToolSetSwitchRequested as switch:
                     self._current_switch_state.switches_used += 1
                     current_tool_set = switch.target_tool_set
+                    if switch.handoff_summary:
+                        handoff_notes.append(switch.handoff_summary)
                     # Re-key history to the new tool set's own composite id --
                     # the chained loop's turn gets recorded under whichever
                     # tool set actually produced the final answer.
@@ -334,6 +366,9 @@ class UnifiedRuntime:
                     for turn in history.turns:
                         history_messages.append({"role": "user", "content": turn.query})
                         history_messages.append({"role": "assistant", "content": turn.response})
+                    user_message = _build_user_message(
+                        query, framework_context=framework_context, handoff_notes=handoff_notes
+                    )
                     continue
 
             history.append(query, final_text)

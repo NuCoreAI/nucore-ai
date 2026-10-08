@@ -22,6 +22,30 @@ async def test_enabled_target_under_cap_returns_the_switch_sentinel():
 
 
 @pytest.mark.asyncio
+async def test_handoff_summary_is_passed_through_on_success():
+    handler = make_switch_handler(
+        "plugin_authoring", is_target_enabled=lambda: True, get_switch_count=lambda: 0, max_switches=1
+    )
+    result = await handler(None, {"handoff_summary": "customer wants a SimpliSafe plugin"})
+    assert result == {
+        SWITCH_TOOL_SET_KEY: "plugin_authoring",
+        "handoff_summary": "customer wants a SimpliSafe plugin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_handoff_summary_does_not_block_the_switch():
+    # The tool schema marks it required, but a model that somehow omits it
+    # (or sends an empty string) must not get stuck -- the switch still
+    # succeeds, just with no extra context carried over.
+    handler = make_switch_handler(
+        "plugin_authoring", is_target_enabled=lambda: True, get_switch_count=lambda: 0, max_switches=1
+    )
+    result = await handler(None, {"handoff_summary": ""})
+    assert result == {SWITCH_TOOL_SET_KEY: "plugin_authoring"}
+
+
+@pytest.mark.asyncio
 async def test_disabled_target_returns_a_plain_error_not_the_sentinel():
     handler = make_switch_handler(
         "plugin_authoring", is_target_enabled=lambda: False, get_switch_count=lambda: 0, max_switches=1

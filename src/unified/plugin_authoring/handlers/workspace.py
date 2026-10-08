@@ -1,7 +1,8 @@
 """Workspace discovery (design/developers/impl_plan.md Phase 3): what's
-already been generated under ``--plugin-output-root``, and loading one back
-into context -- so a customer coming back later gets the AI picking up where
-it left off, not starting blind. The "new vs. history" half of the
+already been generated under this profile's ``plugin_output_root`` (runtime
+config), and loading one back into context -- so a customer coming back
+later gets the AI picking up where it left off, not starting blind. The
+"new vs. history" half of the
 authoring flow; actually modifying and rewriting a plugin goes through
 ``handlers/scaffold.py``'s ``generate_plugin_scaffold`` and its overwrite
 flow (design/developers/plugin_authoring_p4_impl.md Stage 2).

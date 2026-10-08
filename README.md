@@ -36,25 +36,12 @@ Create a runtime profile JSON first (see `src/unified/runtime_config.example.jso
 
 ```shell
 python -m unified.run_unified_runtime \
-  --runtime-config src/unified/runtime_config.example.json \
-  --query "Turn on the patio lights"
+  --runtime-config src/unified/runtime_config.example.json
 ```
+
+This drops into an interactive prompt loop (`> `), reading one query per line from stdin.
 
 ### With NuCore Backend (eisy)
-
-```shell
-python -m unified.run_unified_runtime \
-  --runtime-config src/unified/runtime_config.example.json \
-  --backend-api-classpath iox.IoXWrapper \
-  --backend-api-base-url https://192.168.6.134 \
-  --backend-api-username admin \
-  --backend-api-password yourpassword \
-  --json-output true
-```
-
-### Interactive Mode
-
-Omit `--query` to enter an interactive prompt loop:
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -67,8 +54,8 @@ python -m unified.run_unified_runtime \
 
 ### WebSocket Server Mode
 
-Pass `--websocket-port` to run as a standalone WebSocket server instead of
-`--query`/REPL mode -- no HTTP framework involved (uses the `websockets` package, already
+Pass `--websocket-port` to run as a standalone WebSocket server instead of the interactive
+REPL -- no HTTP framework involved (uses the `websockets` package, already
 a project dependency). Every received message is treated as a query, and the response
 streams back over the same connection. Conversation history is shared across connections
 and keyed by session id, so a reconnect (network blip, page reload, a restarted client)
@@ -92,19 +79,27 @@ serving a browser UI.
 
 ### Developer Tool Set (Plugin Authoring)
 
-Pass `--tool-set plugin_authoring` to swap the customer-facing tool set/system prompt (the
-default, `--tool-set customer`) for `unified.plugin_authoring` (formerly `dev_tools`, renamed in
-place -- see `design/developers/impl_plan.md`): one tool set serving both a developer testing an
-already-installed plugin (Dynamic Profiles JSON validation, UOM lookup,
+`unified.plugin_authoring` (formerly `dev_tools`, renamed in place -- see
+`design/developers/impl_plan.md`) is a second tool set/system prompt serving both a developer
+testing an already-installed plugin (Dynamic Profiles JSON validation, UOM lookup,
 configuring/starting/stopping/calling it) and a non-technical customer guided through a
-store-search/research/scaffold-generation/install flow. Requires `--plugin-output-root <dir>`
-(the allowed root for generated scaffolds) and a live backend via `--backend-api-classpath`, same
-as `customer`.
+store-search/research/scaffold-generation/install flow. It runs alongside the customer-facing
+`unified` tool set in the same process, over the same connection -- switched into dynamically via
+the `/developer`/`/customer` chat commands or a model-driven tool call, not a CLI flag (see
+`design/developers/merged-toolsets.md`).
+
+Which tool sets exist and are reachable is entirely config-driven: each one is a named profile
+under `nucore_runtime` in the runtime config file, gated by its own `enabled` flag (default
+`true`). `plugin_authoring`'s profile additionally requires `plugin_output_root` (the allowed
+root for generated scaffolds) whenever it's enabled -- see
+`runtime_config.example.json`'s `"plugin_authoring"` entry. A live backend via
+`--backend-api-classpath` is still required, same as for `unified`.
 
 The customer-facing flow's web search is Claude's own native `web_search` tool when the resolved
-LLM provider is Claude (no second API key) -- pass `--search-engine {brave,tavily}` (with
-`SEARCH_ENGINE_API_KEY` set) to force that Brave/Tavily fallback instead, on any provider; it's
-also what any non-Claude provider needs, since only Claude offers a native option here.
+LLM provider is Claude (no second API key) -- set runtime config's top-level `search_engine`
+(`"brave"` or `"tavily"`, with `SEARCH_ENGINE_API_KEY` set) to force that fallback instead, on any
+provider; it's also what any non-Claude provider needs, since only Claude offers a native option
+here.
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -112,11 +107,15 @@ python -m unified.run_unified_runtime \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
-  --backend-api-password yourpassword \
-  --tool-set plugin_authoring \
-  --plugin-output-root ~/plugin-projects \
-  --query "I want a plugin that exposes my pool controller"
+  --backend-api-password yourpassword
+> I want a plugin that exposes my pool controller
 ```
+
+In REPL mode the model-driven switch tool is the only way in (the model calls
+`switch_to_developer_mode`/`switch_to_customer_mode` itself when it judges the request is out of
+scope for whichever tool set is currently active); the `/developer`/`/customer` chat commands are
+parsed only from WebSocket `"type": "message"` payloads (see `EisyUIContext.process_message`),
+not from a raw REPL line.
 
 See `src/unified/plugin_authoring/README.md` for the full tool list, layout, and the
 discovery/generation workflow.
@@ -232,8 +231,7 @@ Usage:
 ```shell
 python -m unified.run_unified_runtime \
   --runtime-config src/unified/runtime_config.example.json \
-  --secrets-file /path/to/secrets.json \
-  --query "Turn on the patio lights"
+  --secrets-file /path/to/secrets.json
 ```
 
 ### Logging
@@ -300,14 +298,12 @@ rather than re-embedded on every agentic-loop iteration.
 ```shell
 python -m unified.run_unified_runtime \
   --runtime-config src/unified/runtime_config.example.json \
-  --prompt-log-dir /var/log/nucore \
-  --query "Turn on the patio lights"
+  --prompt-log-file logs/nucore.prompt.jsonl
 ```
 
-- Default location: `<cwd>/logs/nucore.prompt.jsonl` (override with `--prompt-log-dir` or runtime
-  config's `prompt_log_dir`).
-- Disable entirely with `--no-prompt-log` or runtime config's `prompt_log_enabled: false` --
-  `--prompt-log-dir` only ever controls *where*, never *whether*.
+- Off by default -- `--prompt-log-file` is the only on/off switch, and the only place the path
+  is set (CLI-only; never read from runtime config, same reasoning as `--preferences-dir` below).
+  Its mere presence enables logging to exactly that file, creating parent directories as needed.
 - Size-managed: once the active file crosses 10MB, the oldest lines are peeled off into a dated
   `nucore.prompt.<timestamp>.jsonl.gz` archive alongside it (never just discarded), and the
   compress-and-rewrite runs off the event loop so it can't stall an in-flight request. Nothing is
@@ -319,11 +315,7 @@ python -m unified.run_unified_runtime \
 |---|---|
 | `--runtime-config` | Required path to JSON with top-level `nucore_runtime` |
 | `--secrets-file` | Optional JSON file of secret key/value pairs passed into provider client key resolution |
-| `--query` | Single query mode; omit for interactive loop |
-| `--tool-set` | `customer` (default) or `plugin_authoring` -- which tool set/system prompt the agentic loop uses. See "Developer Tool Set (Plugin Authoring)" above |
-| `--plugin-output-root` | Allowed root directory for `plugin_authoring`'s generated scaffolds; required with `--tool-set plugin_authoring` |
-| `--search-engine` | `brave` or `tavily` -- forces that web-search fallback for `plugin_authoring`'s discovery tools (needs `SEARCH_ENGINE_API_KEY` too); omit it to use Claude's own native web search automatically when the resolved provider is Claude |
-| `--websocket-port` | Run as a native WebSocket server on this port instead of `--query`/REPL mode. Ignored when `--websocket-host` is a Unix socket path |
+| `--websocket-port` | Run as a native WebSocket server on this port instead of the interactive REPL. Ignored when `--websocket-host` is a Unix socket path |
 | `--websocket-host` | IP address to bind the WebSocket server to over TCP (default `0.0.0.0`), or a `unix://<path>` URI to serve over a Unix domain socket at `<path>` instead -- on its own (without `--websocket-port`) it's enough to enter WebSocket server mode. Any other value (including a bare filesystem path with no `unix://` prefix) is rejected |
 | `--websocket-client-id` | Unix socket mode only: required effective UID (checked via `getpeereid()`) of the connecting client; other UIDs are rejected. Ignored when `--websocket-host` is a TCP host/IP |
 | `--ssl-certfile` | PEM cert file; with `--ssl-keyfile`, serves `--websocket-port` over `wss://` |
@@ -332,17 +324,21 @@ python -m unified.run_unified_runtime \
 | `--backend-api-base-url` | Base URL for backend API (`http(s)://host:port`, or `unix:///path/to/socket` for `iox.IoXWrapper` to connect over a Unix domain socket instead of TCP) |
 | `--backend-api-username` | Backend API username |
 | `--backend-api-password` | Backend API password |
-| `--json-output` | Enable JSON output mode for backend API |
-| `--prompt_type` | Prompt variant to use (e.g. `shared-features`) |
 | `--log-level` | Logging level override: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `--log-file` | Optional rotating log file path |
 | `--log-json` | Emit logs in JSON format |
 | `--no-log-console` | Disable console logging |
-| `--stream` / `--no-stream` | Force LLM token streaming on/off for every `nucore_runtime` profile, overriding each profile's own `stream` setting |
-| `--max-iterations` | Override the agentic loop's max tool-call iterations per query (defaults to runtime config's `max_iterations`, or 8) |
-| `--preferences-dir` | Directory for this installation's customer preferences (aliases/events); overrides runtime config's `preferences_dir` -- no default, preferences are unavailable without one |
-| `--prompt-log-dir` | Directory for the debug prompt/tool-call log (`nucore.prompt.jsonl`); overrides runtime config's `prompt_log_dir`. Defaults to `<cwd>/logs` |
-| `--no-prompt-log` | Disable the debug prompt/tool-call log entirely. On by default (see "Prompt/Tool-Call Debug Log" below) |
+| `--preferences-dir` | Directory for this installation's customer preferences (aliases/events). No default, no runtime-config fallback -- preferences are unavailable unless this is set |
+| `--prompt-log-file` | Exact file path for the debug prompt/tool-call log; parent directories are created as needed. No default, no runtime-config fallback -- the log is off unless this is set |
+
+Everything else -- which tool set(s) are enabled, `plugin_output_root`, `search_engine`/
+`search_engine_api_key`, per-profile `stream`/`max_iterations` -- lives in the runtime config
+file only (see `runtime_config.example.json` and `design/developers/merged-toolsets.md`); there
+is no CLI override for any of it. `--preferences-dir`/`--prompt-log-file` are the deliberate
+opposite: CLI-only, never read from the config file even if present there -- the config file
+holds settings a customer could reasonably supply (model, temperature, which tool sets are
+enabled, ...), while where preferences/logs land on disk is a deployment/host concern the
+system controls.
 
 ## Supported Providers
 
@@ -486,5 +482,5 @@ Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 ## Further Documentation
 
 - Unified runtime architecture and tool reference: `src/unified/README.md`
-- Developer tool set (`--tool-set plugin_authoring`) reference: `src/unified/plugin_authoring/README.md`
+- Developer tool set (`plugin_authoring`) reference: `src/unified/plugin_authoring/README.md`
 

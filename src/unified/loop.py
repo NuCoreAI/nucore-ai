@@ -33,10 +33,20 @@ SWITCH_TOOL_SET_KEY = "__switch_tool_set_to__"
 
 class ToolSetSwitchRequested(Exception):
     """Raised out of :meth:`AgenticLoop.run` when a dispatched tool's result
-    carries :data:`SWITCH_TOOL_SET_KEY` -- see that constant's docstring."""
+    carries :data:`SWITCH_TOOL_SET_KEY` -- see that constant's docstring.
 
-    def __init__(self, target_tool_set: str) -> None:
+    *handoff_summary* is the model-authored summary of what the customer
+    wants/why it's switching (from the switch tool's required
+    ``handoff_summary`` argument -- see tool_set_switch.py) -- the only
+    place the context that's about to be discarded (this tool set's own
+    conversation history, which deliberately never gets shared with the
+    other tool set) still exists. ``None`` only for a caller that doesn't
+    pass one through (e.g. an old/malformed tool call missing the arg).
+    """
+
+    def __init__(self, target_tool_set: str, *, handoff_summary: str | None = None) -> None:
         self.target_tool_set = target_tool_set
+        self.handoff_summary = handoff_summary
         super().__init__(f"tool-set switch requested: {target_tool_set!r}")
 
 # See fabrication_guard.py's docstring for what this catches and what it
@@ -307,7 +317,9 @@ class AgenticLoop:
                     # calls in this round or build round-trip messages; the
                     # caller is about to build a fresh loop for the other
                     # tool set and continue the same turn there instead.
-                    raise ToolSetSwitchRequested(result[SWITCH_TOOL_SET_KEY])
+                    raise ToolSetSwitchRequested(
+                        result[SWITCH_TOOL_SET_KEY], handoff_summary=result.get("handoff_summary")
+                    )
                 tool_results.append(result)
             logger.info("unified: round %d tool results: %s", iteration + 1, list(tool_results))
 

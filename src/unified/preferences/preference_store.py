@@ -27,9 +27,10 @@ class PreferenceStore:
     read on every turn's prompt build and a bad file shouldn't break that.
 
     There is deliberately no default path -- the caller (see ``get_store``
-    below) must supply one, sourced from ``--preferences-dir``/runtime
-    config's ``preferences_dir``. Preferences are simply unavailable for an
-    installation that hasn't configured either.
+    below) must supply one, sourced from ``--preferences-dir`` (CLI-only,
+    no runtime-config fallback -- see design/developers/merged-toolsets.md).
+    Preferences are simply unavailable for an installation that hasn't
+    configured it.
     """
 
     def __init__(self, path: str | Path):
@@ -91,10 +92,9 @@ def get_store(nucore_interface: Any) -> PreferenceStore | None:
     ``prompt_builder.py`` and ``handlers/preferences.py`` need to call it.
 
     Returns ``None`` -- rather than falling back to some default location --
-    when this installation hasn't configured a ``preferences_dir`` (via
-    ``--preferences-dir`` or runtime config), which callers must handle by
-    treating preferences as unavailable, not by inventing a location of
-    their own.
+    when this installation hasn't been given a ``--preferences-dir`` (CLI,
+    no runtime-config fallback), which callers must handle by treating
+    preferences as unavailable, not by inventing a location of their own.
     """
     store = getattr(nucore_interface, "_preference_store", None)
     if store is not None:

@@ -54,6 +54,15 @@ def make_switch_handler(
                     f"user to split this into separate requests."
                 )
             }
-        return {SWITCH_TOOL_SET_KEY: target_tool_set}
+        result: dict[str, Any] = {SWITCH_TOOL_SET_KEY: target_tool_set}
+        # The tool schema marks this required, but a missing/empty value
+        # still succeeds the switch -- see design/developers/merged-
+        # toolsets.md's "Mid-round chaining": no handoff note just means
+        # the new tool set's first message carries no extra context, the
+        # original (pre-fix) behavior, not a reason to block the switch.
+        handoff_summary = args.get("handoff_summary")
+        if handoff_summary:
+            result["handoff_summary"] = handoff_summary
+        return result
 
     return _switch

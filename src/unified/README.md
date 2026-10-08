@@ -40,12 +40,12 @@ python -m unified.run_unified_runtime \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
-  --backend-api-password yourpassword \
-  --query "Turn on the patio lights"
+  --backend-api-password yourpassword
 ```
 
-Omit `--query` for an interactive REPL. See the top-level `README.md` for the full CLI flag
-reference, secrets-file format, and logging flags -- they're identical for this entrypoint.
+This drops into an interactive REPL (one query per line). See the top-level `README.md` for the
+full CLI flag reference, secrets-file format, and logging flags -- they're identical for this
+entrypoint.
 
 ## Adding a new tool
 
@@ -119,6 +119,6 @@ Sharing one store safely requires serializing same-session access: `UnifiedRunti
 holds `session_store.lock(session_id)` for its entire read-history -> generate -> append-history
 sequence, so a second concurrent request for the same session id waits for the first to fully
 finish rather than racing it on the same `ConversationHistory` object. Every other caller
-(`--query`/REPL mode, and any test constructing `UnifiedRuntime` without a `session_store` kwarg)
-is unaffected -- it defaults to a private, unshared store, so the lock is uncontended and a no-op
-in practice.
+(REPL mode, and any test constructing `UnifiedRuntime` without a `session_store` kwarg) is
+unaffected -- it defaults to a private, unshared store, so the lock is uncontended and a no-op in
+practice.

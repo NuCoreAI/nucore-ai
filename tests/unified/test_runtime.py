@@ -353,3 +353,74 @@ async def test_handle_query_chains_to_the_other_tool_set_on_switch_request():
         assert _SwitchOnceLoop.calls == 2
     finally:
         rm.AgenticLoop = original_loop
+
+
+@pytest.mark.asyncio
+async def test_handoff_summary_is_prepended_to_the_new_tool_sets_user_message():
+    # Regression: a mid-round switch used to blindly resend the bare
+    # trigger message (e.g. a lone "4" replying to a menu the new tool set
+    # never saw) with zero context -- see merged-toolsets.md's "Mid-round
+    # chaining". The switch tool's handoff_summary must reach the second
+    # loop's user_message, while the persisted history still stores the
+    # clean, original query (never the wrapped version).
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    captured_user_messages = []
+
+    class _SwitchOnceLoop:
+        calls = 0
+
+        def __init__(self, **kwargs):
+            self._dispatch = kwargs["dispatch"]
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            _SwitchOnceLoop.calls += 1
+            captured_user_messages.append(user_message)
+            if _SwitchOnceLoop.calls == 1:
+                # Simulates the model's own tool call actually supplying the
+                # (schema-required) handoff_summary argument -- the real
+                # switch handler built by _build_loop/_wrap_dispatch_for_
+                # switching is what reads it back out and puts it on the
+                # sentinel dict, not anything this test controls directly.
+                result = await self._dispatch(
+                    "switch_to_developer_mode", {"handoff_summary": "customer wants a SimpliSafe plugin"}
+                )
+                if isinstance(result, dict) and SWITCH_TOOL_SET_KEY in result:
+                    raise ToolSetSwitchRequested(
+                        result[SWITCH_TOOL_SET_KEY], handoff_summary=result.get("handoff_summary")
+                    )
+            return "answered-in-plugin_authoring", []
+
+    import unified.runtime as rm
+
+    original_loop = rm.AgenticLoop
+    rm.AgenticLoop = _SwitchOnceLoop
+    _SwitchOnceLoop.calls = 0
+    try:
+        runtime_config = {
+            "enabled_profiles": ["unified", "plugin_authoring"],
+            "default_profile_name": "unified",
+            "max_tool_set_switches_per_turn": 1,
+            "nucore_runtime": {"unified": {}, "plugin_authoring": {}},
+        }
+        runtime = _runtime(
+            runtime_config,
+            tool_sets={
+                "plugin_authoring": ToolSetBundle(
+                    tool_spec_paths=None,
+                    dispatch_factory=lambda _ctx: DispatchBundle(dispatch=rm.execute_tool),
+                    system_prompt_builder=_fake_build_system_prompt_sections,
+                )
+            },
+        )
+        result = await runtime.handle_query("4")
+
+        assert captured_user_messages[0] == "4"  # first loop: no switch has happened yet
+        assert "customer wants a SimpliSafe plugin" in captured_user_messages[1]
+        assert captured_user_messages[1].endswith("\n\n4")  # original query still present, verbatim
+
+        history = runtime.session_store.get("default::plugin_authoring", max_turns=20)
+        assert history.turns[-1].query == "4"  # persisted history stays clean, not the wrapped version
+        assert result.output["text"] == "answered-in-plugin_authoring"
+    finally:
+        rm.AgenticLoop = original_loop

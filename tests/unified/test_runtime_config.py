@@ -1,6 +1,6 @@
 """Coverage for the config-driven stream/max_iterations wiring in
-runtime_config.py: per-profile 'stream' from JSON, the --stream/--no-stream
-CLI-level force override, and the top-level 'max_iterations' field.
+runtime_config.py: per-profile 'stream' and 'max_iterations' from JSON, with
+no CLI-level override of either -- this file is the only source of truth.
 """
 
 from __future__ import annotations
@@ -85,20 +85,6 @@ def test_stream_flag_ignored_without_a_handler(tmp_path):
     assert cfg["supported_llms"]["unified"]["stream"] is False
 
 
-def test_force_stream_false_overrides_profile_flag(tmp_path):
-    path = _write_config(tmp_path)
-    cfg = _load_runtime_config(path=path, stream_handler=StreamHandler(), force_stream=False)
-
-    assert cfg["supported_llms"]["unified"]["stream"] is False
-
-
-def test_force_stream_true_overrides_profile_flag(tmp_path):
-    path = _write_config(tmp_path)
-    cfg = _load_runtime_config(path=path, stream_handler=StreamHandler(), force_stream=True)
-
-    assert cfg["supported_llms"]["other"]["stream"] is True
-
-
 def test_max_iterations_parsed_per_profile(tmp_path):
     payload = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "max_iterations": 16}}}
     path = tmp_path / "runtime_config.json"
@@ -106,6 +92,29 @@ def test_max_iterations_parsed_per_profile(tmp_path):
     cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
     assert cfg["supported_llms"]["unified"]["max_iterations"] == 16
+
+
+def test_unrecognized_top_level_and_profile_keys_are_silently_ignored(tmp_path):
+    # JSON has no comment syntax -- a documentation-only key (e.g. noting a
+    # model/param incompatibility discovered in production, see
+    # runtime_config.example.json's "_notes") must survive loading
+    # unharmed rather than being rejected as an unknown field.
+    payload = {
+        "_notes": "see design/developers/merged-toolsets.md",
+        "nucore_runtime": {
+            "unified": {
+                "provider": "claude",
+                "model": "m",
+                "_notes": "claude-sonnet-5 rejects 'temperature' -- see claude_adapter.py",
+            }
+        },
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
+
+    assert cfg["supported_llms"]["unified"]["provider"] == "claude"
 
 
 def test_max_iterations_defaults_to_eight_when_absent(tmp_path):
@@ -122,27 +131,6 @@ def test_max_iterations_rejects_non_integer(tmp_path):
 
     with pytest.raises(ValueError):
         _load_runtime_config(path=str(path), stream_handler=None)
-
-
-def test_preferences_dir_parsed_from_top_level_config(tmp_path):
-    path = _write_config(tmp_path, preferences_dir="/some/dir")
-    cfg = _load_runtime_config(path=path, stream_handler=None)
-
-    assert cfg["preferences_dir"] == "/some/dir"
-
-
-def test_preferences_dir_has_no_default_when_absent(tmp_path):
-    path = _write_config(tmp_path)
-    cfg = _load_runtime_config(path=path, stream_handler=None)
-
-    assert cfg["preferences_dir"] is None
-
-
-def test_preferences_dir_rejects_non_string(tmp_path):
-    path = _write_config(tmp_path, preferences_dir=123)
-
-    with pytest.raises(ValueError):
-        _load_runtime_config(path=path, stream_handler=None)
 
 
 def test_fabrication_guard_mode_defaults_to_log(tmp_path):

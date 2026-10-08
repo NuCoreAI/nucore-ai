@@ -17,7 +17,12 @@ import pytest
 
 from unified.models import IntentHandlerResult
 from unified.plugin_authoring.handlers import discovery
-from unified.run_unified_runtime import EisyUIContext, _build_plugin_authoring_tool_set, _run_once
+from unified.run_unified_runtime import (
+    EisyUIContext,
+    _build_parser,
+    _build_plugin_authoring_tool_set,
+    _run_once,
+)
 
 
 def _resolve_plugin_authoring(**kwargs):
@@ -100,6 +105,85 @@ def test_client_id_persists_when_a_later_context_omits_it():
     ctx.process_message(json.dumps({"type": "context", "context": {"screen": "devices"}}))
 
     assert ctx.get_client_id() == "c-1"  # kept, not cleared
+
+
+def test_developer_switch_command_recognized_from_a_websocket_message():
+    ctx = EisyUIContext()
+
+    result = ctx.process_message(json.dumps({"type": "message", "message": "/developer"}))
+
+    assert result is None
+    assert ctx.get_active_tool_set() == "plugin_authoring"
+
+
+def test_customer_switch_command_recognized_from_a_websocket_message():
+    ctx = EisyUIContext()
+    ctx.process_message(json.dumps({"type": "message", "message": "/developer"}))
+
+    result = ctx.process_message(json.dumps({"type": "message", "message": "/customer"}))
+
+    assert result is None
+    assert ctx.get_active_tool_set() == "unified"
+
+
+def test_developer_switch_command_recognized_from_a_plain_repl_string():
+    # Regression: REPL/--query input is never JSON-wrapped (unlike a
+    # WebSocket "type": "message" payload), so process_message's plain-
+    # string fallback must apply the same switch-command check, or
+    # /developer only ever worked over WebSocket.
+    ctx = EisyUIContext()
+
+    result = ctx.process_message("/developer")
+
+    assert result is None
+    assert ctx.get_active_tool_set() == "plugin_authoring"
+
+
+def test_non_command_plain_repl_string_passes_through_unchanged():
+    ctx = EisyUIContext()
+
+    result = ctx.process_message("  turn on the light  ")
+
+    assert result == "turn on the light"
+    assert ctx.get_active_tool_set() is None
+
+
+# --- CLI surface: --preferences-dir/--prompt-log-file are the only source of
+# truth for these (never read from runtime config -- a deployment/host
+# concern, not a customer-configurable one; see
+# design/developers/merged-toolsets.md) ---
+
+
+def test_preferences_dir_and_prompt_log_file_flags_parse():
+    args = _build_parser().parse_args(
+        ["--preferences-dir", "/etc/nucore/prefs", "--prompt-log-file", "/var/log/nucore/prompt.jsonl"]
+    )
+
+    assert args.preferences_dir == "/etc/nucore/prefs"
+    assert args.prompt_log_file == "/var/log/nucore/prompt.jsonl"
+
+
+def test_preferences_dir_and_prompt_log_file_default_to_none():
+    args = _build_parser().parse_args([])
+
+    assert args.preferences_dir is None
+    assert args.prompt_log_file is None
+
+
+def test_removed_cli_flags_are_rejected():
+    # Regression guard: --prompt-log-dir/--no-prompt-log were collapsed into
+    # --prompt-log-file; --tool-set/--plugin-output-root/--search-engine/
+    # --stream/--max-iterations/--json-output/--prompt_type/--query were
+    # removed outright in earlier cleanup. None should silently resurrect.
+    for removed_flag in (
+        "--prompt-log-dir",
+        "--no-prompt-log",
+        "--tool-set",
+        "--plugin-output-root",
+        "--query",
+    ):
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args([removed_flag, "x"])
 
 
 class _FakeRuntime:

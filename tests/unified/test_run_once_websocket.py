@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from unified.models import IntentHandlerResult
-from unified.run_unified_runtime import EisyUIContext, _run_once
+from unified.run_unified_runtime import EisyUIContext, _handle_turn_exception, _run_once
 
 
 class FakeRuntime:
@@ -64,3 +64,45 @@ async def test_prints_to_stdout_when_no_stream_handler(capsys):
 
     captured = capsys.readouterr()
     assert "the answer" in captured.out
+
+
+class _RuntimeWithStreamHandler:
+    def __init__(self, stream_handler=None):
+        self.stream_handler = stream_handler
+
+
+@pytest.mark.asyncio
+async def test_turn_exception_sends_a_notice_over_the_stream_handler_when_attached():
+    handler = FakeStreamHandler()
+    runtime = _RuntimeWithStreamHandler(stream_handler=handler)
+
+    await _handle_turn_exception(RuntimeError("boom"), runtime)
+
+    assert len(handler.sent) == 1
+    notice, is_end = handler.sent[0]
+    assert is_end is True
+    assert notice  # some human-readable notice, not the raw exception
+
+
+@pytest.mark.asyncio
+async def test_turn_exception_prints_to_stdout_when_no_stream_handler(capsys):
+    runtime = _RuntimeWithStreamHandler(stream_handler=None)
+
+    await _handle_turn_exception(RuntimeError("boom"), runtime)
+
+    captured = capsys.readouterr()
+    assert captured.out.strip()
+
+
+@pytest.mark.asyncio
+async def test_turn_exception_never_raises_even_if_the_exception_carries_a_body():
+    # Mimics anthropic.BadRequestError's shape (a `.body` attribute) --
+    # must not need that attribute to exist, and must not propagate.
+    class _FakeBadRequestError(Exception):
+        def __init__(self, message, body):
+            super().__init__(message)
+            self.body = body
+
+    runtime = _RuntimeWithStreamHandler(stream_handler=None)
+
+    await _handle_turn_exception(_FakeBadRequestError("400", {"error": {"message": "bad input"}}), runtime)

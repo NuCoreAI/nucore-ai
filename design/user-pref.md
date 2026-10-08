@@ -90,9 +90,10 @@ shortcut -- a yahrtzeit has to still be known next month.
 
 ### Where the file lives
 
-No default path -- the directory is explicitly configured, via `--preferences-dir` (CLI,
-overrides) or runtime config's `preferences_dir` (`runtime_config.example.json`), with the actual
-file being `<preferences_dir>/preferences.json`. An installation that hasn't set either simply
+No default path -- the directory is explicitly configured via `--preferences-dir` (CLI-only,
+never read from runtime config -- see design/developers/merged-toolsets.md for why this and the
+prompt log are deliberately kept out of the customer-editable config file), with the actual
+file being `<preferences_dir>/preferences.json`. An installation that hasn't set it simply
 has preferences unavailable: `list_preferences`/`preference_op` return a clear
 "not configured" error, and the standing prompt's aliases section says so rather than silently
 picking a location. The server runs on the hub itself -- one process per installation -- so this
@@ -179,10 +180,12 @@ follow-up, not attempted here.
 3. **Confirmation for LLM-inferred preferences** -- prompt-level guidance only (current proposal),
    or a `propose_preference` (unconfirmed) / `preference_op` (confirmed) split? Leaning toward
    prompt-level guidance only, since a bad create is just deleted.
-4. ~~Where the JSON file's path actually gets configured~~ -- **Resolved**: `--preferences-dir`
-   (CLI) or runtime config's `preferences_dir`, CLI wins if both are set. Deliberately no default
-   -- an installation that hasn't configured either has preferences unavailable, rather than
-   silently writing somewhere unexpected.
+4. ~~Where the JSON file's path actually gets configured~~ -- **Resolved**: `--preferences-dir`,
+   CLI-only (it moved into runtime config for a while, then back out -- see
+   design/developers/merged-toolsets.md's "CLI-only, deliberately" reasoning: this is a
+   deployment/host concern, not something a customer-supplied config file should control).
+   Deliberately no default -- an installation that hasn't configured it has preferences
+   unavailable, rather than silently writing somewhere unexpected.
 
 ## Status
 

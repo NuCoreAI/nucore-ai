@@ -31,6 +31,11 @@ from utils import configure_logging, configure_prompt_logging, get_logger
 
 logger = get_logger(__name__)
 
+# The backend API has only ever been run with JSON output enabled -- never
+# disabled, in this repo's history (the removed --json-output CLI flag's
+# default, and the only value any launch config ever passed it).
+_BACKEND_API_JSON_OUTPUT = True
+
 # Load secrets/.env directly rather than relying on VS Code's debug-adapter
 # "envFile" mechanism -- that only applies when launched via the debugger
 # (never from a plain terminal), and only affects the debuggee's own
@@ -49,8 +54,7 @@ class EisyUIContext:
     One instance per websocket connection -- NOT a shared/global object.
     Concurrent connections used to clobber a single module-level instance's
     ``context``/``message`` (and would have done the same to ``user_id``),
-    so each connection (and each --query/REPL invocation) now constructs its
-    own.
+    so each connection (and each REPL invocation) now constructs its own.
     """
     def __init__(self):
         self.context:dict = None
@@ -103,23 +107,34 @@ class EisyUIContext:
             if type == "message":
                 self.message = message.get("message", None)
                 text = self.message.strip() if self.message else None
-                # Explicit, user-triggered tool-set switch -- sticky, same
-                # operation the model's own switch_to_developer_mode/
-                # switch_to_customer_mode tool performs (see
-                # design/developers/merged-toolsets.md). If the target isn't
-                # actually enabled on this installation, UnifiedRuntime
-                # falls back to its own default tool set rather than erroring
-                # -- the model-driven tool path (not this one) is where a
-                # disabled target gets explained back to the user.
-                if text in self._SWITCH_COMMANDS:
-                    self.active_tool_set = self._SWITCH_COMMANDS[text]
-                    return None
-                return text
+                return self._apply_switch_command_or_return(text)
             logger.warning(f"Received message with unrecognized type: {type}")
             return None
         except Exception as e:
-            # it's a regular string
-            return message_data.strip() if message_data else None
+            # Not JSON -- a plain string, as every REPL/--query line always
+            # is (unlike a WebSocket connection, nothing ever JSON-wraps
+            # REPL input). The /developer and /customer commands must be
+            # recognized here too, or they only ever work over WebSocket.
+            text = message_data.strip() if message_data else None
+            return self._apply_switch_command_or_return(text)
+
+    def _apply_switch_command_or_return(self, text: str | None) -> str | None:
+        """If *text* is exactly ``/developer``/``/customer``, apply the
+        sticky switch and return ``None`` (no query dispatched this turn);
+        otherwise return *text* unchanged. Shared by both the WebSocket
+        ``"type": "message"`` path and the plain-string (REPL/--query)
+        fallback above -- same operation the model's own
+        switch_to_developer_mode/switch_to_customer_mode tool performs (see
+        design/developers/merged-toolsets.md). If the target isn't actually
+        enabled on this installation, UnifiedRuntime falls back to its own
+        default tool set rather than erroring -- the model-driven tool path
+        (not this one) is where a disabled target gets explained back to
+        the user.
+        """
+        if text in self._SWITCH_COMMANDS:
+            self.active_tool_set = self._SWITCH_COMMANDS[text]
+            return None
+        return text
 
     def get_context(self)->dict:
         """Get the current context stored in the UI context object."""
@@ -179,16 +194,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional path to a JSON object of secret key/value pairs (for example API keys)",
     )
     parser.add_argument(
-        "--query",
-        type=str,
-        default=None,
-        help="Single query mode (non-interactive)",
-    )
-    parser.add_argument(
         "--websocket-port",
         type=int,
         default=None,
-        help="Run as a WebSocket server on this port instead of --query/REPL mode; "
+        help="Run as a WebSocket server on this port instead of interactive REPL mode; "
              "each connection gets its own session, every received message is treated "
              "as a query, and responses stream back over the same connection. Ignored "
              "when --websocket-host is a Unix socket path.",
@@ -223,22 +232,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a PEM private key file; with --ssl-certfile, serves --websocket-port over wss:// instead of ws://.",
     )
     parser.add_argument(
-        "--search-engine",
-        type=str,
-        choices=["brave", "tavily"],
-        default=None,
-        help=(
-            "Web-search provider for plugin_authoring's search_web tool (Brave/Tavily). Falls "
-            "back to runtime config's 'search_engine' key when omitted. Requires "
-            "SEARCH_ENGINE_API_KEY to also be set. When the resolved LLM provider for this tool "
-            "set is Claude, omitting this (and its key) uses Claude's own native web_search tool "
-            "instead -- no second API key needed; passing --search-engine explicitly always forces "
-            "this Brave/Tavily fallback regardless of provider. For any other provider, omitting "
-            "this means no web search tool at all, and the flow falls through to asking the user "
-            "for URLs."
-        ),
-    )
-    parser.add_argument(
         "--backend-api-classpath",
         type=str,
         default=None,
@@ -263,22 +256,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Backend API password",
     )
     parser.add_argument(
-        "--json-output",
-        dest="json_output",
-        type=bool,
-        default=True,
-        required=False,
-        help="Enable JSON output for backend API",
-    )
-    parser.add_argument(
-        "--prompt_type",
-        dest="prompt_type",
-        required=False,
-        type=str,
-        default="shared-features",
-        help="The type of prompt to use (e.g., 'per-device', 'shared-features', etc.)",
-    )
-    parser.add_argument(
         "--log-level",
         type=str,
         default=None,
@@ -301,50 +278,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Disable console log output",
     )
     parser.add_argument(
-        "--stream",
-        dest="stream",
-        action="store_true",
-        default=None,
-        help=(
-            "Force-enable LLM token streaming for every nucore_runtime profile, "
-            "overriding each profile's own 'stream' setting in runtime config."
-        ),
-    )
-    parser.add_argument(
-        "--no-stream",
-        dest="stream",
-        action="store_false",
-        help="Force-disable LLM token streaming for every profile, overriding runtime config.",
-    )
-    parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=None,
-        help="Override the agentic loop's max tool-call iterations per query (defaults to runtime config's 'max_iterations', or 8).",
-    )
-    parser.add_argument(
         "--preferences-dir",
         type=str,
         default=None,
         help=(
-            "Directory to store this installation's customer preferences (aliases/events) in -- "
-            "overrides runtime config's 'preferences_dir'. There is no default: preferences are "
-            "unavailable for an installation that hasn't set either."
+            "Directory to store this installation's customer preferences (aliases/events) in. "
+            "There is no default and no runtime-config fallback: preferences are unavailable "
+            "unless this is set. CLI-only, deliberately -- this is a deployment/host concern "
+            "the system controls, not something a customer-supplied runtime config should be "
+            "able to redirect (see design/developers/merged-toolsets.md)."
         ),
     )
     parser.add_argument(
-        "--prompt-log-dir",
+        "--prompt-log-file",
         type=str,
         default=None,
         help=(
-            "Directory to write the debug prompt/tool-call log into -- overrides runtime config's "
-            "'prompt_log_dir'. Defaults to '<cwd>/logs'."
+            "Exact file path for the debug prompt/tool-call log (parent directories are created "
+            "if missing). There is no default and no runtime-config fallback: the log is off "
+            "unless this is set. CLI-only, deliberately, same reasoning as --preferences-dir."
         ),
-    )
-    parser.add_argument(
-        "--no-prompt-log",
-        action="store_true",
-        help="Disable the debug prompt/tool-call log entirely. On by default.",
     )
     return parser
 
@@ -544,6 +497,28 @@ async def _run_once(
 
     return
 
+
+async def _handle_turn_exception(exc: Exception, runtime: UnifiedRuntime) -> None:
+    """Log *exc* (including a provider error's own ``.body``, e.g.
+    Anthropic's ``BadRequestError``, when present) and deliver a short,
+    generic notice to the user over whatever channel ``_run_once`` would
+    have used -- so one failed turn surfaces its real cause in the log
+    instead of a bare "400 Bad Request" status line, and the REPL/WebSocket
+    session survives to the next turn instead of crashing outright and
+    losing the rest of the conversation.
+    """
+    body = getattr(exc, "body", None)
+    logger.error("unified: turn failed: %s%s", exc, f" | body={body}" if body else "", exc_info=True)
+    notice = "Sorry, something went wrong processing that -- please try again."
+    if runtime.stream_handler is not None:
+        try:
+            await runtime.stream_handler.send_chunk(notice, True)
+        except Exception:
+            pass
+    else:
+        print(notice)
+
+
 async def _run_loop(runtime: UnifiedRuntime, eisy_ui_context: "EisyUIContext") -> None:
     """Run an interactive REPL that repeatedly prompts for queries.
 
@@ -588,6 +563,8 @@ async def _run_loop(runtime: UnifiedRuntime, eisy_ui_context: "EisyUIContext") -
         except asyncio.CancelledError:
             logger.info("\nCancelled. Exiting.")
             break
+        except Exception as exc:
+            await _handle_turn_exception(exc, runtime)
 
 
 _UNIX_SOCKET_PREFIX = "unix://"
@@ -803,7 +780,6 @@ async def _run_websocket_server(
     nucore_interface: NuCoreInterface,
     llm_adapter,
     runtime_config_path: str,
-    force_stream: bool | None,
     host: str,
     port: int | None,
     is_unix: bool,
@@ -882,7 +858,6 @@ async def _run_websocket_server(
         runtime_config = _load_runtime_config(
             path=runtime_config_path,
             stream_handler=stream_handler,
-            force_stream=force_stream,
         )
         # tool_sets' own dispatch_factory per entry is still called lazily,
         # at most once per connection -- see ToolSetBundle's docstring; this
@@ -900,7 +875,14 @@ async def _run_websocket_server(
         try:
             async for message in websocket:
                 runtime.reset_stream_handler()
-                await _run_once(runtime, message, eisy_ui_context, session_id=fallback_session_id)
+                try:
+                    await _run_once(runtime, message, eisy_ui_context, session_id=fallback_session_id)
+                except Exception as exc:
+                    # Caught inside the loop, not around it -- one bad turn
+                    # (e.g. a provider 400) must not drop the whole
+                    # connection; the client should get a notice and be able
+                    # to keep chatting.
+                    await _handle_turn_exception(exc, runtime)
         except websockets.ConnectionClosed:
             pass
 
@@ -944,8 +926,9 @@ def main(args:Any=None, poly=None) -> None:
     3. Resolve the runtime profile path.
     4. Load the runtime profile and build the LLM dispatch adapter.
     5. Instantiate the backend API (``nucore_interface``).
-    6. Construct :class:`~UnifiedRuntime` and either run a single query
-       (``--query``) or enter the interactive REPL.
+    6. Construct :class:`~UnifiedRuntime` and enter the interactive REPL
+       (``--websocket-port``/``--websocket-host`` instead serve WebSocket
+       connections, returning before this step).
     7. Shut down the runtime on exit regardless of how it terminates.
     """
     if args is None:
@@ -970,10 +953,10 @@ def main(args:Any=None, poly=None) -> None:
 
     # One StreamHandler instance covers both roles: per-request LLM token
     # streaming (wired into runtime_config below, gated per-profile by each
-    # profile's own 'stream' key unless --stream/--no-stream forces it) and
-    # final-response delivery in _run_once -- stdout print in --query/REPL
-    # mode, or a per-connection WebSocket target in --websocket-port mode
-    # (set separately per connection in _run_websocket_server).
+    # profile's own 'stream' key) and final-response delivery in _run_once --
+    # stdout print in REPL mode, or a per-connection WebSocket target in
+    # --websocket-port mode (set separately per connection in
+    # _run_websocket_server).
     stream_handler = StreamHandler()
 
     # This load is used both to build the LLM dispatch adapter's provider
@@ -981,19 +964,13 @@ def main(args:Any=None, poly=None) -> None:
     runtime_config = _load_runtime_config(
         path=str(runtime_config_path),
         stream_handler=stream_handler,
-        force_stream=args.stream,
     )
 
-    # --prompt-log-dir wins over runtime config's 'prompt_log_dir', same
-    # CLI-overrides-config precedence already used for --preferences-dir;
-    # unlike that one, this always has a real default ('<cwd>/logs') rather
-    # than being left unconfigured. --no-prompt-log/'prompt_log_enabled'
-    # is a separate on/off switch -- the directory never doubles as one.
-    prompt_log_dir = args.prompt_log_dir if args.prompt_log_dir is not None else runtime_config.get("prompt_log_dir")
-    if not prompt_log_dir:
-        prompt_log_dir = str(Path.cwd() / "logs")
-    prompt_log_enabled = not args.no_prompt_log and runtime_config.get("prompt_log_enabled", True)
-    configure_prompt_logging(prompt_log_dir, enabled=prompt_log_enabled)
+    # --prompt-log-file is CLI-only (no runtime-config fallback, no default
+    # path) -- its mere presence is the only on/off switch now; see
+    # configure_prompt_logging's own docstring and design/developers/
+    # merged-toolsets.md.
+    configure_prompt_logging(args.prompt_log_file)
 
     # Build the LLM dispatch adapter from the resolved config.
     llm_adapter = build_default_dispatch_adapter(runtime_config, env=secrets_env)
@@ -1005,14 +982,13 @@ def main(args:Any=None, poly=None) -> None:
     backend_api_username = args.backend_api_username or os.environ.get("BACKEND_API_USER_NAME")
     backend_api_password = args.backend_api_password or os.environ.get("BACKEND_API_PASSWORD")
 
-    # plugin_authoring: --search-engine wins over runtime config's
-    # 'search_engine' key, same CLI-overrides-config precedence as
-    # --preferences-dir above. Neither brave nor tavily is treated as the
-    # implied default when both are unset. search_engine_api_key is now a
-    # top-level config key (see runtime_config.py), resolved via the same
-    # "${ENV_VAR}" convention api_key already uses -- never a literal secret
-    # in the file itself (design/developers/merged-toolsets.md).
-    search_engine = args.search_engine or runtime_config.get("search_engine")
+    # plugin_authoring: neither brave nor tavily is treated as the implied
+    # default when runtime config's 'search_engine' is unset.
+    # search_engine_api_key is a top-level config key (see runtime_config.py),
+    # resolved via the same "${ENV_VAR}" convention api_key already uses --
+    # never a literal secret in the file itself
+    # (design/developers/merged-toolsets.md).
+    search_engine = runtime_config.get("search_engine")
     env_map = secrets_env or dict(os.environ)
     search_engine_api_key = resolve_env_placeholder(runtime_config.get("search_engine_api_key"), env_map)
     # The resolved provider for plugin_authoring's own conversations (not
@@ -1039,36 +1015,23 @@ def main(args:Any=None, poly=None) -> None:
         base_url=args.backend_api_base_url,
         username=backend_api_username,
         password=backend_api_password,
-        json_output=args.json_output,
+        json_output=_BACKEND_API_JSON_OUTPUT,
         poly=poly,
     )
 
     if nucore_interface is None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
 
-    # No default -- None means preferences (aliases/events) are simply
-    # unavailable for this installation. --preferences-dir wins over runtime
-    # config's 'preferences_dir', same CLI-overrides-config precedence
-    # already used for --max-iterations.
-    nucore_interface.preferences_dir = (
-        args.preferences_dir if args.preferences_dir is not None else runtime_config.get("preferences_dir")
-    )
-
-    # --max-iterations, when given, forces every enabled profile's own
-    # max_iterations uniformly, the same "CLI override wins for every
-    # profile" shape --stream/--no-stream already has -- max_iterations
-    # itself otherwise comes from each profile individually (see
-    # runtime_config.py; it genuinely differs by tool set, which is why it
-    # moved off the top level -- design/developers/merged-toolsets.md).
-    if args.max_iterations is not None:
-        for profile in runtime_config["nucore_runtime"].values():
-            profile["max_iterations"] = args.max_iterations
+    # --preferences-dir is CLI-only (no runtime-config fallback) -- see that
+    # flag's own help text. No default: preferences (aliases/events) are
+    # simply unavailable for an installation that hasn't set it.
+    nucore_interface.preferences_dir = args.preferences_dir
 
     websocket_is_unix, websocket_host = _parse_websocket_host(args.websocket_host)
 
     # Resolved once, regardless of mode -- both the websocket server and the
-    # direct --query/REPL path below need the same tool_sets mapping, and
-    # neither needs to know what went into producing it. There is no longer
+    # REPL path below need the same tool_sets mapping, and neither needs to
+    # know what went into producing it. There is no longer
     # a --tool-set/--plugin-output-root flag: which tool sets exist and are
     # reachable is entirely a function of runtime_config's own profiles and
     # their 'enabled' flags (see runtime_config.py / merged-toolsets.md).
@@ -1102,7 +1065,7 @@ def main(args:Any=None, poly=None) -> None:
         logger.info("Starting native WebSocket server; responses stream per connection.")
         try:
             asyncio.run(_run_websocket_server(
-                nucore_interface, llm_adapter, str(runtime_config_path), args.stream,
+                nucore_interface, llm_adapter, str(runtime_config_path),
                 websocket_host, args.websocket_port,
                 websocket_is_unix,
                 client_uid=args.websocket_client_id if websocket_is_unix else None,
@@ -1130,18 +1093,6 @@ def main(args:Any=None, poly=None) -> None:
     )
     runtime.stream_handler = stream_handler
     logger.info("Unified runtime initialized")
-
-    if args.query:
-        # Single-query (non-interactive) mode: run once and exit.
-        if runtime.stream_state is not None:
-            runtime.stream_state["chunks"] = 0
-        try:
-            asyncio.run(_run_once(runtime, args.query, eisy_ui_context))
-        except KeyboardInterrupt:
-            logger.warning("\nInterrupted. Exiting.")
-        finally:
-            runtime.shutdown()
-        return
 
     # Interactive REPL mode.
     try:

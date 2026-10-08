@@ -86,9 +86,6 @@ Both tool sets' settings live in a single runtime config JSON, as two profiles u
 ```json
 {
   "max_tool_set_switches_per_turn": 1,
-  "preferences_dir": null,
-  "prompt_log_dir": null,
-  "prompt_log_enabled": true,
   "search_engine": "brave",
   "search_engine_api_key": "${SEARCH_ENGINE_API_KEY}",
   "nucore_runtime": {
@@ -111,11 +108,13 @@ Both tool sets' settings live in a single runtime config JSON, as two profiles u
 }
 ```
 
-Global (top-level) keys apply regardless of active tool set: the switch cap, preferences
-(installation-wide, not tool-set-specific), the prompt log (one shared debug log; its existing
-`intent` field already distinguishes entries), and `search_engine`/`search_engine_api_key` --
-now usable by *either* tool set's discovery tools, not just `plugin_authoring`'s, which it
-wasn't before.
+Global (top-level) keys apply regardless of active tool set: the switch cap and
+`search_engine`/`search_engine_api_key` -- now usable by *either* tool set's discovery tools,
+not just `plugin_authoring`'s, which it wasn't before.
+
+**Preferences and the prompt log are deliberately *not* here, even though they're also
+installation-wide, not tool-set-specific** -- see "CLI-only, deliberately" below for why they're
+CLI-only instead.
 
 Per-profile keys that used to be global and move here because they genuinely differ by tool set:
 `max_iterations`, `max_turns`, `max_tokens`, `history_token_budget`, `fabrication_guard_mode`,
@@ -131,6 +130,31 @@ the same `max_iterations`).
 `provider_clients.py:66-70` (currently hand-rolled for the `api_key` field only) to also cover
 this field. The literal secret value never appears in the file -- only the environment variable
 *name* does, same as today.
+
+### CLI-only, deliberately: `--preferences-dir` and `--prompt-log-file`
+
+`preferences_dir` and the prompt log's location briefly lived in this file (both are
+installation-wide settings, the same shape as `search_engine` above) before moving back out to
+CLI-only flags -- `--preferences-dir` and `--prompt-log-file` (the latter replacing the former
+`prompt_log_dir`/`prompt_log_enabled` pair: one flag is both the path and the sole on/off
+switch, its mere presence enabling logging to exactly that file, creating missing parent
+directories as needed). Neither is ever read from runtime config again, even if present there.
+
+The distinction driving this: this config file holds *runtime* parameters a customer could
+reasonably supply themselves -- which model, what temperature, which tool sets are enabled.
+Where preferences or debug logs land on disk is a different kind of setting entirely -- a
+deployment/host concern that whoever *launches* the process controls, not whoever *supplied*
+the config file. A customer-editable config should not be able to redirect either of these to
+an arbitrary path.
+
+Since JSON has no comment syntax, a fact worth recording *in* the config file for a future
+reader (e.g. "this model rejects `temperature`, see claude_adapter.py's auto-retry") has nowhere
+obvious to go. The loader's answer: any key it doesn't recognize, at either the top level or
+inside a profile, is silently ignored rather than rejected -- so a plain documentation-only key
+(this doc uses `_notes` as the convention, see `runtime_config.example.json`) survives loading
+untouched. Not a new mechanism -- `_coerce_runtime_profile` already only ever reads specific
+keys via `.get(...)` and never validated "no other keys may be present"; this just states that
+as deliberate, not incidental.
 
 ### `enabled` flag replaces "is the profile present" as the availability gate
 
@@ -173,7 +197,12 @@ one). Two mechanisms coexist, as defense in depth:
   for these two literal commands, setting a new sticky `active_tool_set` field on that
   connection's `EisyUIContext` (already one instance per connection, never shared --
   `run_unified_runtime.py:45-53`) and returning `None` (no query dispatched this turn), the same
-  way a `"context"` message already returns `None` today.
+  way a `"context"` message already returns `None` today. This check has to run in *two* places
+  inside `process_message`, not one: the WebSocket `"type": "message"` branch, and the plain-
+  string fallback its own `except` clause falls through to -- REPL/`--query` input is never
+  JSON-wrapped (unlike a WebSocket payload), so without the second check these commands silently
+  only worked over WebSocket, a real regression caught in testing, not a deliberate scoping
+  decision.
 - **Model-driven**: each tool set's own catalog gains one new tool -- `customer` gets
   `switch_to_developer_mode()`, `plugin_authoring` gets `switch_to_customer_mode()`. Each tool's
   description briefly summarizes what the *other* side can do (not its full prompt/tool catalog
@@ -210,6 +239,46 @@ chars/token ratio, cross-referencing real per-call token usage in
 the same calls, applied to `plugin_authoring`'s own system prompt (23,005 chars) and its 21
 tool specs (33,575 chars, none overlapping by name with `customer`'s 34)). Under this design,
 the cost of the other side is only paid at the moment a switch actually happens.
+
+#### Handoff summary: the new tool set has its own history and never sees the old one's
+
+Found via real-world testing, not design review: a customer asked for a SimpliSafe plugin, the
+model searched the store, found nothing, and offered a numbered list of options including
+"develop a custom plugin." The customer replied `"4"`. The switch fired correctly, but
+`plugin_authoring`'s brand-new loop received *only* the literal trigger message -- `"4"`, with
+none of the preceding exchange -- because that exchange lives in `unified`'s own
+`ConversationHistory`, which by design (see "Session history" below) never crosses the switch.
+The model, now in `plugin_authoring` with no idea what "4" refers to, replied `"4."`
+
+The fix: `switch_to_developer_mode`/`switch_to_customer_mode` both take a **required**
+`handoff_summary` string argument -- the calling model's own 1-3 sentence summary of what the
+customer wants and why it's switching (e.g. `"Customer wants a custom plugin for their
+SimpliSafe alarm; no store plugin exists for it. They confirmed by selecting the 'develop a
+custom plugin' option I offered."`). This is the one point in the system that still has the full
+context before the switch discards it -- reconstructing intent after the fact from conversation
+history would mean violating the very isolation this design relies on to begin with.
+
+Mechanically: the switch handler (`tool_set_switch.py`) echoes `handoff_summary` back onto the
+sentinel dict it returns; `AgenticLoop` doesn't interpret it, just carries it on
+`ToolSetSwitchRequested.handoff_summary` when it unwinds (same generic, tool-set-agnostic
+treatment as the rest of the switch signal -- see "Mechanically" above). `UnifiedRuntime
+.handle_query` rebuilds the next loop's `user_message` from the *original* query plus every
+handoff note accumulated so far in this turn (plural, in case `max_tool_set_switches_per_turn`
+is configured above 1 and a turn chains through more than one switch), via a small
+`_build_user_message` helper -- rebuilt from scratch each time rather than nested, so a second
+switch's wrapper doesn't wrap the first one's. Crucially, this wrapped message is only ever fed
+to the LLM call itself: `history.append(query, final_text)` at the end of `handle_query` still
+persists the clean, original `query` -- a later re-read of this tool set's history sees `"4"`,
+not the synthetic handoff wrapper, which exists purely to inform this one call.
+
+A missing or empty `handoff_summary` (the schema marks it required, but a model can still send an
+empty string) does not block the switch -- it just means no extra context gets carried over,
+the original pre-fix behavior, not a new failure mode.
+
+The explicit `/developer`/`/customer` chat command needs none of this: it never resends a stale
+trigger message at all, it just flips the connection's sticky `active_tool_set` for whichever
+message the user sends *next* (see `EisyUIContext.process_message`) -- there is no message to
+lose context from in the first place.
 
 ### Switch-count cap
 
@@ -284,15 +353,26 @@ rather than silently let one side shadow the other.
 
 ## Status
 
-Design accepted. Implementation follows in this same branch. Follow-on work: schema changes in
-`runtime_config.py` (two profiles, per-profile fields, `enabled`, `search_engine_api_key`
-substitution); generalizing the `${VAR}` substitution helper in `provider_clients.py`; removing
-`--tool-set`/`--plugin-output-root` from `run_unified_runtime.py` and deriving availability from
-config; new `switch_to_developer_mode`/`switch_to_customer_mode` tool specs and handlers; new
-per-connection `active_tool_set` state on `EisyUIContext`; the mid-round chaining orchestration
-layer above `UnifiedRuntime.handle_query`; composite `SessionStore` keys; consolidating the
-per-provider example config files (today's `runtime_config.example.json` +
-`runtime_config_plugin_authoring.example.json` pairs, for claude/grok/gemini/openai) into one
-file each under the new schema; test coverage for `enabled` gating, switch-tool dispatch,
-mid-round chaining, switch-cap enforcement, and composite session keys, matching existing idioms
-in `tests/unified/test_run_unified_runtime.py`, `test_runtime_config.py`, `test_runtime.py`.
+Implemented. `runtime_config.py`'s two-profile schema, `provider_clients.resolve_env_placeholder`,
+`switch_to_developer_mode`/`switch_to_customer_mode`, `EisyUIContext.active_tool_set`, the
+mid-round chaining layer in `UnifiedRuntime.handle_query`, composite `SessionStore` keys, and the
+consolidated per-provider example config files are all in place, with the `--tool-set`/
+`--plugin-output-root` CLI flags removed in favor of config-driven `enabled_profiles`. Every
+CLI flag that duplicated a setting the config file could already express
+(`--stream`/`--no-stream`, `--max-iterations`, `--search-engine`, plus the already-dead
+`--prompt_type` and the always-`true` `--json-output`) has also been removed, on the "config
+file is the only source of truth for runtime parameters" principle this design is built on.
+`--preferences-dir` and `--prompt-log-dir`/`--no-prompt-log` briefly followed the same path into
+the config file, then moved back *out* to CLI-only (the latter collapsed into one
+`--prompt-log-file` flag) -- see "CLI-only, deliberately" above for why these two are the
+exception.
+
+Three real-world-testing fixes landed after the initial implementation, all covered above:
+the `handoff_summary` argument on both switch tools ("Handoff summary" above), making
+`/developer`/`/customer` recognized from plain-string (REPL/`--query`) input, not just
+WebSocket JSON messages (end of "Dynamic switching" above), and moving `--preferences-dir`/
+`--prompt-log-file` back out of runtime config ("CLI-only, deliberately" above). A fourth fix,
+unrelated to this design but found during the same testing round: a provider error (e.g. an
+Anthropic 400) used to crash the entire REPL/WebSocket-connection process with no visibility
+into the actual error body -- `_run_loop`/the WebSocket handler's per-message loop now catch
+it, log the provider's own error body, and let the session continue.

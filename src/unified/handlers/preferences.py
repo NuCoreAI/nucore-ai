@@ -19,8 +19,8 @@ from ..preferences.preference_store import get_store, next_occurrence_info
 
 _NOT_CONFIGURED = {
     "error": (
-        "preferences are not configured for this installation -- set a preferences_dir "
-        "(via --preferences-dir or runtime config's 'preferences_dir') to enable this feature"
+        "preferences are not configured for this installation -- set --preferences-dir to "
+        "enable this feature"
     )
 }
 

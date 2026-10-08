@@ -1,8 +1,14 @@
 {
   "name": "switch_to_customer_mode",
-  "description": "Switch this conversation back to customer mode. Call this when the user's request is actually about end-customer device/scene/routine/group control, diagnostics, preferences, or anything else that isn't plugin authoring/validation/scaffolding -- customer mode has its own tools for those. Not needed for tools already shared between both modes (listing/installing/calling/testing an already-installed plugin, run_shell_command). After a successful switch, continue the user's original request using customer tools rather than asking them to repeat themselves. If this returns an error (not enabled here, or already switched the maximum number of times this request), explain that plainly instead of attempting the request anyway.",
+  "description": "Switch this conversation back to customer mode. Call this when the user's request is actually about end-customer device/scene/routine/group control, diagnostics, preferences, or anything else that isn't plugin authoring/validation/scaffolding -- customer mode has its own tools for those. Not needed for tools already shared between both modes (listing/installing/calling/testing an already-installed plugin, run_shell_command). Customer mode has its own separate conversation history and cannot see anything said in this one, so it relies entirely on handoff_summary to know what's going on -- after a successful switch, the user's request is already being continued on your behalf using that summary; do not ask them to repeat themselves. If this returns an error (not enabled here, or already switched the maximum number of times this request), explain that plainly instead of attempting the request anyway.",
   "input_schema": {
     "type": "object",
-    "properties": {}
+    "properties": {
+      "handoff_summary": {
+        "type": "string",
+        "description": "What the user wants and why you're switching, in your own words, in 1-3 sentences -- e.g. \"User wants to turn on the Master Bedroom scene; that's device control, not plugin authoring.\" This is the *only* context customer mode will have -- it cannot see any of this conversation's history -- so include whatever's actually needed to pick up where you left off (what device/action, any specifics they already gave)."
+      }
+    },
+    "required": ["handoff_summary"]
   }
 }

@@ -50,16 +50,13 @@ def _coerce_runtime_profile(
     payload: dict[str, Any],
     *,
     stream_handler: StreamHandler | None,
-    force_stream: bool | None = None,
 ) -> dict[str, Any]:
     """Normalize one ``nucore_runtime`` profile into dispatch-ready shape.
 
-    Whether this profile actually streams is decided by its own ``stream``
-    key in ``runtime_config.example.json`` -- e.g. the ``unified`` profile
-    opts in, others don't -- unless ``force_stream`` (a CLI-level
-    ``--stream``/``--no-stream`` override) is set, in which case it wins for
-    every profile uniformly. Either way, streaming only actually happens when
-    a real ``stream_handler`` was also supplied by the caller.
+    Whether this profile actually streams is decided entirely by its own
+    ``stream`` key in ``runtime_config.example.json`` -- e.g. the ``unified``
+    profile opts in, others don't. Streaming only actually happens when a
+    real ``stream_handler`` was also supplied by the caller.
 
     ``max_iterations``/``max_turns``/``history_token_budget``/
     ``fabrication_guard_mode``/``max_fabrication_retries`` live here, per
@@ -122,7 +119,7 @@ def _coerce_runtime_profile(
         "fabrication_guard_mode": fabrication_guard_mode,
         "max_fabrication_retries": max_fabrication_retries,
     }
-    wants_stream = bool(payload.get("stream", False)) if force_stream is None else force_stream
+    wants_stream = bool(payload.get("stream", False))
     if wants_stream and stream_handler is not None:
         result["stream"] = True
         result["stream_handler"] = stream_handler.handle_stream_chunk
@@ -134,8 +131,6 @@ def _coerce_runtime_profile(
 def _load_runtime_config(
     path: str,
     stream_handler: StreamHandler,
-    *,
-    force_stream: bool | None = None,
 ) -> dict[str, Any]:
     """Load and normalize CLI-provided runtime profiles.
 
@@ -143,7 +138,6 @@ def _load_runtime_config(
 
     {
       "max_tool_set_switches_per_turn": 1,
-      "preferences_dir": null,
       "search_engine": "brave",
       "search_engine_api_key": "${SEARCH_ENGINE_API_KEY}",
       "nucore_runtime": {
@@ -155,6 +149,25 @@ def _load_runtime_config(
     At least one profile must be present and ``enabled``; which profiles
     exist and are enabled is the *only* gate on tool-set availability --
     there is no longer a ``--tool-set``/``--plugin-output-root`` CLI flag.
+    Most other settings that once had a CLI-level override
+    (``--stream``/``--no-stream``, ``--max-iterations``, ``--search-engine``)
+    were removed the same way: this file is the only source of truth for
+    them, so there's nothing left to override.
+
+    ``preferences_dir`` and the prompt-log settings are the deliberate
+    exception, in the other direction: they moved *out* of this file and are
+    CLI-only now (``--preferences-dir``, ``--prompt-log-file``), never read
+    from here even if present. The distinction: this file holds runtime
+    parameters a customer could reasonably supply (model, temperature,
+    which tool sets are enabled, ...); where on disk preferences/logs get
+    written is a host/deployment concern the system -- whoever launches the
+    process -- controls, not whoever supplied the config file.
+
+    An unrecognized key (anything not listed above or in a profile's own
+    fields) is never an error -- it's silently ignored, which is also how a
+    documentation-only key survives in a config file despite JSON having no
+    comment syntax (see ``runtime_config.example.json``'s per-profile
+    ``_notes`` for an example).
     """
     if not path:
         raise ValueError("A runtime profile JSON path is required")
@@ -182,7 +195,6 @@ def _load_runtime_config(
             profile_name,
             profile_payload,
             stream_handler=stream_handler,
-            force_stream=force_stream,
         )
         supported_llms[profile_name] = normalized_profile
         normalized_profiles[profile_name] = normalized_profile
@@ -211,10 +223,6 @@ def _load_runtime_config(
     default_profile_name = "unified" if "unified" in enabled_profiles else enabled_profiles[0]
     default_max_turns = int(normalized_profiles[default_profile_name].get("max_turns", 20))
 
-    configured_preferences_dir = payload.get("preferences_dir")
-    if configured_preferences_dir is not None and not isinstance(configured_preferences_dir, str):
-        raise ValueError("preferences_dir must be a string when provided")
-
     configured_max_switches = payload.get("max_tool_set_switches_per_turn")
     if configured_max_switches is not None and not isinstance(configured_max_switches, int):
         raise ValueError("max_tool_set_switches_per_turn must be an integer when provided")
@@ -234,9 +242,6 @@ def _load_runtime_config(
         "supported_llms": supported_llms,
         "enabled_profiles": enabled_profiles,
         "default_profile_name": default_profile_name,
-        # No default -- None means preferences are simply unavailable for
-        # this installation (see unified.preferences.preference_store.get_store).
-        "preferences_dir": configured_preferences_dir,
         "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
         # Bounds how many times one turn may chain from one tool set's

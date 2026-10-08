@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from utils.prompt_log import PromptLogManager
+from utils.prompt_log import PromptLogManager, configure_prompt_logging
 
 
 def _lines(path):
@@ -287,3 +287,32 @@ async def test_write_failure_is_logged_not_raised(tmp_path, monkeypatch):
 
     monkeypatch.setattr("builtins.open", _boom)
     await manager.write("intent", [{"role": "user", "content": "hi"}])  # must not raise
+
+
+# --- configure_prompt_logging: --prompt-log-file is the sole on/off switch ---
+# (run_unified_runtime.py's --prompt-log-file -- CLI-only, no runtime-config
+# fallback; see design/developers/merged-toolsets.md)
+
+
+def test_configure_prompt_logging_disabled_when_no_file_given():
+    manager = configure_prompt_logging(None)
+    assert manager.enabled is False
+
+
+def test_configure_prompt_logging_enabled_with_exact_file_and_dir_split(tmp_path):
+    log_file = tmp_path / "nested" / "nucore.prompt.jsonl"
+
+    manager = configure_prompt_logging(str(log_file))
+
+    assert manager.enabled is True
+    assert manager.path == log_file
+    assert manager.log_dir == log_file.parent
+
+
+def test_configure_prompt_logging_creates_missing_parent_directories(tmp_path):
+    log_file = tmp_path / "does" / "not" / "exist" / "nucore.prompt.jsonl"
+    assert not log_file.parent.exists()
+
+    configure_prompt_logging(str(log_file))
+
+    assert log_file.parent.is_dir()

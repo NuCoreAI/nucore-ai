@@ -2,11 +2,14 @@
 authoring/validation, UOM lookup, testing an already-installed plugin
 locally (configure/start/stop/restart/call) -- serving both the plugin
 *developer* and, per design/developers/impl_plan.md, a non-technical
-customer-facing authoring flow built on the same tools. Selected via
-run_unified_runtime.py's ``--tool-set plugin_authoring`` flag -- see that
-flag's help and ``UnifiedRuntime``'s ``tool_spec_paths``/``dispatch``/
-``system_prompt_builder`` constructor params (unified/runtime.py) for how a
-tool set other than the customer-facing default gets wired in.
+customer-facing authoring flow built on the same tools. Enabled via its own
+``nucore_runtime.plugin_authoring`` profile in runtime config (``enabled``,
+``plugin_output_root``, etc.) -- see
+``run_unified_runtime._build_plugin_authoring_tool_set`` and
+``UnifiedRuntime``'s ``tool_sets``/``ToolSetBundle`` constructor param
+(unified/runtime.py) for how it's wired in alongside the customer-facing
+``unified`` tool set, and design/developers/merged-toolsets.md for the
+dynamic-switching design.
 
 Distinct from design/developers/ (which documents the IoX/Polyglot *plugin*
 architecture itself) -- this package is the runnable chat tool set, built on

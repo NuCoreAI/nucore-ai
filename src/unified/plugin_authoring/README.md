@@ -17,11 +17,15 @@ runnable tool set built on top of that architecture.
 
 ## Running it
 
-Selected via `run_unified_runtime.py`'s `--tool-set plugin_authoring` flag (default is `customer`).
-Still requires a live backend via `--backend-api-classpath`, same as the customer tool set -- the
-plugin-lifecycle tools it reuses (`configure_plugin`, `plugin_ops`, etc.) talk to a real hub. The
-customer-facing discovery/generation tools below additionally require `--plugin-output-root`
-(the tool set refuses to start without it).
+Enabled by giving the runtime config file's `nucore_runtime` a `plugin_authoring` profile with
+`enabled: true` (the default once the profile exists) and a `plugin_output_root` -- the tool set
+refuses to start if `plugin_output_root` is missing while enabled. It then runs alongside
+`unified` (customer) in the same process, reachable over the same connection via the
+`/developer`/`/customer` chat commands or a model-driven switch tool (see
+[`design/developers/merged-toolsets.md`](../../../design/developers/merged-toolsets.md)) --
+there is no `--tool-set` CLI flag. Still requires a live backend via `--backend-api-classpath`,
+same as the customer tool set -- the plugin-lifecycle tools it reuses (`configure_plugin`,
+`plugin_ops`, etc.) talk to a real hub.
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -29,15 +33,14 @@ python -m unified.run_unified_runtime \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
-  --backend-api-password yourpassword \
-  --tool-set plugin_authoring \
-  --plugin-output-root ~/plugin-projects \
-  --query "I want a plugin that exposes my pool controller"
+  --backend-api-password yourpassword
+> I want a plugin that exposes my pool controller
 ```
 
-Omit `--query` for an interactive REPL. Every other flag (`--secrets-file`, `--log-*`,
-`--websocket-*`, etc.) works exactly as documented in the top-level `README.md` -- `--tool-set`
-only changes which tools/prompt the loop uses, not how the process is launched.
+This drops into an interactive REPL. Every other flag (`--secrets-file`, `--log-*`,
+`--websocket-*`, etc.) works exactly as documented in the top-level `README.md`. Which tool
+set(s) are reachable, and all of `plugin_authoring`'s own settings (`plugin_output_root`,
+`max_iterations`, model/provider, etc.), come entirely from the runtime config file.
 
 ## Discovery and generation workflow
 
@@ -58,14 +61,14 @@ general persistence location.
 
 ### Native Claude web search vs. the Brave/Tavily fallback
 
-`search_web` (Brave/Tavily) is registered only when `--search-engine {brave,tavily}` is passed
-explicitly (with `SEARCH_ENGINE_API_KEY` set) -- passing it always forces that fallback, on any
-LLM provider. Otherwise, when the resolved provider for this tool set is Claude, Claude's own
-native `web_search` server tool is used instead automatically: no second API key, no `search_web`
-tool offered to the model at all, invoked by Claude itself mid-response. For any other provider
-with no engine configured, there is no web search capability at all and the flow falls through to
-asking the customer for URLs. See `run_unified_runtime.py`'s `--search-engine` help text for the
-exact precedence.
+`search_web` (Brave/Tavily) is registered only when runtime config's top-level `search_engine`
+(`"brave"` or `"tavily"`) is set explicitly (with `SEARCH_ENGINE_API_KEY` set) -- setting it
+always forces that fallback, on any LLM provider. Otherwise, when the resolved provider for this
+tool set is Claude, Claude's own native `web_search` server tool is used instead automatically:
+no second API key, no `search_web` tool offered to the model at all, invoked by Claude itself
+mid-response. For any other provider with no engine configured, there is no web search capability
+at all and the flow falls through to asking the customer for URLs. See `runtime_config.py`'s
+`search_engine` handling for the exact precedence.
 
 ## Layout
 
@@ -111,9 +114,9 @@ which module each lives in):
 |---|---|
 | `search_store_plugins` | Checks the NuCore plugin store first, before any research or generation; scores candidates against the customer's own words and flags a viable match to recommend-and-stop on. |
 | `search_github_plugins` | Public GitHub repo search for an existing implementation or a device's own API client -- a fallback tier, callable in any order relative to `search_web`. Flags any non-permissively-licensed result as reference-only. |
-| `search_web` | Brave/Tavily general web search for official API docs -- registered only when `--search-engine`+key are configured; otherwise Claude's own native `web_search` may be active instead (see below), transparent to this tool list. |
+| `search_web` | Brave/Tavily general web search for official API docs -- registered only when runtime config's `search_engine`+key are configured; otherwise Claude's own native `web_search` may be active instead (see below), transparent to this tool list. |
 | `fetch_reference` | Fetches one URL (from either search tier, or user-supplied once web search has been tried/was unavailable) as untrusted reference text. |
-| `list_generated_plugins` | Lists everything already generated under `--plugin-output-root` for this installation, most-recently-worked-on first -- always registered, local-disk-only. |
+| `list_generated_plugins` | Lists everything already generated under this profile's `plugin_output_root` for this installation, most-recently-worked-on first -- always registered, local-disk-only. |
 | `read_generated_plugin` | Loads one previously-generated plugin's files back into context before discussing/modifying it -- every file by default, or just a requested subset via `files`. |
 | `generate_plugin_scaffold` | Writes a complete local plugin (profile, code, tests, README, `server_entry.json`) once real evidence has been gathered; refuses and writes nothing otherwise, or on an unconfirmed overwrite. |
 | `setup_dev_venv` | Local/dev-testing only: creates a per-plugin `.venv` and installs `requirements.txt` into it. Call before running the plugin's own `tests/` or before `install_generated_plugin`. Idempotent -- a no-op if a working `.venv` already exists, unless `force` is passed. |
