@@ -1,0 +1,8 @@
+{
+  "name": "switch_to_customer_mode",
+  "description": "Switch this conversation back to customer mode. Call this when the user's request is actually about end-customer device/scene/routine/group control, diagnostics, preferences, or anything else that isn't plugin authoring/validation/scaffolding -- customer mode has its own tools for those. Not needed for tools already shared between both modes (listing/installing/calling/testing an already-installed plugin, run_shell_command). After a successful switch, continue the user's original request using customer tools rather than asking them to repeat themselves. If this returns an error (not enabled here, or already switched the maximum number of times this request), explain that plainly instead of attempting the request anyway.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

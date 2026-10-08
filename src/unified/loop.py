@@ -21,6 +21,24 @@ logger = get_logger(__name__)
 
 ToolDispatch = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
+# A tool result carrying this key (see design/developers/merged-toolsets.md's
+# "switch_to_developer_mode"/"switch_to_customer_mode" tools) tells the loop
+# to stop immediately rather than feed the result back for another round --
+# AgenticLoop itself has no notion of "tool sets"; it just recognizes this
+# one generic unwind signal and raises ToolSetSwitchRequested, leaving the
+# caller (UnifiedRuntime.handle_query) to decide what building a fresh loop
+# for the other tool set means.
+SWITCH_TOOL_SET_KEY = "__switch_tool_set_to__"
+
+
+class ToolSetSwitchRequested(Exception):
+    """Raised out of :meth:`AgenticLoop.run` when a dispatched tool's result
+    carries :data:`SWITCH_TOOL_SET_KEY` -- see that constant's docstring."""
+
+    def __init__(self, target_tool_set: str) -> None:
+        self.target_tool_set = target_tool_set
+        super().__init__(f"tool-set switch requested: {target_tool_set!r}")
+
 # See fabrication_guard.py's docstring for what this catches and what it
 # doesn't. Returned instead of a fabricated claim once corrective retries
 # (see max_fabrication_retries) are exhausted in "block" mode.
@@ -283,7 +301,14 @@ class AgenticLoop:
             # though it was, moments later, added successfully.
             tool_results = []
             for tc in tool_calls:
-                tool_results.append(await self.dispatch(tc.name, tc.args))
+                result = await self.dispatch(tc.name, tc.args)
+                if isinstance(result, dict) and SWITCH_TOOL_SET_KEY in result:
+                    # Unwind immediately -- don't dispatch any remaining tool
+                    # calls in this round or build round-trip messages; the
+                    # caller is about to build a fresh loop for the other
+                    # tool set and continue the same turn there instead.
+                    raise ToolSetSwitchRequested(result[SWITCH_TOOL_SET_KEY])
+                tool_results.append(result)
             logger.info("unified: round %d tool results: %s", iteration + 1, list(tool_results))
 
             round_trip = self.llm_client.build_tool_round_trip_messages(

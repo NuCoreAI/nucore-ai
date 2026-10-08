@@ -1,13 +1,11 @@
 {
-  "max_iterations": 20,
+  "max_tool_set_switches_per_turn": 1,
   "preferences_dir": null,
-  "history_token_budget": 20000,
   "prompt_log_dir": null,
   "prompt_log_enabled": true,
-  "fabrication_guard_mode": "block",
-  "max_fabrication_retries": 1,
   "nucore_runtime": {
     "unified": {
+      "enabled": true,
       "provider": "grok",
       "model": "grok-4-fast",
       "api_key": "${XAI_API_KEY}",
@@ -15,7 +13,27 @@
       "url": "https://api.x.ai/v1",
       "max_turns": 20,
       "temperature": 0.2,
-      "max_tokens": 64000
+      "max_tokens": 64000,
+      "max_iterations": 20,
+      "history_token_budget": 20000,
+      "fabrication_guard_mode": "block",
+      "max_fabrication_retries": 1
+    },
+    "plugin_authoring": {
+      "enabled": true,
+      "plugin_output_root": "/path/to/allowed/root",
+      "provider": "grok",
+      "model": "grok-4-fast",
+      "api_key": "${XAI_API_KEY}",
+      "stream": true,
+      "url": "https://api.x.ai/v1",
+      "max_turns": 20,
+      "temperature": 0.2,
+      "max_tokens": 64000,
+      "max_iterations": 50,
+      "history_token_budget": 20000,
+      "fabrication_guard_mode": "block",
+      "max_fabrication_retries": 1
     }
   }
 }

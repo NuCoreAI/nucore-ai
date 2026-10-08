@@ -99,25 +99,29 @@ def test_force_stream_true_overrides_profile_flag(tmp_path):
     assert cfg["supported_llms"]["other"]["stream"] is True
 
 
-def test_max_iterations_parsed_from_top_level_config(tmp_path):
-    path = _write_config(tmp_path, max_iterations=16)
-    cfg = _load_runtime_config(path=path, stream_handler=None)
+def test_max_iterations_parsed_per_profile(tmp_path):
+    payload = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "max_iterations": 16}}}
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
-    assert cfg["max_iterations"] == 16
+    assert cfg["supported_llms"]["unified"]["max_iterations"] == 16
 
 
 def test_max_iterations_defaults_to_eight_when_absent(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=None)
 
-    assert cfg["max_iterations"] == 8
+    assert cfg["supported_llms"]["unified"]["max_iterations"] == 8
 
 
 def test_max_iterations_rejects_non_integer(tmp_path):
-    path = _write_config(tmp_path, max_iterations="eight")
+    payload = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "max_iterations": "eight"}}}
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
 
     with pytest.raises(ValueError):
-        _load_runtime_config(path=path, stream_handler=None)
+        _load_runtime_config(path=str(path), stream_handler=None)
 
 
 def test_preferences_dir_parsed_from_top_level_config(tmp_path):
@@ -145,39 +149,164 @@ def test_fabrication_guard_mode_defaults_to_log(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=None)
 
-    assert cfg["fabrication_guard_mode"] == "log"
+    assert cfg["supported_llms"]["unified"]["fabrication_guard_mode"] == "log"
 
 
-def test_fabrication_guard_mode_parsed_from_top_level_config(tmp_path):
-    path = _write_config(tmp_path, fabrication_guard_mode="block")
-    cfg = _load_runtime_config(path=path, stream_handler=None)
+def test_fabrication_guard_mode_parsed_per_profile(tmp_path):
+    payload = {
+        "nucore_runtime": {"unified": {"provider": "claude", "model": "m", "fabrication_guard_mode": "block"}}
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
-    assert cfg["fabrication_guard_mode"] == "block"
+    assert cfg["supported_llms"]["unified"]["fabrication_guard_mode"] == "block"
 
 
 def test_fabrication_guard_mode_rejects_an_unknown_value(tmp_path):
-    path = _write_config(tmp_path, fabrication_guard_mode="loud")
+    payload = {
+        "nucore_runtime": {"unified": {"provider": "claude", "model": "m", "fabrication_guard_mode": "loud"}}
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
 
     with pytest.raises(ValueError):
-        _load_runtime_config(path=path, stream_handler=None)
+        _load_runtime_config(path=str(path), stream_handler=None)
 
 
 def test_max_fabrication_retries_defaults_to_one(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=None)
 
-    assert cfg["max_fabrication_retries"] == 1
+    assert cfg["supported_llms"]["unified"]["max_fabrication_retries"] == 1
 
 
-def test_max_fabrication_retries_parsed_from_top_level_config(tmp_path):
-    path = _write_config(tmp_path, max_fabrication_retries=3)
-    cfg = _load_runtime_config(path=path, stream_handler=None)
+def test_max_fabrication_retries_parsed_per_profile(tmp_path):
+    payload = {
+        "nucore_runtime": {"unified": {"provider": "claude", "model": "m", "max_fabrication_retries": 3}}
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
-    assert cfg["max_fabrication_retries"] == 3
+    assert cfg["supported_llms"]["unified"]["max_fabrication_retries"] == 3
 
 
 def test_max_fabrication_retries_rejects_non_integer(tmp_path):
-    path = _write_config(tmp_path, max_fabrication_retries="three")
+    payload = {
+        "nucore_runtime": {"unified": {"provider": "claude", "model": "m", "max_fabrication_retries": "three"}}
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
 
     with pytest.raises(ValueError):
-        _load_runtime_config(path=path, stream_handler=None)
+        _load_runtime_config(path=str(path), stream_handler=None)
+
+
+def test_enabled_defaults_to_true(tmp_path):
+    path = _write_config(tmp_path)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["supported_llms"]["unified"]["enabled"] is True
+    assert cfg["enabled_profiles"] == ["unified", "other"]
+
+
+def test_enabled_false_excludes_profile_from_enabled_profiles(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "unified": {"provider": "claude", "model": "m"},
+            "plugin_authoring": {
+                "provider": "claude",
+                "model": "m",
+                "enabled": False,
+            },
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
+
+    assert cfg["enabled_profiles"] == ["unified"]
+
+
+def test_at_least_one_profile_must_be_enabled(tmp_path):
+    payload = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "enabled": False}}}
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError):
+        _load_runtime_config(path=str(path), stream_handler=None)
+
+
+def test_plugin_authoring_requires_plugin_output_root_when_enabled(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "unified": {"provider": "claude", "model": "m"},
+            "plugin_authoring": {"provider": "claude", "model": "m"},
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError):
+        _load_runtime_config(path=str(path), stream_handler=None)
+
+
+def test_plugin_authoring_disabled_does_not_require_plugin_output_root(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "unified": {"provider": "claude", "model": "m"},
+            "plugin_authoring": {"provider": "claude", "model": "m", "enabled": False},
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
+    assert cfg["enabled_profiles"] == ["unified"]
+
+
+def test_default_profile_name_prefers_unified_when_both_enabled(tmp_path):
+    path = _write_config(tmp_path)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["default_profile_name"] == "unified"
+
+
+def test_default_profile_name_falls_back_to_the_only_enabled_profile(tmp_path):
+    payload = {
+        "nucore_runtime": {
+            "unified": {"provider": "claude", "model": "m", "enabled": False},
+            "plugin_authoring": {
+                "provider": "claude",
+                "model": "m",
+                "plugin_output_root": "/allowed/root",
+            },
+        }
+    }
+    path = tmp_path / "runtime_config.json"
+    path.write_text(json.dumps(payload))
+    cfg = _load_runtime_config(path=str(path), stream_handler=None)
+
+    assert cfg["default_profile_name"] == "plugin_authoring"
+
+
+def test_max_tool_set_switches_per_turn_defaults_to_one(tmp_path):
+    path = _write_config(tmp_path)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["max_tool_set_switches_per_turn"] == 1
+
+
+def test_max_tool_set_switches_per_turn_parsed_from_top_level_config(tmp_path):
+    path = _write_config(tmp_path, max_tool_set_switches_per_turn=3)
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["max_tool_set_switches_per_turn"] == 3
+
+
+def test_search_engine_api_key_passed_through_as_placeholder(tmp_path):
+    path = _write_config(tmp_path, search_engine_api_key="${SEARCH_ENGINE_API_KEY}")
+    cfg = _load_runtime_config(path=path, stream_handler=None)
+
+    assert cfg["search_engine_api_key"] == "${SEARCH_ENGINE_API_KEY}"

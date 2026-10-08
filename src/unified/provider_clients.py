@@ -12,6 +12,20 @@ from .adapters import (
 )
 
 
+def resolve_env_placeholder(value: str | None, env_map: dict[str, str]) -> str | None:
+    """Resolve a config value that may be a ``"${ENV_VAR_NAME}"`` placeholder.
+
+    Returns *value* unchanged if it isn't that syntax. Used for ``api_key``
+    (per-profile) and ``search_engine_api_key`` (top-level) -- the literal
+    secret never appears in the config file, only the environment variable's
+    name does.
+    """
+    if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+        env_var_name = value[2:-1].strip()
+        return env_map.get(env_var_name, "")
+    return value
+
+
 def build_provider_clients_from_runtime_config(
     runtime_config: dict[str, Any],
     *,
@@ -63,11 +77,7 @@ def build_provider_clients_from_runtime_config(
             continue
         base_url = llm_cfg.get("url")
         # API key is provided directly in profile config (or env fallback below).
-        api_key = llm_cfg.get("api_key")
-        if isinstance(api_key, str) and api_key.startswith("${") and api_key.endswith("}"):
-            # Support "${ENV_VAR}" syntax for explicit environment variable references in config.
-            env_var_name = api_key[2:-1].strip()
-            api_key = env_map.get(env_var_name, "")
+        api_key = resolve_env_placeholder(llm_cfg.get("api_key"), env_map)
 
         if provider == "openai":
             key = api_key or env_map.get("OPENAI_API_KEY")

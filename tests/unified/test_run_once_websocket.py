@@ -18,7 +18,7 @@ class FakeRuntime:
         self._text = text
         self.stream_handler = None
 
-    async def handle_query(self, query, *, framework_context=None, session_id=None):
+    async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         return IntentHandlerResult(intent="unified", output={"text": self._text})
 
 

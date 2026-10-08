@@ -1,0 +1,8 @@
+{
+  "name": "switch_to_developer_mode",
+  "description": "Switch this conversation into developer/plugin-authoring mode. Call this instead of attempting the request yourself when the customer needs plugin authoring or validation (checking/fixing a plugin's profile.json), UOM/property-id lookup, generating or regenerating a plugin scaffold, installing a generated (not store) plugin, configuring developer settings, or setting up a dev venv/VS Code debug config. Do not call this for anything already answerable with your current tools (listing/installing/calling/testing an already-installed plugin, device/routine/group control, diagnostics) -- those work the same in both modes. After a successful switch, continue the customer's original request using your new tools rather than asking them to repeat themselves. If this returns an error (not enabled here, or already switched the maximum number of times this request), explain that plainly instead of attempting the request anyway.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

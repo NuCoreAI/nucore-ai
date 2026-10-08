@@ -60,6 +60,16 @@ def _coerce_runtime_profile(
     ``--stream``/``--no-stream`` override) is set, in which case it wins for
     every profile uniformly. Either way, streaming only actually happens when
     a real ``stream_handler`` was also supplied by the caller.
+
+    ``max_iterations``/``max_turns``/``history_token_budget``/
+    ``fabrication_guard_mode``/``max_fabrication_retries`` live here, per
+    profile, rather than as top-level config keys -- see
+    design/developers/merged-toolsets.md: different tool sets (``unified``
+    vs. ``plugin_authoring``) genuinely need different values for all five,
+    the same way they need different models. ``enabled`` (default ``True``)
+    and ``plugin_output_root`` (meaningful only for the ``plugin_authoring``
+    profile) are the gate on whether this tool set is reachable at all --
+    see that same doc.
     """
     provider = _normalize_provider_name(payload.get("provider"))
     if not provider:
@@ -69,6 +79,26 @@ def _coerce_runtime_profile(
     cache_ttl = payload.get("cache_ttl")
     if cache_ttl is not None and cache_ttl not in ("5m", "1h"):
         raise ValueError(f'nucore_runtime.{profile_name}.cache_ttl must be "5m" or "1h", got {cache_ttl!r}')
+
+    fabrication_guard_mode = payload.get("fabrication_guard_mode", "log")
+    if fabrication_guard_mode not in ("off", "log", "block"):
+        raise ValueError(
+            f'nucore_runtime.{profile_name}.fabrication_guard_mode must be "off", "log", or '
+            f"\"block\", got {fabrication_guard_mode!r}"
+        )
+
+    max_iterations = payload.get("max_iterations", 8)
+    if not isinstance(max_iterations, int):
+        raise ValueError(f"nucore_runtime.{profile_name}.max_iterations must be an integer")
+
+    history_token_budget = payload.get("history_token_budget", 20000)
+    if not isinstance(history_token_budget, int):
+        raise ValueError(f"nucore_runtime.{profile_name}.history_token_budget must be an integer")
+
+    max_fabrication_retries = payload.get("max_fabrication_retries", 1)
+    if not isinstance(max_fabrication_retries, int):
+        raise ValueError(f"nucore_runtime.{profile_name}.max_fabrication_retries must be an integer")
+
     result: dict[str, Any] = {
         "provider": provider,
         "model": payload.get("model"),
@@ -85,6 +115,12 @@ def _coerce_runtime_profile(
         "supports_system_role": bool(
             payload.get("supports_system_role", capabilities.get("supports_system_role", True))
         ),
+        "enabled": bool(payload.get("enabled", True)),
+        "plugin_output_root": payload.get("plugin_output_root"),
+        "max_iterations": max_iterations,
+        "history_token_budget": history_token_budget,
+        "fabrication_guard_mode": fabrication_guard_mode,
+        "max_fabrication_retries": max_fabrication_retries,
     }
     wants_stream = bool(payload.get("stream", False)) if force_stream is None else force_stream
     if wants_stream and stream_handler is not None:
@@ -103,16 +139,22 @@ def _load_runtime_config(
 ) -> dict[str, Any]:
     """Load and normalize CLI-provided runtime profiles.
 
-    Expected file format:
+    Expected file format (see design/developers/merged-toolsets.md):
 
     {
-      "max_iterations": 8,
+      "max_tool_set_switches_per_turn": 1,
       "preferences_dir": null,
+      "search_engine": "brave",
+      "search_engine_api_key": "${SEARCH_ENGINE_API_KEY}",
       "nucore_runtime": {
-        "unified": {...},
-        "other_profile_name": {...}
+        "unified": {"enabled": true, ...},
+        "plugin_authoring": {"enabled": true, "plugin_output_root": "...", ...}
       }
     }
+
+    At least one profile must be present and ``enabled``; which profiles
+    exist and are enabled is the *only* gate on tool-set availability --
+    there is no longer a ``--tool-set``/``--plugin-output-root`` CLI flag.
     """
     if not path:
         raise ValueError("A runtime profile JSON path is required")
@@ -128,23 +170,12 @@ def _load_runtime_config(
         raise ValueError("Runtime profile must be a JSON object at top level")
 
     raw_runtime = payload.get("nucore_runtime")
-    if not isinstance(raw_runtime, dict):
-        raise ValueError("Runtime profile must contain an object key 'nucore_runtime'")
+    if not isinstance(raw_runtime, dict) or not raw_runtime:
+        raise ValueError("Runtime profile must contain a non-empty object key 'nucore_runtime'")
 
-    raw_unified = raw_runtime.get("unified")
-    if not isinstance(raw_unified, dict):
-        raise ValueError("nucore_runtime.unified must be an object")
-
-    unified_profile = _coerce_runtime_profile(
-        "unified", raw_unified, stream_handler=stream_handler, force_stream=force_stream
-    )
-
-    supported_llms: dict[str, dict[str, Any]] = {"unified": unified_profile}
-    normalized_profiles: dict[str, dict[str, Any]] = {"unified": unified_profile}
-
+    supported_llms: dict[str, dict[str, Any]] = {}
+    normalized_profiles: dict[str, dict[str, Any]] = {}
     for profile_name, profile_payload in raw_runtime.items():
-        if profile_name == "unified":
-            continue
         if not isinstance(profile_payload, dict):
             raise ValueError(f"nucore_runtime.{profile_name} must be an object")
         normalized_profile = _coerce_runtime_profile(
@@ -156,40 +187,44 @@ def _load_runtime_config(
         supported_llms[profile_name] = normalized_profile
         normalized_profiles[profile_name] = normalized_profile
 
-    default_max_turns = int(unified_profile.get("max_turns", 20))
+    enabled_profiles = [name for name, p in normalized_profiles.items() if p.get("enabled")]
+    if not enabled_profiles:
+        raise ValueError(
+            "at least one nucore_runtime profile must have 'enabled' true (or omit 'enabled', "
+            "which defaults to true)"
+        )
 
-    configured_max_iterations = payload.get("max_iterations")
-    if configured_max_iterations is not None and not isinstance(configured_max_iterations, int):
-        raise ValueError("max_iterations must be an integer when provided")
+    plugin_authoring_profile = normalized_profiles.get("plugin_authoring")
+    if (
+        plugin_authoring_profile is not None
+        and plugin_authoring_profile.get("enabled")
+        and not plugin_authoring_profile.get("plugin_output_root")
+    ):
+        raise ValueError(
+            "nucore_runtime.plugin_authoring requires 'plugin_output_root' when enabled -- the "
+            "tool set refuses to start without an allowed output root"
+        )
+
+    # "unified" is the preferred default active tool set for a new connection
+    # when both are enabled (today's behavior); otherwise whichever single
+    # profile is enabled (see merged-toolsets.md's "enabled flag" section).
+    default_profile_name = "unified" if "unified" in enabled_profiles else enabled_profiles[0]
+    default_max_turns = int(normalized_profiles[default_profile_name].get("max_turns", 20))
 
     configured_preferences_dir = payload.get("preferences_dir")
     if configured_preferences_dir is not None and not isinstance(configured_preferences_dir, str):
         raise ValueError("preferences_dir must be a string when provided")
 
-    configured_history_token_budget = payload.get("history_token_budget")
-    if configured_history_token_budget is not None and not isinstance(configured_history_token_budget, int):
-        raise ValueError("history_token_budget must be an integer when provided")
+    configured_max_switches = payload.get("max_tool_set_switches_per_turn")
+    if configured_max_switches is not None and not isinstance(configured_max_switches, int):
+        raise ValueError("max_tool_set_switches_per_turn must be an integer when provided")
 
-    configured_fabrication_guard_mode = payload.get("fabrication_guard_mode")
-    if configured_fabrication_guard_mode is not None and configured_fabrication_guard_mode not in (
-        "off",
-        "log",
-        "block",
-    ):
-        raise ValueError(
-            f'fabrication_guard_mode must be "off", "log", or "block", '
-            f"got {configured_fabrication_guard_mode!r}"
-        )
-
-    configured_max_fabrication_retries = payload.get("max_fabrication_retries")
-    if configured_max_fabrication_retries is not None and not isinstance(configured_max_fabrication_retries, int):
-        raise ValueError("max_fabrication_retries must be an integer when provided")
-
-    # plugin_authoring's search_web fallback tier -- see run_unified_runtime.py's
-    # --search-engine flag, which wins over this when both are given (same
-    # CLI-overrides-config precedence as preferences_dir/max_iterations
-    # above). The key itself is never read from here -- SEARCH_ENGINE_API_KEY
-    # is env-var-only, deliberately not part of this config file.
+    # search_engine/search_engine_api_key are global (not per-profile) --
+    # either tool set's discovery tools may use them, not just
+    # plugin_authoring's (see merged-toolsets.md). The key follows the same
+    # "${ENV_VAR}" convention api_key already uses -- resolved later via
+    # provider_clients.resolve_env_placeholder, never read from the file
+    # directly as a literal secret.
     configured_search_engine = payload.get("search_engine")
     if configured_search_engine is not None and configured_search_engine not in ("brave", "tavily"):
         raise ValueError(f'search_engine must be "brave" or "tavily", got {configured_search_engine!r}')
@@ -197,30 +232,20 @@ def _load_runtime_config(
     return {
         "nucore_runtime": normalized_profiles,
         "supported_llms": supported_llms,
-        "max_iterations": int(configured_max_iterations) if configured_max_iterations is not None else 8,
+        "enabled_profiles": enabled_profiles,
+        "default_profile_name": default_profile_name,
         # No default -- None means preferences are simply unavailable for
         # this installation (see unified.preferences.preference_store.get_store).
         "preferences_dir": configured_preferences_dir,
         "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
-        # Compaction trigger for UnifiedRuntime.handle_query's conversation
-        # history -- see history_compaction.maybe_compact_history. Bounds
-        # estimated token size, not turn count (default_max_turns above
-        # already bounds that separately).
-        "history_token_budget": (
-            int(configured_history_token_budget) if configured_history_token_budget is not None else 20000
-        ),
-        # See unified.fabrication_guard/AgenticLoop -- the code-level backstop
-        # for a reply that claims a tool-mediated action happened with no
-        # matching tool call that turn. "log" (default) only ever writes a
-        # debug-log flag line, no customer-facing behavior change; "block"
-        # also forces a bounded corrective retry.
-        "fabrication_guard_mode": configured_fabrication_guard_mode or "log",
-        "max_fabrication_retries": (
-            int(configured_max_fabrication_retries) if configured_max_fabrication_retries is not None else 1
-        ),
-        # No default -- None means no engine configured here; --search-engine
-        # or the absence of either still disables plugin_authoring's
-        # search_web tool (see _resolve_tool_set).
+        # Bounds how many times one turn may chain from one tool set's
+        # AgenticLoop into the other's after a switch-tool call -- see
+        # design/developers/merged-toolsets.md's "Switch-count cap".
+        "max_tool_set_switches_per_turn": configured_max_switches if configured_max_switches is not None else 1,
+        # No default -- None means no engine configured here; absence just
+        # disables the search_web tool for whichever tool set would have
+        # used it.
         "search_engine": configured_search_engine,
+        "search_engine_api_key": payload.get("search_engine_api_key"),
     }

@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 import unified.runtime as runtime_module
-from unified.runtime import _TOOLS_DIR, UnifiedRuntime, resolve_llm_profile
+from unified.runtime import _TOOLS_DIR, DispatchBundle, ToolSetBundle, UnifiedRuntime, resolve_llm_profile
 from unified.session_store import SessionStore
 
 
@@ -48,24 +48,25 @@ def _patch_collaborators(monkeypatch):
     _FakeLoop.captured_init_kwargs = None
 
 
-def _runtime(runtime_config: dict | None = None) -> UnifiedRuntime:
+def _runtime(runtime_config: dict | None = None, **kwargs) -> UnifiedRuntime:
     return UnifiedRuntime(
         nucore_interface=SimpleNamespace(),
         llm_client=SimpleNamespace(),
         runtime_config=runtime_config if runtime_config is not None else {},
+        **kwargs,
     )
 
 
 @pytest.mark.asyncio
 async def test_handle_query_threads_session_id_into_llm_config():
     await _runtime().handle_query("hi", session_id="conversation-42")
-    assert _FakeLoop.captured_llm_config["session_id"] == "conversation-42"
+    assert _FakeLoop.captured_llm_config["session_id"] == "conversation-42::unified"
 
 
 @pytest.mark.asyncio
 async def test_handle_query_defaults_session_id_when_not_given():
     await _runtime().handle_query("hi")
-    assert _FakeLoop.captured_llm_config["session_id"] == "default"
+    assert _FakeLoop.captured_llm_config["session_id"] == "default::unified"
 
 
 @pytest.mark.asyncio
@@ -76,7 +77,10 @@ async def test_handle_query_passes_system_prompt_sections_through_as_a_list():
 
 @pytest.mark.asyncio
 async def test_handle_query_threads_fabrication_guard_config_into_agentic_loop():
-    await _runtime({"fabrication_guard_mode": "block", "max_fabrication_retries": 3}).handle_query("hi")
+    runtime_config = {
+        "nucore_runtime": {"unified": {"fabrication_guard_mode": "block", "max_fabrication_retries": 3}}
+    }
+    await _runtime(runtime_config).handle_query("hi")
     assert _FakeLoop.captured_init_kwargs["fabrication_guard_mode"] == "block"
     assert _FakeLoop.captured_init_kwargs["max_fabrication_retries"] == 3
 
@@ -104,30 +108,50 @@ def test_explicit_session_store_is_used_as_given():
     assert runtime.session_store is shared
 
 
-# --- Alternate tool set injection (unified.plugin_authoring uses all three) ---
+# --- Alternate tool set injection (unified.plugin_authoring uses ToolSetBundle) ---
 
 
-def test_default_tool_spec_paths_matches_hardcoded_customer_tools_dir():
+@pytest.mark.asyncio
+async def test_default_tool_spec_paths_matches_hardcoded_customer_tools_dir():
     expected_count = len(list(_TOOLS_DIR.glob("tool_*.json")))
-    assert len(_runtime().tool_specs) == expected_count
+    await _runtime().handle_query("hi")
+    assert len(_FakeLoop.captured_init_kwargs["tool_specs"]) == expected_count
 
 
-def test_tool_spec_paths_override_replaces_the_default_tool_set(tmp_path):
+@pytest.mark.asyncio
+async def test_tool_spec_paths_override_replaces_the_default_tool_set(tmp_path):
     schema_path = tmp_path / "tool_ping.json"
     schema_path.write_text(
         json.dumps({"name": "ping", "description": "ping", "input_schema": {"type": "object", "properties": {}}})
     )
-    runtime = UnifiedRuntime(
-        nucore_interface=SimpleNamespace(),
-        llm_client=SimpleNamespace(),
-        runtime_config={},
-        tool_spec_paths=[schema_path],
+    runtime = _runtime(
+        tool_sets={
+            "unified": ToolSetBundle(
+                tool_spec_paths=[schema_path],
+                dispatch_factory=lambda _ctx: DispatchBundle(dispatch=runtime_module.execute_tool),
+                system_prompt_builder=_fake_build_system_prompt_sections,
+            )
+        }
     )
-    assert [t.name for t in runtime.tool_specs] == ["ping"]
+    await runtime.handle_query("hi")
+    assert [t.name for t in _FakeLoop.captured_init_kwargs["tool_specs"]] == ["ping"]
 
 
-def test_default_dispatch_has_no_override():
-    assert _runtime()._dispatch_override is None
+@pytest.mark.asyncio
+async def test_default_dispatch_is_execute_tool(monkeypatch):
+    calls = []
+
+    async def fake_execute_tool(name, args, *, nucore_interface):
+        calls.append((name, args))
+        return {"from": "default"}
+
+    monkeypatch.setattr(runtime_module, "execute_tool", fake_execute_tool)
+    runtime = _runtime()
+    await runtime.handle_query("hi")
+    dispatch = _FakeLoop.captured_init_kwargs["dispatch"]
+    result = await dispatch("some_tool", {"a": 1})
+    assert result == {"from": "default"}
+    assert calls == [("some_tool", {"a": 1})]
 
 
 @pytest.mark.asyncio
@@ -138,13 +162,18 @@ async def test_dispatch_override_is_used_instead_of_default_execute_tool():
         calls.append((name, args))
         return {"from": "override"}
 
-    runtime = UnifiedRuntime(
-        nucore_interface=SimpleNamespace(),
-        llm_client=SimpleNamespace(),
-        runtime_config={},
-        dispatch=fake_dispatch,
+    runtime = _runtime(
+        tool_sets={
+            "unified": ToolSetBundle(
+                tool_spec_paths=None,
+                dispatch_factory=lambda _ctx: DispatchBundle(dispatch=fake_dispatch),
+                system_prompt_builder=_fake_build_system_prompt_sections,
+            )
+        }
     )
-    result = await runtime._dispatch("some_tool", {"a": 1})
+    await runtime.handle_query("hi")
+    dispatch = _FakeLoop.captured_init_kwargs["dispatch"]
+    result = await dispatch("some_tool", {"a": 1})
     assert result == {"from": "override"}
     assert calls == [("some_tool", {"a": 1})]
 
@@ -154,11 +183,14 @@ async def test_system_prompt_builder_override_is_used_instead_of_default():
     async def fake_builder(nucore_interface):
         return ["dev-tools-section"]
 
-    runtime = UnifiedRuntime(
-        nucore_interface=SimpleNamespace(),
-        llm_client=SimpleNamespace(),
-        runtime_config={},
-        system_prompt_builder=fake_builder,
+    runtime = _runtime(
+        tool_sets={
+            "unified": ToolSetBundle(
+                tool_spec_paths=None,
+                dispatch_factory=lambda _ctx: DispatchBundle(dispatch=runtime_module.execute_tool),
+                system_prompt_builder=fake_builder,
+            )
+        }
     )
     await runtime.handle_query("hi")
     # Not ["static", "tail"] -- the module-level default _patch_collaborators
@@ -213,7 +245,7 @@ async def test_concurrent_handle_query_calls_for_same_session_are_serialized(mon
 
 
 # --- extra_tools/on_raw_response passthrough (plugin_authoring's Claude-
-# native web search path, run_unified_runtime.py's _resolve_tool_set) ---
+# native web search path, run_unified_runtime.py's _build_plugin_authoring_tool_set) ---
 
 
 @pytest.mark.asyncio
@@ -223,12 +255,16 @@ async def test_handle_query_forwards_extra_tools_and_on_raw_response_to_agentic_
     async def harvest(raw_response):
         pass
 
-    runtime = UnifiedRuntime(
-        nucore_interface=SimpleNamespace(),
-        llm_client=SimpleNamespace(),
-        runtime_config={},
-        extra_tools=[native_tool],
-        on_raw_response=harvest,
+    runtime = _runtime(
+        tool_sets={
+            "unified": ToolSetBundle(
+                tool_spec_paths=None,
+                dispatch_factory=lambda _ctx: DispatchBundle(
+                    dispatch=runtime_module.execute_tool, extra_tools=[native_tool], on_raw_response=harvest
+                ),
+                system_prompt_builder=_fake_build_system_prompt_sections,
+            )
+        }
     )
     await runtime.handle_query("hi")
 
@@ -266,3 +302,54 @@ def test_resolve_llm_profile_falls_back_to_first_key_when_preferred_is_absent():
 def test_resolve_llm_profile_falls_back_to_first_key_when_nothing_else_matches():
     config = {"supported_llms": {"only_one": {"provider": "gemini"}}}
     assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "gemini"}
+
+
+# --- Mid-round tool-set switching (design/developers/merged-toolsets.md) ---
+
+
+@pytest.mark.asyncio
+async def test_handle_query_chains_to_the_other_tool_set_on_switch_request():
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    class _SwitchOnceLoop:
+        calls = 0
+
+        def __init__(self, **kwargs):
+            self._dispatch = kwargs["dispatch"]
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            _SwitchOnceLoop.calls += 1
+            if _SwitchOnceLoop.calls == 1:
+                result = await self._dispatch("switch_to_developer_mode", {})
+                if isinstance(result, dict) and SWITCH_TOOL_SET_KEY in result:
+                    raise ToolSetSwitchRequested(result[SWITCH_TOOL_SET_KEY])
+            return "answered-in-" + ("unified" if _SwitchOnceLoop.calls == 1 else "plugin_authoring"), []
+
+    import unified.runtime as rm
+
+    original_loop = rm.AgenticLoop
+    rm.AgenticLoop = _SwitchOnceLoop
+    _SwitchOnceLoop.calls = 0
+    try:
+        runtime_config = {
+            "enabled_profiles": ["unified", "plugin_authoring"],
+            "default_profile_name": "unified",
+            "max_tool_set_switches_per_turn": 1,
+            "nucore_runtime": {"unified": {}, "plugin_authoring": {}},
+        }
+        runtime = _runtime(
+            runtime_config,
+            tool_sets={
+                "plugin_authoring": ToolSetBundle(
+                    tool_spec_paths=None,
+                    dispatch_factory=lambda _ctx: DispatchBundle(dispatch=rm.execute_tool),
+                    system_prompt_builder=_fake_build_system_prompt_sections,
+                )
+            },
+        )
+        result = await runtime.handle_query("hi")
+        assert result.output["text"] == "answered-in-plugin_authoring"
+        assert result.output["active_tool_set"] == "plugin_authoring"
+        assert _SwitchOnceLoop.calls == 2
+    finally:
+        rm.AgenticLoop = original_loop

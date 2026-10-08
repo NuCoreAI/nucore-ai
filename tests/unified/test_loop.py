@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 import unified.loop as loop_module
 from unified.loop import AgenticLoop
 
@@ -385,3 +387,70 @@ async def test_on_raw_response_exception_is_swallowed_not_propagated():
 
 async def _ok():
     return {"ok": True}
+
+
+# --- Mid-round tool-set switching (design/developers/merged-toolsets.md) ---
+
+
+async def test_switch_tool_set_result_raises_instead_of_continuing_the_round():
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    async def fake_dispatch(name, args):
+        return {SWITCH_TOOL_SET_KEY: "plugin_authoring"}
+
+    responses = [{"tool_calls": [{"id": "1", "name": "switch_to_developer_mode", "input": {}}]}]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=fake_dispatch)
+
+    with pytest.raises(ToolSetSwitchRequested) as exc_info:
+        await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert exc_info.value.target_tool_set == "plugin_authoring"
+
+
+async def test_switch_tool_set_does_not_dispatch_remaining_calls_in_the_same_round():
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    dispatched = []
+
+    async def fake_dispatch(name, args):
+        dispatched.append(name)
+        if name == "switch_to_developer_mode":
+            return {SWITCH_TOOL_SET_KEY: "plugin_authoring"}
+        return {"ok": True}
+
+    responses = [
+        {
+            "tool_calls": [
+                {"id": "1", "name": "switch_to_developer_mode", "input": {}},
+                {"id": "2", "name": "some_other_tool", "input": {}},
+            ]
+        }
+    ]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=fake_dispatch)
+
+    with pytest.raises(ToolSetSwitchRequested):
+        await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert dispatched == ["switch_to_developer_mode"]
+
+
+async def test_an_ordinary_error_result_does_not_raise_or_unwind():
+    # A disabled target or an exhausted switch cap (tool_set_switch.py) is
+    # just a plain {"error": ...} dict -- the same convention every other
+    # tool handler uses -- and must NOT raise ToolSetSwitchRequested; the
+    # loop should treat it like any other tool result and keep going.
+    async def fake_dispatch(name, args):
+        return {"error": "developer tools are not enabled on this installation"}
+
+    responses = [
+        {"tool_calls": [{"id": "1", "name": "switch_to_developer_mode", "input": {}}]},
+        {"text": "explained the error"},
+    ]
+    adapter = _FakeAdapter(responses)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=fake_dispatch)
+
+    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert final_text == "explained the error"

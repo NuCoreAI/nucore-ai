@@ -17,7 +17,22 @@ import pytest
 
 from unified.models import IntentHandlerResult
 from unified.plugin_authoring.handlers import discovery
-from unified.run_unified_runtime import EisyUIContext, _resolve_tool_set, _run_once
+from unified.run_unified_runtime import EisyUIContext, _build_plugin_authoring_tool_set, _run_once
+
+
+def _resolve_plugin_authoring(**kwargs):
+    """Test helper matching the old `_resolve_tool_set("plugin_authoring", ...)`
+    call shape, now that the dispatcher function is gone -- there is only
+    one tool set `_build_plugin_authoring_tool_set` ever builds, since
+    "customer"/"unified" needs no explicit resolution at all (UnifiedRuntime
+    falls back to its own hardcoded default -- see merged-toolsets.md)."""
+    import os
+
+    kwargs.setdefault("nucore_interface", SimpleNamespace())
+    kwargs.setdefault("plugin_output_root", "/tmp/plugin-projects")
+    kwargs.setdefault("search_engine_api_key", os.environ.get("SEARCH_ENGINE_API_KEY"))
+    bundle = _build_plugin_authoring_tool_set(**kwargs)
+    return bundle.tool_spec_paths, bundle.dispatch_factory, bundle.system_prompt_builder
 
 
 def test_two_contexts_do_not_share_state():
@@ -93,7 +108,7 @@ class _FakeRuntime:
         self.stream_handler = None
         self.calls: list[dict] = []
 
-    async def handle_query(self, query, *, framework_context=None, session_id=None):
+    async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         self.calls.append({"query": query, "framework_context": framework_context, "session_id": session_id})
         return IntentHandlerResult(intent="unified", output={"text": self._text})
 
@@ -144,33 +159,25 @@ async def test_run_once_does_not_dispatch_a_context_only_message():
     assert runtime.calls == []  # context alone never reaches handle_query
 
 
-# --- _resolve_tool_set: tool-set selection, startup refusal, dispatch factory ---
+# --- _build_plugin_authoring_tool_set: dispatch factory shape ---
+# (there is no more tool-set dispatcher -- "customer"/"unified" needs no
+# resolution at all, and plugin_output_root's presence/'enabled' validation
+# now lives in runtime_config.py -- see test_runtime_config.py)
 
 
-def test_resolve_tool_set_customer_returns_all_none():
-    assert _resolve_tool_set("customer", SimpleNamespace()) == (None, None, None)
-
-
-def test_resolve_tool_set_plugin_authoring_requires_an_output_root():
-    with pytest.raises(ValueError):
-        _resolve_tool_set("plugin_authoring", SimpleNamespace(), plugin_output_root=None)
-
-
-def test_resolve_tool_set_plugin_authoring_returns_a_dispatch_factory_not_a_dispatch():
-    tool_spec_paths, dispatch_factory, system_prompt_builder = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/plugin-projects"
-    )
+def test_build_plugin_authoring_tool_set_returns_a_dispatch_factory_not_a_dispatch():
+    tool_spec_paths, dispatch_factory, system_prompt_builder = _resolve_plugin_authoring()
 
     assert tool_spec_paths  # non-empty: this package's own tools + reused customer ones
     assert callable(system_prompt_builder)
     assert callable(dispatch_factory)
 
-    # Calling the factory twice must each time hand back a
-    # _PluginAuthoringDispatch bundle, each backed by its own fresh
-    # EvidenceLedger (see the cross-connection-isolation test below) --
-    # .dispatch is what's actually usable as a dispatch callable;
-    # .extra_tools/.on_raw_response are the Claude-native web search path's
-    # own additions (None here, no provider given).
+    # Calling the factory twice must each time hand back a DispatchBundle,
+    # each backed by its own fresh EvidenceLedger (see the
+    # cross-connection-isolation test below) -- .dispatch is what's actually
+    # usable as a dispatch callable; .extra_tools/.on_raw_response are the
+    # Claude-native web search path's own additions (None here, no provider
+    # given).
     first_bundle = dispatch_factory()
     second_bundle = dispatch_factory()
     assert callable(first_bundle.dispatch)
@@ -180,10 +187,8 @@ def test_resolve_tool_set_plugin_authoring_returns_a_dispatch_factory_not_a_disp
 
 
 @pytest.mark.asyncio
-async def test_resolve_tool_set_plugin_authoring_dispatch_routes_a_known_tool():
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/plugin-projects"
-    )
+async def test_build_plugin_authoring_tool_set_dispatch_routes_a_known_tool():
+    _, dispatch_factory, _ = _resolve_plugin_authoring()
     dispatch = dispatch_factory().dispatch
 
     result = await dispatch("lookup_uom", {"keyword": "amps"})
@@ -194,9 +199,7 @@ async def test_resolve_tool_set_plugin_authoring_dispatch_routes_a_known_tool():
 def test_make_dispatch_still_works_when_called_with_no_eisy_ui_context():
     # Zero-arg calls (every pre-existing test above, and any caller that
     # hasn't been updated to pass one) must keep working.
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/plugin-projects"
-    )
+    _, dispatch_factory, _ = _resolve_plugin_authoring()
     bundle = dispatch_factory()
     assert callable(bundle.dispatch)
 
@@ -209,9 +212,7 @@ async def test_make_dispatch_binds_live_eisy_ui_context_get_user_id(tmp_path):
     # context message could have arrived) -- a snapshot would make
     # configure_developer's identity check permanently useless.
     ctx = EisyUIContext()
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root=str(tmp_path)
-    )
+    _, dispatch_factory, _ = _resolve_plugin_authoring(plugin_output_root=str(tmp_path))
     dispatch = dispatch_factory(ctx).dispatch
 
     # No identity known yet -- commissioning under a different email is allowed.
@@ -236,16 +237,16 @@ def _tool_names(tool_spec_paths):
 
 def test_resolve_tool_set_excludes_search_web_without_an_engine_or_key(monkeypatch):
     monkeypatch.delenv("SEARCH_ENGINE_API_KEY", raising=False)
-    tool_spec_paths, _, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=None
+    tool_spec_paths, _, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=None
     )
     assert "tool_search_web.json" not in _tool_names(tool_spec_paths)
 
 
 def test_resolve_tool_set_excludes_search_web_when_engine_given_but_key_missing(monkeypatch):
     monkeypatch.delenv("SEARCH_ENGINE_API_KEY", raising=False)
-    tool_spec_paths, _, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine="brave"
+    tool_spec_paths, _, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine="brave"
     )
     assert "tool_search_web.json" not in _tool_names(tool_spec_paths)
 
@@ -253,8 +254,8 @@ def test_resolve_tool_set_excludes_search_web_when_engine_given_but_key_missing(
 @pytest.mark.parametrize("engine", ["brave", "tavily"])
 def test_resolve_tool_set_includes_search_web_when_engine_and_key_both_given(monkeypatch, engine):
     monkeypatch.setenv("SEARCH_ENGINE_API_KEY", "a-key")
-    tool_spec_paths, _, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=engine
+    tool_spec_paths, _, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=engine
     )
     assert "tool_search_web.json" in _tool_names(tool_spec_paths)
 
@@ -278,8 +279,8 @@ async def test_resolve_tool_set_factory_gives_each_connection_an_independent_led
     cm.__aexit__ = AsyncMock(return_value=False)
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: cm)
 
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine="brave"
+    _, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine="brave"
     )
     first_connection = dispatch_factory().dispatch
     second_connection = dispatch_factory().dispatch
@@ -299,8 +300,8 @@ async def test_resolve_tool_set_factory_gives_each_connection_an_independent_led
 
 def test_resolve_tool_set_uses_native_claude_search_when_provider_is_claude_and_no_engine_given(monkeypatch):
     monkeypatch.delenv("SEARCH_ENGINE_API_KEY", raising=False)
-    tool_spec_paths, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=None, provider="claude"
+    tool_spec_paths, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=None, provider="claude"
     )
     assert "tool_search_web.json" not in _tool_names(tool_spec_paths)
 
@@ -313,8 +314,8 @@ def test_resolve_tool_set_uses_native_claude_search_when_provider_is_claude_and_
 
 def test_resolve_tool_set_normalizes_the_anthropic_alias_to_claude(monkeypatch):
     monkeypatch.delenv("SEARCH_ENGINE_API_KEY", raising=False)
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=None, provider="anthropic"
+    _, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=None, provider="anthropic"
     )
     assert dispatch_factory().extra_tools is not None
 
@@ -322,8 +323,8 @@ def test_resolve_tool_set_normalizes_the_anthropic_alias_to_claude(monkeypatch):
 @pytest.mark.parametrize("engine", ["brave", "tavily"])
 def test_resolve_tool_set_explicit_search_engine_wins_over_native_even_on_claude(monkeypatch, engine):
     monkeypatch.setenv("SEARCH_ENGINE_API_KEY", "a-key")
-    tool_spec_paths, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=engine, provider="claude"
+    tool_spec_paths, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=engine, provider="claude"
     )
     assert "tool_search_web.json" in _tool_names(tool_spec_paths)
     bundle = dispatch_factory()
@@ -333,8 +334,8 @@ def test_resolve_tool_set_explicit_search_engine_wins_over_native_even_on_claude
 
 def test_resolve_tool_set_non_claude_provider_without_engine_has_no_web_search_at_all(monkeypatch):
     monkeypatch.delenv("SEARCH_ENGINE_API_KEY", raising=False)
-    tool_spec_paths, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=None, provider="openai"
+    tool_spec_paths, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=None, provider="openai"
     )
     assert "tool_search_web.json" not in _tool_names(tool_spec_paths)
     bundle = dispatch_factory()
@@ -349,8 +350,8 @@ async def test_native_claude_search_marks_web_search_available_without_an_engine
     # fetch_reference(source_tier="user_url") gate, which refuses until
     # web_search_tried (never set yet) when web_search_available is True.
     monkeypatch.delenv("SEARCH_ENGINE_API_KEY", raising=False)
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=None, provider="claude"
+    _, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=None, provider="claude"
     )
     dispatch = dispatch_factory().dispatch
 
@@ -373,8 +374,8 @@ async def test_no_native_and_no_fallback_leaves_web_search_unavailable(monkeypat
     cm.__aexit__ = AsyncMock(return_value=False)
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: cm)
 
-    _, dispatch_factory, _ = _resolve_tool_set(
-        "plugin_authoring", SimpleNamespace(), plugin_output_root="/tmp/x", search_engine=None, provider="openai"
+    _, dispatch_factory, _ = _resolve_plugin_authoring(
+        plugin_output_root="/tmp/x", search_engine=None, provider="openai"
     )
     dispatch = dispatch_factory().dispatch
 

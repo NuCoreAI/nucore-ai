@@ -19,8 +19,9 @@ from unified.models import IntentHandlerResult
 from unified.plugin_authoring import search_result_enrichment
 from unified.plugin_authoring.handlers import discovery as plugin_authoring_discovery
 from unified.provider_dispatch_adapter import ProviderDispatchLLMAdapter
-from unified.runtime import UnifiedRuntime, resolve_llm_profile
+from unified.runtime import DispatchBundle, ToolSetBundle, UnifiedRuntime, resolve_llm_profile
 from unified.runtime_config import _load_runtime_config
+from unified.provider_clients import resolve_env_placeholder
 from unified.session_store import SessionStore
 from unified.dispatch_builder import build_default_dispatch_adapter
 from unified.stream_handler import StreamHandler
@@ -57,6 +58,16 @@ class EisyUIContext:
         self.user_id:str | None = None
         self.is_developer:bool | None = None
         self.client_id:str | None = None
+        # Sticky active tool set for this connection -- None means "use the
+        # runtime's own default" (see UnifiedRuntime.default_tool_set / the
+        # runtime config's default_profile_name). Set explicitly either by
+        # the /developer or /customer chat command (see process_message) or
+        # by UnifiedRuntime.handle_query's returned "active_tool_set" after
+        # a model-driven mid-turn switch -- see
+        # design/developers/merged-toolsets.md.
+        self.active_tool_set: str | None = None
+
+    _SWITCH_COMMANDS = {"/developer": "plugin_authoring", "/customer": "unified"}
 
     def process_message(self, message_data: str)->str:
         """
@@ -91,7 +102,19 @@ class EisyUIContext:
                 return None
             if type == "message":
                 self.message = message.get("message", None)
-                return self.message.strip() if self.message else None
+                text = self.message.strip() if self.message else None
+                # Explicit, user-triggered tool-set switch -- sticky, same
+                # operation the model's own switch_to_developer_mode/
+                # switch_to_customer_mode tool performs (see
+                # design/developers/merged-toolsets.md). If the target isn't
+                # actually enabled on this installation, UnifiedRuntime
+                # falls back to its own default tool set rather than erroring
+                # -- the model-driven tool path (not this one) is where a
+                # disabled target gets explained back to the user.
+                if text in self._SWITCH_COMMANDS:
+                    self.active_tool_set = self._SWITCH_COMMANDS[text]
+                    return None
+                return text
             logger.warning(f"Received message with unrecognized type: {type}")
             return None
         except Exception as e:
@@ -126,6 +149,18 @@ class EisyUIContext:
         ``clientId``. None if no context carrying one has been seen yet on
         this connection."""
         return self.client_id
+
+    def get_active_tool_set(self) -> str | None:
+        """This connection's sticky active tool set, if `/developer`/
+        `/customer` has been typed or a mid-turn model-driven switch has
+        happened. None means "use the runtime's own default"."""
+        return self.active_tool_set
+
+    def set_active_tool_set(self, tool_set_name: str) -> None:
+        """Called after a turn that ended in a different tool set than it
+        started in (a mid-round model-driven switch), so the *next* turn on
+        this connection starts there too -- sticky either way it happens."""
+        self.active_tool_set = tool_set_name
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -186,29 +221,6 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Path to a PEM private key file; with --ssl-certfile, serves --websocket-port over wss:// instead of ws://.",
-    )
-    parser.add_argument(
-        "--tool-set",
-        type=str,
-        choices=["customer", "plugin_authoring"],
-        default="customer",
-        help=(
-            "Which tool set/system prompt the agentic loop uses. 'customer' (default) is "
-            "today's end-customer smart-home assistant. 'plugin_authoring' (unified.plugin_authoring, "
-            "formerly 'dev_tools') covers profile authoring/validation, UOM lookup, and "
-            "configuring/starting/stopping/calling an already-installed plugin under test -- "
-            "still requires a live backend via --backend-api-classpath, same as 'customer'. "
-            "Requires --plugin-output-root."
-        ),
-    )
-    parser.add_argument(
-        "--plugin-output-root",
-        type=str,
-        default=None,
-        help=(
-            "Allowed root directory for plugin_authoring's generated scaffolds. Required when "
-            "--tool-set plugin_authoring is used; the tool set refuses to start without it."
-        ),
     )
     parser.add_argument(
         "--search-engine",
@@ -494,7 +506,13 @@ async def _run_once(
     # history) survive a reconnect instead of resetting to a fresh uuid4
     # every time.
     session_id = eisy_ui_context.get_user_id() or session_id or "default"
-    results = await runtime.handle_query(query, framework_context=eisy_ui_context.get_context(), session_id=session_id)
+    results = await runtime.handle_query(
+        query,
+        framework_context=eisy_ui_context.get_context(),
+        session_id=session_id,
+        active_tool_set=eisy_ui_context.get_active_tool_set(),
+        connection_context=eisy_ui_context,
+    )
     if not results:
         return
     if not isinstance(results, list):
@@ -502,6 +520,14 @@ async def _run_once(
     for result in results:
         if result is None:
             continue
+        # Sticky either way a switch happens -- see merged-toolsets.md. The
+        # *next* turn on this connection starts wherever this one ended up,
+        # whether that came from /developer, /customer, or a mid-round
+        # model-driven switch_to_*_mode tool call.
+        if isinstance(result, IntentHandlerResult) and isinstance(result.output, dict):
+            final_tool_set = result.output.get("active_tool_set")
+            if final_tool_set:
+                eisy_ui_context.set_active_tool_set(final_tool_set)
         text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
         if runtime.stream_handler is not None:
             if runtime.stream_handler.get_stream_chunk_count() > 0:
@@ -648,22 +674,6 @@ _PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS = (
 )
 
 
-class _PluginAuthoringDispatch(NamedTuple):
-    """What ``_resolve_tool_set``'s ``dispatch_factory()`` returns for the
-    ``plugin_authoring`` branch -- a richer bundle than a bare dispatch
-    callable, since the Claude-native web search path also needs
-    ``extra_tools``/``on_raw_response`` threaded into ``UnifiedRuntime``
-    (see that class's own docstring), bound to this same connection's
-    ``EvidenceLedger``. ``extra_tools``/``on_raw_response`` are ``None``
-    whenever native search isn't in play -- the common case, and the only
-    case for ``tool_set != "plugin_authoring"`` (whose ``dispatch_factory``
-    is ``None`` entirely, never even called)."""
-
-    dispatch: Any
-    extra_tools: list[dict[str, Any]] | None = None
-    on_raw_response: Any = None
-
-
 async def _record_native_search_evidence(
     raw_response: Any, *, ledger: "plugin_authoring.EvidenceLedger", secret_values: list[str]
 ) -> None:
@@ -695,57 +705,45 @@ async def _record_native_search_evidence(
                 )
 
 
-def _resolve_tool_set(
-    tool_set: str,
+def _build_plugin_authoring_tool_set(
+    *,
     nucore_interface: NuCoreInterface,
-    plugin_output_root: str | None = None,
+    plugin_output_root: str,
     search_engine: str | None = None,
+    search_engine_api_key: str | None = None,
     secret_values: list[str] | None = None,
     provider: str | None = None,
-) -> tuple[list[Path] | None, Any, Any]:
-    """Return ``(tool_spec_paths, dispatch_factory, system_prompt_builder)``
-    for ``UnifiedRuntime``'s matching constructor params (see
-    unified/runtime.py). Any *tool_set* other than ``"plugin_authoring"``
-    returns ``(None, None, None)``, which ``UnifiedRuntime`` treats as "use
-    the hardcoded customer-facing default" -- so this only changes behavior
-    for ``--tool-set plugin_authoring``.
+) -> ToolSetBundle:
+    """Build the ``plugin_authoring`` tool set's :class:`ToolSetBundle` --
+    called from ``main()`` only when ``runtime_config``'s
+    ``nucore_runtime.plugin_authoring.enabled`` is true (see
+    design/developers/merged-toolsets.md; there is no longer a
+    ``--tool-set``/``--plugin-output-root`` CLI flag -- *plugin_output_root*
+    comes from that profile's own config instead, and *search_engine*/
+    *search_engine_api_key* are now the top-level, tool-set-agnostic config
+    keys of the same names).
 
-    The second element is a **factory** (zero-arg callable returning a
-    :class:`_PluginAuthoringDispatch`), not a ready-to-use dispatch --
-    callers must invoke it once per connection/session (see
-    ``_run_websocket_server`` and ``main``) rather than sharing one dispatch
-    object across every connection. This is what gives each connection its
-    own fresh ``EvidenceLedger`` (design/developers/impl_plan.md's discovery
-    tools), so one user's evidence can never satisfy another's "credible
-    source" check.
+    ``dispatch_factory`` (the bundle's second field) is called at most once
+    per connection, lazily, by :class:`UnifiedRuntime` (see that class's own
+    docstring) -- this is what gives each connection its own fresh
+    ``EvidenceLedger`` (design/developers/impl_plan.md's discovery tools), so
+    one user's evidence can never satisfy another's "credible source" check.
 
-    Raises ``ValueError`` if ``tool_set == "plugin_authoring"`` and
-    *plugin_output_root* is falsy -- the tool set refuses to start without an
-    allowed output root (impl_plan.md's server-side-configuration section).
-
-    *search_engine* (``"brave"``/``"tavily"``) together with the
-    ``SEARCH_ENGINE_API_KEY`` environment variable (read here, never taken
-    from tool args or model output) controls whether the Brave/Tavily
-    ``search_web`` tool is registered. *provider* is the resolved LLM
-    provider for this tool set's conversations (``resolve_llm_profile``'s
-    ``"provider"`` key) -- when it resolves to ``claude`` and *search_engine*
-    was not explicitly given, Claude's own native ``web_search`` server tool
-    is used instead: no ``search_web``/no second API key, via *extra_tools*/
-    *on_raw_response* on the returned dispatch bundle rather than a
-    ``tool_*.json`` file (there is nothing to dispatch -- Anthropic executes
-    it server-side). Passing *search_engine* explicitly always wins, on any
-    provider, forcing the Brave/Tavily fallback -- today's exact behavior.
-    *secret_values* are the literal secret strings (backend password, loaded
-    secrets-file values, the search engine key itself) the discovery tools
-    refuse to send in an outbound query/fetch.
+    *search_engine* (``"brave"``/``"tavily"``) together with
+    *search_engine_api_key* controls whether the Brave/Tavily ``search_web``
+    tool is registered. *provider* is the resolved LLM provider for this
+    tool set's conversations (``resolve_llm_profile``'s ``"provider"`` key)
+    -- when it resolves to ``claude`` and *search_engine* was not explicitly
+    given, Claude's own native ``web_search`` server tool is used instead:
+    no ``search_web``/no second API key, via *extra_tools*/*on_raw_response*
+    on the returned dispatch bundle rather than a ``tool_*.json`` file
+    (there is nothing to dispatch -- Anthropic executes it server-side).
+    Passing *search_engine* explicitly always wins, on any provider, forcing
+    the Brave/Tavily fallback -- today's exact behavior. *secret_values* are
+    the literal secret strings (backend password, loaded secrets-file
+    values, the search engine key itself) the discovery tools refuse to
+    send in an outbound query/fetch.
     """
-    if tool_set != "plugin_authoring":
-        return None, None, None
-
-    if not plugin_output_root:
-        raise ValueError("--tool-set plugin_authoring requires --plugin-output-root")
-
-    search_engine_api_key = os.environ.get("SEARCH_ENGINE_API_KEY")
     web_search_enabled = bool(search_engine and search_engine_api_key)
     native_claude_search = (
         bool(provider) and ProviderDispatchLLMAdapter._normalize(provider) == "claude" and not search_engine
@@ -758,7 +756,7 @@ def _resolve_tool_set(
         tool_spec_paths.append(plugin_authoring.TOOLS_DIR / "tool_search_web.json")
     tool_spec_paths.sort()
 
-    def _make_dispatch(eisy_ui_context: "EisyUIContext | None" = None) -> _PluginAuthoringDispatch:
+    def _make_dispatch(eisy_ui_context: "EisyUIContext | None" = None) -> DispatchBundle:
         # plugin_output_root is consumed by list_generated_plugins/
         # read_generated_plugin/generate_plugin_scaffold/install_generated_plugin
         # (design/developers/impl_plan.md Phase 3, plugin_authoring_p4_impl.md).
@@ -781,7 +779,7 @@ def _resolve_tool_set(
             plugin_authoring.dispatch.execute_tool, nucore_interface=nucore_interface, tool_handlers=tool_handlers
         )
         if not native_claude_search:
-            return _PluginAuthoringDispatch(dispatch=dispatch)
+            return DispatchBundle(dispatch=dispatch)
         extra_tools = [
             {
                 "type": "web_search_20250305",
@@ -792,9 +790,13 @@ def _resolve_tool_set(
         on_raw_response = functools.partial(
             _record_native_search_evidence, ledger=ledger, secret_values=secret_values or []
         )
-        return _PluginAuthoringDispatch(dispatch=dispatch, extra_tools=extra_tools, on_raw_response=on_raw_response)
+        return DispatchBundle(dispatch=dispatch, extra_tools=extra_tools, on_raw_response=on_raw_response)
 
-    return tool_spec_paths, _make_dispatch, plugin_authoring.build_system_prompt_sections
+    return ToolSetBundle(
+        tool_spec_paths=tool_spec_paths,
+        dispatch_factory=_make_dispatch,
+        system_prompt_builder=plugin_authoring.build_system_prompt_sections,
+    )
 
 
 async def _run_websocket_server(
@@ -802,15 +804,12 @@ async def _run_websocket_server(
     llm_adapter,
     runtime_config_path: str,
     force_stream: bool | None,
-    max_iterations: int,
     host: str,
     port: int | None,
     is_unix: bool,
     client_uid: int | None = None,
     ssl_context: ssl.SSLContext | None = None,
-    tool_spec_paths: list[Path] | None = None,
-    dispatch_factory: Any = None,
-    system_prompt_builder: Any = None,
+    tool_sets: dict[str, ToolSetBundle] | None = None,
 ) -> None:
     """Serve WebSocket connections directly, no HTTP framework involved.
 
@@ -826,10 +825,10 @@ async def _run_websocket_server(
     reconnect silently lost everything despite ``EisyUIContext.get_user_id``'s
     session id being stable across one -- see ``SessionStore.lock`` for what
     keeps sharing it across connections safe). Dispatch is also per-connection:
-    ``_resolve_tool_set`` hands back a dispatch *factory*, and ``handler``
-    calls it fresh for each connection rather than sharing one dispatch
-    object -- for ``plugin_authoring`` this is what gives each connection
-    its own fresh ``EvidenceLedger`` (design/developers/impl_plan.md's
+    each entry in *tool_sets* hands back a dispatch *factory*, and
+    ``UnifiedRuntime`` calls it fresh for each connection rather than sharing
+    one dispatch object -- for ``plugin_authoring`` this is what gives each
+    connection its own fresh ``EvidenceLedger`` (design/developers/impl_plan.md's
     discovery tools), so one user's evidence never satisfies another's
     "credible source" check.
 
@@ -853,14 +852,11 @@ async def _run_websocket_server(
     ``getpeereid()`` -- connections from any other UID are closed immediately,
     before any query is processed.
 
-    ``tool_spec_paths``/``dispatch_factory``/``system_prompt_builder`` are
-    ``_resolve_tool_set``'s own return values -- this function has no idea
-    what tool set is active or what plugin_authoring-specific config
-    (output root, search engine, secrets, provider) produced them. The
-    caller (``main``) resolves that once, the same way its own direct
-    (non-websocket) path already does, so this generic connection-serving
-    function only ever deals with the three-value contract
-    :class:`UnifiedRuntime` itself understands.
+    *tool_sets* maps each enabled tool-set name (today: ``"unified"``/
+    ``"plugin_authoring"``, whichever ``runtime_config.enabled_profiles``
+    says are on) to its own :class:`~unified.runtime.ToolSetBundle` -- see
+    ``main()``'s ``_build_plugin_authoring_tool_set`` call and
+    ``UnifiedRuntime``'s own docstring for what each one needs.
     """
     # Shared across every connection -- see this function's own docstring
     # and SessionStore.lock for why (a reconnect must find its history, not
@@ -888,24 +884,17 @@ async def _run_websocket_server(
             stream_handler=stream_handler,
             force_stream=force_stream,
         )
-        # Call the factory fresh per connection -- see this function's own
-        # docstring and _resolve_tool_set's. dispatch_bundle carries
-        # extra_tools/on_raw_response alongside dispatch for plugin_authoring's
-        # Claude-native web search path; None for every other tool set.
-        # Pass this connection's own eisy_ui_context (constructed just above)
-        # so plugin_authoring's tools see its live, current user_id.
-        dispatch_bundle = dispatch_factory(eisy_ui_context) if dispatch_factory is not None else None
+        # tool_sets' own dispatch_factory per entry is still called lazily,
+        # at most once per connection -- see ToolSetBundle's docstring; this
+        # function and UnifiedRuntime itself have no idea what tool-set
+        # specific config (output root, search engine, secrets, provider)
+        # produced each bundle. The caller (main()) resolves that once.
         runtime = UnifiedRuntime(
             nucore_interface=nucore_interface,
             llm_client=llm_adapter,
             runtime_config=runtime_config,
-            max_iterations=max_iterations,
             session_store=shared_session_store,
-            tool_spec_paths=tool_spec_paths,
-            dispatch=dispatch_bundle.dispatch if dispatch_bundle is not None else None,
-            system_prompt_builder=system_prompt_builder,
-            extra_tools=dispatch_bundle.extra_tools if dispatch_bundle is not None else None,
-            on_raw_response=dispatch_bundle.on_raw_response if dispatch_bundle is not None else None,
+            tool_sets=tool_sets,
         )
         runtime.stream_handler = stream_handler
         try:
@@ -1018,15 +1007,20 @@ def main(args:Any=None, poly=None) -> None:
 
     # plugin_authoring: --search-engine wins over runtime config's
     # 'search_engine' key, same CLI-overrides-config precedence as
-    # --preferences-dir/--max-iterations above. Neither brave nor tavily is
-    # treated as the implied default when both are unset.
+    # --preferences-dir above. Neither brave nor tavily is treated as the
+    # implied default when both are unset. search_engine_api_key is now a
+    # top-level config key (see runtime_config.py), resolved via the same
+    # "${ENV_VAR}" convention api_key already uses -- never a literal secret
+    # in the file itself (design/developers/merged-toolsets.md).
     search_engine = args.search_engine or runtime_config.get("search_engine")
-    # The resolved provider for this tool set's own conversations (not
+    env_map = secrets_env or dict(os.environ)
+    search_engine_api_key = resolve_env_placeholder(runtime_config.get("search_engine_api_key"), env_map)
+    # The resolved provider for plugin_authoring's own conversations (not
     # necessarily the dispatch adapter's overall default_provider, which
     # comes from a different runtime_config key -- see resolve_llm_profile's
     # docstring) -- plugin_authoring's native-vs-fallback web search
-    # selection needs this before _resolve_tool_set runs.
-    provider = resolve_llm_profile(runtime_config).get("provider")
+    # selection needs this before _build_plugin_authoring_tool_set runs.
+    provider = resolve_llm_profile(runtime_config, preferred_key="plugin_authoring").get("provider")
     # Literal secret values the discovery tools refuse to send in an
     # outbound query/fetch -- never put these in a search query or a log.
     secret_values = [
@@ -1034,7 +1028,7 @@ def main(args:Any=None, poly=None) -> None:
         for v in (
             backend_api_password,
             *(secrets_env.values() if secrets_env else ()),
-            os.environ.get("SEARCH_ENGINE_API_KEY"),
+            search_engine_api_key,
         )
         if v
     ]
@@ -1060,19 +1054,37 @@ def main(args:Any=None, poly=None) -> None:
         args.preferences_dir if args.preferences_dir is not None else runtime_config.get("preferences_dir")
     )
 
-    resolved_max_iterations = (
-        args.max_iterations if args.max_iterations is not None else int(runtime_config.get("max_iterations", 8))
-    )
+    # --max-iterations, when given, forces every enabled profile's own
+    # max_iterations uniformly, the same "CLI override wins for every
+    # profile" shape --stream/--no-stream already has -- max_iterations
+    # itself otherwise comes from each profile individually (see
+    # runtime_config.py; it genuinely differs by tool set, which is why it
+    # moved off the top level -- design/developers/merged-toolsets.md).
+    if args.max_iterations is not None:
+        for profile in runtime_config["nucore_runtime"].values():
+            profile["max_iterations"] = args.max_iterations
 
     websocket_is_unix, websocket_host = _parse_websocket_host(args.websocket_host)
 
     # Resolved once, regardless of mode -- both the websocket server and the
-    # direct --query/REPL path below need the same (tool_spec_paths,
-    # dispatch_factory, system_prompt_builder) triple, and neither needs to
-    # know what went into producing it.
-    tool_spec_paths, dispatch_factory, system_prompt_builder = _resolve_tool_set(
-        args.tool_set, nucore_interface, args.plugin_output_root, search_engine, secret_values, provider
-    )
+    # direct --query/REPL path below need the same tool_sets mapping, and
+    # neither needs to know what went into producing it. There is no longer
+    # a --tool-set/--plugin-output-root flag: which tool sets exist and are
+    # reachable is entirely a function of runtime_config's own profiles and
+    # their 'enabled' flags (see runtime_config.py / merged-toolsets.md).
+    # "unified" needs no explicit entry -- UnifiedRuntime falls back to its
+    # own customer-facing default when it's absent from this dict.
+    tool_sets: dict[str, ToolSetBundle] = {}
+    plugin_authoring_profile = runtime_config["nucore_runtime"].get("plugin_authoring")
+    if plugin_authoring_profile is not None and plugin_authoring_profile.get("enabled"):
+        tool_sets["plugin_authoring"] = _build_plugin_authoring_tool_set(
+            nucore_interface=nucore_interface,
+            plugin_output_root=plugin_authoring_profile["plugin_output_root"],
+            search_engine=search_engine,
+            search_engine_api_key=search_engine_api_key,
+            secret_values=secret_values,
+            provider=provider,
+        )
 
     if args.websocket_port or websocket_is_unix:
         # Native WebSocket server mode: this process itself is the server --
@@ -1091,13 +1103,11 @@ def main(args:Any=None, poly=None) -> None:
         try:
             asyncio.run(_run_websocket_server(
                 nucore_interface, llm_adapter, str(runtime_config_path), args.stream,
-                resolved_max_iterations, websocket_host, args.websocket_port,
+                websocket_host, args.websocket_port,
                 websocket_is_unix,
                 client_uid=args.websocket_client_id if websocket_is_unix else None,
                 ssl_context=ssl_context,
-                tool_spec_paths=tool_spec_paths,
-                dispatch_factory=dispatch_factory,
-                system_prompt_builder=system_prompt_builder,
+                tool_sets=tool_sets,
             ))
         except KeyboardInterrupt:
             logger.warning("\nInterrupted. Exiting.")
@@ -1105,22 +1115,18 @@ def main(args:Any=None, poly=None) -> None:
             nucore_interface.shutdown()
         return
 
-    # Built once, before the dispatch factory call, and reused in both
-    # branches below -- plugin_authoring's tools (configure_developer,
-    # generate_plugin_scaffold) need the exact same instance the dispatch
-    # factory bound get_user_id to, not a second, independent one.
+    # Built once and reused in both branches below -- plugin_authoring's
+    # tools (configure_developer, generate_plugin_scaffold) need the exact
+    # same instance any dispatch factory bound get_user_id to, not a second,
+    # independent one; UnifiedRuntime itself now calls each tool set's own
+    # dispatch_factory lazily (see ToolSetBundle's docstring), passing this
+    # same connection_context through each time.
     eisy_ui_context = EisyUIContext()
-    dispatch_bundle = dispatch_factory(eisy_ui_context) if dispatch_factory is not None else None
     runtime = UnifiedRuntime(
         nucore_interface=nucore_interface,
         llm_client=llm_adapter,
         runtime_config=runtime_config,
-        max_iterations=resolved_max_iterations,
-        tool_spec_paths=tool_spec_paths,
-        dispatch=dispatch_bundle.dispatch if dispatch_bundle is not None else None,
-        system_prompt_builder=system_prompt_builder,
-        extra_tools=dispatch_bundle.extra_tools if dispatch_bundle is not None else None,
-        on_raw_response=dispatch_bundle.on_raw_response if dispatch_bundle is not None else None,
+        tool_sets=tool_sets,
     )
     runtime.stream_handler = stream_handler
     logger.info("Unified runtime initialized")
