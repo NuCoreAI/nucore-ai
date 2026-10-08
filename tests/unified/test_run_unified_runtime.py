@@ -1,9 +1,12 @@
 """EisyUIContext must be per-connection state, not a shared/global object --
 concurrent websocket connections used to clobber a single module-level
-instance's context/message. Also covers user_id (sourced from the context
-payload) winning over the per-connection uuid4 fallback as _run_once's
-effective session_id, which is what lets identity (and therefore
-conversation history) survive a reconnect.
+instance's context/message. Also covers the combined client_id+user_id
+identity (sourced from the context payload) winning over the per-connection
+uuid4 fallback as _run_once's effective session_id -- combined, not user_id
+alone, so the same logged-in user_id on a different browser/machine lands
+in a different session -- and, via a shared SessionStore, how UI context
+itself survives a reconnect (a brand-new, empty EisyUIContext) even though
+the object holding it does not.
 """
 
 from __future__ import annotations
@@ -17,11 +20,14 @@ import pytest
 
 from unified.models import IntentHandlerResult
 from unified.plugin_authoring.handlers import discovery
+from unified.session_store import SessionStore
+from unified import run_unified_runtime
 from unified.run_unified_runtime import (
     EisyUIContext,
     _build_parser,
     _build_plugin_authoring_tool_set,
     _run_once,
+    main,
 )
 
 
@@ -51,6 +57,113 @@ def test_two_contexts_do_not_share_state():
     assert b.get_context() is None
     assert b.get_is_developer() is None
     assert b.get_client_id() is None
+
+
+def test_get_identity_key_combines_client_id_and_user_id():
+    ctx = EisyUIContext()
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "client-1", "user": {"username": "a@example.com"}}})
+    )
+
+    assert ctx.get_identity_key() == "client-1::a@example.com"
+
+
+def test_get_identity_key_is_none_with_no_identity_seen_yet():
+    ctx = EisyUIContext()
+
+    assert ctx.get_identity_key() is None
+
+
+def test_get_identity_key_degrades_gracefully_with_only_one_field():
+    client_only = EisyUIContext()
+    client_only.process_message(json.dumps({"type": "context", "context": {"clientId": "client-1"}}))
+    user_only = EisyUIContext()
+    user_only.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    assert client_only.get_identity_key() == "client-1::-"
+    assert user_only.get_identity_key() == "-::a@example.com"
+
+
+def test_reconnect_recovers_ui_context_from_the_shared_session_store():
+    """The scenario the user reported: a websocket reconnect builds a brand
+    new, empty EisyUIContext (see that class's own docstring on why it's
+    per-connection, not global) -- without a shared SessionStore, that
+    looked exactly like the customer's screen had become unknown. With one,
+    the new connection's first context message (even a terse one that
+    doesn't repeat the screen) still lets get_context() recover the
+    previous connection's last known value until this one sends its own."""
+    store = SessionStore()
+    first_connection = EisyUIContext(session_store=store)
+    first_connection.process_message(
+        json.dumps(
+            {
+                "type": "context",
+                "context": {"clientId": "client-1", "user": {"username": "a@example.com"}, "screen": "devices"},
+            }
+        )
+    )
+    assert first_connection.get_context() == {
+        "clientId": "client-1",
+        "user": {"username": "a@example.com"},
+        "screen": "devices",
+    }
+
+    # New connection -- same customer (same identity), reconnecting.
+    second_connection = EisyUIContext(session_store=store)
+    assert second_connection.get_context() is None  # nothing on *this* connection yet
+
+    second_connection.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "client-1", "user": {"username": "a@example.com"}}})
+    )
+
+    # This connection's own context message didn't repeat "screen", but its
+    # own .context is now set (even without "screen") -- get_context()
+    # returns exactly what this connection last said, same as before this
+    # feature existed; the read-through only fills the gap *before* that.
+    assert second_connection.get_context() == {"clientId": "client-1", "user": {"username": "a@example.com"}}
+
+
+def test_a_new_connection_before_any_context_message_reads_through_the_shared_store():
+    store = SessionStore()
+    first_connection = EisyUIContext(session_store=store)
+    first_connection.process_message(
+        json.dumps(
+            {
+                "type": "context",
+                "context": {"clientId": "client-1", "user": {"username": "a@example.com"}, "screen": "devices"},
+            }
+        )
+    )
+
+    second_connection = EisyUIContext(session_store=store)
+    # Simulate this connection already knowing the identity (e.g. carried
+    # over by whatever establishes the connection) without having received
+    # a context message of its own yet -- get_context() must still recover
+    # the shared last-known value rather than report "unknown".
+    second_connection.client_id = "client-1"
+    second_connection.user_id = "a@example.com"
+
+    assert second_connection.get_context() == {
+        "clientId": "client-1",
+        "user": {"username": "a@example.com"},
+        "screen": "devices",
+    }
+
+
+def test_different_identities_do_not_share_ui_context_through_the_store():
+    store = SessionStore()
+    ctx_a = EisyUIContext(session_store=store)
+    ctx_a.process_message(
+        json.dumps(
+            {"type": "context", "context": {"clientId": "client-1", "user": {"username": "a@example.com"}, "screen": "devices"}}
+        )
+    )
+    ctx_b = EisyUIContext(session_store=store)
+    ctx_b.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "client-2", "user": {"username": "b@example.com"}}})
+    )
+
+    assert ctx_b.get_context() == {"clientId": "client-2", "user": {"username": "b@example.com"}}
 
 
 def test_user_id_persists_when_a_later_context_omits_it():
@@ -156,11 +269,19 @@ def test_non_command_plain_repl_string_passes_through_unchanged():
 
 def test_preferences_dir_and_prompt_log_file_flags_parse():
     args = _build_parser().parse_args(
-        ["--preferences-dir", "/etc/nucore/prefs", "--prompt-log-file", "/var/log/nucore/prompt.jsonl"]
+        [
+            "--preferences-dir",
+            "/etc/nucore/prefs",
+            "--prompt-log-file",
+            "/var/log/nucore/prompt.jsonl",
+            "--plugin-output-root",
+            "/etc/nucore/plugins",
+        ]
     )
 
     assert args.preferences_dir == "/etc/nucore/prefs"
     assert args.prompt_log_file == "/var/log/nucore/prompt.jsonl"
+    assert args.plugin_output_root == "/etc/nucore/plugins"
 
 
 def test_preferences_dir_and_prompt_log_file_default_to_none():
@@ -168,22 +289,75 @@ def test_preferences_dir_and_prompt_log_file_default_to_none():
 
     assert args.preferences_dir is None
     assert args.prompt_log_file is None
+    assert args.plugin_output_root is None
 
 
 def test_removed_cli_flags_are_rejected():
     # Regression guard: --prompt-log-dir/--no-prompt-log were collapsed into
-    # --prompt-log-file; --tool-set/--plugin-output-root/--search-engine/
-    # --stream/--max-iterations/--json-output/--prompt_type/--query were
-    # removed outright in earlier cleanup. None should silently resurrect.
+    # --prompt-log-file; --tool-set/--search-engine/--stream/--max-iterations/
+    # --json-output/--prompt_type/--query were removed outright in earlier
+    # cleanup. --plugin-output-root was removed in that same cleanup and then
+    # reinstated later (see design/developers/merged-toolsets.md's
+    # "CLI-only, deliberately" section) -- it is deliberately *not* in this
+    # list any more; its own parse test lives above. None of the flags below
+    # should silently resurrect.
     for removed_flag in (
         "--prompt-log-dir",
         "--no-prompt-log",
         "--tool-set",
-        "--plugin-output-root",
         "--query",
     ):
         with pytest.raises(SystemExit):
             _build_parser().parse_args([removed_flag, "x"])
+
+
+def test_plugin_output_root_required_when_plugin_authoring_enabled(tmp_path, monkeypatch):
+    """plugin_output_root is CLI-only (--plugin-output-root) again -- never read
+    from runtime config (see design/developers/merged-toolsets.md's "CLI-only,
+    deliberately" section). main() itself now enforces the same
+    "required when plugin_authoring.enabled" rule runtime_config.py's loader
+    used to apply to the now-removed config key of the same name."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(run_unified_runtime, "_load_backend_api", lambda **_kwargs: SimpleNamespace())
+
+    config_path = tmp_path / "runtime_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "nucore_runtime": {
+                    "unified": {"provider": "claude", "model": "m"},
+                    "plugin_authoring": {"provider": "claude", "model": "m"},
+                }
+            }
+        )
+    )
+    args = _build_parser().parse_args(["--runtime-config", str(config_path)])
+
+    with pytest.raises(ValueError, match="--plugin-output-root"):
+        main(args)
+
+
+def test_main_accepts_an_in_process_dict_in_place_of_a_runtime_config_path(monkeypatch):
+    """args.runtime_config is normally a path string -- the only thing argparse
+    can ever produce from real argv. An in-process caller invoking main()
+    directly (not through a real CLI subprocess) may instead build its own
+    args namespace with an already-parsed dict there, skipping the
+    "write it to a temp file just to point a path at it" round trip -- see
+    _load_runtime_config's docstring. This drives main() through REPL mode
+    (no --websocket-port) end to end with that dict, with stdin faked as
+    already closed so the REPL loop exits on its very first iteration."""
+
+    def _raise_eof(*_args, **_kwargs):
+        raise EOFError
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(run_unified_runtime, "_load_backend_api", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr("builtins.input", _raise_eof)
+
+    args = _build_parser().parse_args([])
+    args.runtime_config = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m"}}}
+
+    main(args)  # must not raise -- REPL loop exits immediately on EOFError
 
 
 class _FakeRuntime:
@@ -198,14 +372,39 @@ class _FakeRuntime:
 
 
 @pytest.mark.asyncio
-async def test_run_once_prefers_user_id_over_the_fallback_session_id():
+async def test_run_once_prefers_the_combined_identity_over_the_fallback_session_id():
     runtime = _FakeRuntime()
     ctx = EisyUIContext()
-    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "client-1", "user": {"username": "a@example.com"}}})
+    )
 
     await _run_once(runtime, "hello", ctx, session_id="fallback-uuid")
 
-    assert runtime.calls[0]["session_id"] == "a@example.com"
+    assert runtime.calls[0]["session_id"] == "client-1::a@example.com"
+
+
+@pytest.mark.asyncio
+async def test_run_once_gives_the_same_user_id_on_a_different_client_a_different_session():
+    """Regression guard: session_id used to be user_id alone, so the same
+    logged-in customer on two different browsers/machines landed in the
+    *same* conversation history/UI context -- wrong, since they're
+    different physical sessions. client_id (not just user_id) must be part
+    of the identity so they land in different sessions."""
+    runtime = _FakeRuntime()
+    ctx_a = EisyUIContext()
+    ctx_a.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "laptop", "user": {"username": "a@example.com"}}})
+    )
+    ctx_b = EisyUIContext()
+    ctx_b.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "phone", "user": {"username": "a@example.com"}}})
+    )
+
+    await _run_once(runtime, "hello from laptop", ctx_a, session_id="fallback-a")
+    await _run_once(runtime, "hello from phone", ctx_b, session_id="fallback-b")
+
+    assert runtime.calls[0]["session_id"] != runtime.calls[1]["session_id"]
 
 
 @pytest.mark.asyncio
@@ -245,8 +444,11 @@ async def test_run_once_does_not_dispatch_a_context_only_message():
 
 # --- _build_plugin_authoring_tool_set: dispatch factory shape ---
 # (there is no more tool-set dispatcher -- "customer"/"unified" needs no
-# resolution at all, and plugin_output_root's presence/'enabled' validation
-# now lives in runtime_config.py -- see test_runtime_config.py)
+# resolution at all. 'enabled' validation lives in runtime_config.py -- see
+# test_runtime_config.py. plugin_output_root itself is CLI-only
+# (--plugin-output-root) and required-when-enabled validation for it lives
+# in run_unified_runtime.py's main() -- see
+# test_plugin_output_root_required_when_plugin_authoring_enabled below.)
 
 
 def test_build_plugin_authoring_tool_set_returns_a_dispatch_factory_not_a_dispatch():

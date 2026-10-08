@@ -40,3 +40,40 @@ async def test_lock_actually_serializes_concurrent_holders():
     await asyncio.gather(hold("first", 0.02), hold("second", 0))
 
     assert order == ["first:start", "first:end", "second:start", "second:end"]
+
+
+def test_get_ui_context_returns_none_for_an_unknown_identity():
+    store = SessionStore()
+
+    assert store.get_ui_context("client-1::a@example.com") is None
+
+
+def test_set_then_get_ui_context_round_trips():
+    store = SessionStore()
+
+    store.set_ui_context("client-1::a@example.com", {"screen": "devices"})
+
+    assert store.get_ui_context("client-1::a@example.com") == {"screen": "devices"}
+
+
+def test_ui_context_is_isolated_per_identity():
+    store = SessionStore()
+
+    store.set_ui_context("client-1::a@example.com", {"screen": "devices"})
+    store.set_ui_context("client-2::a@example.com", {"screen": "routines"})
+
+    assert store.get_ui_context("client-1::a@example.com") == {"screen": "devices"}
+    assert store.get_ui_context("client-2::a@example.com") == {"screen": "routines"}
+
+
+def test_ui_context_is_not_keyed_by_tool_set():
+    """Deliberately not nested under a f"{identity}::{tool_set}" key the way
+    conversation history (_sessions) is -- the customer's screen doesn't
+    change just because the chatbot switched tool sets (see
+    merged-toolsets.md), so one slot per identity is shared across both."""
+    store = SessionStore()
+
+    store.set_ui_context("client-1::a@example.com", {"screen": "devices"})
+
+    assert store.get_ui_context("client-1::a@example.com::unified") is None
+    assert store.get_ui_context("client-1::a@example.com") == {"screen": "devices"}

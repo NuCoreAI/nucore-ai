@@ -90,10 +90,10 @@ the `/developer`/`/customer` chat commands or a model-driven tool call, not a CL
 
 Which tool sets exist and are reachable is entirely config-driven: each one is a named profile
 under `nucore_runtime` in the runtime config file, gated by its own `enabled` flag (default
-`true`). `plugin_authoring`'s profile additionally requires `plugin_output_root` (the allowed
-root for generated scaffolds) whenever it's enabled -- see
-`runtime_config.example.json`'s `"plugin_authoring"` entry. A live backend via
-`--backend-api-classpath` is still required, same as for `unified`.
+`true`). `plugin_authoring` additionally requires `--plugin-output-root` (the allowed root for
+generated scaffolds, CLI-only -- never read from the config file) whenever it's enabled; omitting
+it while enabled raises an error at startup. A live backend via `--backend-api-classpath` is
+still required, same as for `unified`.
 
 The customer-facing flow's web search is Claude's own native `web_search` tool when the resolved
 LLM provider is Claude (no second API key) -- set runtime config's top-level `search_engine`
@@ -104,6 +104,7 @@ here.
 ```shell
 python -m unified.run_unified_runtime \
   --runtime-config src/unified/runtime_config.example.json \
+  --plugin-output-root /usr/home/admin/.config/nucore_unified_runtime/local_plugins \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
@@ -330,15 +331,16 @@ python -m unified.run_unified_runtime \
 | `--no-log-console` | Disable console logging |
 | `--preferences-dir` | Directory for this installation's customer preferences (aliases/events). No default, no runtime-config fallback -- preferences are unavailable unless this is set |
 | `--prompt-log-file` | Exact file path for the debug prompt/tool-call log; parent directories are created as needed. No default, no runtime-config fallback -- the log is off unless this is set |
+| `--plugin-output-root` | Allowed root directory for generated plugin scaffolds (the `plugin_authoring` tool set). No default, no runtime-config fallback. Required when `nucore_runtime.plugin_authoring.enabled` is `true`; ignored otherwise |
 
-Everything else -- which tool set(s) are enabled, `plugin_output_root`, `search_engine`/
-`search_engine_api_key`, per-profile `stream`/`max_iterations` -- lives in the runtime config
-file only (see `runtime_config.example.json` and `design/developers/merged-toolsets.md`); there
-is no CLI override for any of it. `--preferences-dir`/`--prompt-log-file` are the deliberate
-opposite: CLI-only, never read from the config file even if present there -- the config file
-holds settings a customer could reasonably supply (model, temperature, which tool sets are
-enabled, ...), while where preferences/logs land on disk is a deployment/host concern the
-system controls.
+Everything else -- which tool set(s) are enabled, `search_engine`/`search_engine_api_key`,
+per-profile `stream`/`max_iterations` -- lives in the runtime config file only (see
+`runtime_config.example.json` and `design/developers/merged-toolsets.md`); there is no CLI
+override for any of it. `--preferences-dir`/`--prompt-log-file`/`--plugin-output-root` are the
+deliberate opposite: CLI-only, never read from the config file even if present there -- the
+config file holds settings a customer could reasonably supply (model, temperature, which tool
+sets are enabled, ...), while where preferences/logs land on disk, and which root directory
+generated plugin scaffolds are confined to, are deployment/host concerns the system controls.
 
 ## Supported Providers
 

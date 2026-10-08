@@ -98,7 +98,6 @@ Both tool sets' settings live in a single runtime config JSON, as two profiles u
     },
     "plugin_authoring": {
       "enabled": true,
-      "plugin_output_root": "/path/to/allowed/root",
       "provider": "claude", "model": "claude-sonnet-5", "api_key": "${ANTHROPIC_API_KEY}",
       "stream": true, "url": null, "temperature": 0.2, "cache_ttl": "5m",
       "max_iterations": 50, "max_turns": 20, "max_tokens": 64000, "history_token_budget": 20000,
@@ -112,9 +111,9 @@ Global (top-level) keys apply regardless of active tool set: the switch cap and
 `search_engine`/`search_engine_api_key` -- now usable by *either* tool set's discovery tools,
 not just `plugin_authoring`'s, which it wasn't before.
 
-**Preferences and the prompt log are deliberately *not* here, even though they're also
-installation-wide, not tool-set-specific** -- see "CLI-only, deliberately" below for why they're
-CLI-only instead.
+**Preferences, the prompt log, and `plugin_output_root` are deliberately *not* here, even though
+the first two are also installation-wide, not tool-set-specific** -- see "CLI-only, deliberately"
+below for why all three are CLI-only instead.
 
 Per-profile keys that used to be global and move here because they genuinely differ by tool set:
 `max_iterations`, `max_turns`, `max_tokens`, `history_token_budget`, `fabrication_guard_mode`,
@@ -122,30 +121,34 @@ Per-profile keys that used to be global and move here because they genuinely dif
 customer and plugin_authoring need the same fabrication-guard strictness any more than they need
 the same `max_iterations`).
 
-`plugin_output_root` moves from a required CLI flag (`--plugin-output-root`) into the
-`plugin_authoring` profile itself, since it's specific to that side.
-
 `search_engine_api_key` follows the *exact same* convention `api_key` already uses: a
 `${VAR}`-style placeholder, resolved by generalizing the existing substitution check in
 `provider_clients.py:66-70` (currently hand-rolled for the `api_key` field only) to also cover
 this field. The literal secret value never appears in the file -- only the environment variable
 *name* does, same as today.
 
-### CLI-only, deliberately: `--preferences-dir` and `--prompt-log-file`
+### CLI-only, deliberately: `--preferences-dir`, `--prompt-log-file`, and `--plugin-output-root`
 
 `preferences_dir` and the prompt log's location briefly lived in this file (both are
 installation-wide settings, the same shape as `search_engine` above) before moving back out to
 CLI-only flags -- `--preferences-dir` and `--prompt-log-file` (the latter replacing the former
 `prompt_log_dir`/`prompt_log_enabled` pair: one flag is both the path and the sole on/off
 switch, its mere presence enabling logging to exactly that file, creating missing parent
-directories as needed). Neither is ever read from runtime config again, even if present there.
+directories as needed). `plugin_output_root` took the identical round trip, slightly later: it
+started as a required CLI flag (`--plugin-output-root`), moved into the `plugin_authoring`
+profile itself when this design first merged the two tool sets (reasoned at the time as "specific
+to that side, so it belongs with the rest of that profile's settings"), then moved back out to
+CLI-only for the same reason the other two did -- see below. None of the three is ever read from
+runtime config again, even if present there.
 
 The distinction driving this: this config file holds *runtime* parameters a customer could
 reasonably supply themselves -- which model, what temperature, which tool sets are enabled.
-Where preferences or debug logs land on disk is a different kind of setting entirely -- a
-deployment/host concern that whoever *launches* the process controls, not whoever *supplied*
-the config file. A customer-editable config should not be able to redirect either of these to
-an arbitrary path.
+Where preferences or debug logs land on disk, and which root directory generated plugin
+scaffolds are confined to, are a different kind of setting entirely -- a deployment/host concern
+that whoever *launches* the process controls, not whoever *supplied* the config file. A
+customer-editable config should not be able to redirect any of these to an arbitrary path --
+`plugin_output_root` especially so, since it's a path-confinement security boundary
+(`path_confinement.confine_path`), not merely a convenience default.
 
 Since JSON has no comment syntax, a fact worth recording *in* the config file for a future
 reader (e.g. "this model rejects `temperature`, see claude_adapter.py's auto-retry") has nowhere
@@ -160,12 +163,14 @@ as deliberate, not incidental.
 
 Each profile gets an `enabled` field (default `true`). Whether `plugin_authoring` is reachable
 on a given deployment is decided by `nucore_runtime.plugin_authoring.enabled`, not by whether the
-CLI was started with a particular `--tool-set` value -- **`--tool-set` and `--plugin-output-root`
-are removed as CLI flags entirely**. If `enabled` is `true` but `plugin_output_root` is missing,
-loading fails (same validation spirit as today's `ValueError("--tool-set plugin_authoring
-requires --plugin-output-root")`, just relocated to this check). The only cross-profile
-requirement is that **at least one** profile is enabled -- see below, `unified.enabled: false` is
-itself legal.
+CLI was started with a particular `--tool-set` value -- **`--tool-set` is removed as a CLI flag
+entirely**. `--plugin-output-root` stays (see "CLI-only, deliberately" above): if `enabled` is
+`true` but `--plugin-output-root` is missing, startup fails in `run_unified_runtime.py`'s
+`main()` (same validation spirit as the original `ValueError("--tool-set plugin_authoring
+requires --plugin-output-root")`, and briefly relocated into `runtime_config.py`'s loader while
+`plugin_output_root` lived in the config file, now relocated back to the CLI side alongside the
+flag itself). The only cross-profile requirement `runtime_config.py` itself enforces is that
+**at least one** profile is enabled -- see below, `unified.enabled: false` is itself legal.
 
 Flipping `enabled` to `false` disables that tool set without deleting its whole config block.
 Because `_run_websocket_server`'s `handler` already reloads `runtime_config` fresh from disk for
@@ -314,9 +319,17 @@ Example verbiage (illustrative, not binding -- the model phrases the actual repl
 ### Session history
 
 `SessionStore` (`session_store.py`) is keyed by an arbitrary string, with no notion of tool set.
-A composite key per active tool set (e.g. `f"{user_id}::{active_tool_set}"`) keeps the two
+A composite key per active tool set (e.g. `f"{identity}::{active_tool_set}"`) keeps the two
 conversations from interleaving plain-text turns in one `ConversationHistory` when a connection
-switches back and forth.
+switches back and forth. *identity* here is `EisyUIContext.get_identity_key()` --
+`client_id`+`user_id` combined, not `user_id` alone (a real-world-testing fix landed after the
+initial implementation -- see Status below): the same logged-in user_id on a different
+browser/machine must land in a different session, which only `client_id` distinguishes. The same
+`SessionStore` also
+holds each identity's last-known UI context (`get_ui_context`/`set_ui_context`), keyed by
+identity alone -- never tool-set-suffixed, since the customer's screen doesn't depend on which
+tool set is active -- so a reconnect's brand-new `EisyUIContext` (see that class's own docstring)
+can recover the customer's last known screen instead of looking like it vanished.
 
 ### Shared state is unaffected, which is why this is safe
 
@@ -356,23 +369,29 @@ rather than silently let one side shadow the other.
 Implemented. `runtime_config.py`'s two-profile schema, `provider_clients.resolve_env_placeholder`,
 `switch_to_developer_mode`/`switch_to_customer_mode`, `EisyUIContext.active_tool_set`, the
 mid-round chaining layer in `UnifiedRuntime.handle_query`, composite `SessionStore` keys, and the
-consolidated per-provider example config files are all in place, with the `--tool-set`/
-`--plugin-output-root` CLI flags removed in favor of config-driven `enabled_profiles`. Every
-CLI flag that duplicated a setting the config file could already express
-(`--stream`/`--no-stream`, `--max-iterations`, `--search-engine`, plus the already-dead
-`--prompt_type` and the always-`true` `--json-output`) has also been removed, on the "config
-file is the only source of truth for runtime parameters" principle this design is built on.
-`--preferences-dir` and `--prompt-log-dir`/`--no-prompt-log` briefly followed the same path into
-the config file, then moved back *out* to CLI-only (the latter collapsed into one
-`--prompt-log-file` flag) -- see "CLI-only, deliberately" above for why these two are the
-exception.
+consolidated per-provider example config files are all in place, with the `--tool-set` CLI flag
+removed in favor of config-driven `enabled_profiles`. Every CLI flag that duplicated a setting
+the config file could already express (`--stream`/`--no-stream`, `--max-iterations`,
+`--search-engine`, plus the already-dead `--prompt_type` and the always-`true` `--json-output`)
+has also been removed, on the "config file is the only source of truth for runtime parameters"
+principle this design is built on. `--preferences-dir`, `--prompt-log-dir`/`--no-prompt-log`, and
+`--plugin-output-root` briefly followed the same path into the config file, then each moved back
+*out* to CLI-only (the prompt-log pair collapsed into one `--prompt-log-file` flag) -- see
+"CLI-only, deliberately" above for why these three are the exception.
 
-Three real-world-testing fixes landed after the initial implementation, all covered above:
+Six real-world-testing fixes landed after the initial implementation, all covered above:
 the `handoff_summary` argument on both switch tools ("Handoff summary" above), making
 `/developer`/`/customer` recognized from plain-string (REPL/`--query`) input, not just
-WebSocket JSON messages (end of "Dynamic switching" above), and moving `--preferences-dir`/
-`--prompt-log-file` back out of runtime config ("CLI-only, deliberately" above). A fourth fix,
-unrelated to this design but found during the same testing round: a provider error (e.g. an
-Anthropic 400) used to crash the entire REPL/WebSocket-connection process with no visibility
-into the actual error body -- `_run_loop`/the WebSocket handler's per-message loop now catch
-it, log the provider's own error body, and let the session continue.
+WebSocket JSON messages (end of "Dynamic switching" above), moving `--preferences-dir`/
+`--prompt-log-file` back out of runtime config, and later moving `--plugin-output-root` back out
+the same way (both in "CLI-only, deliberately" above), combining `client_id`+`user_id` into the
+session identity instead of `user_id` alone ("Session history" above -- the same logged-in
+customer on two different browsers/machines used to land in one shared session), and giving UI
+context the same shared-`SessionStore`, survives-a-reconnect treatment conversation history
+already had ("Session history" above -- previously `EisyUIContext` being correctly scoped
+per-connection, not global, meant a reconnect's brand-new instance looked exactly like the
+customer's screen had become unknown). A seventh fix, unrelated to this design but found during
+the same testing round: a provider error (e.g. an Anthropic 400) used to crash the entire
+REPL/WebSocket-connection process with no visibility into the actual error body -- `_run_loop`/the
+WebSocket handler's per-message loop now catch it, log the provider's own error body, and let the
+session continue.

@@ -55,8 +55,24 @@ class EisyUIContext:
     Concurrent connections used to clobber a single module-level instance's
     ``context``/``message`` (and would have done the same to ``user_id``),
     so each connection (and each REPL invocation) now constructs its own.
+
+    That per-connection scoping is still correct -- it's what keeps two
+    customers chatting at the same time from reading/overwriting each
+    other's screen -- but it used to mean a reconnect (a new connection,
+    hence a brand-new, empty instance) looked exactly like a customer whose
+    screen context had vanished, even though nothing about the actual
+    customer changed. *session_store*, when given, is the fix: the same
+    shared :class:`~session_store.SessionStore` instance already used for
+    conversation history (see ``_run_websocket_server``'s
+    ``shared_session_store``), used here only for its ``get_ui_context``/
+    ``set_ui_context`` slot, keyed by :meth:`get_identity_key`
+    (client_id+user_id, not just this connection) so the customer's last
+    known screen survives the reconnect instead of resetting to unknown.
+    ``None`` (the default -- REPL mode, tests, or any caller with nothing to
+    share) just disables the read-through/write-through below; behavior
+    then is exactly what it was before this existed.
     """
-    def __init__(self):
+    def __init__(self, session_store: "SessionStore | None" = None):
         self.context:dict = None
         self.message:str = None
         self.user_id:str | None = None
@@ -70,6 +86,7 @@ class EisyUIContext:
         # a model-driven mid-turn switch -- see
         # design/developers/merged-toolsets.md.
         self.active_tool_set: str | None = None
+        self._session_store = session_store
 
     _SWITCH_COMMANDS = {"/developer": "plugin_authoring", "/customer": "unified"}
 
@@ -103,6 +120,14 @@ class EisyUIContext:
                     self.is_developer = user.get("isDeveloper")
                 self.client_id = (self.context or {}).get("clientId") or self.client_id
                 self.message = None
+                # Write through to the shared store (if any) so the *next*
+                # connection for this same identity -- a reconnect -- can
+                # read this back even if it never resends its own context
+                # before its first message. See get_identity_key/get_context.
+                if self._session_store is not None:
+                    identity_key = self.get_identity_key()
+                    if identity_key is not None:
+                        self._session_store.set_ui_context(identity_key, self.context)
                 return None
             if type == "message":
                 self.message = message.get("message", None)
@@ -137,8 +162,41 @@ class EisyUIContext:
         return text
 
     def get_context(self)->dict:
-        """Get the current context stored in the UI context object."""
-        return self.context
+        """Get the current context stored in the UI context object.
+
+        Falls back to this identity's last known context in the shared
+        session store (see :meth:`get_identity_key`/
+        ``SessionStore.get_ui_context``) when *this* connection hasn't
+        received a context message of its own yet -- the gap right after a
+        reconnect, before the client resends one -- so a brand-new
+        connection doesn't look like the customer's screen is unknown when
+        a prior connection for the same customer already recorded one.
+        """
+        if self.context is not None:
+            return self.context
+        if self._session_store is not None:
+            identity_key = self.get_identity_key()
+            if identity_key is not None:
+                return self._session_store.get_ui_context(identity_key)
+        return None
+
+    def get_identity_key(self) -> str | None:
+        """Stable per-customer identity -- client_id and user_id combined --
+        used both as the shared UI-context store's key (see get_context)
+        and, by the caller, as the session_id conversation history is keyed
+        by (see _run_once). Combining both, rather than user_id alone,
+        matters for one concrete case: the same logged-in user_id on two
+        different browsers/machines must land in two different sessions,
+        never share one conversation history or UI context between them --
+        user_id alone can't distinguish those, client_id can.
+
+        None until at least one of client_id/user_id has been seen on this
+        connection -- nothing stable to key by yet, so the caller falls back
+        to a fresh, non-persistent per-connection id instead.
+        """
+        if not self.client_id and not self.user_id:
+            return None
+        return f"{self.client_id or '-'}::{self.user_id or '-'}"
 
     def get_message(self)->str:
         """Get the last user message stored in the UI context object."""
@@ -185,7 +243,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--runtime-config",
         type=str,
         default=None,
-        help="Required path to runtime profile JSON containing top-level 'nucore_runtime'",
+        help=(
+            "Required path to runtime profile JSON containing top-level 'nucore_runtime'. "
+            "(An in-process caller invoking main() directly, rather than through this parser, "
+            "may pass an already-parsed dict of that same shape instead -- see "
+            "_load_runtime_config's docstring.)"
+        ),
     )
     parser.add_argument(
         "--secrets-file",
@@ -297,6 +360,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "Exact file path for the debug prompt/tool-call log (parent directories are created "
             "if missing). There is no default and no runtime-config fallback: the log is off "
             "unless this is set. CLI-only, deliberately, same reasoning as --preferences-dir."
+        ),
+    )
+    parser.add_argument(
+        "--plugin-output-root",
+        type=str,
+        default=None,
+        help=(
+            "Allowed root directory for generated plugin scaffolds (the plugin_authoring tool "
+            "set). Required when nucore_runtime.plugin_authoring.enabled is true in "
+            "--runtime-config; ignored otherwise. There is no runtime-config fallback -- never "
+            "read from that file even if a 'plugin_output_root' key is present there. CLI-only, "
+            "deliberately, same reasoning as --preferences-dir: this is a deployment/host "
+            "concern the system controls, not something a customer-supplied runtime config "
+            "should be able to redirect (see design/developers/merged-toolsets.md)."
         ),
     )
     return parser
@@ -448,17 +525,19 @@ async def _run_once(
         eisy_ui_context:  This connection's own EisyUIContext (never shared
                            across connections -- see its class docstring).
         session_id:       Fallback session identifier, used only if
-                           eisy_ui_context has no durable user_id yet (e.g.
+                           eisy_ui_context has no durable identity yet (e.g.
                            the client never sent a context message).
     """
     query = eisy_ui_context.process_message(query)
     if not query:
         return
-    # Prefer the durable, authenticated user_id over the per-connection
+    # Prefer the durable client_id+user_id identity over the per-connection
     # fallback -- this is what lets identity (and therefore conversation
-    # history) survive a reconnect instead of resetting to a fresh uuid4
-    # every time.
-    session_id = eisy_ui_context.get_user_id() or session_id or "default"
+    # history *and* UI context -- see get_identity_key/get_context) survive
+    # a reconnect instead of resetting to a fresh uuid4 every time. Combined
+    # identity, not user_id alone: the same logged-in user_id on a different
+    # browser/machine must not land in the same session as the first one.
+    session_id = eisy_ui_context.get_identity_key() or session_id or "default"
     results = await runtime.handle_query(
         query,
         framework_context=eisy_ui_context.get_context(),
@@ -694,9 +773,10 @@ def _build_plugin_authoring_tool_set(
     """Build the ``plugin_authoring`` tool set's :class:`ToolSetBundle` --
     called from ``main()`` only when ``runtime_config``'s
     ``nucore_runtime.plugin_authoring.enabled`` is true (see
-    design/developers/merged-toolsets.md; there is no longer a
-    ``--tool-set``/``--plugin-output-root`` CLI flag -- *plugin_output_root*
-    comes from that profile's own config instead, and *search_engine*/
+    design/developers/merged-toolsets.md; there is no longer a ``--tool-set``
+    CLI flag -- *plugin_output_root* comes from the CLI-only
+    ``--plugin-output-root`` flag instead (never from runtime config -- same
+    reasoning as ``--preferences-dir``), and *search_engine*/
     *search_engine_api_key* are now the top-level, tool-set-agnostic config
     keys of the same names).
 
@@ -779,7 +859,7 @@ def _build_plugin_authoring_tool_set(
 async def _run_websocket_server(
     nucore_interface: NuCoreInterface,
     llm_adapter,
-    runtime_config_path: str,
+    runtime_config_source: str | dict[str, Any],
     host: str,
     port: int | None,
     is_unix: bool,
@@ -809,14 +889,29 @@ async def _run_websocket_server(
     "credible source" check.
 
     ``runtime_config`` is *not* shared, unlike the other two -- it's rebuilt
-    fresh per connection (a cheap local JSON read, no network I/O) because
-    ``_load_runtime_config`` bakes a bound ``stream_handler.handle_stream_chunk``
-    callback directly into it (see ``runtime_config.py``'s
-    ``_coerce_runtime_profile``). Reusing one shared ``runtime_config`` across
-    connections would mean every connection's live token stream gets routed to
-    whichever ``StreamHandler`` built it first -- one with no websocket
-    attached -- so streaming silently no-ops and only the final complete
-    answer (sent separately by ``_run_once``) ever reaches the client.
+    fresh per connection (a cheap local JSON read when *runtime_config_source*
+    is a path, no network I/O either way) because ``_load_runtime_config``
+    bakes a bound ``stream_handler.handle_stream_chunk`` callback directly
+    into it (see ``runtime_config.py``'s ``_coerce_runtime_profile``). Reusing
+    one shared ``runtime_config`` across connections would mean every
+    connection's live token stream gets routed to whichever ``StreamHandler``
+    built it first -- one with no websocket attached -- so streaming silently
+    no-ops and only the final complete answer (sent separately by
+    ``_run_once``) ever reaches the client.
+
+    *runtime_config_source* is whatever ``main()`` resolved ``--runtime-config``
+    to -- a path string in the normal CLI case, or an in-process caller's own
+    dict (see ``_load_runtime_config``'s docstring). Either way it's re-passed
+    to ``_load_runtime_config`` verbatim on every new connection for the
+    per-connection ``StreamHandler`` rebind above. One side effect of the
+    path case is a free bonus, not the reason this re-read happens: an
+    ``enabled``/model edit to the file on disk takes effect for new
+    connections without a process restart (see design/developers/
+    merged-toolsets.md's "enabled flag" section). A dict source has no disk
+    backing to re-read, so it's simply re-coerced identically on every
+    connection for the rest of this process's life -- no hot-reload
+    equivalent is possible for it, which is an expected trade-off of passing
+    a dict directly rather than a limitation to work around.
 
     ``ssl_context``, when given, serves ``wss://`` instead of ``ws://`` --
     required for clients (e.g. the Eisy UI) that always connect over TLS, the
@@ -850,13 +945,17 @@ async def _run_websocket_server(
                 return
 
         # Fallback only -- used until/unless this connection's own
-        # EisyUIContext picks up a durable user_id from a context message.
+        # EisyUIContext picks up a durable identity from a context message.
         fallback_session_id = str(uuid.uuid4())
-        eisy_ui_context = EisyUIContext()
+        # shared_session_store (not a fresh, connection-local SessionStore)
+        # so this connection's UI-context updates are visible to -- and, on
+        # a reconnect, recoverable from -- whatever connection comes next
+        # for the same customer. See EisyUIContext's own docstring.
+        eisy_ui_context = EisyUIContext(session_store=shared_session_store)
         stream_handler = StreamHandler()
         stream_handler.set_websocket(_RawWebSocketAdapter(websocket))
         runtime_config = _load_runtime_config(
-            path=runtime_config_path,
+            path=runtime_config_source,
             stream_handler=stream_handler,
         )
         # tool_sets' own dispatch_factory per entry is still called lazily,
@@ -943,13 +1042,28 @@ def main(args:Any=None, poly=None) -> None:
     )
     logger.debug("Logging initialized", extra={"log_config": log_config})
 
-    runtime_config_path = Path(args.runtime_config).expanduser().resolve() if args.runtime_config else None
+    # args.runtime_config is normally a path string (the only thing argparse
+    # can ever produce from real argv) -- but an in-process caller invoking
+    # main() directly (never a real CLI subprocess, which only ever carries
+    # strings across its argv boundary) may pass an already-built dict
+    # instead, skipping the "write it to a temp file just to point a path at
+    # it" round trip. runtime_config_source carries whichever form was given,
+    # all the way down to _load_runtime_config and (websocket mode only)
+    # _run_websocket_server's per-connection reload -- see that function's
+    # own docstring for why a dict source means no per-connection hot-reload.
+    if isinstance(args.runtime_config, dict):
+        runtime_config_source: str | dict[str, Any] = args.runtime_config
+    elif args.runtime_config:
+        runtime_config_path = Path(args.runtime_config).expanduser().resolve()
+        if not runtime_config_path.exists() or not runtime_config_path.is_file():
+            raise FileNotFoundError(f"Runtime profile file not found: {runtime_config_path}")
+        runtime_config_source = str(runtime_config_path)
+    else:
+        raise ValueError(
+            "--runtime-config is required and must point to a JSON file with top-level "
+            "'nucore_runtime' (or, for an in-process caller, be a dict of that same shape)"
+        )
     secrets_env = _load_secrets_file(args.secrets_file) if args.secrets_file else None
-
-    if runtime_config_path is None:
-        raise ValueError("--runtime-config is required and must point to a JSON file with top-level 'nucore_runtime'")
-    if not runtime_config_path.exists() or not runtime_config_path.is_file():
-        raise FileNotFoundError(f"Runtime profile file not found: {runtime_config_path}")
 
     # One StreamHandler instance covers both roles: per-request LLM token
     # streaming (wired into runtime_config below, gated per-profile by each
@@ -962,7 +1076,7 @@ def main(args:Any=None, poly=None) -> None:
     # This load is used both to build the LLM dispatch adapter's provider
     # clients (below) and as UnifiedRuntime's own config.
     runtime_config = _load_runtime_config(
-        path=str(runtime_config_path),
+        path=runtime_config_source,
         stream_handler=stream_handler,
     )
 
@@ -1031,18 +1145,25 @@ def main(args:Any=None, poly=None) -> None:
 
     # Resolved once, regardless of mode -- both the websocket server and the
     # REPL path below need the same tool_sets mapping, and neither needs to
-    # know what went into producing it. There is no longer
-    # a --tool-set/--plugin-output-root flag: which tool sets exist and are
-    # reachable is entirely a function of runtime_config's own profiles and
-    # their 'enabled' flags (see runtime_config.py / merged-toolsets.md).
+    # know what went into producing it. There is no longer a --tool-set
+    # flag: which tool sets exist and are reachable is entirely a function
+    # of runtime_config's own profiles and their 'enabled' flags (see
+    # runtime_config.py / merged-toolsets.md). --plugin-output-root is the
+    # one exception, CLI-only same as --preferences-dir -- never read from
+    # runtime_config even if present there.
     # "unified" needs no explicit entry -- UnifiedRuntime falls back to its
     # own customer-facing default when it's absent from this dict.
     tool_sets: dict[str, ToolSetBundle] = {}
     plugin_authoring_profile = runtime_config["nucore_runtime"].get("plugin_authoring")
     if plugin_authoring_profile is not None and plugin_authoring_profile.get("enabled"):
+        if not args.plugin_output_root:
+            raise ValueError(
+                "--plugin-output-root is required when nucore_runtime.plugin_authoring.enabled "
+                "is true -- the tool set refuses to start without an allowed output root"
+            )
         tool_sets["plugin_authoring"] = _build_plugin_authoring_tool_set(
             nucore_interface=nucore_interface,
-            plugin_output_root=plugin_authoring_profile["plugin_output_root"],
+            plugin_output_root=args.plugin_output_root,
             search_engine=search_engine,
             search_engine_api_key=search_engine_api_key,
             secret_values=secret_values,
@@ -1065,7 +1186,7 @@ def main(args:Any=None, poly=None) -> None:
         logger.info("Starting native WebSocket server; responses stream per connection.")
         try:
             asyncio.run(_run_websocket_server(
-                nucore_interface, llm_adapter, str(runtime_config_path),
+                nucore_interface, llm_adapter, runtime_config_source,
                 websocket_host, args.websocket_port,
                 websocket_is_unix,
                 client_uid=args.websocket_client_id if websocket_is_unix else None,

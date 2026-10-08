@@ -2,10 +2,14 @@
 
 Field-by-field reference for the JSON file passed to `run_unified_runtime.py` via
 `--runtime-config` (see `runtime_config.example.json`/`.gemini.example.json`/`.grok.example.json`/
-`.openai.example.json` in this directory for copy-paste starting points, one per provider).
+`.openai.example.json` in this directory for copy-paste starting points, one per provider). A real
+CLI invocation always supplies a path -- argv only ever carries strings -- but an in-process
+caller invoking `run_unified_runtime.main()` directly may instead pass an already-parsed dict of
+this same shape, skipping the file entirely (see `_load_runtime_config`'s own docstring).
+Everything below describes the shape of the JSON/dict itself; it applies identically either way.
 
 For the *why* behind this schema -- why settings are split the way they are between top-level
-and per-profile, and why two fields are deliberately kept **out** of this file entirely -- see
+and per-profile, and why three fields are deliberately kept **out** of this file entirely -- see
 [`design/developers/merged-toolsets.md`](../../design/developers/merged-toolsets.md). This doc
 only covers *what each field does and what happens if you omit it*.
 
@@ -44,9 +48,9 @@ loads and validates fine but isn't reachable by anything today.
 | `search_engine_api_key` | string | *(none)* | API key for `search_engine`, in the same `"${ENV_VAR_NAME}"` placeholder form as a profile's `api_key` (see "Secrets" below) -- never a literal key in the file. Required for `search_engine` to actually take effect; `search_engine` with no key behaves the same as neither being set. |
 | any other key | -- | -- | Silently ignored -- never an error. This is also how a documentation-only key survives in a file format with no comment syntax; see "Documentation-only keys" below. |
 
-Two settings that look like they belong here -- `preferences_dir` and where the debug prompt log
-goes -- are **not** read from this file at all, by design: see "What's deliberately not here"
-below.
+Three settings that look like they belong here -- `preferences_dir`, where the debug prompt log
+goes, and `plugin_output_root` -- are **not** read from this file at all, by design: see "What's
+deliberately not here" below.
 
 ## Per-profile fields (`nucore_runtime.<name>`)
 
@@ -57,7 +61,6 @@ below.
 | `api_key` | string | *(none)* | Either a literal key or a `"${ENV_VAR_NAME}"` placeholder (see "Secrets" below). When omitted (or the placeholder resolves empty), falls back to a provider-specific environment variable: `ANTHROPIC_API_KEY` (claude), `OPENAI_API_KEY` (openai), `XAI_API_KEY`/`GROK_API_KEY` (grok), `GEMINI_API_KEY` (gemini). `llama.cpp` needs no real key -- it falls back to the literal string `"no-key"` if nothing else is set, since most llama.cpp servers run unauthenticated. |
 | `url` | string | *(none)* | Custom base URL for the provider's API (e.g. a self-hosted llama.cpp server, or an OpenAI-compatible proxy). `null`/omitted uses the provider's own default endpoint. |
 | `enabled` | boolean | `true` | Whether this tool set is reachable at all. `false` removes it from `enabled_profiles` without deleting the rest of its config -- the profile's settings stay in the file, just dormant. At least one profile across the whole file must end up enabled. |
-| `plugin_output_root` | string | *(none)* | Allowed root directory for generated plugin scaffolds. **Required** when a profile named `plugin_authoring` is enabled -- loading raises `ValueError` if it's enabled with this unset. Meaningless (read but unused) for any other profile name. |
 | `max_iterations` | integer | `8` | Hard cap on tool-call rounds within one `AgenticLoop.run()` call for this tool set. Hitting it without a final answer returns a hardcoded "ran out of steps" message rather than looping forever. |
 | `max_turns` | integer | `20` | How many past turns of this tool set's own conversation history are kept and replayed on each new call (older turns are dropped, oldest-first). Also used as this profile's `SessionStore` turn cap. |
 | `max_tokens` | integer | *(provider-adapter default; typically `4096`)* | Requested max output tokens per LLM call. **Only forwarded to the API for `claude`, `gemini`, and `llamacpp` providers.** For `openai` and `grok`, this field is currently read but never sent -- see "Provider-specific caveats" below. |
@@ -118,12 +121,17 @@ nothing behind it. For example:
 
 ## What's deliberately not here
 
-`preferences_dir` (where customer preferences/aliases are stored) and the debug prompt log's file
-path/on-off switch are **CLI-only** -- `--preferences-dir` and `--prompt-log-file` respectively --
-and are never read from this file even if a key with that name is present. The reasoning: this
-file holds settings a customer could reasonably supply themselves (model, temperature, which tool
-sets are enabled); where preferences or debug logs land on disk is a deployment/host concern that
-whoever launches the process controls, not whoever supplied the config file. See
-[`design/developers/merged-toolsets.md`](../../design/developers/merged-toolsets.md)'s
-"CLI-only, deliberately" section, and the top-level `README.md`'s CLI flag table, for both flags'
-exact behavior.
+`preferences_dir` (where customer preferences/aliases are stored), the debug prompt log's file
+path/on-off switch, and `plugin_output_root` (the allowed root directory for generated plugin
+scaffolds) are **CLI-only** -- `--preferences-dir`, `--prompt-log-file`, and
+`--plugin-output-root` respectively -- and are never read from this file even if a key with that
+name is present. The reasoning: this file holds settings a customer could reasonably supply
+themselves (model, temperature, which tool sets are enabled); where preferences or debug logs
+land on disk, and which root directory generated plugin scaffolds are confined to, are
+deployment/host concerns that whoever launches the process controls, not whoever supplied the
+config file. `--plugin-output-root` is required (`run_unified_runtime.py`'s `main()` raises
+`ValueError` otherwise) whenever `nucore_runtime.plugin_authoring.enabled` is `true` -- the same
+validation spirit this file used to apply to the now-removed `plugin_output_root` config key.
+See [`design/developers/merged-toolsets.md`](../../design/developers/merged-toolsets.md)'s
+"CLI-only, deliberately" section, and the top-level `README.md`'s CLI flag table, for all three
+flags' exact behavior.

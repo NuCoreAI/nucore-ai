@@ -64,9 +64,11 @@ def _coerce_runtime_profile(
     design/developers/merged-toolsets.md: different tool sets (``unified``
     vs. ``plugin_authoring``) genuinely need different values for all five,
     the same way they need different models. ``enabled`` (default ``True``)
-    and ``plugin_output_root`` (meaningful only for the ``plugin_authoring``
-    profile) are the gate on whether this tool set is reachable at all --
-    see that same doc.
+    is the gate on whether this tool set is reachable at all -- see that
+    same doc. ``plugin_output_root`` is CLI-only (``--plugin-output-root``),
+    never read from here even if present -- same reasoning as
+    ``preferences_dir``/the prompt log, see ``_load_runtime_config``'s
+    docstring.
     """
     provider = _normalize_provider_name(payload.get("provider"))
     if not provider:
@@ -113,7 +115,6 @@ def _coerce_runtime_profile(
             payload.get("supports_system_role", capabilities.get("supports_system_role", True))
         ),
         "enabled": bool(payload.get("enabled", True)),
-        "plugin_output_root": payload.get("plugin_output_root"),
         "max_iterations": max_iterations,
         "history_token_budget": history_token_budget,
         "fabrication_guard_mode": fabrication_guard_mode,
@@ -129,10 +130,20 @@ def _coerce_runtime_profile(
 
 
 def _load_runtime_config(
-    path: str,
+    path: str | dict[str, Any],
     stream_handler: StreamHandler,
 ) -> dict[str, Any]:
     """Load and normalize CLI-provided runtime profiles.
+
+    *path* is either a filesystem path to the JSON file (the CLI's
+    ``--runtime-config``, and the only form the actual CLI entry point ever
+    passes), or an already-parsed dict of the same shape -- for an in-process
+    caller (e.g. an embedder calling ``run_unified_runtime.main()`` directly,
+    never a real CLI subprocess boundary, which only ever carries strings)
+    that already holds the config in memory and would rather not round-trip
+    it through a temp file just to satisfy this function. A dict is used
+    as-is, skipping the file read entirely; everything after that point
+    (validation, per-profile coercion) is identical either way.
 
     Expected file format (see design/developers/merged-toolsets.md):
 
@@ -142,26 +153,32 @@ def _load_runtime_config(
       "search_engine_api_key": "${SEARCH_ENGINE_API_KEY}",
       "nucore_runtime": {
         "unified": {"enabled": true, ...},
-        "plugin_authoring": {"enabled": true, "plugin_output_root": "...", ...}
+        "plugin_authoring": {"enabled": true, ...}
       }
     }
 
     At least one profile must be present and ``enabled``; which profiles
     exist and are enabled is the *only* gate on tool-set availability --
-    there is no longer a ``--tool-set``/``--plugin-output-root`` CLI flag.
-    Most other settings that once had a CLI-level override
-    (``--stream``/``--no-stream``, ``--max-iterations``, ``--search-engine``)
-    were removed the same way: this file is the only source of truth for
-    them, so there's nothing left to override.
+    there is no longer a ``--tool-set`` CLI flag. Most other settings that
+    once had a CLI-level override (``--stream``/``--no-stream``,
+    ``--max-iterations``, ``--search-engine``) were removed the same way:
+    this file is the only source of truth for them, so there's nothing left
+    to override.
 
-    ``preferences_dir`` and the prompt-log settings are the deliberate
-    exception, in the other direction: they moved *out* of this file and are
-    CLI-only now (``--preferences-dir``, ``--prompt-log-file``), never read
-    from here even if present. The distinction: this file holds runtime
-    parameters a customer could reasonably supply (model, temperature,
-    which tool sets are enabled, ...); where on disk preferences/logs get
-    written is a host/deployment concern the system -- whoever launches the
-    process -- controls, not whoever supplied the config file.
+    ``preferences_dir``, the prompt-log settings, and ``plugin_output_root``
+    are the deliberate exception, in the other direction: they moved *out*
+    of this file and are CLI-only now (``--preferences-dir``,
+    ``--prompt-log-file``, ``--plugin-output-root``), never read from here
+    even if present. The distinction: this file holds runtime parameters a
+    customer could reasonably supply (model, temperature, which tool sets
+    are enabled, ...); where on disk preferences/logs get written, and
+    which root directory generated plugin scaffolds are confined to, are
+    host/deployment concerns the system -- whoever launches the process --
+    controls, not whoever supplied the config file. ``plugin_authoring``
+    refuses to start without ``--plugin-output-root`` when it's enabled
+    (``run_unified_runtime.py``'s ``main()`` raises ``ValueError``), the
+    same validation spirit this file used to apply to the now-removed
+    config key.
 
     An unrecognized key (anything not listed above or in a profile's own
     fields) is never an error -- it's silently ignored, which is also how a
@@ -170,14 +187,17 @@ def _load_runtime_config(
     ``_notes`` for an example).
     """
     if not path:
-        raise ValueError("A runtime profile JSON path is required")
+        raise ValueError("A runtime profile JSON path or dict is required")
 
-    runtime_profile_path = Path(path).expanduser().resolve()
-    if not runtime_profile_path.exists() or not runtime_profile_path.is_file():
-        raise FileNotFoundError(f"Runtime profile file not found: {runtime_profile_path}")
+    if isinstance(path, dict):
+        payload = path
+    else:
+        runtime_profile_path = Path(path).expanduser().resolve()
+        if not runtime_profile_path.exists() or not runtime_profile_path.is_file():
+            raise FileNotFoundError(f"Runtime profile file not found: {runtime_profile_path}")
 
-    with runtime_profile_path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+        with runtime_profile_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
 
     if not isinstance(payload, dict):
         raise ValueError("Runtime profile must be a JSON object at top level")
@@ -204,17 +224,6 @@ def _load_runtime_config(
         raise ValueError(
             "at least one nucore_runtime profile must have 'enabled' true (or omit 'enabled', "
             "which defaults to true)"
-        )
-
-    plugin_authoring_profile = normalized_profiles.get("plugin_authoring")
-    if (
-        plugin_authoring_profile is not None
-        and plugin_authoring_profile.get("enabled")
-        and not plugin_authoring_profile.get("plugin_output_root")
-    ):
-        raise ValueError(
-            "nucore_runtime.plugin_authoring requires 'plugin_output_root' when enabled -- the "
-            "tool set refuses to start without an allowed output root"
         )
 
     # "unified" is the preferred default active tool set for a new connection

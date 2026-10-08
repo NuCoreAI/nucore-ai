@@ -27,6 +27,16 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, ConversationHistory] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # Keyed by identity alone (client_id::user_id -- see
+        # EisyUIContext.get_identity_key), never by
+        # f"{identity}::{tool_set}" the way _sessions is: the customer's
+        # current screen doesn't change just because the chatbot switched
+        # between unified/plugin_authoring (see merged-toolsets.md), so one
+        # slot per identity is deliberately shared across whichever tool set
+        # is active. Survives a reconnect (a new websocket connection, same
+        # customer) the same way _sessions already does, for the same
+        # reason: this store outlives any one connection.
+        self._ui_contexts: dict[str, dict | None] = {}
 
     def lock(self, session_id: str) -> asyncio.Lock:
         """Returns this session's lock, creating it on first use -- same
@@ -66,6 +76,31 @@ class SessionStore:
     def clear_all(self) -> None:
         """Remove history for all sessions."""
         self._sessions.clear()
+
+    def get_ui_context(self, identity_key: str) -> dict | None:
+        """Last known UI context (the Eisy UI's own per-turn ``context``
+        payload shape -- current screen, etc.) for *identity_key*, or
+        ``None`` if nothing has been recorded for it yet.
+
+        This is what lets a brand-new websocket connection (a reconnect --
+        same customer, new connection object, so a fresh, empty
+        ``EisyUIContext`` -- see that class's docstring) pick up where the
+        last connection left off instead of looking like the customer's
+        screen is suddenly unknown. See :meth:`set_ui_context` for who
+        writes this.
+        """
+        return self._ui_contexts.get(identity_key)
+
+    def set_ui_context(self, identity_key: str, context: dict | None) -> None:
+        """Record *context* as the latest known UI context for
+        *identity_key*. Called by ``EisyUIContext.process_message`` every
+        time a ``"type": "context"`` message arrives and identity
+        (client_id/user_id) is resolvable -- not locked, same as every
+        other field on ``EisyUIContext`` itself: a single dict-key
+        assignment never interleaves under asyncio's cooperative
+        scheduling, so there's nothing a lock would protect here.
+        """
+        self._ui_contexts[identity_key] = context
 
     def format_history_for_prompt(self, session_id: str) -> str:
         """Format conversation history with consistent labeling for LLM prompts.

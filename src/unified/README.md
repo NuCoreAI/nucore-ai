@@ -109,16 +109,29 @@ untouched -- `force_tool_choice` is computed but never set to `True` off a non-C
 `run_unified_runtime.py`'s `--websocket-port`/`--websocket-host` server mode shares one
 `SessionStore` across every accepted connection (built once in `_run_websocket_server`, passed
 into each connection's `UnifiedRuntime(session_store=...)`), keyed by the durable session id
-`EisyUIContext.get_user_id()` establishes per logical client. This is what lets a reconnect
-(network blip, page reload, the bridge process itself reconnecting) find its prior conversation
-history instead of starting over empty -- previously each connection got its own private, empty
-`SessionStore`, so a reconnect silently lost everything despite the session id staying stable
-across it.
+`EisyUIContext.get_identity_key()` establishes per logical client -- `client_id` and `user_id`
+combined (`f"{client_id}::{user_id}"`), not `user_id` alone: the same logged-in user_id on a
+different browser/machine must land in a *different* session, which `client_id` is what
+distinguishes. This is what lets a reconnect (network blip, page reload, the bridge process
+itself reconnecting) find its prior conversation history instead of starting over empty --
+previously each connection got its own private, empty `SessionStore`, so a reconnect silently
+lost everything despite the session id staying stable across it.
+
+The same shared `SessionStore` also holds each identity's last-known **UI context** (the
+customer's current screen, via `get_ui_context`/`set_ui_context`), keyed by identity alone --
+deliberately *not* suffixed by tool set, since the customer's screen doesn't change just because
+the chatbot switched between `unified`/`plugin_authoring`. `EisyUIContext.get_context()` reads
+through to this shared slot whenever *this* connection hasn't received a context message of its
+own yet, so a brand-new connection (a reconnect -- see `EisyUIContext`'s own docstring on why it's
+per-connection, not global, and why that's still correct) doesn't look like the customer's screen
+has become unknown just because the object holding it was.
 
 Sharing one store safely requires serializing same-session access: `UnifiedRuntime.handle_query`
 holds `session_store.lock(session_id)` for its entire read-history -> generate -> append-history
 sequence, so a second concurrent request for the same session id waits for the first to fully
-finish rather than racing it on the same `ConversationHistory` object. Every other caller
+finish rather than racing it on the same `ConversationHistory` object. UI context reads/writes are
+unlocked plain dict operations -- a single dict-key assignment never interleaves under asyncio's
+cooperative scheduling, so there's nothing a lock would protect there. Every other caller
 (REPL mode, and any test constructing `UnifiedRuntime` without a `session_store` kwarg) is
 unaffected -- it defaults to a private, unshared store, so the lock is uncontended and a no-op in
 practice.

@@ -1,5 +1,5 @@
 {
-  "_notes": "preferences_dir/prompt_log_file are CLI-only now (--preferences-dir/--prompt-log-file) -- never read from this file even if present here. See design/developers/merged-toolsets.md.",
+  "_notes": "preferences_dir/prompt_log_file/plugin_output_root are CLI-only now (--preferences-dir/--prompt-log-file/--plugin-output-root) -- never read from this file even if present here. See design/developers/merged-toolsets.md.",
   "max_tool_set_switches_per_turn": 1,
   "search_engine": null,
   "search_engine_api_key": "${SEARCH_ENGINE_API_KEY}",
@@ -23,7 +23,6 @@
     },
     "plugin_authoring": {
       "enabled": true,
-      "plugin_output_root": "/usr/home/admin/.config/nucore_unified_runtime/local_plugins",
       "provider": "claude",
       "model_2": "claude-haiku-5-5",
       "model": "claude-sonnet-5-5",

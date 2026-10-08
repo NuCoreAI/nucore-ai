@@ -26,6 +26,23 @@ def _write_config(tmp_path, **overrides):
     return str(path)
 
 
+def test_load_runtime_config_accepts_an_already_parsed_dict_in_place_of_a_path():
+    """An in-process caller (never a real CLI subprocess, which only ever
+    carries strings across argv) may hand _load_runtime_config an
+    already-built dict directly instead of writing it to a temp file just to
+    point a path at it -- see _load_runtime_config's own docstring."""
+    payload = {
+        "nucore_runtime": {
+            "unified": {"provider": "claude", "model": "m", "stream": True},
+        }
+    }
+
+    cfg = _load_runtime_config(path=payload, stream_handler=None)
+
+    assert cfg["enabled_profiles"] == ["unified"]
+    assert cfg["supported_llms"]["unified"]["model"] == "m"
+
+
 def test_reasoning_effort_passed_through_when_set(tmp_path):
     payload = {
         "nucore_runtime": {
@@ -226,7 +243,11 @@ def test_at_least_one_profile_must_be_enabled(tmp_path):
         _load_runtime_config(path=str(path), stream_handler=None)
 
 
-def test_plugin_authoring_requires_plugin_output_root_when_enabled(tmp_path):
+def test_plugin_authoring_enabled_does_not_require_plugin_output_root(tmp_path):
+    """plugin_output_root moved back to the CLI-only --plugin-output-root flag (see
+    design/developers/merged-toolsets.md's "CLI-only, deliberately" section) -- this
+    loader no longer reads or validates it at all, even when plugin_authoring is
+    enabled. The CLI-side requirement is covered in test_run_unified_runtime.py."""
     payload = {
         "nucore_runtime": {
             "unified": {"provider": "claude", "model": "m"},
@@ -236,22 +257,8 @@ def test_plugin_authoring_requires_plugin_output_root_when_enabled(tmp_path):
     path = tmp_path / "runtime_config.json"
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(ValueError):
-        _load_runtime_config(path=str(path), stream_handler=None)
-
-
-def test_plugin_authoring_disabled_does_not_require_plugin_output_root(tmp_path):
-    payload = {
-        "nucore_runtime": {
-            "unified": {"provider": "claude", "model": "m"},
-            "plugin_authoring": {"provider": "claude", "model": "m", "enabled": False},
-        }
-    }
-    path = tmp_path / "runtime_config.json"
-    path.write_text(json.dumps(payload))
-
     cfg = _load_runtime_config(path=str(path), stream_handler=None)
-    assert cfg["enabled_profiles"] == ["unified"]
+    assert cfg["enabled_profiles"] == ["unified", "plugin_authoring"]
 
 
 def test_default_profile_name_prefers_unified_when_both_enabled(tmp_path):
@@ -268,7 +275,6 @@ def test_default_profile_name_falls_back_to_the_only_enabled_profile(tmp_path):
             "plugin_authoring": {
                 "provider": "claude",
                 "model": "m",
-                "plugin_output_root": "/allowed/root",
             },
         }
     }
