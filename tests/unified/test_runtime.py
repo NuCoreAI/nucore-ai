@@ -254,20 +254,12 @@ def test_resolve_llm_profile_returns_empty_dict_when_nothing_configured():
 
 
 def test_resolve_llm_profile_prefers_the_preferred_key():
-    config = {"supported_llms": {"unified": {"provider": "claude"}, "default": {"provider": "openai"}}}
+    config = {"supported_llms": {"unified": {"provider": "claude"}, "other": {"provider": "openai"}}}
     assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "claude"}
 
 
-def test_resolve_llm_profile_falls_back_to_default_llm_key():
-    config = {
-        "default_llm": "custom",
-        "supported_llms": {"custom": {"provider": "grok"}, "default": {"provider": "openai"}},
-    }
-    assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "grok"}
-
-
-def test_resolve_llm_profile_falls_back_to_default_key_when_no_default_llm():
-    config = {"supported_llms": {"default": {"provider": "openai"}, "other": {"provider": "gemini"}}}
+def test_resolve_llm_profile_falls_back_to_first_key_when_preferred_is_absent():
+    config = {"supported_llms": {"other": {"provider": "openai"}, "another": {"provider": "gemini"}}}
     assert resolve_llm_profile(config, preferred_key="unified") == {"provider": "openai"}
 
 

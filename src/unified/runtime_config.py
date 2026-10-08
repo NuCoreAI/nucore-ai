@@ -109,9 +109,8 @@ def _load_runtime_config(
       "max_iterations": 8,
       "preferences_dir": null,
       "nucore_runtime": {
-        "default": {...},
-        "router": {...},
-        "intent_name": {...}
+        "unified": {...},
+        "other_profile_name": {...}
       }
     }
     """
@@ -132,29 +131,19 @@ def _load_runtime_config(
     if not isinstance(raw_runtime, dict):
         raise ValueError("Runtime profile must contain an object key 'nucore_runtime'")
 
-    raw_default = raw_runtime.get("default")
-    if not isinstance(raw_default, dict):
-        raise ValueError("nucore_runtime.default must be an object")
+    raw_unified = raw_runtime.get("unified")
+    if not isinstance(raw_unified, dict):
+        raise ValueError("nucore_runtime.unified must be an object")
 
-    default_profile = _coerce_runtime_profile(
-        "default", raw_default, stream_handler=stream_handler, force_stream=force_stream
+    unified_profile = _coerce_runtime_profile(
+        "unified", raw_unified, stream_handler=stream_handler, force_stream=force_stream
     )
 
-    supported_llms: dict[str, dict[str, Any]] = {"default": default_profile}
-    normalized_profiles: dict[str, dict[str, Any]] = {"default": default_profile}
-
-    raw_router = raw_runtime.get("router")
-    if raw_router is not None:
-        if not isinstance(raw_router, dict):
-            raise ValueError("nucore_runtime.router must be an object when provided")
-        router_profile = _coerce_runtime_profile(
-            "router", raw_router, stream_handler=stream_handler, force_stream=force_stream
-        )
-        supported_llms["router"] = router_profile
-        normalized_profiles["router"] = router_profile
+    supported_llms: dict[str, dict[str, Any]] = {"unified": unified_profile}
+    normalized_profiles: dict[str, dict[str, Any]] = {"unified": unified_profile}
 
     for profile_name, profile_payload in raw_runtime.items():
-        if profile_name in {"default", "router"}:
+        if profile_name == "unified":
             continue
         if not isinstance(profile_payload, dict):
             raise ValueError(f"nucore_runtime.{profile_name} must be an object")
@@ -167,7 +156,7 @@ def _load_runtime_config(
         supported_llms[profile_name] = normalized_profile
         normalized_profiles[profile_name] = normalized_profile
 
-    default_max_turns = int(default_profile.get("max_turns", 20))
+    default_max_turns = int(unified_profile.get("max_turns", 20))
 
     configured_max_iterations = payload.get("max_iterations")
     if configured_max_iterations is not None and not isinstance(configured_max_iterations, int):
@@ -212,8 +201,6 @@ def _load_runtime_config(
         # No default -- None means preferences are simply unavailable for
         # this installation (see unified.preferences.preference_store.get_store).
         "preferences_dir": configured_preferences_dir,
-        "default_llm": "default",
-        "router_llm": "router" if "router" in supported_llms else "default",
         "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
         # Compaction trigger for UnifiedRuntime.handle_query's conversation

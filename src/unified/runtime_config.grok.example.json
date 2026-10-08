@@ -7,15 +7,6 @@
   "fabrication_guard_mode": "block",
   "max_fabrication_retries": 1,
   "nucore_runtime": {
-    "default": {
-      "provider": "grok",
-      "model": "grok-4-fast",
-      "api_key": "${XAI_API_KEY}",
-      "url": "https://api.x.ai/v1",
-      "max_turns": 20,
-      "temperature": 0.2,
-      "max_tokens": 64000
-    },
     "unified": {
       "provider": "grok",
       "model": "grok-4-fast",

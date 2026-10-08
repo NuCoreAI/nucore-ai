@@ -26,18 +26,16 @@ SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
 def resolve_llm_profile(runtime_config: dict[str, Any], *, preferred_key: str = "unified") -> dict[str, Any]:
     """Pick an LLM profile dict out of ``runtime_config["supported_llms"]``:
-    *preferred_key* if present, else ``default_llm``/``"default"``, else
-    whatever key comes first. Shared by :meth:`UnifiedRuntime._resolve_llm_config`
-    and ``run_unified_runtime.py`` (which needs to know the same resolved
-    provider up front, before ``UnifiedRuntime`` exists, to decide whether
-    plugin_authoring's native-vs-fallback web search applies) -- extracted
-    once here so the two can never drift on the fallback order."""
+    *preferred_key* if present, else whatever key comes first. Shared by
+    :meth:`UnifiedRuntime._resolve_llm_config` and ``run_unified_runtime.py``
+    (which needs to know the same resolved provider up front, before
+    ``UnifiedRuntime`` exists, to decide whether plugin_authoring's
+    native-vs-fallback web search applies) -- extracted once here so the two
+    can never drift on the fallback order."""
     supported = runtime_config.get("supported_llms", {})
     if not supported:
         return {}
-    key = preferred_key if preferred_key in supported else (runtime_config.get("default_llm") or "default")
-    if key not in supported:
-        key = next(iter(supported.keys()))
+    key = preferred_key if preferred_key in supported else next(iter(supported.keys()))
     return dict(supported.get(key, {}))
 
 

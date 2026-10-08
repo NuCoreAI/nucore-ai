@@ -16,8 +16,8 @@ from unified.stream_handler import StreamHandler
 def _write_config(tmp_path, **overrides):
     payload = {
         "nucore_runtime": {
-            "default": {"provider": "claude", "model": "m"},
             "unified": {"provider": "claude", "model": "m", "stream": True},
+            "other": {"provider": "claude", "model": "m"},
         }
     }
     payload.update(overrides)
@@ -29,38 +29,37 @@ def _write_config(tmp_path, **overrides):
 def test_reasoning_effort_passed_through_when_set(tmp_path):
     payload = {
         "nucore_runtime": {
-            "default": {"provider": "openai", "model": "m", "reasoning_effort": "none"},
             "unified": {"provider": "openai", "model": "m"},
+            "other": {"provider": "openai", "model": "m", "reasoning_effort": "none"},
         }
     }
     path = tmp_path / "runtime_config.json"
     path.write_text(json.dumps(payload))
     cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
-    assert cfg["supported_llms"]["default"]["reasoning_effort"] == "none"
+    assert cfg["supported_llms"]["other"]["reasoning_effort"] == "none"
     assert cfg["supported_llms"]["unified"]["reasoning_effort"] is None
 
 
 def test_cache_ttl_passed_through_and_defaults_to_none(tmp_path):
     payload = {
         "nucore_runtime": {
-            "default": {"provider": "claude", "model": "m", "cache_ttl": "1h"},
             "unified": {"provider": "claude", "model": "m"},
+            "other": {"provider": "claude", "model": "m", "cache_ttl": "1h"},
         }
     }
     path = tmp_path / "runtime_config.json"
     path.write_text(json.dumps(payload))
     cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
-    assert cfg["supported_llms"]["default"]["cache_ttl"] == "1h"
+    assert cfg["supported_llms"]["other"]["cache_ttl"] == "1h"
     assert cfg["supported_llms"]["unified"]["cache_ttl"] is None
 
 
 def test_cache_ttl_rejects_an_unknown_value(tmp_path):
     payload = {
         "nucore_runtime": {
-            "default": {"provider": "claude", "model": "m", "cache_ttl": "2h"},
-            "unified": {"provider": "claude", "model": "m"},
+            "unified": {"provider": "claude", "model": "m", "cache_ttl": "2h"},
         }
     }
     path = tmp_path / "runtime_config.json"
@@ -74,7 +73,7 @@ def test_profile_stream_flag_honored_when_handler_present(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=StreamHandler())
 
-    assert cfg["supported_llms"]["default"]["stream"] is False
+    assert cfg["supported_llms"]["other"]["stream"] is False
     assert cfg["supported_llms"]["unified"]["stream"] is True
     assert callable(cfg["supported_llms"]["unified"]["stream_handler"])
 
@@ -97,7 +96,7 @@ def test_force_stream_true_overrides_profile_flag(tmp_path):
     path = _write_config(tmp_path)
     cfg = _load_runtime_config(path=path, stream_handler=StreamHandler(), force_stream=True)
 
-    assert cfg["supported_llms"]["default"]["stream"] is True
+    assert cfg["supported_llms"]["other"]["stream"] is True
 
 
 def test_max_iterations_parsed_from_top_level_config(tmp_path):
