@@ -1,6 +1,6 @@
 {
   "name": "delete_plugin",
-  "description": "Get the dashboard link to delete/uninstall a plugin the customer already has installed (see list_installed_plugins). Only call this after the customer has explicitly agreed to delete it -- never speculatively. This tool re-verifies plugin_id/name against the real installed list itself and returns an error if it isn't actually installed, but still pass the exact plugin_id/name from list_installed_plugins rather than guessing -- don't rely on this check in place of that. For security reasons, deletion happens on the web, not through this assistant -- same as buy_plugin/install_plugin -- this tool does not delete anything; it returns a `delete_url` for the customer to finish there themselves.",
+  "description": "Permanently uninstalls a plugin that's already installed (see list_installed_plugins), freeing its slot entirely -- a real, permanent change on the hub, performed through this assistant. Code-enforced two-call confirm: call once without `confirmed` (or `confirmed: false`) to resolve the plugin and see what would be deleted -- this does not delete anything. Only call again with `confirmed: true` after the customer/developer has explicitly agreed to delete it -- never speculatively. This tool re-verifies plugin_id/name against the real installed list itself and returns an error if it isn't actually installed, but still pass the exact plugin_id/name from list_installed_plugins rather than guessing -- don't rely on this check in place of that.",
   "input_schema": {
     "type": "object",
     "required": ["plugin_id", "name"],
@@ -11,7 +11,12 @@
       },
       "name": {
         "type": "string",
-        "description": "The plugin's exact display `name`, from list_installed_plugins -- used to build the customer-facing link text without a separate lookup."
+        "description": "The plugin's exact display `name`, from list_installed_plugins -- used to build the confirmation/result text without a separate lookup."
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "Leave unset (or false) for the first call, which only previews the delete and performs no side effects. Set to true only on a follow-up call, only after the customer/developer has explicitly agreed to delete it.",
+        "default": false
       }
     }
   }

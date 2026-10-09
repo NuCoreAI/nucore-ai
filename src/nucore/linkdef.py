@@ -19,6 +19,7 @@ class LinkParameter:
     editor: Editor
     optional: bool = None
     name: str = None
+    desc: str = None
     init_val: str = None
     init_uom: int = None
 
@@ -37,6 +38,7 @@ class LinkDef:
     name: str = None
     cmd: bool = None
     format: str = None
+    desc: str = None
     parameters: dict[str, LinkParameter] = field(default_factory=dict)
 
     def add_parameters(self, parameters: list["LinkParameter"]) -> None:

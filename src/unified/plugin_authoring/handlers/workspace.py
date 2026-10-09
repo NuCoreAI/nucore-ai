@@ -146,6 +146,7 @@ async def list_generated_plugins(
         entries.append(
             {
                 "location": child.name,
+                "absolute_path": str(child),
                 "name": name,
                 "description": description,
                 "last_modified_at": mtime,
@@ -221,6 +222,7 @@ async def read_generated_plugin(
 
     result = {
         "location": location,
+        "absolute_path": str(plugin_dir),
         "profile": profile,
         "plugin_py": _read_text_if_present(plugin_dir / _PLUGIN_FILENAME),
         "main_py": _read_text_if_present(plugin_dir / _MAIN_FILENAME),
@@ -237,6 +239,10 @@ async def read_generated_plugin(
     }
 
     if requested_files is not None:
-        result = {"location": location, **{key: result[key] for key in requested_files}}
+        result = {
+            "location": location,
+            "absolute_path": str(plugin_dir),
+            **{key: result[key] for key in requested_files},
+        }
 
     return result

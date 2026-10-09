@@ -11,8 +11,8 @@ purely via ``Profile().load_from_json(...)`` and its captured debug-log
 output, below), just a reusable reference for anyone hand-authoring/vetting
 a profile document outside this chat loop.
 
-``validate_profile`` also independently cross-checks two things
-``nucore.profile``'s own parser doesn't (both below):
+``validate_profile`` also independently cross-checks several things
+``nucore.profile``'s own parser doesn't:
 - every editor range's ``uom`` against the real UOM table
   (``_check_uom_consistency``) -- ``nucore.profile.__build_editor__``
   already logs a debug message for a *nonexistent* uom id, but silently
@@ -25,13 +25,31 @@ a profile document outside this chat loop.
   through ``nucore.profile`` locally, but the real hub requires all-caps
   letters/digits/underscore, starting with a letter, max 30 chars (see
   ``standard_property_ids.py``).
+- every NodeDef has a ``links`` object with ``ctl``/``rsp`` arrays, even
+  when empty (``_check_links_object_present``) -- confirmed mandatory
+  against a real generated profile.json; ``nucore.profile`` leaves
+  ``NodeDef.links`` as ``None`` with no error or debug log when the key is
+  simply absent.
+- every id a NodeDef's ``links.ctl``/``links.rsp`` names actually matches a
+  linkdef defined in that instance's ``linkdefs[]`` (``_check_linkdef_
+  references``) -- a dangling reference round-trips fine through
+  ``nucore.profile`` locally.
+- no linkdef combines ``cmd: true`` with a non-empty ``parameters`` list
+  (``_check_linkdef_cmd_parameters``) -- the official Dynamic Profiles docs
+  (developer.isy.io/docs/API/pg/DynamicProfiles) say a ``cmd: true``
+  linkdef "must not specify any parameters"; ``nucore.profile`` doesn't
+  enforce this either.
 
-Both cross-checks exist because the system prompt tells the model to call
-``lookup_uom``/``lookup_property_id`` instead of guessing from memory, but
-that's a request the model can silently skip (and, if asked about it
-afterward, confabulate a plausible-sounding justification for) with no
-consequence otherwise. These checks make the wrong answer fail mechanically
-instead of depending on the model remembering.
+These cross-checks exist because the system prompt tells the model to call
+``lookup_uom``/``lookup_property_id`` instead of guessing from memory, and
+to follow the links/linkdef rules above, but that's a request the model can
+silently skip (and, if asked about it afterward, confabulate a plausible-
+sounding justification for) with no consequence otherwise. These checks
+make the wrong answer fail mechanically instead of depending on the model
+remembering -- including inside ``generate_plugin_scaffold`` itself, which
+calls this same ``validate_profile`` as its own pre-write guard
+(``handlers/scaffold.py``), so a scaffold can't be generated with these
+problems either.
 """
 
 from __future__ import annotations
@@ -138,10 +156,104 @@ def _check_property_id_format(raw_profile: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _check_links_object_present(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef and requires a ``links`` object with ``ctl``/
+    ``rsp`` list fields, even when both are empty -- confirmed mandatory
+    against a real generated profile.json. ``nucore.profile`` leaves
+    ``NodeDef.links`` as ``None`` with no error or debug log at all when
+    the ``links`` key is simply absent, so without this a missing/malformed
+    ``links`` object would never be caught locally.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id") or "?"
+                links = nodedef.get("links")
+                if not isinstance(links, dict):
+                    errors.append(
+                        f"nodedef '{nodedef_id}': missing 'links' object -- every nodedef must "
+                        "include {'ctl': [...], 'rsp': [...]}, even when both are empty"
+                    )
+                    continue
+                for key in ("ctl", "rsp"):
+                    if not isinstance(links.get(key), list):
+                        errors.append(
+                            f"nodedef '{nodedef_id}': 'links.{key}' is required and must be a list "
+                            "(use [] if none)"
+                        )
+    return errors
+
+
+def _check_linkdef_references(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef's ``links.ctl``/``links.rsp`` and flags any id
+    that doesn't match a linkdef actually defined in that same instance's
+    ``linkdefs[]`` -- a dangling reference round-trips fine through
+    ``nucore.profile`` locally, since it just stores the raw id list as-is.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            defined_ids = {
+                linkdef["id"]
+                for linkdef in instance.get("linkdefs") or []
+                if isinstance(linkdef, dict) and isinstance(linkdef.get("id"), str)
+            }
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id") or "?"
+                links = nodedef.get("links")
+                if not isinstance(links, dict):
+                    continue
+                for key in ("ctl", "rsp"):
+                    for ref_id in links.get(key) or []:
+                        if ref_id not in defined_ids:
+                            errors.append(
+                                f"nodedef '{nodedef_id}': links.{key} references linkdef '{ref_id}' "
+                                "which is not defined in this instance's linkdefs"
+                            )
+    return errors
+
+
+def _check_linkdef_cmd_parameters(raw_profile: dict[str, Any]) -> list[str]:
+    """Flags any linkdef combining ``cmd: true`` with a non-empty
+    ``parameters`` list -- the official Dynamic Profiles docs
+    (developer.isy.io/docs/API/pg/DynamicProfiles) state that a
+    ``cmd: true`` linkdef "must not specify any parameters" (it means any
+    direct command a responder accepts can be used in the link, with no
+    fixed parameter list); ``nucore.profile`` doesn't enforce this either.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for linkdef in instance.get("linkdefs") or []:
+                if not isinstance(linkdef, dict):
+                    continue
+                if linkdef.get("cmd") and linkdef.get("parameters"):
+                    linkdef_id = linkdef.get("id") or "?"
+                    errors.append(f"linkdef '{linkdef_id}': cmd is true -- must not specify parameters")
+    return errors
+
+
 async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     """*nucore_interface* is unused -- this tool never touches the hub, it
-    only exercises nucore's local profile parser (plus ``_check_uom_
-    consistency``'s own independent cross-check, see module docstring)."""
+    only exercises nucore's local profile parser plus this module's own
+    independent cross-checks (see module docstring)."""
     raw_profile = args.get("profile")
     if not isinstance(raw_profile, dict):
         return {"valid": False, "errors": ["'profile' must be a JSON object"]}
@@ -165,7 +277,14 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
         profile_logger.removeHandler(capture)
         profile_logger.setLevel(original_level)
 
-    errors = capture.messages + _check_uom_consistency(raw_profile) + _check_property_id_format(raw_profile)
+    errors = (
+        capture.messages
+        + _check_uom_consistency(raw_profile)
+        + _check_property_id_format(raw_profile)
+        + _check_links_object_present(raw_profile)
+        + _check_linkdef_references(raw_profile)
+        + _check_linkdef_cmd_parameters(raw_profile)
+    )
     return {"valid": not errors, "errors": errors}
 
 

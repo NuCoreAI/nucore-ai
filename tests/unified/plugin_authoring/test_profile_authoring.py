@@ -31,6 +31,7 @@ VALID_PROFILE = {
                             "name": "Switch",
                             "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
                             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
+                            "links": {"ctl": [], "rsp": []},
                         }
                     ],
                 }
@@ -134,7 +135,14 @@ async def test_validate_profile_accepts_enum_uom_with_subset_range():
                 "id": "inst1",
                 "name": "Test Instance",
                 "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
-                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "ED_ONOFF"}], "cmds": {}}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
             }],
         }]
     }
@@ -304,7 +312,224 @@ async def test_validate_profile_accepts_meaningful_custom_property_id():
                 "id": "inst1",
                 "name": "Test Instance",
                 "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
-                "nodedefs": [{"id": "ND_X", "properties": [{"id": "FILTER_LIFE", "editor": "ED_X"}], "cmds": {}}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "FILTER_LIFE", "editor": "ED_X"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+# --- links-object-present cross-check (_check_links_object_present): every
+# nodedef must include a links object with ctl/rsp arrays, even when empty
+# -- confirmed mandatory against a real generated profile.json. nucore's own
+# parser leaves NodeDef.links as None with no error at all when the key is
+# simply absent ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_nodedef_missing_links():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "ED_ONOFF"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ND_X" in e and "missing 'links'" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_nodedef_links_missing_ctl_or_rsp():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("links.rsp" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_nodedef_with_empty_links():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+# --- linkdef-reference cross-check (_check_linkdef_references): a nodedef's
+# links.ctl/links.rsp must name a linkdef actually defined in that
+# instance's linkdefs[] -- a dangling reference round-trips fine through
+# nucore.profile locally ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_dangling_linkdef_reference():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+                "linkdefs": [],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": ["I_STD"], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("I_STD" in e and "not defined" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_linkdef_reference_that_matches():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+                "linkdefs": [{"id": "I_STD", "protocol": "I_STD", "name": "Insteon"}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": ["I_STD"], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+# --- linkdef cmd/parameters cross-check (_check_linkdef_cmd_parameters): the
+# official Dynamic Profiles docs (developer.isy.io/docs/API/pg/
+# DynamicProfiles) say a cmd: true linkdef "must not specify any
+# parameters" -- nucore.profile doesn't enforce this either ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_cmd_true_linkdef_with_parameters():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "linkdefs": [
+                    {
+                        "id": "ASSOC_CMD",
+                        "protocol": "ASSOC_CMD",
+                        "name": "Z-Wave Association Command",
+                        "cmd": True,
+                        "parameters": [{"id": "OL", "editor": "ED_X"}],
+                    }
+                ],
+                "nodedefs": [],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ASSOC_CMD" in e and "must not specify parameters" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_cmd_true_linkdef_without_parameters():
+    # The official doc's own example: a Z-Wave association command linkdef,
+    # cmd: true, no parameters at all.
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "linkdefs": [
+                    {"id": "ASSOC_CMD", "protocol": "ASSOC_CMD", "name": "Z-Wave Association Command", "cmd": True}
+                ],
+                "nodedefs": [],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_non_cmd_linkdef_with_parameters():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "linkdefs": [
+                    {
+                        "id": "I_DIMMER",
+                        "protocol": "I_STD",
+                        "name": "Insteon",
+                        "parameters": [{"id": "OL", "editor": "ED_X"}],
+                    }
+                ],
+                "nodedefs": [],
             }],
         }]
     }

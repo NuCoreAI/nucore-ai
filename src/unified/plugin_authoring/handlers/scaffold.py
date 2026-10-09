@@ -722,6 +722,7 @@ async def generate_plugin_scaffold(
 
     return {
         "location": location,
+        "absolute_path": str(plugin_dir),
         "files_written": sorted(str(p.relative_to(plugin_dir)) for p in candidate_files)
         + [_CONTEXT_FILENAME, _SOURCES_FILENAME]
         + extra_dirs,

@@ -26,6 +26,7 @@ WIRE_PROFILE = {
             "name": "Switch",
             "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
+            "links": {"ctl": [], "rsp": []},
         }
     ],
     "linkdefs": [],
@@ -121,6 +122,12 @@ async def test_rejects_profile_with_dangling_editor_reference(tmp_path):
 async def test_accepts_well_formed_wire_profile(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_result_includes_the_absolute_path_on_disk(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert result["absolute_path"] == str((tmp_path / "acme_pool").resolve())
 
 
 # --- guard 4: override_bodies key allowlist / AI-tool matching ---
@@ -781,7 +788,21 @@ async def test_main_py_sends_the_profile_before_constructing_the_controller(tmp_
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "main.py").read_text()
-    assert source.index("updateJsonProfile") < source.index("Controller(polyglot")
+    assert (
+        source.index("updateJsonProfile")
+        < source.index("Controller(polyglot")
+        < source.index("polyglot.ready()")
+        < source.index("polyglot.runForever()")
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_py_logs_the_profile_update_response(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert 'response = polyglot.updateJsonProfile(json.load(f), {"waitResponse": True})' in source
+    assert 'LOGGER.info("Profile update response: %s", response)' in source
 
 
 # --- main.py/install.sh both self-detect a local-dev .venv (see

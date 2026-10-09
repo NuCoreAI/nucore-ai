@@ -8,9 +8,10 @@ access) -- all reused directly, not reimplemented, so the tool sets never
 drift on what "start"/"stop"/"configure a plugin"/"run a shell command"
 actually does.
 
-Deliberately excludes buy_plugin/delete_plugin/list_store_plugins/
-list_purchased_plugins -- marketplace-only concerns, not part of the local
-dev/test loop. Also excludes install_plugin: that handler is the
+Deliberately excludes buy_plugin/list_store_plugins/list_purchased_plugins --
+marketplace-only concerns, not part of the local dev/test loop. delete_plugin
+is reused too (not excluded): it's a real, confirmed delete shared verbatim
+with the customer tool set, not a marketplace stub. Also excludes install_plugin: that handler is the
 purchase-flow stub (it hands back a URL rather than installing anything --
 see plugin_management.py's module docstring) -- generate_plugin_scaffold's
 own install_generated_plugin is the real local-dev install/start path.
@@ -54,7 +55,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "call_plugin": plugin_management.call_plugin,
     "run_shell_command": shell.run_shell_command,
     "detect_usb_device": device_detection.detect_usb_device,
-    "uninstall_installed_plugin": plugin_management.uninstall_installed_plugin,
+    "delete_plugin": plugin_management.delete_plugin,
 }
 
 

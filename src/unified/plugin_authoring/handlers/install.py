@@ -10,6 +10,20 @@ Each stage's failure is reported distinctly via a ``"stage"`` key
 (``"read"``/``"register"``/``"install"``/``"start"``) -- no silent retry,
 no partial success reported as full success.
 
+Also runs ``setup_dev_venv`` first, automatically, for *location* -- a
+developer calling this tool to test a plugin locally no longer has to
+remember the separate ``setup_dev_venv`` call beforehand (easy to forget;
+its own tool still exists for running the plugin's own ``tests/`` or for
+rebuilding with ``force`` after editing ``requirements.txt``). Idempotent,
+same as that tool itself, so repeat ``install_generated_plugin`` calls
+against an already-set-up ``.venv`` cost nothing extra. Deliberately
+non-fatal: a venv failure (no ``requirements.txt`` yet, pip install
+failed, ...) is surfaced as ``venv_setup_error`` on the eventual result
+rather than aborting the real register/install/start pipeline below --
+local dev-venv setup and the actual remote install are unrelated concerns,
+and the real host's own ``install.sh`` already tolerates no ``.venv``
+being present (see that script's own fallback).
+
 ``register_local_plugin`` is create-only ("Creates a new local dev
 plugin" -- design/developers/plugin_apis.md). So once a plugin has ever
 been registered, its host-assigned ``nsid`` is persisted back into its own
@@ -33,6 +47,7 @@ from typing import Any
 from nucore import NuCoreInterface
 
 from ..path_confinement import confine_path
+from .dev_venv import setup_dev_venv
 
 _SERVER_ENTRY_FILENAME = "server_entry.json"
 
@@ -88,6 +103,13 @@ async def install_generated_plugin(
         return result
     entry_path, entry = result
 
+    # Automatic, non-fatal -- see this module's own docstring. Computed once
+    # up front and attached to the eventual success result below; never
+    # blocks register/install/start, which are the operations that actually
+    # matter to "is this plugin installed on the real hub."
+    venv_result = await setup_dev_venv(nucore_interface, {"location": location}, plugin_output_root=plugin_output_root)
+    venv_setup_error = venv_result.get("error") if isinstance(venv_result, dict) else None
+
     known_nsid = entry.get("nsid")
     if not (isinstance(known_nsid, str) and known_nsid):
         known_nsid = None
@@ -131,7 +153,7 @@ async def install_generated_plugin(
                     "explicitly before re-calling install_generated_plugin: update_registered_plugin "
                     "(refresh the registration in place -- also syncs to the installed record "
                     "automatically if installed), delete_registered_plugin and/or "
-                    "uninstall_installed_plugin (a harder reset), or do nothing to abort."
+                    "delete_plugin (a harder reset), or do nothing to abort."
                 ),
             }
         # known_nsid matches nothing in either list -- stale (e.g. deleted
@@ -194,6 +216,8 @@ async def install_generated_plugin(
     if persist_error is not None:
         result["nsid_persisted"] = False
         result["persist_error"] = persist_error
+    if venv_setup_error is not None:
+        result["venv_setup_error"] = venv_setup_error
     return result
 
 
@@ -236,7 +260,7 @@ async def delete_registered_plugin(
     """Resolves a reported ``"conflict"``'s registered half the other way:
     deletes the dev-store registration entirely, then clears the locally-
     known ``nsid`` so the next install_generated_plugin call registers
-    fresh. Does not uninstall -- see uninstall_installed_plugin for that."""
+    fresh. Does not uninstall -- see delete_plugin for that."""
     location = (args.get("location") or "").strip()
     result = _read_server_entry(plugin_output_root, location)
     if isinstance(result, dict):

@@ -1,28 +1,32 @@
 """``setup_dev_venv`` -- local/dev-testing only: creates a per-plugin
-``.venv`` and installs ``requirements.txt`` into it. Never a side effect of
-``generate_plugin_scaffold``/``install_generated_plugin`` -- a developer
-calls this explicitly, so a real production install can never end up with
-a ``.venv`` it didn't ask for.
+``.venv`` and installs ``requirements.txt`` into it. Never runs as a side
+effect of ``generate_plugin_scaffold`` -- that tool only ever writes local
+files, never touches dependencies -- but ``install_generated_plugin``
+*does* now call this automatically, first thing, before it touches the
+real hub (see that module's own docstring): a developer no longer has to
+remember this separate call just to prepare for an install. A real
+production install still never ends up with a ``.venv`` it didn't ask
+for, because production never goes through this function at all --
+``install_generated_plugin`` calling it is still only ever exercising the
+local-dev path, the same path a developer calling it directly would have.
 
-Call this *before* ``install_generated_plugin``, not after: the real host
-runs ``install.sh`` unconditionally as part of that call's own install
-step, and ``install.sh``'s own ``.venv`` check (``handlers/scaffold.py``'s
-``_INSTALL_SCRIPT_CONTENT``) only helps if ``.venv`` already exists by the
-time the host gets there. ``main.py``'s matching re-exec check
-(``plugin_skeleton.render_main_py``) then picks it up on every subsequent
-start, with no further configuration.
+Also call this directly (still) before running a generated plugin's own
+``tests/`` via ``run_shell_command`` (e.g.
+``.venv/bin/python3 -m pytest tests/``) -- those tests import ``plugin.py``,
+which needs ``requirements.txt``'s packages (``udi_interface`` and
+friends) importable, exactly like a real run does, and
+``install_generated_plugin`` isn't part of that path. ``install.sh``'s own
+``.venv`` check (``handlers/scaffold.py``'s ``_INSTALL_SCRIPT_CONTENT``)
+and ``main.py``'s matching re-exec check (``plugin_skeleton.render_main_py``)
+pick up whatever this leaves behind automatically, with no further
+configuration, regardless of whether it was called automatically or by
+hand.
 
-Also call this before running a generated plugin's own ``tests/`` via
-``run_shell_command`` (e.g. ``.venv/bin/python3 -m pytest tests/``) --
-those tests import ``plugin.py``, which needs ``requirements.txt``'s
-packages (``udi_interface`` and friends) importable, exactly like a real
-run does.
-
-Idempotent by design, since both call sites above may call it many times
-in a session (once per test run, once before every install attempt): if a
-working ``.venv`` already exists, this is a cheap no-op rather than a full
-recreate-and-reinstall. Pass ``force`` to rebuild it anyway (e.g. after
-editing ``requirements.txt``).
+Idempotent by design, since every call site above may call it many times
+in a session (once per test run, once per install attempt, automatic or
+not): if a working ``.venv`` already exists, this is a cheap no-op rather
+than a full recreate-and-reinstall. Pass ``force`` to rebuild it anyway
+(e.g. after editing ``requirements.txt``).
 
 Reuses ``unified.handlers.shell.run_shell_command``'s subprocess machinery
 (timeout, bounded output capture) rather than reimplementing it -- the

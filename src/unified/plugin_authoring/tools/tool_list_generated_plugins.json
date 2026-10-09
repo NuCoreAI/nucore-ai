@@ -1,6 +1,6 @@
 {
   "name": "list_generated_plugins",
-  "description": "List every plugin this tool has already generated for this customer, most-recently-worked-on first -- the 'history' view, analogous to picking a past session instead of starting a new one. Call this whenever the customer refers to a plugin they already have, asks what they've already created, or wants to continue/modify an existing one, before assuming nothing exists yet. Each entry's 'location' is the key read_generated_plugin takes to load it back into context; actually changing a listed plugin still goes through profile/code generation afterward, with the customer's explicit confirmation before anything is overwritten.",
+  "description": "List every plugin this tool has already generated for this customer, most-recently-worked-on first -- the 'history' view, analogous to picking a past session instead of starting a new one. Call this whenever the customer refers to a plugin they already have, asks what they've already created, or wants to continue/modify an existing one, before assuming nothing exists yet. Each entry's 'location' is the key read_generated_plugin takes to load it back into context; 'absolute_path' is where that plugin's files actually live on disk -- share it whenever the customer/developer asks where to find them. Actually changing a listed plugin still goes through profile/code generation afterward, with the customer's explicit confirmation before anything is overwritten.",
   "input_schema": {
     "type": "object",
     "properties": {}

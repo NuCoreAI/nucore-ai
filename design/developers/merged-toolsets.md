@@ -345,11 +345,15 @@ the two-executable proposals.
 
 ### Tool-name collision safety
 
-Confirmed today: the 5 overlapping tool names (`list_installed_plugins`, `plugin_ops`,
-`get_plugin_capabilities`, `call_plugin`, `run_shell_command`) resolve to the literal same Python
-handler function on both sides (`..handlers.plugin_management`/`..handlers.shell`) -- safe by
-construction, not by convention. Any *new* name collision introduced later should raise loudly
-rather than silently let one side shadow the other.
+Confirmed today: 6 overlapping tool names (`list_installed_plugins`, `plugin_ops`,
+`get_plugin_capabilities`, `call_plugin`, `run_shell_command`, `delete_plugin`) resolve to the
+literal same Python handler function on both sides (`..handlers.plugin_management`/
+`..handlers.shell`) -- safe by construction, not by convention. Any *new* name collision
+introduced later should raise loudly rather than silently let one side shadow the other.
+`delete_plugin` is the one real, permanent delete in that list (the other five are read-only or
+operational) -- it's gated by its own code-enforced two-call confirm (`confirmed: true`), not by
+toolset switching, so both the customer and developer side carry the same safeguard rather than
+each needing their own.
 
 ## Open questions -- resolved
 

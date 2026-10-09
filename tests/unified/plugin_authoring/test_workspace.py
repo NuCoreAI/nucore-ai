@@ -92,6 +92,15 @@ async def test_list_generated_plugins_empty_root_returns_empty_list(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_generated_plugins_includes_the_absolute_path_on_disk(tmp_path):
+    _write_profile(tmp_path / "pool_controller")
+
+    result = await workspace.list_generated_plugins(None, {}, plugin_output_root=str(tmp_path))
+
+    assert result["plugins"][0]["absolute_path"] == str((tmp_path / "pool_controller").resolve())
+
+
+@pytest.mark.asyncio
 async def test_read_generated_plugin_returns_all_files(tmp_path):
     plugin_dir = tmp_path / "pool_controller"
     _write_profile(plugin_dir, nodedefs=[{"id": "ND_POOL", "name": "Pool Controller"}])
@@ -110,6 +119,7 @@ async def test_read_generated_plugin_returns_all_files(tmp_path):
     assert result["tests"] == {"test_pool.py": "def test_x(): pass"}
     assert result["sources"] == "# Sources\n\n| Tier |\n"
     assert result["license"] == "# License\n\n## MIT License\n"
+    assert result["absolute_path"] == str(plugin_dir.resolve())
 
 
 @pytest.mark.asyncio
@@ -176,7 +186,11 @@ async def test_read_generated_plugin_files_filter_returns_only_requested_keys(tm
         None, {"location": "pool_controller", "files": ["plugin_py"]}, plugin_output_root=str(tmp_path)
     )
 
-    assert result == {"location": "pool_controller", "plugin_py": "# the backend"}
+    assert result == {
+        "location": "pool_controller",
+        "absolute_path": str(plugin_dir.resolve()),
+        "plugin_py": "# the backend",
+    }
 
 
 @pytest.mark.asyncio

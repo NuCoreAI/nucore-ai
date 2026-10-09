@@ -29,6 +29,7 @@ WIRE_PROFILE = {
             "name": "Switch",
             "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
+            "links": {"ctl": [], "rsp": []},
         }
     ],
     "linkdefs": [],

@@ -6,11 +6,13 @@ and a ``.vscode/launch.json`` pointing at it, so a developer can attach a
 local debugger (debugpy) to the generated plugin with the exact same
 ``PG3INIT`` identity/MQTT credentials the real daemonized process uses.
 
-Never a side effect of ``install_generated_plugin`` itself, same reasoning
-as ``setup_dev_venv``: a real production install never has a ``.vscode/``
-or ``.iox_env`` here, and a non-technical customer never wants one either --
-a developer calls this explicitly, after installing, when they actually
-want to debug the plugin locally.
+Never a side effect of ``install_generated_plugin`` itself -- unlike
+``setup_dev_venv``, which that tool *does* now call automatically (see its
+own docstring): a venv is useful on every install/test attempt, debugging
+isn't. A real production install never has a ``.vscode/`` or ``.iox_env``
+here, and a non-technical customer never wants one either -- a developer
+calls this explicitly, after installing, when they actually want to debug
+the plugin locally.
 
 Always overwrites both files unconditionally (unlike ``setup_dev_venv``,
 which skips a working ``.venv``) -- cheap to regenerate, and PG3INIT itself

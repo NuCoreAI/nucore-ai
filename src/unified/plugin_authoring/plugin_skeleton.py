@@ -291,17 +291,22 @@ def render_main_py(controller_module: str, controller_class: str) -> str:
     identical for every plugin: start Polyglot, send this plugin's Dynamic
     Profile (profile.json, written next to this file) via
     ``updateJsonProfile`` -- writing that file to disk does nothing on its
-    own (design/developers/plugin_model.md §1/§2/§5); PG3/IoX only learns
-    the plugin's nodedefs/editors/linkdefs once the plugin's own code sends
-    them over the wire, documented as happening on startup, before
-    ``polyglot.ready()`` -- then construct the Controller, ``ready()``,
-    ``runForever()``. Sent unconditionally on every startup, not diffed
-    against what PG3 already has: ``updateJsonProfile``'s own add/replace-
-    by-id semantics make resending the same profile a no-op.
+    own (design/developers/legacy/plugin_model.md §1/§2/§5); PG3/IoX only
+    learns the plugin's nodedefs/editors/linkdefs once the plugin's own
+    code sends them over the wire, documented as happening on startup,
+    before constructing the Controller and calling ``polyglot.ready()`` --
+    then ``runForever()``. Sent unconditionally on every startup, not
+    diffed against what PG3 already has: ``updateJsonProfile``'s own
+    add/replace-by-id semantics make resending the same profile a no-op.
+    The response is logged (not just discarded) so a failed/rejected
+    update is visible in the plugin's own log rather than silently
+    swallowed.
 
     The very first thing this file does, before even ``import udi_interface``,
     is check for a sibling ``.venv`` (created by the ``setup_dev_venv`` tool,
-    never automatically) and ``os.execv`` into its interpreter if present --
+    either called directly or automatically by ``install_generated_plugin`` --
+    see that tool's own docstring) and ``os.execv`` into its interpreter if
+    present --
     the real host (confirmed against a live ``/usr/local/etc/rc.d/plugin_N``
     script) always launches this file with the bare system ``python3``,
     regardless of dev or production, so this is the only reliable place a
@@ -359,7 +364,8 @@ if __name__ == "__main__":
         polyglot.start(version.ud_plugin_version)
         profile_path = os.path.join(_PLUGIN_DIR, "profile.json")
         with open(profile_path, "r", encoding="utf-8") as f:
-            polyglot.updateJsonProfile(json.load(f), {{"waitResponse": True}})
+            response = polyglot.updateJsonProfile(json.load(f), {{"waitResponse": True}})
+            LOGGER.info("Profile update response: %s", response)
         {controller_class}(polyglot, "controller", "controller", "{controller_class}")
         polyglot.ready()
         polyglot.runForever()

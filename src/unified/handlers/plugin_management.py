@@ -17,11 +17,17 @@ tool covers what the customer wants, the model checks
 installed/purchased/store plugins (the three ``list_*`` tools above) in
 order, confirms with the customer before installing, buying, or deleting,
 then loads a plugin's own declared capabilities and calls one to actually
-answer the request. None of ``install_plugin``/``buy_plugin``/
-``delete_plugin`` completes anything server-side -- for security reasons,
-installing, purchasing, and deleting all happen on the web, not through this
-assistant, so each just returns a link (``install_url``/``purchase_url``/
-``delete_url``) for the customer to finish there themselves. The plugin-facing get_prompt/get_tools/handle_llm_result calls hit a real
+answer the request. Neither ``install_plugin`` nor ``buy_plugin`` completes
+anything server-side -- for security reasons, installing and purchasing
+happen on the web, not through this assistant, so each just returns a link
+(``install_url``/``purchase_url``) for the customer to finish there
+themselves. ``delete_plugin``, by contrast, performs a real, permanent
+delete on the hub -- shared as-is (same function, same tool name) by both
+the customer-facing and plugin_authoring tool sets, gated by a
+code-enforced two-call confirm: a call without ``confirmed: true`` resolves
+the plugin and reports what would be deleted without deleting anything;
+only a follow-up call with ``confirmed: true`` actually removes it. The
+plugin-facing get_prompt/get_tools/handle_llm_result calls hit a real
 per-plugin API (see ``NuCoreInterface``'s docstrings); a non-2xx/connection
 failure is ordinary HTTP-failure handling, so they fail gracefully
 (``successful: false``) rather than raising, same as any other call here.
@@ -187,8 +193,23 @@ async def buy_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
 
 
 async def delete_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    """Permanently uninstalls a plugin, freeing its slot entirely --
+    distinct from plugin_ops's "stop" (which keeps the slot). Does not
+    touch the plugin's local dev store registration, if any -- see
+    plugin_authoring's delete_registered_plugin for that. Shared as-is
+    (same function, same tool name) by both the customer-facing and
+    plugin_authoring TOOL_HANDLERS tables.
+
+    Code-enforced two-call confirm, same shape as generate_plugin_scaffold's
+    confirm_overwrite: a call without confirmed=True resolves the plugin and
+    returns a confirmation_required payload with zero side effects; only a
+    follow-up call with confirmed=True actually deletes it. This exists
+    because deletion is a real, permanent host change -- a tool description
+    telling the model to "confirm with the customer first" is not something
+    code can enforce on its own."""
     plugin_id = args.get("plugin_id")
     name = args.get("name")
+    confirmed = bool(args.get("confirmed"))
     if not plugin_id:
         return {"error": "plugin_id is required"}
     if not name:
@@ -202,14 +223,23 @@ async def delete_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any])
     if resolved_id is None:
         return {"error": f"'{name}' is not an installed plugin -- call list_installed_plugins for the real plugin_id"}
 
-    # For security reasons, deletion must be completed on the web, not
-    # through this assistant -- same as install_plugin/buy_plugin.
-    return {
-        "delete_required": True,
-        "plugin_id": resolved_id,
-        "name": name,
-        "delete_url": f"/plugins/dashboard/{resolved_id}",
-    }
+    if not confirmed:
+        return {
+            "confirmation_required": True,
+            "plugin_id": resolved_id,
+            "name": name,
+            "message": (
+                f"This permanently removes '{name}' from the hub -- nothing has been deleted yet. "
+                "Call delete_plugin again with confirmed: true only after the customer/developer has "
+                "explicitly agreed, never speculatively."
+            ),
+        }
+
+    response = await nucore_interface.uninstall_installed_plugin(resolved_id)
+    if not isinstance(response, dict) or not response.get("successful"):
+        return {"error": f"failed to delete plugin '{resolved_id}'"}
+
+    return {"plugin_id": resolved_id, "name": name, "uninstalled": True}
 
 
 async def get_plugin_capabilities(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
@@ -276,25 +306,6 @@ async def plugin_ops(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
 
     data = response.get("data")
     return {"plugin_id": plugin_id, "operation": operation, **(data if isinstance(data, dict) else {})}
-
-
-async def uninstall_installed_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    """Frees the plugin's slot entirely -- distinct from plugin_ops's
-    "stop" (which keeps the slot). Does not touch the plugin's local dev
-    store registration, if any -- see plugin_authoring's
-    delete_registered_plugin for that. Not wired into the customer-facing
-    TOOL_HANDLERS table, same security boundary as delete_plugin (a real
-    delete stays developer/plugin-authoring-only); currently only reused
-    by plugin_authoring.dispatch."""
-    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
-    if not plugin_id:
-        return {"error": "plugin_id is required -- call list_installed_plugins for the real plugin_id"}
-
-    response = await nucore_interface.uninstall_installed_plugin(plugin_id)
-    if not isinstance(response, dict) or not response.get("successful"):
-        return {"error": f"failed to uninstall plugin '{plugin_id}'"}
-
-    return {"plugin_id": plugin_id, "uninstalled": True}
 
 
 _VALID_CONFIG_KEYS = ("customparams", "oauth")

@@ -15,6 +15,7 @@ import json
 
 import pytest
 
+from unified.plugin_authoring.handlers import install as install_module
 from unified.plugin_authoring.handlers.install import (
     delete_registered_plugin,
     install_generated_plugin,
@@ -197,10 +198,85 @@ async def test_full_success(tmp_path):
 
     result = await install_generated_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
 
-    assert result == {"location": "acme_pool", "nsid": "local.acme_pool", "plugin_id": 7, "name": "AcmePool", "started": True}
+    # No requirements.txt in this fixture (see setup_dev_venv's own tests for
+    # that tool in isolation) -- setup_dev_venv's own "call generate_plugin_
+    # scaffold first" error is still reported, but non-fatally: the rest of
+    # the pipeline below completes exactly as it did before this existed.
+    assert result == {
+        "location": "acme_pool",
+        "nsid": "local.acme_pool",
+        "plugin_id": 7,
+        "name": "AcmePool",
+        "started": True,
+        "venv_setup_error": "no requirements.txt found at 'acme_pool' -- call generate_plugin_scaffold first",
+    }
     assert backend.register_calls == [entry]
     assert backend.install_calls == [("local.acme_pool", None)]
     assert backend.plugin_ops_calls == [(7, "start")]
+
+
+# --- setup_dev_venv now runs automatically, as the first thing this does ---
+
+
+@pytest.mark.asyncio
+async def test_setup_dev_venv_is_called_automatically_with_this_location(tmp_path, monkeypatch):
+    """The developer no longer has to remember the separate setup_dev_venv
+    call before install_generated_plugin -- it happens here now."""
+    _write_server_entry(tmp_path / "acme_pool")
+    backend = FakeBackend()
+    calls = []
+
+    async def fake_setup_dev_venv(nucore_interface, args, *, plugin_output_root):
+        calls.append((nucore_interface, args, plugin_output_root))
+        return {"location": args["location"], "venv_created": True, "venv_path": "/fake/.venv"}
+
+    monkeypatch.setattr(install_module, "setup_dev_venv", fake_setup_dev_venv)
+
+    result = await install_generated_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert calls == [(backend, {"location": "acme_pool"}, str(tmp_path))]
+    assert "venv_setup_error" not in result  # success -- nothing extra reported
+
+
+@pytest.mark.asyncio
+async def test_venv_setup_failure_does_not_block_the_real_install(tmp_path, monkeypatch):
+    """Local dev-venv setup and the real register/install/start pipeline are
+    unrelated concerns -- a venv failure must never abort the latter."""
+    _write_server_entry(tmp_path / "acme_pool")
+    backend = FakeBackend()
+
+    async def failing_setup_dev_venv(nucore_interface, args, *, plugin_output_root):
+        return {"error": "failed to create .venv or install requirements.txt into it -- see stdout/stderr"}
+
+    monkeypatch.setattr(install_module, "setup_dev_venv", failing_setup_dev_venv)
+
+    result = await install_generated_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["started"] is True
+    assert result["venv_setup_error"] == (
+        "failed to create .venv or install requirements.txt into it -- see stdout/stderr"
+    )
+    assert backend.register_calls  # the real pipeline still ran to completion
+
+
+@pytest.mark.asyncio
+async def test_a_missing_location_never_reaches_setup_dev_venv(tmp_path, monkeypatch):
+    """The 'read' stage (bad/missing location) must short-circuit before
+    even trying to set up a venv for a plugin directory that may not
+    exist."""
+    backend = FakeBackend()
+    calls = []
+
+    async def fake_setup_dev_venv(nucore_interface, args, *, plugin_output_root):
+        calls.append(args)
+        return {"venv_created": True}
+
+    monkeypatch.setattr(install_module, "setup_dev_venv", fake_setup_dev_venv)
+
+    result = await install_generated_plugin(backend, {}, plugin_output_root=str(tmp_path))
+
+    assert result["stage"] == "read"
+    assert calls == []
 
 
 @pytest.mark.asyncio

@@ -234,15 +234,17 @@ class Profile:
                                 editor=editor,
                                 optional=p.get("optional"),
                                 name=p.get("name"),
+                                desc=p.get("desc"),
                             )
                         )
-                    
+
                     link_def=LinkDef(
                         id=ldict["id"],
                         protocol=ldict["protocol"],
                         name=ldict.get("name"),
                         cmd=ldict.get("cmd"),
-                        format=ldict.get("format"))
+                        format=ldict.get("format"),
+                        desc=ldict.get("desc"))
                     
                     link_def.add_parameters(params)
                     linkdefs.append(link_def)

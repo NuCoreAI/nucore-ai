@@ -154,11 +154,13 @@ async def test_handler_exception_is_caught_and_returned_as_error(monkeypatch):
 
 
 def test_plugin_authoring_excludes_marketplace_only_plugin_tools():
-    # buy/delete/store/purchased are marketplace concerns, not part of the
-    # local dev/test loop -- see dispatch.py's module docstring. install_plugin
-    # is also excluded: it's the purchase-flow URL-handback stub, not a real
-    # local install (see design/developers/plugin_dev_tooling.md).
-    for excluded in ("buy_plugin", "delete_plugin", "list_store_plugins", "list_purchased_plugins", "install_plugin"):
+    # buy/store/purchased are marketplace concerns, not part of the local
+    # dev/test loop -- see dispatch.py's module docstring. install_plugin is
+    # also excluded: it's the purchase-flow URL-handback stub, not a real
+    # local install (see design/developers/plugin_dev_tooling.md). delete_plugin
+    # is deliberately NOT in this list -- it's a real, confirmed delete shared
+    # verbatim with the customer tool set (see the test below).
+    for excluded in ("buy_plugin", "list_store_plugins", "list_purchased_plugins", "install_plugin"):
         assert excluded not in TOOL_HANDLERS
 
 
@@ -220,13 +222,15 @@ def test_build_tool_handlers_always_adds_update_and_delete_registered_plugin():
     assert "delete_registered_plugin" in handlers
 
 
-def test_uninstall_installed_plugin_is_in_the_static_tool_handlers_table():
+def test_delete_plugin_is_the_same_shared_handler_as_the_customer_tool_set():
     # Needs no plugin_output_root binding -- registered directly, same as
-    # plugin_ops, not through build_tool_handlers. Not customer-facing (see
-    # its own docstring) -- plugin_authoring-only, same as delete_plugin's
-    # boundary, but unlike delete_plugin it's a real delete, so it's reused
-    # here rather than left out entirely.
-    assert "uninstall_installed_plugin" in TOOL_HANDLERS
+    # plugin_ops, not through build_tool_handlers. Both tool sets must point
+    # at the literal same function (not a copy) so a real, permanent delete
+    # never drifts between the customer-facing and developer paths.
+    from unified.dispatch import TOOL_HANDLERS as CUSTOMER_TOOL_HANDLERS
+
+    assert "delete_plugin" in TOOL_HANDLERS
+    assert TOOL_HANDLERS["delete_plugin"] is CUSTOMER_TOOL_HANDLERS["delete_plugin"]
 
 
 def test_plugin_authoring_reuses_run_shell_command_and_detect_usb_device():

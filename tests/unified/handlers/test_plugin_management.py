@@ -345,19 +345,24 @@ async def test_buy_plugin_requires_name():
 
 
 @pytest.mark.asyncio
-async def test_delete_plugin_returns_delete_link_without_completing_a_deletion():
+async def test_delete_plugin_without_confirmed_previews_without_deleting():
     backend = FakeBackend()
     result = await execute_tool("delete_plugin", {"plugin_id": "3", "name": "YouTube"}, nucore_interface=backend)
     assert result == {
-        "delete_required": True,
+        "confirmation_required": True,
         "plugin_id": 3,
         "name": "YouTube",
-        "delete_url": "/plugins/dashboard/3",
+        "message": (
+            "This permanently removes 'YouTube' from the hub -- nothing has been deleted yet. "
+            "Call delete_plugin again with confirmed: true only after the customer/developer has "
+            "explicitly agreed, never speculatively."
+        ),
     }
+    assert backend.uninstall_calls == []
 
 
 @pytest.mark.asyncio
-async def test_delete_plugin_ignores_a_guessed_plugin_id_and_resolves_by_name():
+async def test_delete_plugin_without_confirmed_ignores_a_guessed_plugin_id_and_resolves_by_name():
     """Regression: the model has repeatedly called delete_plugin with a
     slugified name as plugin_id (e.g. "sun" for a plugin actually named
     "Sun", profileNum 6) instead of the real plugin_id, even when the real
@@ -370,12 +375,9 @@ async def test_delete_plugin_ignores_a_guessed_plugin_id_and_resolves_by_name():
         "data": [{"profileNum": 6, "name": "Sun", "isLocal": False}],
     }
     result = await execute_tool("delete_plugin", {"plugin_id": "sun", "name": "Sun"}, nucore_interface=backend)
-    assert result == {
-        "delete_required": True,
-        "plugin_id": 6,
-        "name": "Sun",
-        "delete_url": "/plugins/dashboard/6",
-    }
+    assert result["confirmation_required"] is True
+    assert result["plugin_id"] == 6
+    assert backend.uninstall_calls == []
 
 
 @pytest.mark.asyncio
@@ -403,6 +405,40 @@ async def test_delete_plugin_requires_name():
     backend = FakeBackend()
     result = await execute_tool("delete_plugin", {"plugin_id": "3"}, nucore_interface=backend)
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_confirmed_true_performs_the_delete():
+    # Goes through unified.dispatch.execute_tool (not a direct handler call)
+    # to prove delete_plugin is wired into the customer-facing dispatch table
+    # and actually deletes once confirmed -- no more "happens on the web" stub.
+    backend = FakeBackend()
+    result = await execute_tool(
+        "delete_plugin", {"plugin_id": "3", "name": "YouTube", "confirmed": True}, nucore_interface=backend
+    )
+    assert result == {"plugin_id": 3, "name": "YouTube", "uninstalled": True}
+    assert backend.uninstall_calls == [3]
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_confirmed_true_resolves_a_guessed_plugin_id_by_name():
+    backend = FakeBackend()
+    backend.installed_response = {
+        "successful": True,
+        "data": [{"profileNum": 6, "name": "Sun", "isLocal": False}],
+    }
+    result = await plugin_management.delete_plugin(backend, {"plugin_id": "sun", "name": "Sun", "confirmed": True})
+    assert result == {"plugin_id": 6, "name": "Sun", "uninstalled": True}
+    assert backend.uninstall_calls == [6]
+
+
+@pytest.mark.asyncio
+async def test_delete_plugin_confirmed_true_errors_on_backend_failure():
+    backend = FakeBackend()
+    backend.uninstall_response = {"successful": False}
+    result = await plugin_management.delete_plugin(backend, {"plugin_id": "3", "name": "YouTube", "confirmed": True})
+    assert "error" in result
+    assert backend.uninstall_calls == [3]
 
 
 @pytest.mark.asyncio
@@ -600,49 +636,3 @@ async def test_configure_plugin_errors_on_backend_failure():
     assert "error" in result
 
 
-# --- uninstall_installed_plugin: not in the customer TOOL_HANDLERS table
-# (same security boundary as delete_plugin), so these call the handler
-# directly rather than through unified.dispatch.execute_tool. ---
-
-
-@pytest.mark.asyncio
-async def test_uninstall_installed_plugin_success():
-    backend = FakeBackend()
-    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "3"})
-    assert result == {"plugin_id": 3, "uninstalled": True}
-    assert backend.uninstall_calls == [3]
-
-
-@pytest.mark.asyncio
-async def test_uninstall_installed_plugin_resolves_a_guessed_plugin_id_by_name():
-    backend = FakeBackend()
-    backend.installed_response = {
-        "successful": True,
-        "data": [{"profileNum": 6, "nsid": "...", "name": "Sun", "isLocal": False}],
-    }
-    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "sun"})
-    assert result == {"plugin_id": 6, "uninstalled": True}
-    assert backend.uninstall_calls == [6]
-
-
-@pytest.mark.asyncio
-async def test_uninstall_installed_plugin_requires_plugin_id():
-    backend = FakeBackend()
-    result = await plugin_management.uninstall_installed_plugin(backend, {})
-    assert "error" in result
-    assert backend.uninstall_calls == []
-
-
-@pytest.mark.asyncio
-async def test_uninstall_installed_plugin_errors_when_plugin_id_unresolvable():
-    backend = FakeBackend()
-    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "not-a-real-plugin"})
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_uninstall_installed_plugin_errors_on_backend_failure():
-    backend = FakeBackend()
-    backend.uninstall_response = {"successful": False}
-    result = await plugin_management.uninstall_installed_plugin(backend, {"plugin_id": "3"})
-    assert "error" in result
