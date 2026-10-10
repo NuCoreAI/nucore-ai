@@ -38,6 +38,17 @@ async def routine_status_op(nucore_interface: NuCoreInterface, args: dict[str, A
     if not routine_id or not operation:
         return {"error": "id and operation are both required"}
 
+    if operation == "delete" and not bool(args.get("confirmed")):
+        return {
+            "confirmation_required": True,
+            "id": routine_id,
+            "message": (
+                "This permanently deletes this routine -- nothing has been deleted yet. Call "
+                "routine_status_op again with confirmed: true only after the customer has "
+                "explicitly agreed, never speculatively."
+            ),
+        }
+
     result = await nucore_interface.routine_ops(routine_id, operation)
     if not _op_ok(result):
         return {"error": f"'{operation}' failed for routine {routine_id}: {_op_error(result)}"}

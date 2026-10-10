@@ -1051,6 +1051,37 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the remove_device method.")
 
+    async def dismiss_discovery_dialogs(self) -> Any:
+        """
+        Close any stale/already-open discovery or pairing dialog on every
+        connected eisy-ui client (a broadcast -- no client to target), before
+        a fresh pairing/exclusion flow starts. Not ``@abstractmethod`` --
+        same reasoning as ``is_protocol_enabled``: most backends should
+        implement this, but existing ``NuCoreInterface`` test fakes that
+        don't care about pairing shouldn't be forced to stub it out just to
+        stay instantiable.
+
+        :return: response from the hub, or None/error info on failure.
+        """
+        raise NotImplementedError("Subclasses must implement the dismiss_discovery_dialogs method.")
+
+    async def open_qr_scan(self, client_id: str, raw: str = None) -> Any:
+        """
+        Open the QR-scan/pairing-code dialog on one specific eisy-ui client
+        (matter/zwave/insteon pairing only -- zigbee's bare include never
+        needs this). Not ``@abstractmethod``, same reasoning as
+        ``dismiss_discovery_dialogs`` above.
+
+        :param client_id: The target eisy-ui client's own id (sourced from
+            the UI's own context payload -- never invented).
+        :param raw: The pairing code, setup code, or device address the
+            customer typed in instead of scanning a QR code visually, if
+            any -- passed through verbatim; the dialog itself validates/
+            interprets it per protocol, not this call.
+        :return: response from the hub, or None/error info on failure.
+        """
+        raise NotImplementedError("Subclasses must implement the open_qr_scan method.")
+
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None):
         """
         Subscribe to device events using the nucore API.

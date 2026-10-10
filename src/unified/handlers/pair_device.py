@@ -13,39 +13,74 @@ finish" shape for any protocol:
   node, see ``_NODE_ADDED_GRACE_TIMEOUT_S``) in case this address enumerates
   more than one hub-side node, before waiting again (via ``wait_until``) for
   the address to actually become usable and returning it.
-- ``include`` -- add a device whose address isn't known up front (insteon/
-  zwave/zigbee). Opens the hub's pairing mode, then blocks until that
-  protocol's own "pairing session ended" event fires (or times out) -- then,
-  since node creation can lag slightly behind that signal, gives the actual
-  ``_3``/``ND`` (node added) event a brief grace period too (see
-  ``_NODE_ADDED_GRACE_TIMEOUT_S``) before checking final state and reporting
-  whatever new device(s) appeared. Each protocol signals session-end
-  completely differently, confirmed against the real eisy-ui frontend
-  (cloned from ``git@github.com:universaldevices/eisy-ui.git`` and read
-  directly -- ``InsteonDiscoveryDialog.tsx``/``ZWaveDiscoveryDialog.tsx``/
-  ``ZigbeeDiscoveryDialog.tsx``/``FamilyDiscoveryDialog.tsx``):
-    - insteon: the customer finishes by clicking "Finish" in an on-screen
-      eisy-ui dialog -- that click is what actually commits the session
-      (with a flag the customer picks via UI radio buttons, never passed
-      through chat). The dialog's own "COMPLETE" phase is reached on `_20`
-      action `"2"` (`UD_LINKER_EVENT_CLEAR`, category `_20` = Linker
-      Events) -- multi-device is real (the dialog tracks every device found
-      before Finish is clicked), so waiting for this one terminal event
-      rather than the first device appearing preserves that.
-    - zwave/zigbee: driven by their own event category (`_25` zwave, `_27`
-      zigbee), action format `"{category}.{type}"` -- sub-type `2` = include
-      active, `1` = inactive (session ended), fired automatically by the hub,
-      no customer UI click needed. The dialogs' own code comments state
-      "Done: ... No cancel call" on the success path -- `finish_device_
-      discovery`/`node/cancel` is only used to abort early and is never part
-      of normal completion, so this call never makes it either.
-    - matter: **not implemented via chat.** There is no simple `node/include`
-      for Matter -- the real flow (`MatterInclusionDialog.tsx`) needs a
-      customer-supplied pairing code/QR code and a 5-step commissioning
-      sequence with no equivalent in this tool's arguments. `include` for
-      matter returns a message directing the customer to the eisy-ui
-      interface instead of attempting a call that doesn't correspond to
-      anything real. Matter *exclusion* is unaffected -- see below.
+- ``include`` -- add a device whose address isn't known up front. First,
+  always ``dismiss_discovery_dialogs()`` (``api/app-event``, broadcasts to
+  every eisy-ui client) -- best-effort/non-fatal, just closing any stale
+  dialog before a fresh one opens; a failure there is logged and never
+  blocks the real pairing attempt. Then:
+    - **zigbee**: always the bare protocol-level include call -- no QR/code
+      question, no by-address option (it has none). Driven by its own event
+      category (`_27`), action format `"{category}.{type}"` -- sub-type `2`
+      = include active, `1` = inactive (session ended), fired automatically
+      by the hub, no customer UI click needed (same shape as zwave's `_25`,
+      below).
+    - **insteon**: has two genuinely different methods, and the customer
+      should be asked which they want rather than one being assumed:
+      ``add_by_address`` (they already know the device's address) or
+      ``include`` (linking mode). *Only once linking mode is chosen* does
+      the QR/code question below apply.
+    - **matter/zwave, and insteon once linking mode is chosen**: ask whether
+      the customer has a QR code (``scan_qr_code: true``, no ``raw_code``)
+      or a pairing code/setup code/device address to type in instead
+      (``raw_code``) -- either sets off ``open_qr_scan(client_id, raw=
+      raw_code)`` (``api/app-event``, targets one specific eisy-ui client --
+      ``client_id`` is required here, copied verbatim from the ``clientId``
+      field of the ``<ui_context>`` block already in the conversation, never
+      invented or asked of the customer). Afterward, since neither protocol
+      has a confirmed "QR-scan session ended" event, this polls generically
+      (``wait_until`` on ``"_3", None`` -- any node-category event wakes a
+      re-check, exactly the idiom already used below for Matter's own
+      ``exclude`` path) until a new node appears or ``_WAIT_TOTAL_TIMEOUT_S``
+      elapses, then reports it the same way the bare protocol-level call
+      does.
+    - **matter, with neither a QR code nor any other code**: there's no
+      manual-linking-mode fallback for Matter at all -- returns a message
+      telling the customer a QR/pairing code is required, with no tool call
+      attempted.
+    - **zwave/insteon, with neither a QR code nor any other code**: opens
+      the hub's own manual pairing mode, then blocks until that protocol's
+      own "pairing session ended" event fires (or times out) -- then, since
+      node creation can lag slightly behind that signal, gives the actual
+      ``_3``/``ND`` (node added) event a brief grace period too (see
+      ``_NODE_ADDED_GRACE_TIMEOUT_S``) before checking final state and
+      reporting whatever new device(s) appeared. Each protocol signals
+      session-end completely differently, confirmed against the real
+      eisy-ui frontend (cloned from
+      ``git@github.com:universaldevices/eisy-ui.git`` and read directly --
+      ``InsteonDiscoveryDialog.tsx``/``ZWaveDiscoveryDialog.tsx``/
+      ``ZigbeeDiscoveryDialog.tsx``/``FamilyDiscoveryDialog.tsx``):
+        - insteon: the customer finishes by clicking "Finish" in an
+          on-screen eisy-ui dialog -- that click is what actually commits
+          the session (with a flag the customer picks via UI radio buttons,
+          never passed through chat). The dialog's own "COMPLETE" phase is
+          reached on `_20` action `"2"` (`UD_LINKER_EVENT_CLEAR`, category
+          `_20` = Linker Events) -- multi-device is real (the dialog tracks
+          every device found before Finish is clicked), so waiting for this
+          one terminal event rather than the first device appearing
+          preserves that. Unlike every other wait in this module, this one
+          gets a full ``_INSTEON_LINKING_MODE_TIMEOUT_S`` (5 minutes, not
+          the shared 80s) -- the hub's own linking-mode window really does
+          stay open that long so the customer can link several devices in
+          turn, and the model is expected to say so as plain text,
+          immediately before this call (see the blocking-call note below).
+        - zwave: driven by its own event category (`_25`), action format
+          `"{category}.{type}"` -- sub-type `2` = include active, `1` =
+          inactive (session ended), fired automatically by the hub, no
+          customer UI click needed. The dialog's own code comments state
+          "Done: ... No cancel call" on the success path -- `finish_device_
+          discovery`/`node/cancel` is only used to abort early and is never
+          part of normal completion, so this call never makes it either.
+    - matter *exclusion* is unaffected by any of the above -- see below.
 - ``exclude`` -- remove an already-known, already-paired device (zwave/
   zigbee/matter only -- insteon has no distinct hardware "exclude" mode in
   this codebase). Two different shapes hide behind this one action name, per
@@ -188,6 +223,12 @@ _WAIT_TOTAL_TIMEOUT_S = 80
 # final state check, not another "wait for the customer" budget.
 _NODE_ADDED_GRACE_TIMEOUT_S = 60
 
+# Insteon's manual linking mode (no QR/code given) keeps the hub listening
+# for a real 5 minutes, not a quick single-session close like zwave/zigbee's
+# dialogs -- the customer can link several devices in turn during that
+# window. _WAIT_TOTAL_TIMEOUT_S would cut this off far too early.
+_INSTEON_LINKING_MODE_TIMEOUT_S = 300
+
 
 def _has_address(nucore_interface: NuCoreInterface, address: str) -> bool:
     """Case-insensitive membership check against nucore_interface.nodes --
@@ -243,6 +284,23 @@ def _is_zigbee_disabled_event(node: str, control: str, action: str, event_info: 
     enabled/disabled) with ``eventInfo == {"enabled": "false"}``, never
     ``_3``/``"NR"`` (node removed) at all."""
     return action == "EN" and isinstance(event_info, dict) and event_info.get("enabled") == "false"
+
+
+async def _collect_new_devices(nucore_interface: NuCoreInterface, before: set[str]) -> list[dict]:
+    """Shared tail for every `include` path (bare protocol-level include and
+    the QR-scan path alike): diff the node set against *before*, then -- for
+    whatever's new -- give each one's device profile a further grace period
+    to resolve (see _is_device_usable) before handing addresses back as
+    ready to reference in the very next tool call."""
+    changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before)
+    if changed_addresses:
+        await wait_until(
+            nucore_interface, "_3", None,
+            lambda: all(_is_device_usable(nucore_interface, a) for a in changed_addresses),
+            nucore_interface._refresh_device_structure,
+            _NODE_ADDED_GRACE_TIMEOUT_S,
+        )
+    return [{"address": address, "name": nucore_interface.nodes[address].name} for address in changed_addresses]
 
 
 async def _remove_zmatter_device(
@@ -419,12 +477,49 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         return {"protocol": protocol, "action": action, "device_address": real_address, "status": "added"}
 
     if action == "include":
+        try:
+            await nucore_interface.dismiss_discovery_dialogs()
+        except Exception as e:
+            logger.warning(f"dismiss_discovery_dialogs failed (continuing anyway): {e}")
+
+        raw_code = args.get("raw_code") or None
+        use_qr = bool(args.get("scan_qr_code")) or bool(raw_code)
+
+        if protocol != "zigbee" and use_qr:
+            client_id = args.get("client_id")
+            if not client_id:
+                return {
+                    "error": "client_id is required to open the QR-scan dialog -- copy it from "
+                             "the ui_context block, never invent it"
+                }
+            before = set(nucore_interface.nodes.keys())
+            ok = await nucore_interface.open_qr_scan(client_id, raw=raw_code)
+            if not ok:
+                return {"error": "failed to open the QR-scan dialog"}
+            # Neither protocol has a confirmed "QR-scan session ended" event
+            # -- poll generically instead, same idiom _remove_zmatter_device
+            # already uses for Matter's own exclude path below.
+            await wait_until(
+                nucore_interface, "_3", None,
+                lambda: bool(set(nucore_interface.nodes.keys()) - before),
+                nucore_interface._refresh_device_structure,
+                _WAIT_TOTAL_TIMEOUT_S,
+            )
+            devices = await _collect_new_devices(nucore_interface, before)
+            return {
+                "protocol": protocol, "action": action, "status": "inclusion_committed",
+                "new_devices": devices,
+                "note": "No new devices appeared during the QR-scan window." if not devices else
+                        "Rename/assign these as needed using the addresses above.",
+            }
+
         if protocol == "matter":
             return (
-                "Adding a Matter device requires scanning a QR code or entering a pairing code, "
-                "which isn't available through this chat -- please use the eisy-ui interface "
-                "directly (Devices -> Add Device -> Matter) to add this device."
+                "Adding a Matter device requires a QR code or a pairing/setup code -- ask the "
+                "customer for one of those first; there's no manual linking-mode fallback for "
+                "Matter."
             )
+
         try:
             ok = await nucore_interface.discover_devices(
                 device_type=args.get("device_type"), protocol=protocol, mode="include",
@@ -436,28 +531,15 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
 
         before = set(nucore_interface.nodes.keys())
         control, complete_action = _INCLUDE_COMPLETE_EVENT[protocol]
-        await wait_for_event(nucore_interface, control, complete_action, _WAIT_TOTAL_TIMEOUT_S)
+        timeout = _INSTEON_LINKING_MODE_TIMEOUT_S if protocol == "insteon" else _WAIT_TOTAL_TIMEOUT_S
+        await wait_for_event(nucore_interface, control, complete_action, timeout)
         # The pairing session has ended -- give the actual node-added event a
         # brief grace period to land too, in case node creation lags slightly
         # behind the session-ended signal (see _NODE_ADDED_GRACE_TIMEOUT_S).
         await wait_for_event(nucore_interface, "_3", "AA", _NODE_ADDED_GRACE_TIMEOUT_S)
         await nucore_interface._refresh_device_structure()
 
-        changed_addresses = sorted(set(nucore_interface.nodes.keys()) - before)
-        if changed_addresses:
-            # A newly-added node's own device profile (node_def) can resolve
-            # after this point -- see _is_device_usable -- so give that a
-            # further grace period too before handing addresses back as
-            # ready to reference in the very next tool call.
-            await wait_until(
-                nucore_interface, "_3", None,
-                lambda: all(_is_device_usable(nucore_interface, a) for a in changed_addresses),
-                nucore_interface._refresh_device_structure,
-                _NODE_ADDED_GRACE_TIMEOUT_S,
-            )
-        devices = [
-            {"address": address, "name": nucore_interface.nodes[address].name} for address in changed_addresses
-        ]
+        devices = await _collect_new_devices(nucore_interface, before)
         return {
             "protocol": protocol, "action": action, "status": "inclusion_committed",
             "new_devices": devices,
@@ -466,6 +548,11 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         }
 
     # action == "exclude"
+    try:
+        await nucore_interface.dismiss_discovery_dialogs()
+    except Exception as e:
+        logger.warning(f"dismiss_discovery_dialogs failed (continuing anyway): {e}")
+
     device_address = args.get("device_address")
 
     if protocol in _DIRECT_REMOVE_PROTOCOLS:

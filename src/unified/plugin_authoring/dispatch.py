@@ -34,6 +34,7 @@ from .handlers import (
     dev_venv,
     device_detection,
     discovery,
+    github_repo,
     install,
     profile_authoring,
     scaffold,
@@ -132,6 +133,9 @@ def build_tool_handlers(
     handlers["setup_dev_venv"] = functools.partial(dev_venv.setup_dev_venv, plugin_output_root=plugin_output_root)
     handlers["setup_vscode_debug_config"] = functools.partial(
         vscode_debug.setup_vscode_debug_config, plugin_output_root=plugin_output_root
+    )
+    handlers["setup_github_repo"] = functools.partial(
+        github_repo.setup_github_repo, plugin_output_root=plugin_output_root
     )
     handlers["regenerate_plugin_boilerplate"] = functools.partial(
         boilerplate.regenerate_plugin_boilerplate, plugin_output_root=plugin_output_root

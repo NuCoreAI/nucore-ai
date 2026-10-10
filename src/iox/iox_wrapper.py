@@ -2489,6 +2489,25 @@ class IoXWrapper(NuCoreInterface):
         response = await self.get(f"{ZMATTER_BASE_PATHS[family]}node/{device_address}/remove")
         return response is not None and response.status_code == 200
 
+    async def _post_app_event(self, action: str, client_id: str = None, action_data: dict = None) -> bool:
+        """POST api/app-event -- eisy-ui's own UI-control channel (dialogs,
+        not device hardware). *client_id*, when given, targets one specific
+        connected UI client; omitted entirely, the event broadcasts to all
+        of them (e.g. dismissDiscoveryDialogs never needs one)."""
+        body = {"action": action}
+        if client_id:
+            body["clientId"] = client_id
+        if action_data:
+            body["actionData"] = action_data
+        response = await self.post("/api/app-event", json.dumps(body), {"Content-Type": "application/json"})
+        return response is not None and response.status_code == 200
+
+    async def dismiss_discovery_dialogs(self) -> bool:
+        return await self._post_app_event("dismissDiscoveryDialogs")
+
+    async def open_qr_scan(self, client_id: str, raw: str = None) -> bool:
+        return await self._post_app_event("openQrScan", client_id=client_id, action_data={"raw": raw} if raw else None)
+
     # ------------------------------------------------------------------
     # WebSocket event subscription
     # ------------------------------------------------------------------

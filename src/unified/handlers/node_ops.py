@@ -69,6 +69,17 @@ async def node_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> An
     if not node_id:
         return {"error": f"node_id is required for operation '{operation}'"}
 
+    if operation == "delete" and not bool(args.get("confirmed")):
+        return {
+            "confirmation_required": True,
+            "node_id": node_id,
+            "message": (
+                "This permanently deletes this node -- nothing has been deleted yet. Call "
+                "node_op again with confirmed: true only after the customer has explicitly "
+                "agreed, never speculatively."
+            ),
+        }
+
     kwargs: dict[str, Any] = {}
     if operation == "rename":
         new_name = args.get("new_name")

@@ -1,0 +1,45 @@
+{
+  "name": "setup_github_repo",
+  "description": "Local/dev-testing only -- one-time version-control bootstrap for a generated plugin: git init, write/merge .gitignore, first commit, create or link a GitHub remote, first push. Always creates or extends .gitignore BEFORE the first commit so .iox_env (setup_vscode_debug_config's file, holding the live PG3INIT MQTT credential) can never be committed, no matter what else is in the directory -- this is guaranteed in code, not something you need to remember each call. Idempotent: safe to call again later -- it skips git init if .git already exists, skips creating a remote if 'origin' is already configured, and reports committed: false with reason: 'no changes' instead of erroring when there's nothing new to commit. Remote setup has two paths: pass remote_url when the developer already created an empty repo themselves (on GitHub.com or elsewhere) and you just need to link it; otherwise this tries gh repo create automatically, and if the gh CLI isn't installed/authenticated on this host, it returns a non-fatal warning asking the developer to create an empty repo themselves and re-call with remote_url -- local init/commit still succeeded either way. Pushing is NOT gated in code -- always get the developer's explicit go-ahead before calling this at all (the first call already writes real history and, with push left true, creates a real remote repo and pushes to it), the same way you'd confirm before install_generated_plugin. For anything beyond this one-time setup -- git status/diff/log, stash/unstash, pull, later ad hoc commits outside this tool -- use run_shell_command directly with cwd set to the plugin's absolute_path; there's no need to come back to this tool for those.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The subdirectory name under the server's plugin output root -- the same 'location' generate_plugin_scaffold/install_generated_plugin use."
+      },
+      "visibility": {
+        "type": "string",
+        "enum": ["private", "public"],
+        "description": "Visibility for a repo this tool creates via gh repo create. Ignored when remote_url is given (visibility is whatever the developer already chose). Defaults to private.",
+        "default": "private"
+      },
+      "repo_name": {
+        "type": "string",
+        "description": "Name for a repo this tool creates via gh repo create. Ignored when remote_url is given. Defaults to location."
+      },
+      "remote_url": {
+        "type": ["string", "null"],
+        "description": "An existing, already-created (usually empty) repo's URL to link as 'origin' -- use this when the developer created the GitHub repo themselves, or when gh isn't available on this host. Omit to have this tool create one automatically via gh repo create."
+      },
+      "commit_message": {
+        "type": "string",
+        "description": "Commit message for this call's commit, if there are any changes to commit. Defaults to 'Initial commit'."
+      },
+      "author_name": {
+        "type": "string",
+        "description": "Git author/committer name for this call's commit. Ask the developer for their preferred name first; falls back to a generic default if omitted."
+      },
+      "author_email": {
+        "type": "string",
+        "description": "Git author/committer email for this call's commit. Ask the developer for their preferred email first; falls back to a generic default if omitted."
+      },
+      "push": {
+        "type": "boolean",
+        "description": "Whether to push after committing. Set false to only init/commit locally (and link remote_url, if given) without pushing anything. Defaults to true.",
+        "default": true
+      }
+    }
+  }
+}

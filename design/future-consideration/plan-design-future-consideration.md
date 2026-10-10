@@ -419,6 +419,34 @@ All four protocols (`insteon`, `zwave`, `zigbee`, `matter`) are implemented now,
 See `src/unified/handlers/pair_device.py`'s module docstring for the full per-protocol event
 mapping and the eisy-ui research behind it.
 
+## Update (2026-10-09): Matter `include` now works given a QR/pairing code, via `api/app-event`
+
+Superseding the "Matter `include` is out of scope" note above: `pair_device` now always calls a
+new `dismiss_discovery_dialogs()` (`POST api/app-event {action: 'dismissDiscoveryDialogs'}`,
+broadcasts to every eisy-ui client) before `include`/`exclude`, closing any stale dialog first.
+For matter/zwave, and for insteon once the customer has chosen linking mode over `add_by_address`,
+a new `open_qr_scan(client_id, raw=...)` call (`POST api/app-event {action: 'openQrScan', clientId,
+actionData: {raw}?}`) opens eisy-ui's QR-scan/pairing-code dialog on one specific client -- the
+customer either scans a QR code visually (no `raw`) or types a pairing code/setup code/device
+address (`raw`), which the dialog itself validates/interprets per protocol. `client_id` is sourced
+the same way `device_id`/`node_id` already are -- the model copies it verbatim from the `clientId`
+field of the `<ui_context>` block already present every turn (`EisyUIContext.get_client_id()`),
+not via any new dispatch plumbing.
+
+Since neither protocol has a confirmed "QR-scan session ended" event (unlike `include`'s existing
+per-protocol `_INCLUDE_COMPLETE_EVENT` mapping), the wait afterward is a generic poll --
+`wait_until` on `("_3", None)`, condition = "a new node appeared" -- reusing the exact idiom
+`_remove_zmatter_device` already used for Matter's own `exclude` path, rather than guessing at an
+unverified event. Matter `include` with neither a QR code nor any other code is still an error --
+there remains no manual linking-mode fallback for Matter at all.
+
+Separately: Insteon's manual (no-code) linking mode keeps the hub listening for a real 5 minutes,
+not the shared ~80s `_WAIT_TOTAL_TIMEOUT_S` every other wait in this module uses -- long enough for
+the customer to link several devices in turn, previously undocumented and under-timed. The model is
+now told to ask the customer up front, for Insteon specifically, whether they know the device's
+address (`add_by_address`, unchanged) or want linking mode (`include`) -- this choice already
+existed via the `action` argument, just wasn't consistently surfaced as a question before.
+
 ## Status
 
 `new_installation` is implemented (device pairing, room folders, and staged scenes/automations/

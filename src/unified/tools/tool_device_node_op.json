@@ -1,6 +1,6 @@
 {
   "name": "node_op",
-  "description": "Manage a device, group/scene, or folder node: enable, disable, delete, rename, or move it, or create a new group/scene or folder. add_group/add_folder's result includes the new node's real id -- use that as new_parent_id for a following move, never the name you gave it. delete is destructive -- only after the customer has explicitly agreed, never speculatively. delete does not work for Z-Wave/Zigbee/Matter devices -- the call is rejected with the real protocol named; use pair_device's exclude action instead to remove it. delete also does not work for a plugin-created device -- the call is rejected; confirm with the customer that they want to uninstall the owning plugin, then use delete_plugin instead. One node per call -- call it once per node.",
+  "description": "Manage a device, group/scene, or folder node: enable, disable, delete, rename, or move it, or create a new group/scene or folder. add_group/add_folder's result includes the new node's real id -- use that as new_parent_id for a following move, never the name you gave it. delete is a real, permanent change, gated by a code-enforced two-call confirm: call once with no confirmed (or confirmed: false) to preview -- this does not delete anything -- then call again with confirmed: true only after the customer has explicitly agreed, never speculatively. delete does not work for Z-Wave/Zigbee/Matter devices -- the call is rejected with the real protocol named; use pair_device's exclude action instead to remove it. delete also does not work for a plugin-created device -- the call is rejected; confirm with the customer that they want to uninstall the owning plugin, then use delete_plugin instead. One node per call -- call it once per node.",
   "input_schema": {
     "type": "object",
     "required": ["operation"],
@@ -20,6 +20,11 @@
       "new_parent_id": {
         "type": ["string", "null"],
         "description": "The new parent folder or group/scene's real id, exactly as shown in DEVICE DATABASE -- never guessed. For move: omit (or pass an empty string) to move the node to the top level/root instead of into another folder or group/scene -- never invent a placeholder id like 'none' or 'root' for this, there isn't one."
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "delete only. Leave unset (or false) for the first call, which only previews -- no side effects. Set to true only on a follow-up call, only after the customer has explicitly agreed to delete it.",
+        "default": false
       }
     }
   }

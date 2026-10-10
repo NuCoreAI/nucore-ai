@@ -1,6 +1,6 @@
 {
   "name": "variable_op",
-  "description": "Create, update, or delete a NuCore variable (an integer counter or a state flag routines can reference in their conditions/actions -- call list_variables for the current list, and see create_or_update_routine's var_ref()/set_var()/while_repeat() for how a variable is referenced inside routine logic). This tool manages the variable itself, not routine logic. `value`/`init` here are the RAW stored integers, same as list_variables returns -- not display values, do not scale them yourself. Create: type + optional name/prec (the hub assigns the id, returned in the response). Update (id required): only the fields given change, everything else is left as-is -- name/prec/value/init are all optional. Delete: type + id only -- destructive, so only after the customer has explicitly agreed, never speculatively. One variable per call -- call it once per variable.",
+  "description": "Create, update, or delete a NuCore variable (an integer counter or a state flag routines can reference in their conditions/actions -- call list_variables for the current list, and see create_or_update_routine's var_ref()/set_var()/while_repeat() for how a variable is referenced inside routine logic). This tool manages the variable itself, not routine logic. `value`/`init` here are the RAW stored integers, same as list_variables returns -- not display values, do not scale them yourself. Create: type + optional name/prec (the hub assigns the id, returned in the response). Update (id required): only the fields given change, everything else is left as-is -- name/prec/value/init are all optional. Delete: type + id, gated by a code-enforced two-call confirm -- call once with no confirmed (or confirmed: false) to preview -- this does not delete anything -- then call again with confirmed: true only after the customer has explicitly agreed, never speculatively. One variable per call -- call it once per variable.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -59,6 +59,11 @@
           "null"
         ],
         "description": "New init value (what the variable resets to when a routine runs set_var(..., op=\"init\") on it), as a RAW stored integer. update only."
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "delete only. Leave unset (or false) for the first call, which only previews -- no side effects. Set to true only on a follow-up call, only after the customer has explicitly agreed to delete it.",
+        "default": false
       }
     }
   }

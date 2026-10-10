@@ -1,6 +1,6 @@
 {
   "name": "routine_status_op",
-  "description": "Change a routine's runtime status: enable/disable it, run its if/then/else branch directly, stop it, change run-at-startup, or delete it. Use create_or_update_routine to change what a routine actually does, not this tool. delete is destructive -- only after the customer has explicitly agreed, never speculatively. One routine per call -- call it once per routine.",
+  "description": "Change a routine's runtime status: enable/disable it, run its if/then/else branch directly, stop it, change run-at-startup, or delete it. Use create_or_update_routine to change what a routine actually does, not this tool. delete is a real, permanent change, gated by a code-enforced two-call confirm: call once with no confirmed (or confirmed: false) to preview -- this does not delete anything -- then call again with confirmed: true only after the customer has explicitly agreed, never speculatively. One routine per call -- call it once per routine.",
   "input_schema": {
     "type": "object",
     "required": ["id", "operation"],
@@ -16,6 +16,11 @@
           "enable", "disable", "enableRunAtStartup", "disableRunAtStartup",
           "delete"
         ]
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "delete only. Leave unset (or false) for the first call, which only previews -- no side effects. Set to true only on a follow-up call, only after the customer has explicitly agreed to delete it.",
+        "default": false
       }
     }
   }

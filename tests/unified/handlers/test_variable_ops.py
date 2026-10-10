@@ -114,9 +114,28 @@ async def test_delete_requires_id():
 
 
 @pytest.mark.asyncio
-async def test_delete_succeeds():
+async def test_delete_without_confirmed_previews_without_deleting():
     backend = FakeBackend()
     result = await execute_tool("variable_op", {"type": 1, "id": "3", "operation": "delete"}, nucore_interface=backend)
+    assert result == {
+        "confirmation_required": True,
+        "type": 1,
+        "id": "3",
+        "message": (
+            "This permanently deletes this variable -- nothing has been deleted yet. Call "
+            "variable_op again with confirmed: true only after the customer has explicitly "
+            "agreed, never speculatively."
+        ),
+    }
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_succeeds():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "variable_op", {"type": 1, "id": "3", "operation": "delete", "confirmed": True}, nucore_interface=backend
+    )
     assert result == {"type": 1, "id": "3", "status": "ok"}
     assert backend.calls == [(1, "3", "delete", {})]
 
@@ -143,7 +162,9 @@ async def test_routines_changed_not_set_on_failure():
     backend = FakeBackend()
     backend.status = 400
     backend.routines_changed = False
-    await execute_tool("variable_op", {"type": 1, "id": "3", "operation": "delete"}, nucore_interface=backend)
+    await execute_tool(
+        "variable_op", {"type": 1, "id": "3", "operation": "delete", "confirmed": True}, nucore_interface=backend
+    )
     assert backend.routines_changed is False
 
 

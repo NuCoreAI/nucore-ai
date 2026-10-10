@@ -411,6 +411,34 @@ async def test_setup_vscode_debug_config_routes_through_dispatch(tmp_path):
     assert "error" in result
 
 
+# --- setup_github_repo (local/dev-testing only) ---
+
+
+def test_build_tool_handlers_always_adds_setup_github_repo():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "setup_github_repo" in handlers
+
+
+@pytest.mark.asyncio
+async def test_setup_github_repo_routes_through_dispatch(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+    )
+    result = await execute_tool(
+        "setup_github_repo",
+        {"location": "does_not_exist"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert "error" in result
+
+
 # --- regenerate_plugin_boilerplate (local/dev-testing only) ---
 
 

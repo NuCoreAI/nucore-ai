@@ -72,6 +72,9 @@ class FakeBackend(NuCoreInterface):
         # _refresh_device_structure the same way -- simulates the hub
         # reflecting a direct zigbee/matter removal on its next reload.
         self._pending_removals: set[str] = set()
+        self.dismiss_calls: int = 0
+        self.open_qr_scan_calls: list[tuple] = []
+        self.open_qr_scan_result: bool = True
 
     async def add_device(self, device_address, name=None, device_type=None, **kwargs):
         self.add_device_calls.append((device_address, name, device_type))
@@ -102,6 +105,14 @@ class FakeBackend(NuCoreInterface):
         if self.remove_device_result:
             self._pending_removals.add(device_address)
         return self.remove_device_result
+
+    async def dismiss_discovery_dialogs(self):
+        self.dismiss_calls += 1
+        return True
+
+    async def open_qr_scan(self, client_id, raw=None):
+        self.open_qr_scan_calls.append((client_id, raw))
+        return self.open_qr_scan_result
 
     async def _refresh_device_structure(self):
         # Always reports a successful (instant) reload -- merges in whatever
@@ -644,11 +655,140 @@ async def test_include_surfaces_a_nucore_error_from_discover_devices():
 
 
 @pytest.mark.asyncio
-async def test_include_for_matter_redirects_to_the_ui_instead_of_calling_discover_devices():
+async def test_include_for_matter_without_code_requires_a_code_instead_of_calling_discover_devices():
     backend = FakeBackend()
     result = await pair_device(backend, {"protocol": "matter", "action": "include"})
-    assert "eisy-ui" in result
+    assert "QR code or a pairing/setup code" in result
     assert backend.discover_calls == []
+    assert backend.open_qr_scan_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["insteon", "zwave", "zigbee", "matter"])
+async def test_include_always_dismisses_discovery_dialogs_first(protocol):
+    backend = FakeBackend()
+    asyncio.create_task(_fire_complete_event_shortly(backend, protocol)) if protocol != "matter" else None
+    await pair_device(backend, {"protocol": protocol, "action": "include", "raw_code": "123-456" if protocol == "matter" else None, "client_id": "client-1"})
+    assert backend.dismiss_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_exclude_also_dismisses_discovery_dialogs_first():
+    backend = FakeBackend()
+    asyncio.create_task(_fire_node_removed_event_shortly(backend, "ZW001"))
+    await pair_device(backend, {"protocol": "zwave", "action": "exclude"})
+    assert backend.dismiss_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# include -- QR-code/pairing-code path (matter/zwave/insteon only, via
+# openQrScan), and insteon's longer no-code linking-mode timeout.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["matter", "zwave", "insteon"])
+async def test_include_with_scan_qr_code_calls_open_qr_scan_with_no_raw(protocol):
+    backend = FakeBackend()
+
+    async def adds_a_device_shortly():
+        await asyncio.sleep(0.02)
+        backend.nodes["NEW001"] = SimpleNamespace(name="NEW001", node_def=object())
+
+    asyncio.create_task(adds_a_device_shortly())
+
+    result = await pair_device(
+        backend, {"protocol": protocol, "action": "include", "scan_qr_code": True, "client_id": "client-1"}
+    )
+
+    assert backend.open_qr_scan_calls == [("client-1", None)]
+    assert backend.discover_calls == []
+    assert result["status"] == "inclusion_committed"
+    assert [d["address"] for d in result["new_devices"]] == ["NEW001"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["matter", "zwave", "insteon"])
+async def test_include_with_raw_code_calls_open_qr_scan_with_that_raw_value(protocol):
+    backend = FakeBackend()
+    result = await pair_device(
+        backend,
+        {"protocol": protocol, "action": "include", "raw_code": "0123-4567", "client_id": "client-1"},
+    )
+    assert backend.open_qr_scan_calls == [("client-1", "0123-4567")]
+    assert backend.discover_calls == []
+    assert result["status"] == "inclusion_committed"
+    assert result["new_devices"] == []
+
+
+@pytest.mark.asyncio
+async def test_include_zigbee_ignores_scan_qr_code_and_raw_code():
+    backend = FakeBackend()
+    asyncio.create_task(_fire_complete_event_shortly(backend, "zigbee"))
+    result = await pair_device(
+        backend,
+        {"protocol": "zigbee", "action": "include", "scan_qr_code": True, "raw_code": "abc", "client_id": "client-1"},
+    )
+    assert backend.open_qr_scan_calls == []
+    assert backend.discover_calls == [(None, "zigbee", "include")]
+    assert result["status"] == "inclusion_committed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [{"scan_qr_code": True}, {"raw_code": "0123-4567"}])
+async def test_include_requires_client_id_when_qr_scan_requested(args):
+    backend = FakeBackend()
+    result = await pair_device(backend, {"protocol": "zwave", "action": "include", **args})
+    assert "client_id" in result["error"]
+    assert backend.open_qr_scan_calls == []
+
+
+@pytest.mark.asyncio
+async def test_open_qr_scan_failure_is_reported_as_error():
+    backend = FakeBackend()
+    backend.open_qr_scan_result = False
+    result = await pair_device(
+        backend, {"protocol": "matter", "action": "include", "scan_qr_code": True, "client_id": "client-1"}
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_include_insteon_without_code_uses_the_five_minute_timeout_not_eighty_seconds(monkeypatch):
+    captured = {}
+    real_wait_for_event = pair_device_module.wait_for_event
+
+    async def spy(nucore_interface, control, action, total_timeout):
+        if (control, action) == pair_device_module._INCLUDE_COMPLETE_EVENT["insteon"]:
+            captured["timeout"] = total_timeout
+            total_timeout = 0.05  # keep the test itself fast regardless of the real constant
+        return await real_wait_for_event(nucore_interface, control, action, total_timeout)
+
+    monkeypatch.setattr(pair_device_module, "wait_for_event", spy)
+    backend = FakeBackend()
+
+    await pair_device(backend, {"protocol": "insteon", "action": "include"})
+
+    assert captured["timeout"] == pair_device_module._INSTEON_LINKING_MODE_TIMEOUT_S == 300
+
+
+@pytest.mark.asyncio
+async def test_include_insteon_with_raw_code_still_uses_the_eighty_second_qr_wait(monkeypatch):
+    captured = {}
+    real_wait_until = pair_device_module.wait_until
+
+    async def spy(nucore_interface, control, action, condition, refresh, total_timeout):
+        captured["timeout"] = total_timeout
+        return await real_wait_until(nucore_interface, control, action, condition, refresh, 0.05)
+
+    monkeypatch.setattr(pair_device_module, "wait_until", spy)
+    backend = FakeBackend()
+
+    await pair_device(
+        backend, {"protocol": "insteon", "action": "include", "raw_code": "0123-4567", "client_id": "client-1"}
+    )
+
+    assert captured["timeout"] == pair_device_module._WAIT_TOTAL_TIMEOUT_S
 
 
 # ---------------------------------------------------------------------------

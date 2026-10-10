@@ -254,14 +254,35 @@ no single tool's schema can state on its own.
      there gets its own dedicated OS user instead.
      - It's idempotent, so there's no cost to the automatic call above when a working `.venv`
        already exists -- a cheap no-op, not a reinstall, every time.
-   - **`setup_vscode_debug_config` is also local/dev-testing only.** Call it only when a developer
-     explicitly wants to attach a local debugger (VS Code/debugpy) to a plugin -- never implied
-     automatically. Call it *after* a successful `install_generated_plugin`, not before: it needs
+   - **`setup_vscode_debug_config` is also local/dev-testing only.** Still requires the developer's
+     explicit go-ahead before calling it -- never implied automatically -- but proactively *offer*
+     it right after a successful `install_generated_plugin` rather than only reacting if they
+     think to ask, the same way `absolute_path` is volunteered rather than withheld until asked
+     (step 3 above). Call it *after* a successful `install_generated_plugin`, not before: it needs
      the plugin's real, host-assigned `profileNum` to find its `/usr/local/etc/rc.d` service
      script and copy the exact `PG3INIT` identity/MQTT credentials the real daemonized process
      uses into a local `.iox_env` file, plus a `.vscode/launch.json` pointing at it. Safe to
      re-call after every restart -- `PG3INIT` rotates each time, and this always overwrites both
      files fresh rather than leaving a stale token behind.
+   - **`setup_github_repo` offers version control, also proactively, right alongside the VS Code
+     offer above.** One-time bootstrap: `git init`, write/merge `.gitignore`, first commit,
+     create-or-link a GitHub remote, first push. It always creates/extends `.gitignore` before
+     that first commit so `.iox_env` (holding the live `PG3INIT` secret, above) can never end up
+     committed, no matter what else is sitting in the directory -- that's guaranteed in code, not
+     something you need to track yourself. Idempotent, so it's just as safe to call again later to
+     commit and push whatever changed since: it skips `git init` if `.git` already exists, skips
+     creating a remote if `origin` is already configured, and reports `committed: false` /
+     `reason: "no changes"` instead of an error when there's nothing new. Two ways to get a
+     remote: pass `remote_url` when the developer already created an empty repo themselves,
+     otherwise it tries `gh repo create` automatically and, if the `gh` CLI isn't
+     installed/authenticated on this host, comes back with a non-fatal warning asking the
+     developer to create one themselves and re-call with `remote_url` -- local init/commit still
+     happened either way. **Always get the customer's explicit confirmation before calling this at
+     all** -- same as the install gate above, not code-enforced, but a first call already writes
+     real history and (with `push` left `true`) creates a real GitHub repo and pushes to it. Once
+     set up, everyday git work -- `status`/`diff`/`log`, `stash`/`unstash`, `pull`, later ad hoc
+     commits outside this flow -- is just `run_shell_command` with `cwd` set to the plugin's
+     `absolute_path`; there's no dedicated tool for those and none is needed.
    - **`regenerate_plugin_boilerplate` picks up a template/tooling fix on an already-generated
      plugin.** When this tool set's own generation code changes (e.g. a fix to how `plugin.py`'s
      wiring or `main.py` is rendered), a plugin generated before that fix doesn't benefit from it

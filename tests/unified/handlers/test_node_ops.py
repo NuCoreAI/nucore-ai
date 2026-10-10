@@ -39,15 +39,31 @@ async def test_delete_rejected_by_backend_guard_surfaces_as_error():
         "removal mode and waits for the customer to complete it on their own screen."
     )
     backend = _FakeBackend(redirect_message)
-    result = await node_op(backend, {"operation": "delete", "node_id": "n1"})
+    result = await node_op(backend, {"operation": "delete", "node_id": "n1", "confirmed": True})
     assert result == {"error": f"'delete' failed: {redirect_message}"}
 
 
 @pytest.mark.asyncio
 async def test_delete_success_still_reports_ok():
     backend = _FakeBackend(SimpleNamespace(status_code=200))
-    result = await node_op(backend, {"operation": "delete", "node_id": "n1"})
+    result = await node_op(backend, {"operation": "delete", "node_id": "n1", "confirmed": True})
     assert result == {"node_id": "n1", "operation": "delete", "status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_delete_without_confirmed_previews_without_deleting():
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    result = await node_op(backend, {"operation": "delete", "node_id": "n1"})
+    assert result == {
+        "confirmation_required": True,
+        "node_id": "n1",
+        "message": (
+            "This permanently deletes this node -- nothing has been deleted yet. Call "
+            "node_op again with confirmed: true only after the customer has explicitly "
+            "agreed, never speculatively."
+        ),
+    }
+    assert backend.calls == []
 
 
 @pytest.mark.asyncio

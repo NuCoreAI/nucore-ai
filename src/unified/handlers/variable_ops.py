@@ -89,6 +89,18 @@ async def variable_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
     if operation != "create" and not var_id:
         return {"error": f"id is required for '{operation}'"}
 
+    if operation == "delete" and not bool(args.get("confirmed")):
+        return {
+            "confirmation_required": True,
+            "type": var_type,
+            "id": var_id,
+            "message": (
+                "This permanently deletes this variable -- nothing has been deleted yet. Call "
+                "variable_op again with confirmed: true only after the customer has explicitly "
+                "agreed, never speculatively."
+            ),
+        }
+
     kwargs = {k: args[k] for k in ("name", "prec", "value", "init") if args.get(k) is not None}
 
     try:
