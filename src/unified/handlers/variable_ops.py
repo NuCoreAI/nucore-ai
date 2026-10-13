@@ -97,7 +97,9 @@ async def variable_op(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             "message": (
                 "This permanently deletes this variable -- nothing has been deleted yet. Call "
                 "variable_op again with confirmed: true only after the customer has explicitly "
-                "agreed, never speculatively."
+                "agreed, never speculatively. The system only honors this if their very next "
+                "reply is exactly the word YES (all caps) and nothing else; it independently "
+                "verifies this regardless of what this call's own confirmed argument says."
             ),
         }
 

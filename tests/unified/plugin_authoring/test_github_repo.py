@@ -1,10 +1,10 @@
 """setup_github_repo -- one-time version-control bootstrap (git init,
-.gitignore, first commit, remote create/link, first push). Real git
-commands are allowed to run for real against tmp_path (fast, local,
-no network) via unified.handlers.shell.run_shell_command's actual subprocess
-machinery -- only `gh ...` invocations are intercepted (no dependency on a
-real gh CLI/network/auth in tests). A real local bare repo under a second
-tmp_path stands in for "GitHub" for push-path coverage.
+.gitignore, first commit, remote link, first push). Plain git only -- it
+never shells out to any GitHub-specific CLI or API to create a repository,
+so every command here is real git, run for real against tmp_path (fast,
+local, no network) via unified.handlers.shell.run_shell_command's actual
+subprocess machinery -- no interception needed. A real local bare repo
+under a second tmp_path stands in for "GitHub" for push-path coverage.
 """
 
 from __future__ import annotations
@@ -13,14 +13,8 @@ import subprocess
 
 import pytest
 
-import unified.handlers.shell as real_shell
-from unified.plugin_authoring.handlers import github_repo
+from unified.plugin_authoring import developer_config
 from unified.plugin_authoring.handlers.github_repo import setup_github_repo
-
-# Captured before any test monkeypatches github_repo.shell.run_shell_command --
-# that attribute lives on this same module object, so a late lookup of
-# real_shell.run_shell_command would see the patched version too.
-_REAL_RUN_SHELL_COMMAND = real_shell.run_shell_command
 
 
 def _make_plugin_dir(tmp_path, name="acme_pool"):
@@ -32,28 +26,6 @@ def _make_plugin_dir(tmp_path, name="acme_pool"):
 
 def _git(cwd, *args):
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
-
-
-def _intercept_gh(gh_result):
-    """A shell.run_shell_command replacement that answers `gh ...` commands
-    with *gh_result* and runs everything else (git) for real."""
-
-    async def fake_run_shell_command(nucore_interface, args):
-        if args["command"].startswith("gh "):
-            return gh_result
-        return await _REAL_RUN_SHELL_COMMAND(nucore_interface, args)
-
-    return fake_run_shell_command
-
-
-@pytest.fixture(autouse=True)
-def _no_real_gh(monkeypatch):
-    # Default for every test unless overridden: `gh` is unavailable/unauthenticated.
-    monkeypatch.setattr(
-        github_repo.shell,
-        "run_shell_command",
-        _intercept_gh({"exit_code": 1, "stdout": "", "stderr": "gh: not authenticated"}),
-    )
 
 
 @pytest.mark.asyncio
@@ -71,15 +43,6 @@ async def test_rejects_path_traversal(tmp_path):
 @pytest.mark.asyncio
 async def test_missing_plugin_directory(tmp_path):
     result = await setup_github_repo(None, {"location": "nope"}, plugin_output_root=str(tmp_path))
-    assert "error" in result
-
-
-@pytest.mark.asyncio
-async def test_rejects_invalid_visibility(tmp_path):
-    _make_plugin_dir(tmp_path)
-    result = await setup_github_repo(
-        None, {"location": "acme_pool", "visibility": "public-ish", "push": False}, plugin_output_root=str(tmp_path)
-    )
     assert "error" in result
 
 
@@ -122,6 +85,32 @@ async def test_default_author_used_when_not_given(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_commissioned_developer_identity_used_when_author_not_given(tmp_path):
+    plugin_dir = _make_plugin_dir(tmp_path)
+    developer_config.write_developer_config(str(tmp_path), email="real.dev@example.com", name="Real Dev")
+
+    await setup_github_repo(None, {"location": "acme_pool", "push": False}, plugin_output_root=str(tmp_path))
+
+    author = _git(plugin_dir, "log", "-1", "--pretty=%an <%ae>").stdout.strip()
+    assert author == "Real Dev <real.dev@example.com>"
+
+
+@pytest.mark.asyncio
+async def test_explicit_author_overrides_commissioned_developer_identity(tmp_path):
+    plugin_dir = _make_plugin_dir(tmp_path)
+    developer_config.write_developer_config(str(tmp_path), email="real.dev@example.com", name="Real Dev")
+
+    await setup_github_repo(
+        None,
+        {"location": "acme_pool", "push": False, "author_name": "Override", "author_email": "override@example.com"},
+        plugin_output_root=str(tmp_path),
+    )
+
+    author = _git(plugin_dir, "log", "-1", "--pretty=%an <%ae>").stdout.strip()
+    assert author == "Override <override@example.com>"
+
+
+@pytest.mark.asyncio
 async def test_gitignore_merge_preserves_existing_custom_lines(tmp_path):
     plugin_dir = _make_plugin_dir(tmp_path)
     (plugin_dir / ".gitignore").write_text("my_custom_ignore.txt\n")
@@ -149,7 +138,7 @@ async def test_second_call_with_no_changes_reports_no_changes_not_an_error(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_remote_url_links_origin_without_gh(tmp_path):
+async def test_remote_url_links_origin(tmp_path):
     plugin_dir = _make_plugin_dir(tmp_path)
     remote_dir = tmp_path / "remote.git"
     remote_dir.mkdir()
@@ -204,7 +193,7 @@ async def test_second_remote_url_call_updates_existing_origin(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_gh_unavailable_returns_non_fatal_warning(tmp_path):
+async def test_no_remote_url_returns_non_fatal_warning_without_creating_one(tmp_path):
     _make_plugin_dir(tmp_path)
 
     result = await setup_github_repo(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
@@ -214,25 +203,30 @@ async def test_gh_unavailable_returns_non_fatal_warning(tmp_path):
     assert result["pushed"] is False
     assert "warning" in result
     assert "remote_url" in result["warning"]
+    assert "gh" not in result["warning"]
 
 
 @pytest.mark.asyncio
-async def test_gh_repo_create_used_when_authenticated_and_no_remote_url(tmp_path, monkeypatch):
+async def test_never_shells_out_to_gh(tmp_path, monkeypatch):
+    """Regression guard: setup_github_repo must only ever run plain `git`
+    commands -- no GitHub-specific CLI, with or without a remote_url."""
     _make_plugin_dir(tmp_path)
 
+    import unified.handlers.shell as real_shell
+
+    real_run_shell_command = real_shell.run_shell_command
     calls = []
 
-    async def fake_run_shell_command(nucore_interface, args):
+    async def tracking_run_shell_command(nucore_interface, args):
         calls.append(args["command"])
-        if args["command"] == "gh auth status":
-            return {"exit_code": 0, "stdout": "", "stderr": ""}
-        if args["command"].startswith("gh repo create"):
-            return {"exit_code": 0, "stdout": "https://github.com/example/acme_pool\n", "stderr": ""}
-        return await _REAL_RUN_SHELL_COMMAND(nucore_interface, args)
+        return await real_run_shell_command(nucore_interface, args)
 
-    monkeypatch.setattr(github_repo.shell, "run_shell_command", fake_run_shell_command)
+    import unified.plugin_authoring.handlers.github_repo as github_repo_module
+
+    monkeypatch.setattr(github_repo_module.shell, "run_shell_command", tracking_run_shell_command)
 
     result = await setup_github_repo(None, {"location": "acme_pool", "push": False}, plugin_output_root=str(tmp_path))
 
-    assert result["remote_url"] == "https://github.com/example/acme_pool"
-    assert any(c.startswith("gh repo create") for c in calls)
+    assert result["remote_url"] is None
+    assert all(command.startswith("git") for command in calls)
+    assert not any("gh " in command or command.startswith("gh") for command in calls)

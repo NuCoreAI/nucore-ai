@@ -185,8 +185,8 @@ def test_context_message_returns_none_and_message_returns_stripped_text():
     )
     message_result = ctx.process_message(json.dumps({"type": "message", "message": "  turn on the light  "}))
 
-    assert context_result is None
-    assert message_result == "turn on the light"
+    assert context_result == (None, None)
+    assert message_result == ("turn on the light", None)
 
 
 def test_is_developer_read_from_nested_user_object():
@@ -223,9 +223,10 @@ def test_client_id_persists_when_a_later_context_omits_it():
 def test_developer_switch_command_recognized_from_a_websocket_message():
     ctx = EisyUIContext()
 
-    result = ctx.process_message(json.dumps({"type": "message", "message": "/developer"}))
+    forward, direct_reply = ctx.process_message(json.dumps({"type": "message", "message": "/developer"}))
 
-    assert result is None
+    assert forward is None
+    assert direct_reply == "Switched to developer tools."
     assert ctx.get_active_tool_set() == "plugin_authoring"
 
 
@@ -233,9 +234,10 @@ def test_customer_switch_command_recognized_from_a_websocket_message():
     ctx = EisyUIContext()
     ctx.process_message(json.dumps({"type": "message", "message": "/developer"}))
 
-    result = ctx.process_message(json.dumps({"type": "message", "message": "/customer"}))
+    forward, direct_reply = ctx.process_message(json.dumps({"type": "message", "message": "/customer"}))
 
-    assert result is None
+    assert forward is None
+    assert direct_reply == "Switched to customer tools."
     assert ctx.get_active_tool_set() == "unified"
 
 
@@ -246,19 +248,46 @@ def test_developer_switch_command_recognized_from_a_plain_repl_string():
     # /developer only ever worked over WebSocket.
     ctx = EisyUIContext()
 
-    result = ctx.process_message("/developer")
+    forward, direct_reply = ctx.process_message("/developer")
 
-    assert result is None
+    assert forward is None
+    assert direct_reply == "Switched to developer tools."
     assert ctx.get_active_tool_set() == "plugin_authoring"
 
 
 def test_non_command_plain_repl_string_passes_through_unchanged():
     ctx = EisyUIContext()
 
-    result = ctx.process_message("  turn on the light  ")
+    forward, direct_reply = ctx.process_message("  turn on the light  ")
 
-    assert result == "turn on the light"
+    assert forward == "turn on the light"
+    assert direct_reply is None
     assert ctx.get_active_tool_set() is None
+
+
+def test_developer_switch_command_blocked_when_target_not_enabled():
+    ctx = EisyUIContext()
+
+    forward, direct_reply = ctx.process_message(
+        json.dumps({"type": "message", "message": "/developer"}), lambda _name: False
+    )
+
+    assert forward is None
+    assert direct_reply == "Developer tools are not enabled on this installation."
+    assert ctx.get_active_tool_set() is None
+
+
+def test_switch_command_succeeds_when_is_target_enabled_not_given():
+    # Back-compat default: a caller that doesn't pass is_target_enabled at
+    # all (None) doesn't block the switch -- "caller doesn't care" means
+    # "every target is enabled" for this check specifically.
+    ctx = EisyUIContext()
+
+    forward, direct_reply = ctx.process_message(json.dumps({"type": "message", "message": "/customer"}))
+
+    assert forward is None
+    assert direct_reply == "Switched to customer tools."
+    assert ctx.get_active_tool_set() == "unified"
 
 
 # --- CLI surface: --preferences-dir/--prompt-log-file are the only source of
@@ -369,6 +398,9 @@ class _FakeRuntime:
     async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         self.calls.append({"query": query, "framework_context": framework_context, "session_id": session_id})
         return IntentHandlerResult(intent="unified", output={"text": self._text})
+
+    def is_tool_set_enabled(self, tool_set_name: str) -> bool:
+        return True
 
 
 @pytest.mark.asyncio

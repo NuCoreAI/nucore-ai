@@ -25,6 +25,10 @@ a profile document outside this chat loop.
   through ``nucore.profile`` locally, but the real hub requires all-caps
   letters/digits/underscore, starting with a letter, max 30 chars (see
   ``standard_property_ids.py``).
+- every NodeDef's own ``id`` against the real hub's format constraint
+  (``_check_nodedef_id_format``) -- alphanumeric/underscore only, max 31
+  chars; same permissive-locally/strict-on-the-real-hub gap as property
+  ids above.
 - every NodeDef has a ``links`` object with ``ctl``/``rsp`` arrays, even
   when empty (``_check_links_object_present``) -- confirmed mandatory
   against a real generated profile.json; ``nucore.profile`` leaves
@@ -156,6 +160,49 @@ def _check_property_id_format(raw_profile: dict[str, Any]) -> list[str]:
     return errors
 
 
+_MAX_NODEDEF_ID_LENGTH = 31
+
+
+def _is_valid_nodedef_id_format(nodedef_id: str) -> bool:
+    return (
+        isinstance(nodedef_id, str)
+        and 1 <= len(nodedef_id) <= _MAX_NODEDEF_ID_LENGTH
+        and all(c.isalnum() or c == "_" for c in nodedef_id)
+    )
+
+
+def _check_nodedef_id_format(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef and flags any ``id`` that doesn't match the real
+    hub's own format constraint for a NodeDef id -- alphanumeric/underscore
+    only, at most 31 characters. ``nucore.profile``'s parser doesn't check
+    this at all (any non-empty string round-trips fine locally, per
+    ``nucore/schemas/defs/id.schema.json``'s deliberately permissive
+    shape), so without this an over-length or bad-charset id (e.g. a
+    ``generate_plugin_scaffold``-rewritten ``{mac6}_{placeholder}`` id with
+    too long a placeholder) would only ever be caught once a customer
+    actually tries to register it on a real hub.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id")
+                if not isinstance(nodedef_id, str) or not _is_valid_nodedef_id_format(nodedef_id):
+                    errors.append(
+                        f"nodedef id '{nodedef_id}' must be alphanumeric/underscore only and at "
+                        f"most {_MAX_NODEDEF_ID_LENGTH} characters (recommended: the last 6 hex "
+                        "digits of the authoring hub's MAC address, no colons, + '_' + a "
+                        "meaningful name, e.g. 'a1b2c3_thermostat')"
+                    )
+    return errors
+
+
 def _check_links_object_present(raw_profile: dict[str, Any]) -> list[str]:
     """Walks every NodeDef and requires a ``links`` object with ``ctl``/
     ``rsp`` list fields, even when both are empty -- confirmed mandatory
@@ -281,6 +328,7 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
         capture.messages
         + _check_uom_consistency(raw_profile)
         + _check_property_id_format(raw_profile)
+        + _check_nodedef_id_format(raw_profile)
         + _check_links_object_present(raw_profile)
         + _check_linkdef_references(raw_profile)
         + _check_linkdef_cmd_parameters(raw_profile)

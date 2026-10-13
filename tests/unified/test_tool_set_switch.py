@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from unified.loop import SWITCH_TOOL_SET_KEY
-from unified.tool_set_switch import make_switch_handler
+from unified.tool_set_switch import disabled_target_message, make_switch_handler, switched_message
 
 
 @pytest.mark.asyncio
@@ -85,3 +85,26 @@ async def test_disabled_check_wins_over_cap_check():
     )
     result = await handler(None, {})
     assert "not enabled" in result["error"]
+
+
+def test_disabled_target_message_matches_the_label_for_each_tool_set():
+    assert disabled_target_message("plugin_authoring") == "Developer tools are not enabled on this installation."
+    assert disabled_target_message("unified") == "Customer tools are not enabled on this installation."
+
+
+def test_switched_message_matches_the_label_for_each_tool_set():
+    assert switched_message("plugin_authoring") == "Switched to developer tools."
+    assert switched_message("unified") == "Switched to customer tools."
+
+
+@pytest.mark.asyncio
+async def test_switch_handler_disabled_error_uses_the_shared_wording():
+    # Regression guard: the model-relayed error and the explicit
+    # /developer//customer command's own error must never drift apart --
+    # both go through disabled_target_message (see run_unified_runtime.py's
+    # EisyUIContext._apply_switch_command_or_return).
+    handler = make_switch_handler(
+        "plugin_authoring", is_target_enabled=lambda: False, get_switch_count=lambda: 0, max_switches=1
+    )
+    result = await handler(None, {})
+    assert result == {"error": disabled_target_message("plugin_authoring")}

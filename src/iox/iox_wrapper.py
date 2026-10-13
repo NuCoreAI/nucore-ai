@@ -2229,6 +2229,9 @@ class IoXWrapper(NuCoreInterface):
     async def get_full_system_config(self) -> dict[str, Any] | None:
         return await self.diagnostics.get_full_system_config()
 
+    async def get_device_mac_address(self) -> str | None:
+        return await self.diagnostics.get_device_mac_address()
+
     async def get_core_services_status(self) -> dict[str, Any] | None:
         return await self.diagnostics.get_core_services_status()
 

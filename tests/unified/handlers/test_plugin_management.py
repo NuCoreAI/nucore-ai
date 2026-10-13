@@ -355,7 +355,9 @@ async def test_delete_plugin_without_confirmed_previews_without_deleting():
         "message": (
             "This permanently removes 'YouTube' from the hub -- nothing has been deleted yet. "
             "Call delete_plugin again with confirmed: true only after the customer/developer has "
-            "explicitly agreed, never speculatively."
+            "explicitly agreed, never speculatively. The system only honors this if their very next "
+            "reply is exactly the word YES (all caps) and nothing else; it independently verifies "
+            "this regardless of what this call's own confirmed argument says."
         ),
     }
     assert backend.uninstall_calls == []

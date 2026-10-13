@@ -15,7 +15,7 @@
       },
       "confirmed": {
         "type": "boolean",
-        "description": "Leave unset (or false) for the first call, which only previews the delete and performs no side effects. Set to true only on a follow-up call, only after the customer/developer has explicitly agreed to delete it.",
+        "description": "Leave unset (or false) for the first call, which only previews the delete and performs no side effects. Set to true only on a follow-up call, only after the customer/developer has explicitly agreed to delete it. The system independently verifies the customer's/developer's literal next reply was exactly the word YES (all caps) before honoring this, regardless of what this call's own confirmed argument says.",
         "default": false
       }
     }

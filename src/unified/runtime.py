@@ -148,6 +148,42 @@ def _wrap_dispatch_for_switching(
     return _dispatch
 
 
+# Single-purpose delete tools -- every call is a delete attempt.
+_DELETE_CONFIRMATION_TOOLS = {"delete_plugin", "delete_registered_plugin"}
+# Multi-operation tools -- only a "delete" operation call is a delete attempt;
+# every other operation (rename, create, etc.) passes through untouched.
+_DELETE_CONFIRMATION_OPERATION_TOOLS = {"node_op", "routine_status_op", "variable_op"}
+
+
+def _wrap_dispatch_for_delete_confirmation(base_dispatch: ToolDispatch, *, raw_query: str) -> ToolDispatch:
+    """Intercept every delete-type tool call and independently verify the
+    customer's literal last message (*raw_query* -- ``handle_query``'s own
+    ``query`` parameter, never the LLM-facing wrapped ``user_message``) was
+    exactly ``"YES"`` before a handler's own ``confirmed=True`` can take
+    effect. The model's own ``confirmed`` argument is still required too
+    (AND, not a replacement) -- this adds a hard floor underneath it,
+    it doesn't remove the model's own judgment as an extra layer.
+
+    *raw_query* is this whole turn's own query, constant across the turn
+    even through a mid-turn tool-set switch (see ``handle_query``'s
+    docstring), so a delete attempted in the same turn as the original
+    request can never pass regardless of how the model words the call --
+    only a later turn whose own literal text is exactly ``"YES"`` can.
+    Every other tool call (including every non-"delete" operation on a
+    multi-operation tool) passes through to *base_dispatch* untouched."""
+    exact_yes = raw_query.strip() == "YES"
+
+    async def _dispatch(name: str, args: dict[str, Any]) -> Any:
+        is_delete_attempt = name in _DELETE_CONFIRMATION_TOOLS or (
+            name in _DELETE_CONFIRMATION_OPERATION_TOOLS and args.get("operation") == "delete"
+        )
+        if is_delete_attempt:
+            args = {**args, "confirmed": bool(args.get("confirmed")) and exact_yes}
+        return await base_dispatch(name, args)
+
+    return _dispatch
+
+
 class UnifiedRuntime:
     def __init__(
         self,
@@ -213,6 +249,14 @@ class UnifiedRuntime:
     async def _default_dispatch(self, name: str, args: dict[str, Any]) -> Any:
         return await execute_tool(name, args, nucore_interface=self.nucore_interface)
 
+    def is_tool_set_enabled(self, tool_set_name: str) -> bool:
+        """Connection-scoped enabled check -- used by ``run_unified_runtime.
+        py``'s ``_run_once`` to validate the explicit `/developer`/
+        `/customer` chat command before applying it. Mirrors `_SwitchState.
+        is_enabled`, which is turn-scoped and serves the model-driven
+        switch tool instead."""
+        return tool_set_name in self.enabled_tool_sets
+
     def _profile_config(self, tool_set_name: str) -> dict[str, Any]:
         return self.runtime_config.get("nucore_runtime", {}).get(tool_set_name, {})
 
@@ -253,7 +297,7 @@ class UnifiedRuntime:
             except Exception:
                 pass
 
-    async def _build_loop(self, tool_set_name: str, connection_context: Any) -> AgenticLoop:
+    async def _build_loop(self, tool_set_name: str, connection_context: Any, query: str) -> AgenticLoop:
         profile_cfg = self._profile_config(tool_set_name)
         bundle = self._dispatch_bundle_for(tool_set_name, connection_context)
         switch_tool_name = {"unified": "switch_to_developer_mode", "plugin_authoring": "switch_to_customer_mode"}.get(
@@ -268,6 +312,10 @@ class UnifiedRuntime:
                 switch_target=switch_target,
                 switch_state=self._current_switch_state,
             )
+        # Applies to every tool set unconditionally, unlike the switch
+        # wrapper above -- see _wrap_dispatch_for_delete_confirmation's
+        # docstring.
+        dispatch = _wrap_dispatch_for_delete_confirmation(dispatch, raw_query=query)
         return AgenticLoop(
             llm_client=self.llm_client,
             tool_specs=self._tool_specs_for(tool_set_name),
@@ -303,6 +351,16 @@ class UnifiedRuntime:
         """
         session_id = session_id or "default"
         current_tool_set = active_tool_set or self.default_tool_set
+        # Backstop, not the primary guard -- the explicit /developer//customer
+        # command path (run_unified_runtime.py's EisyUIContext) already
+        # checks is_tool_set_enabled before ever setting active_tool_set, and
+        # the model-driven switch tool already checks is_target_enabled
+        # before raising ToolSetSwitchRequested. This only protects a caller
+        # that hands in a stale/invalid active_tool_set some other way (a
+        # sticky value from before a config reload, a direct test/CLI call)
+        # from a KeyError at self._tool_sets[current_tool_set] below.
+        if current_tool_set not in self._tool_sets:
+            current_tool_set = self.default_tool_set
         # Composite key -- see merged-toolsets.md's "Session history": two
         # tool sets' conversations on one connection must not interleave
         # plain-text turns in one ConversationHistory.
@@ -335,7 +393,7 @@ class UnifiedRuntime:
 
             while True:
                 system_prompt = await self._tool_sets[current_tool_set].system_prompt_builder(self.nucore_interface)
-                loop = await self._build_loop(current_tool_set, connection_context)
+                loop = await self._build_loop(current_tool_set, connection_context, query)
                 llm_config = self._resolve_llm_config(current_tool_set)
                 # Grok's adapter reads this back out to set the x-grok-conv-id
                 # header that keeps repeat calls in this conversation routed to

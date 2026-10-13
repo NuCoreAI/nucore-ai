@@ -206,7 +206,11 @@ async def delete_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any])
     follow-up call with confirmed=True actually deletes it. This exists
     because deletion is a real, permanent host change -- a tool description
     telling the model to "confirm with the customer first" is not something
-    code can enforce on its own."""
+    code can enforce on its own. ``UnifiedRuntime``'s
+    ``_wrap_dispatch_for_delete_confirmation`` additionally verifies the
+    customer's literal last message was exactly "YES" before letting any
+    caller-supplied confirmed=True reach this handler at all -- the
+    confirmed=True this function sees is never purely the model's own say-so."""
     plugin_id = args.get("plugin_id")
     name = args.get("name")
     confirmed = bool(args.get("confirmed"))
@@ -231,7 +235,9 @@ async def delete_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any])
             "message": (
                 f"This permanently removes '{name}' from the hub -- nothing has been deleted yet. "
                 "Call delete_plugin again with confirmed: true only after the customer/developer has "
-                "explicitly agreed, never speculatively."
+                "explicitly agreed, never speculatively. The system only honors this if their very next "
+                "reply is exactly the word YES (all caps) and nothing else; it independently verifies "
+                "this regardless of what this call's own confirmed argument says."
             ),
         }
 

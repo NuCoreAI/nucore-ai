@@ -24,6 +24,26 @@ from .loop import SWITCH_TOOL_SET_KEY
 _LABELS = {"unified": "customer", "plugin_authoring": "developer"}
 
 
+def disabled_target_message(target_tool_set: str) -> str:
+    """Exact wording for 'switch to target_tool_set refused because it isn't
+    enabled' -- shared by the model's own switch-tool handler (below) and
+    the explicit /developer//customer command path
+    (run_unified_runtime.py), so the two can never say different things for
+    the identical failure (see design/developers/merged-toolsets.md's 'no
+    separate code path with its own messaging')."""
+    label = _LABELS.get(target_tool_set, target_tool_set)
+    return f"{label.capitalize()} tools are not enabled on this installation."
+
+
+def switched_message(target_tool_set: str) -> str:
+    """Confirmation text for a successful explicit /developer//customer
+    switch. Only the explicit command path uses this -- a model-driven
+    switch has no equivalent message of its own; the new tool set's reply
+    *is* the confirmation."""
+    label = _LABELS.get(target_tool_set, target_tool_set)
+    return f"Switched to {label} tools."
+
+
 def make_switch_handler(
     target_tool_set: str,
     *,
@@ -41,11 +61,9 @@ def make_switch_handler(
     switches have already happened so far in *this* turn, reset to zero by
     the caller (`UnifiedRuntime.handle_query`) at the start of every turn.
     """
-    target_label = _LABELS.get(target_tool_set, target_tool_set)
-
     async def _switch(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
         if not is_target_enabled():
-            return {"error": f"{target_label.capitalize()} tools are not enabled on this installation."}
+            return {"error": disabled_target_message(target_tool_set)}
         if get_switch_count() >= max_switches:
             return {
                 "error": (

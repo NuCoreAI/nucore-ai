@@ -11,7 +11,7 @@
       },
       "profile": {
         "type": "object",
-        "description": "The Dynamic Profiles wire document -- top-level 'editors'/'nodedefs'/'linkdefs' lists, the same shape polyglot.getJsonProfile()/read_generated_plugin use. Internally wrapped and checked with the same structural validation validate_profile runs before anything is written."
+        "description": "The Dynamic Profiles wire document -- top-level 'editors'/'nodedefs'/'linkdefs' lists, the same shape polyglot.getJsonProfile()/read_generated_plugin use. Internally wrapped and checked with the same structural validation validate_profile runs before anything is written. Every nodedef's 'id' must be a plain, meaningful placeholder (e.g. 'switch'); exactly one must be the reserved placeholder 'controller' (the Controller's own nodedef). Generation fetches the connected hub's MAC address and rewrites every placeholder into its real {mac6}_{placeholder} id, in both the written profile.json and the matching 'id' class variable in plugin.py/node_classes -- write placeholders here, never a precomputed id."
       },
       "controller_class": {
         "type": "string",
@@ -27,7 +27,7 @@
       },
       "node_classes": {
         "type": "object",
-        "description": "Extra device Node subclasses beyond the Controller, as {filename_without_py: full_python_source}, for profiles with more than one NodeDef.",
+        "description": "Extra device Node subclasses beyond the Controller, as {filename_without_py: full_python_source}, for profiles with more than one NodeDef. Each class must declare a class variable id = \"<placeholder>\" matching one of profile.nodedefs' own placeholder ids exactly -- generation rewrites both together into the real MAC-derived id, and refuses outright if any class's id is missing or doesn't match a real nodedef.",
         "additionalProperties": {"type": "string"}
       },
       "override_bodies": {

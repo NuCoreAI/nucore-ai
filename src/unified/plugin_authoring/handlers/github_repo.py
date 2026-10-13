@@ -12,6 +12,14 @@ erroring when there's nothing new to commit -- safe to call once right after
 ``generate_plugin_scaffold``/``install_generated_plugin`` and again later to
 commit and push whatever changed since.
 
+Plain ``git`` only -- deliberately never shells out to any external,
+GitHub-specific tool to create a remote repository. When
+``remote_url`` is given, that existing repository is linked as ``origin``
+(``git remote add``/``set-url``); when it isn't, and no ``origin`` is already
+configured, this returns a warning asking the developer to create one
+themselves and re-call with ``remote_url`` set -- it never attempts to create
+a GitHub repo on its own.
+
 Everyday git work after this one-time setup -- stash, status, diff, log,
 pull, later ad hoc commits/pushes -- goes through ``run_shell_command``
 directly; this module only covers the one step with a real secret-leak edge
@@ -26,7 +34,16 @@ already documents for its own venv/pip invocation.
 Identity (``user.name``/``user.email``) is passed via ``git -c`` flags, not
 environment variables or a real ``~/.gitconfig`` -- ``run_shell_command``'s
 child process gets a deliberately minimal environment with no ``HOME``, so a
-global gitconfig is never read here.
+global gitconfig is never read here. That identity's own precedence is
+*args* (an explicit ``author_name``/``author_email`` override) > the
+commissioned developer's own ``configure_developer`` identity
+(``developer_config.load_developer_config`` -- the same real name/email
+``generate_plugin_scaffold`` stamps into every ``server_entry.json``'s
+``developer``/``author`` fields) > a generic placeholder, only when neither
+of those is available (no developer has been commissioned for this
+``plugin_output_root`` yet). A real commit should carry a real person's
+identity whenever one is already on file, not a generic placeholder by
+default.
 """
 
 from __future__ import annotations
@@ -38,6 +55,7 @@ from typing import Any
 from nucore import NuCoreInterface
 
 from ...handlers import shell
+from .. import developer_config
 from ..path_confinement import confine_path
 
 _GITIGNORE_FILENAME = ".gitignore"
@@ -95,14 +113,17 @@ async def setup_github_repo(
         return {"error": f"no plugin directory found at '{location}'"}
 
     cwd = str(plugin_dir)
-    visibility = args.get("visibility") or "private"
-    if visibility not in ("private", "public"):
-        return {"error": "visibility must be 'private' or 'public'"}
-    repo_name = (args.get("repo_name") or location).strip()
     remote_url = (args.get("remote_url") or "").strip() or None
     commit_message = (args.get("commit_message") or _DEFAULT_COMMIT_MESSAGE).strip()
-    author_name = (args.get("author_name") or _DEFAULT_AUTHOR_NAME).strip()
-    author_email = (args.get("author_email") or _DEFAULT_AUTHOR_EMAIL).strip()
+    # Identity precedence: an explicit args override, then the commissioned developer's own
+    # configure_developer identity, then a generic placeholder -- only when neither is available.
+    developer_entry = developer_config.load_developer_config(plugin_output_root)
+    author_name = (
+        args.get("author_name") or (developer_entry["name"] if developer_entry else None) or _DEFAULT_AUTHOR_NAME
+    ).strip()
+    author_email = (
+        args.get("author_email") or (developer_entry["email"] if developer_entry else None) or _DEFAULT_AUTHOR_EMAIL
+    ).strip()
     push = args.get("push", True)
 
     result: dict[str, Any] = {"location": location}
@@ -160,24 +181,13 @@ async def setup_github_repo(
     elif has_remote:
         result["remote_url"] = (existing_remote.get("stdout") or "").strip() or None
     else:
-        auth_check = await _run(nucore_interface, "gh auth status", cwd)
-        if auth_check.get("error") or auth_check.get("exit_code") != 0:
-            result["remote_url"] = None
-            result["pushed"] = False
-            result["warning"] = (
-                "the gh CLI isn't available or authenticated on this host -- create an empty "
-                "repo on GitHub.com yourself and re-call setup_github_repo with remote_url set "
-                "to its URL"
-            )
-            return result
-
-        create_cmd = f"gh repo create {shlex.quote(repo_name)} --{visibility} --source=. --remote={_DEFAULT_REMOTE}"
-        create_result = await _run(nucore_interface, create_cmd, cwd)
-        if create_result.get("error"):
-            return create_result
-        if create_result.get("exit_code") != 0:
-            return {"error": "gh repo create failed", **create_result}
-        result["remote_url"] = (create_result.get("stdout") or "").strip() or None
+        result["remote_url"] = None
+        result["pushed"] = False
+        result["warning"] = (
+            "no remote configured -- create an empty repository yourself (on GitHub.com or "
+            "elsewhere) and re-call setup_github_repo with remote_url set to its URL"
+        )
+        return result
 
     if not push:
         result["pushed"] = False

@@ -1,6 +1,6 @@
 {
   "name": "delete_registered_plugin",
-  "description": "Resolves install_generated_plugin's 'already registered' conflict the other way: deletes this plugin's local dev store registration entirely, then clears the locally-known nsid so the next install_generated_plugin call registers it fresh. Does not uninstall the plugin if it's currently installed -- call delete_plugin for that, separately, if needed. Requires a locally-known nsid; fails if there isn't one. This is a real, permanent change on the hub -- always confirm with the customer first.",
+  "description": "Resolves install_generated_plugin's 'already registered' conflict the other way: deletes this plugin's local dev store registration entirely (and the hub's own on-disk files for it), then clears the locally-known nsid so the next install_generated_plugin call registers it fresh. Does not uninstall the plugin if it's currently installed -- call delete_plugin for that, separately, if needed. Requires a locally-known nsid; fails if there isn't one. This is a real, permanent change on the hub, performed through this assistant. Code-enforced two-call confirm, same shape as delete_plugin: call once without `confirmed` (or `confirmed: false`) to resolve the registration and see what would be deleted -- this does not delete anything. Only call again with `confirmed: true` after the developer has explicitly agreed to delete it -- never speculatively. The system independently verifies the developer's literal next reply was exactly the word YES (all caps) before honoring confirmed: true, regardless of what this call's own confirmed argument says.",
   "input_schema": {
     "type": "object",
     "required": ["location"],
@@ -8,6 +8,11 @@
       "location": {
         "type": "string",
         "description": "The 'location' a generate_plugin_scaffold/list_generated_plugins call returned, identifying which generated plugin's registration to delete."
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "Leave unset (or false) for the first call, which only previews the delete and performs no side effects. Set to true only on a follow-up call, only after the developer has explicitly agreed to delete it.",
+        "default": false
       }
     }
   }

@@ -45,7 +45,10 @@ async def routine_status_op(nucore_interface: NuCoreInterface, args: dict[str, A
             "message": (
                 "This permanently deletes this routine -- nothing has been deleted yet. Call "
                 "routine_status_op again with confirmed: true only after the customer has "
-                "explicitly agreed, never speculatively."
+                "explicitly agreed, never speculatively. The system only honors this if their "
+                "very next reply is exactly the word YES (all caps) and nothing else; it "
+                "independently verifies this regardless of what this call's own confirmed "
+                "argument says."
             ),
         }
 

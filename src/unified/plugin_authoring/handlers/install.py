@@ -260,7 +260,17 @@ async def delete_registered_plugin(
     """Resolves a reported ``"conflict"``'s registered half the other way:
     deletes the dev-store registration entirely, then clears the locally-
     known ``nsid`` so the next install_generated_plugin call registers
-    fresh. Does not uninstall -- see delete_plugin for that."""
+    fresh. Does not uninstall -- see delete_plugin for that.
+
+    Code-enforced two-call confirm, same shape as delete_plugin/node_op/
+    routine_status_op/variable_op's own ``confirmed`` check: a call without
+    ``confirmed: True`` resolves the registration and returns a
+    ``confirmation_required`` payload with zero side effects; only a
+    follow-up call with ``confirmed: True`` actually deletes it.
+    ``UnifiedRuntime``'s ``_wrap_dispatch_for_delete_confirmation``
+    additionally verifies the customer's literal last message was exactly
+    ``"YES"`` before letting any caller-supplied ``confirmed: True`` reach
+    this handler at all -- see that function's docstring."""
     location = (args.get("location") or "").strip()
     result = _read_server_entry(plugin_output_root, location)
     if isinstance(result, dict):
@@ -270,6 +280,22 @@ async def delete_registered_plugin(
     nsid = entry.get("nsid")
     if not (isinstance(nsid, str) and nsid):
         return {"stage": "delete", "error": f"'{location}' has no known nsid -- nothing to delete"}
+
+    confirmed = bool(args.get("confirmed"))
+    if not confirmed:
+        return {
+            "confirmation_required": True,
+            "location": location,
+            "nsid": nsid,
+            "message": (
+                "This permanently deletes this plugin's registration from the hub's local store "
+                "(and the hub's own on-disk files for it) -- nothing has been deleted yet. Ask the "
+                "developer to confirm, then call delete_registered_plugin again -- but the system "
+                "only honors this if the developer's very next reply is exactly the word YES (all "
+                "caps) and nothing else; it independently verifies this regardless of what this "
+                "call's own confirmed argument says."
+            ),
+        }
 
     delete_response = await nucore_interface.delete_local_plugin(nsid)
     if not _is_successful(delete_response):

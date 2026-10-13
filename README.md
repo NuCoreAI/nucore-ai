@@ -112,11 +112,13 @@ python -m unified.run_unified_runtime \
 > I want a plugin that exposes my pool controller
 ```
 
-In REPL mode the model-driven switch tool is the only way in (the model calls
-`switch_to_developer_mode`/`switch_to_customer_mode` itself when it judges the request is out of
-scope for whichever tool set is currently active); the `/developer`/`/customer` chat commands are
-parsed only from WebSocket `"type": "message"` payloads (see `EisyUIContext.process_message`),
-not from a raw REPL line.
+The model-driven switch tool (the model calls `switch_to_developer_mode`/`switch_to_customer_mode`
+itself when it judges the request is out of scope for whichever tool set is currently active) works
+the same way in both REPL and WebSocket mode. The explicit `/developer`/`/customer` chat commands
+(see `EisyUIContext.process_message`) are recognized from both a raw REPL line and a WebSocket
+`"type": "message"` payload: typing one switches this connection's active tool set and immediately
+prints a confirmation (or, if that tool set isn't enabled on this installation, an error) -- the
+same outcome the model-driven switch tool would relay.
 
 See `src/unified/plugin_authoring/README.md` for the full tool list, layout, and the
 discovery/generation workflow.

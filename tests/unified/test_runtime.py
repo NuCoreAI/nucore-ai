@@ -92,6 +92,105 @@ async def test_handle_query_defaults_fabrication_guard_config_when_absent():
     assert _FakeLoop.captured_init_kwargs["max_fabrication_retries"] == 1
 
 
+@pytest.mark.asyncio
+async def test_handle_query_falls_back_to_default_tool_set_for_an_unregistered_active_tool_set():
+    # Backstop against a stale/invalid active_tool_set from any caller --
+    # e.g. a sticky value from before a config reload -- degrading to the
+    # default tool set instead of raising KeyError at self._tool_sets[...].
+    result = await _runtime().handle_query("hi", active_tool_set="not_a_real_tool_set")
+    assert _FakeLoop.captured_llm_config["session_id"] == "default::unified"
+    assert result.output["active_tool_set"] == "unified"
+
+
+def test_is_tool_set_enabled_reflects_enabled_profiles():
+    runtime = _runtime({"enabled_profiles": ["unified"]})
+    assert runtime.is_tool_set_enabled("unified") is True
+    assert runtime.is_tool_set_enabled("plugin_authoring") is False
+
+
+async def _dispatch_through_delete_confirmation_gate(query: str, name: str, args: dict) -> dict:
+    """Runs one handle_query turn (with *query* as the raw customer text),
+    then invokes the resulting wrapped dispatch callable directly with
+    (name, args) against a recording fake base dispatch, returning exactly
+    the args that reached it -- isolates _wrap_dispatch_for_delete_
+    confirmation's own rewriting logic from the rest of the dispatch chain."""
+    received: list[dict] = []
+
+    async def _fake_base_dispatch(dispatched_name, dispatched_args):
+        received.append(dispatched_args)
+        return {"ok": True}
+
+    tool_sets = {
+        "unified": ToolSetBundle(
+            tool_spec_paths=[],
+            dispatch_factory=lambda _ctx: DispatchBundle(dispatch=_fake_base_dispatch),
+            system_prompt_builder=_fake_build_system_prompt_sections,
+        )
+    }
+    await _runtime(tool_sets=tool_sets).handle_query(query)
+    dispatch = _FakeLoop.captured_init_kwargs["dispatch"]
+    await dispatch(name, args)
+    return received[0]
+
+
+@pytest.mark.asyncio
+async def test_delete_confirmation_gate_passes_through_on_exact_yes_and_model_confirmed():
+    args = await _dispatch_through_delete_confirmation_gate(
+        "YES", "node_op", {"operation": "delete", "node_id": "n1", "confirmed": True}
+    )
+    assert args["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_confirmation_gate_trims_only_outer_whitespace():
+    args = await _dispatch_through_delete_confirmation_gate(
+        "  YES  \n", "node_op", {"operation": "delete", "node_id": "n1", "confirmed": True}
+    )
+    assert args["confirmed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_reply", ["yes", "Y", "YES please", "YES.", "ye", "YES\nplease"])
+async def test_delete_confirmation_gate_rejects_anything_but_exact_yes(bad_reply):
+    args = await _dispatch_through_delete_confirmation_gate(
+        bad_reply, "node_op", {"operation": "delete", "node_id": "n1", "confirmed": True}
+    )
+    assert args["confirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_delete_confirmation_gate_requires_model_confirmed_too():
+    # Exact "YES" alone is not sufficient -- the model's own confirmed must
+    # also be true (AND, not a replacement for the model's own judgment).
+    args = await _dispatch_through_delete_confirmation_gate(
+        "YES", "node_op", {"operation": "delete", "node_id": "n1"}
+    )
+    assert args["confirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_delete_confirmation_gate_ignores_non_delete_operations():
+    args = await _dispatch_through_delete_confirmation_gate(
+        "not yes", "node_op", {"operation": "rename", "node_id": "n1", "new_name": "x"}
+    )
+    assert args == {"operation": "rename", "node_id": "n1", "new_name": "x"}
+
+
+@pytest.mark.asyncio
+async def test_delete_confirmation_gate_ignores_tool_names_outside_the_gated_set():
+    args = await _dispatch_through_delete_confirmation_gate("not yes", "some_other_tool", {"foo": "bar"})
+    assert args == {"foo": "bar"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gated_tool", ["delete_plugin", "delete_registered_plugin"])
+async def test_delete_confirmation_gate_covers_single_purpose_delete_tools(gated_tool):
+    args = await _dispatch_through_delete_confirmation_gate(
+        "not yes", gated_tool, {"location": "acme_pool", "confirmed": True}
+    )
+    assert args["confirmed"] is False
+
+
 def test_default_session_store_is_private_per_instance():
     # No session_store given -- each instance gets its own, unshared with
     # any other (the behavior every existing caller/test relies on).

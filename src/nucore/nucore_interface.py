@@ -824,6 +824,15 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the get_full_system_config method.")
 
+    async def get_device_mac_address(self) -> str | None:
+        """
+        Returns the connected hub's own MAC address (from its /desc UPnP
+        description), or None if the hub is unreachable or didn't return
+        one. No params.
+        :return: The hub's MAC address string, or None.
+        """
+        raise NotImplementedError("Subclasses must implement the get_device_mac_address method.")
+
     async def get_core_services_status(self) -> dict[str, Any] | None:
         """
         Returns the status (running/stopped/failed) of NuCore core services:

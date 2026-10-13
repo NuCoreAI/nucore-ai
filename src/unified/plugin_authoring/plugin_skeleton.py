@@ -79,11 +79,13 @@ def render_init(
     authorize: bool,
     ai_enabled: bool,
     file_upload: bool,
+    controller_address: str,
+    controller_node_name: str,
     custom_param_docs: str | None = None,
 ) -> str:
     """The Controller's ``__init__`` method body (full ``def __init__...``
-    through the final ``self.poly.addNode(self)``) -- the exact verified
-    ``subscribe()`` list, plus the OAuth service construction/subscription
+    through the final ``self.poly.addNode(self, conn_status='ST')``) -- the
+    exact verified ``subscribe()`` list, plus the OAuth service construction/subscription
     when *authorize* (closing ``ioxplugin``'s dead-code bug: its own
     template subscribed ``CUSTOMNS`` but left ``OAUTH`` commented out; this
     one does not), plus the ``CUSTOMREQUEST`` subscription when
@@ -117,9 +119,35 @@ def render_init(
     nothing is actually configured yet when the real ``START`` event fires
     (no custom params, no previously-discovered nodes, no OAuth token), so
     the LLM-authored ``start()`` override must not run until ``CONFIGDONE``
-    has fired, or a timeout gives up."""
+    has fired, or a timeout gives up.
+
+    *controller_address* is this plugin's own MAC-derived, generation-time-
+    computed address (see ``handlers/scaffold.py``'s guard 4a) -- ``primary``
+    and ``address`` both default to it (this Controller is its own primary,
+    a self-referential singleton, same as the one real construction call in
+    ``render_main_py`` always passes). ``name`` defaults to
+    *controller_node_name* (``"<project name> Controller"`` -- never the bare
+    word ``"Controller"``, which would be meaningless once a customer has
+    more than one node-server installed) -- that default is never actually
+    relied on, since ``render_main_py``'s construction call always passes all
+    four arguments explicitly, but it still shouldn't carry a generic
+    placeholder in human-readable generated source.
+
+    ``self.poly.addNode(self, conn_status='ST')`` (the final line) tells PG3
+    to manage the Controller's own ``ST`` driver's connected/disconnected
+    value automatically (``Interface.setController`` -- confirmed against
+    the installed ``udi_interface`` package: there is no local Python logic
+    that toggles it, PG3 does this entirely server-side once told which
+    driver to use) -- paired with the ``drivers = [...]`` class variable
+    ``_assemble_plugin_py`` always emits for the Controller
+    (``{'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Status'}``) and the
+    matching ``ST`` nodedef property ``handlers/scaffold.py``'s guard 4a
+    always injects. No LLM-authored override body should ever call
+    ``self.setDriver('ST', ...)`` on the Controller itself -- that would
+    just fight PG3's own automatic management of it."""
     lines = [
-        "    def __init__(self, polyglot, primary, address, name):",
+        f"    def __init__(self, polyglot, primary={controller_address!r}, address={controller_address!r}, "
+        f"name={controller_node_name!r}):",
         "        super().__init__(polyglot, primary, address, name)",
         "        self.poly = polyglot",
         "        self.persist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"persist\")",
@@ -167,7 +195,7 @@ def render_init(
         lines.append("        self.poly.subscribe(self.poly.OAUTH, self.__oauthHandler)")
     if ai_enabled:
         lines.append(f"        self.poly.subscribe(self.poly.CUSTOMREQUEST, self.{AI_REQUEST_OVERRIDE_METHOD})")
-    lines.append("        self.poly.addNode(self)")
+    lines.append("        self.poly.addNode(self, conn_status='ST')")
     return "\n".join(lines) + "\n"
 
 
@@ -286,7 +314,9 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
     return "\n".join(methods)
 
 
-def render_main_py(controller_module: str, controller_class: str) -> str:
+def render_main_py(
+    controller_module: str, controller_class: str, *, controller_address: str, controller_node_name: str
+) -> str:
     """Fully tool-generated, never LLM-authored -- bootstrap is nearly
     identical for every plugin: start Polyglot, send this plugin's Dynamic
     Profile (profile.json, written next to this file) via
@@ -313,7 +343,36 @@ def render_main_py(controller_module: str, controller_class: str) -> str:
     local dev venv can actually take effect once a plugin is registered and
     started through the normal install flow. Production never has a
     ``.venv`` here, so this check is always a no-op there -- zero behavior
-    change, nothing to opt into or out of at generation time."""
+    change, nothing to opt into or out of at generation time.
+
+    The re-exec additionally only fires when this process was launched
+    directly (a terminal, the VSCode debugger via ``setup_vscode_debug_
+    config``) -- never when the real host's own rc.d/``init``-managed
+    service framework started it. Confirmed on a live host: a daemonized
+    service process is reparented to ``init`` (PID 1) once its original
+    forking parent exits, so a genuinely framework-launched process's own
+    parent command is ``"/sbin/init"`` (checked via ``ps -o command= -p
+    <ppid>``) -- true for both a real production install and a local
+    ``install_generated_plugin`` test-on-hub, since both start the plugin
+    through the identical rc.d path. Skipping the re-exec there keeps a
+    hub-installed test running on the exact interpreter/dependencies a real
+    production install would use, so a ``.venv``-only dependency gap can
+    never hide behind dev convenience once the plugin is actually running
+    as a real managed service -- the ``.venv`` shortcut stays available only
+    for the lighter, direct-run debugging workflow it was built for. The
+    ``ps`` check itself is wrapped defensively (defaulting to "not
+    framework-launched", i.e. today's old behavior) since it runs before
+    ``udi_interface.LOGGER`` exists -- nowhere safe to surface a warning if
+    it ever fails.
+
+    *controller_address* is this plugin's own MAC-derived, generation-time-
+    computed address (see ``handlers/scaffold.py``'s guard 4a) -- used for
+    both ``primary`` and ``address`` in the one real construction call
+    below, matching this singleton's self-referential convention.
+    *controller_node_name* (``"<project name> Controller"``, built from
+    ``server_entry.name``) is this Controller's display name -- never the
+    bare word ``"Controller"``, which would be meaningless once a customer
+    has more than one node-server installed."""
     return f'''"""Generated by plugin_authoring -- bootstraps the plugin process. Do not
 edit by hand; regenerate via generate_plugin_scaffold instead. See
 context.md for this plugin's iteration history."""
@@ -321,6 +380,7 @@ context.md for this plugin's iteration history."""
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -335,19 +395,43 @@ if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
     # binary as the system one, so comparing resolved paths would never
     # see a difference and this would silently never fire.
     #
-    # argv[0] is the literal "python3" here, NOT _VENV_PYTHON -- confirmed
-    # against a live host: rc.subr's check_pidfile()/_find_processes()
-    # (/etc/rc.subr) matches the running process's own argv[0] against the
-    # service's procname (the real system python3's path, from a live
-    # /usr/local/etc/rc.d/plugin_N's udx_command), accepting either that
-    # exact path or its bare basename ("python3") -- never an unrelated
-    # full path like this venv's own. Passing _VENV_PYTHON as argv[0]
-    # breaks that match even though the PID is exactly right and the
-    # process is genuinely alive, which makes rc.subr conclude the service
-    # isn't running and spawn a duplicate on every subsequent start,
-    # orphaning this one. The actual interpreter binary that runs is still
-    # _VENV_PYTHON (os.execv's own first argument, unaffected by argv[0]).
-    os.execv(_VENV_PYTHON, ["python3"] + sys.argv)
+    # Only re-exec when this process was launched directly (a terminal, the
+    # VSCode debugger) -- never when the real host's own rc.d/init-managed
+    # service framework started it. A daemonized service process is
+    # reparented to init (PID 1) once its original forking parent exits, so
+    # a genuinely framework-launched process's own parent command is
+    # "/sbin/init" (confirmed on a live host) -- true for both a real
+    # production install and a local install_generated_plugin test-on-hub
+    # (both go through the identical rc.d start path). Skipping the re-exec
+    # there keeps a hub-installed test running on the exact
+    # interpreter/dependencies a real production install would use, so a
+    # venv-only dependency gap can't hide until real production. Defaults
+    # to "not framework-launched" (preserves the old behavior: allow the
+    # re-exec) if the check itself fails for any reason -- this runs before
+    # LOGGER exists, so there is nowhere safe to surface a warning yet.
+    _is_framework_launch = False
+    try:
+        _ppid_command = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(os.getppid())], capture_output=True, text=True
+        ).stdout.strip()
+        _is_framework_launch = _ppid_command.startswith("/sbin/init")
+    except Exception:
+        pass
+
+    if not _is_framework_launch:
+        # argv[0] is the literal "python3" here, NOT _VENV_PYTHON -- confirmed
+        # against a live host: rc.subr's check_pidfile()/_find_processes()
+        # (/etc/rc.subr) matches the running process's own argv[0] against the
+        # service's procname (the real system python3's path, from a live
+        # /usr/local/etc/rc.d/plugin_N's udx_command), accepting either that
+        # exact path or its bare basename ("python3") -- never an unrelated
+        # full path like this venv's own. Passing _VENV_PYTHON as argv[0]
+        # breaks that match even though the PID is exactly right and the
+        # process is genuinely alive, which makes rc.subr conclude the service
+        # isn't running and spawn a duplicate on every subsequent start,
+        # orphaning this one. The actual interpreter binary that runs is still
+        # _VENV_PYTHON (os.execv's own first argument, unaffected by argv[0]).
+        os.execv(_VENV_PYTHON, ["python3"] + sys.argv)
 
 import json
 
@@ -366,7 +450,7 @@ if __name__ == "__main__":
         with open(profile_path, "r", encoding="utf-8") as f:
             response = polyglot.updateJsonProfile(json.load(f), {{"waitResponse": True}})
             LOGGER.info("Profile update response: %s", response)
-        {controller_class}(polyglot, "controller", "controller", "{controller_class}")
+        {controller_class}(polyglot, {controller_address!r}, {controller_address!r}, {controller_node_name!r})
         polyglot.ready()
         polyglot.runForever()
     except (KeyboardInterrupt, SystemExit):

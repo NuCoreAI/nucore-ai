@@ -69,6 +69,17 @@ async def regenerate_plugin_boilerplate(
         return {"error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' is not valid JSON: {exc}"}
 
     server_entry_input = generation_inputs.get("server_entry") or {}
+    # Same derivation generate_plugin_scaffold uses -- the Controller's display name must include
+    # the project's own name, never the bare word "Controller". A plugin that successfully
+    # generated once should always have this, but a hand-edited/corrupted generation_inputs.json
+    # is still worth guarding against explicitly rather than rendering a blank/invalid name.
+    project_name = server_entry_input.get("name")
+    if not isinstance(project_name, str) or not project_name.strip():
+        return {
+            "error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has no server_entry.name -- "
+            "regenerate once with generate_plugin_scaffold (confirm_overwrite: true) first"
+        }
+    controller_node_name = f"{project_name.strip()} Controller"
     authorize = bool(server_entry_input.get("authorize"))
     ai_enabled = bool(server_entry_input.get("ai_enabled"))
     file_upload = bool(server_entry_input.get("fileUpload"))
@@ -81,8 +92,33 @@ async def regenerate_plugin_boilerplate(
     controller_module = generation_inputs.get("controller_module") or _DEFAULT_CONTROLLER_MODULE
     version = generation_inputs.get("version") or _DEFAULT_VERSION
 
+    # The stored profile already carries the MAC-derived id generate_plugin_scaffold's guard 4a
+    # rewrote the Controller's reserved "controller" placeholder into (always ending in
+    # "_controller") -- reused as-is here rather than re-fetching the hub's MAC again, since this
+    # tool only ever refreshes template-driven files, never re-derives LLM-authored/profile content.
+    stored_profile = generation_inputs.get("profile") or {}
+    controller_node_id = next(
+        (
+            nd["id"]
+            for nd in (stored_profile.get("nodedefs") or [])
+            if isinstance(nd, dict) and isinstance(nd.get("id"), str) and nd["id"].endswith("_controller")
+        ),
+        None,
+    )
+    if controller_node_id is None:
+        return {
+            "error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has no stored nodedef ending in "
+            "'_controller' -- it predates the MAC-derived controller id/address convention; "
+            "regenerate once with generate_plugin_scaffold (confirm_overwrite: true) first"
+        }
+    mac6 = controller_node_id[: -len("_controller")]
+    controller_address = f"{mac6}_ctl"
+
     plugin_py = _assemble_plugin_py(
         controller_class=controller_class,
+        controller_node_id=controller_node_id,
+        controller_address=controller_address,
+        controller_node_name=controller_node_name,
         node_classes=list(node_classes.keys()),
         authorize=authorize,
         ai_enabled=ai_enabled,
@@ -91,7 +127,9 @@ async def regenerate_plugin_boilerplate(
         ai_tool_names=ai_tool_names,
         custom_param_docs=custom_param_docs,
     )
-    main_py = plugin_skeleton.render_main_py(controller_module, controller_class)
+    main_py = plugin_skeleton.render_main_py(
+        controller_module, controller_class, controller_address=controller_address, controller_node_name=controller_node_name
+    )
     version_py = plugin_skeleton.render_version_py(version)
 
     for filename, source in {_PLUGIN_FILENAME: plugin_py, _MAIN_FILENAME: main_py, _VERSION_FILENAME: version_py}.items():

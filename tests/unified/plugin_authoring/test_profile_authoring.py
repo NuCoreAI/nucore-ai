@@ -327,6 +327,66 @@ async def test_validate_profile_accepts_meaningful_custom_property_id():
     assert result == {"valid": True, "errors": []}
 
 
+# --- nodedef id format cross-check (_check_nodedef_id_format): a nodedef id
+# that isn't alphanumeric/underscore, or exceeds 31 characters, must fail
+# validation mechanically -- this is what actually catches an over-length
+# generate_plugin_scaffold-rewritten {mac6}_{placeholder} id ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_bad_charset_nodedef_id():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [],
+                "nodedefs": [{"id": "bad id!", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("bad id!" in e and "alphanumeric" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_too_long_nodedef_id():
+    too_long = "a" * 32
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [],
+                "nodedefs": [{"id": too_long, "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any(too_long in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_mac_derived_nodedef_id():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [],
+                "nodedefs": [{"id": "ddeeff_controller", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
 # --- links-object-present cross-check (_check_links_object_present): every
 # nodedef must include a links object with ctl/rsp arrays, even when empty
 # -- confirmed mandatory against a real generated profile.json. nucore's own

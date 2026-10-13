@@ -18,25 +18,51 @@ from unified.plugin_authoring.secret_guard import OAUTH_PLACEHOLDER
 DEVELOPER_EMAIL = "dev@example.com"
 DEVELOPER_NAME = "Dev Name"
 
+# "AA:BB:CC:DD:EE:FF" -> mac6 "ddeeff" -- every placeholder below is rewritten to
+# f"ddeeff_{placeholder}" by guard 4a.
+FAKE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
+FAKE_MAC6 = "ddeeff"
+
 WIRE_PROFILE = {
     "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
     "nodedefs": [
         {
-            "id": "ND_SWITCH",
+            "id": "switch",
             "name": "Switch",
             "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
             "links": {"ctl": [], "rsp": []},
-        }
+        },
+        {
+            "id": "controller",
+            "name": "Controller",
+            "properties": [],
+            "cmds": {"sends": [], "accepts": []},
+            "links": {"ctl": [], "rsp": []},
+        },
     ],
     "linkdefs": [],
 }
 
 PROFILE_WITH_DANGLING_EDITOR = {
     "editors": [],
-    "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "MISSING_EDITOR"}], "cmds": {}}],
+    "nodedefs": [
+        {"id": "ND_X", "properties": [{"id": "ST", "editor": "MISSING_EDITOR"}], "cmds": {}},
+        {"id": "controller", "properties": [], "cmds": {}},
+    ],
     "linkdefs": [],
 }
+
+
+class _FakeNuCoreInterface:
+    """Minimal stand-in for the one method generate_plugin_scaffold's guard
+    4a calls -- generation never touches the hub otherwise."""
+
+    def __init__(self, mac_address: str | None = FAKE_MAC_ADDRESS):
+        self._mac_address = mac_address
+
+    async def get_device_mac_address(self):
+        return self._mac_address
 
 
 def _ledger_with_evidence() -> EvidenceLedger:
@@ -60,14 +86,22 @@ def _base_args(**overrides):
 
 
 async def _generate(
-    tmp_path, args, *, ledger=None, secret_values=None, get_user_id=None, skip_developer_config=False, default_run_as=None
+    tmp_path,
+    args,
+    *,
+    ledger=None,
+    secret_values=None,
+    get_user_id=None,
+    skip_developer_config=False,
+    default_run_as=None,
+    nucore_interface=None,
 ):
     if not skip_developer_config:
         developer_config.write_developer_config(
             str(tmp_path), email=DEVELOPER_EMAIL, name=DEVELOPER_NAME, default_run_as=default_run_as
         )
     return await generate_plugin_scaffold(
-        None,
+        nucore_interface if nucore_interface is not None else _FakeNuCoreInterface(),
         args,
         ledger=ledger if ledger is not None else _ledger_with_evidence(),
         secret_values=secret_values or [],
@@ -361,8 +395,19 @@ async def test_generation_inputs_json_is_written_with_the_normalized_inputs(tmp_
     assert "error" not in result
 
     generation_inputs = json.loads((tmp_path / "acme_pool" / "generation_inputs.json").read_text())
+    rewritten_profile = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in rewritten_profile["nodedefs"]:
+        if nodedef["id"] == "controller":
+            nodedef["properties"].append({"id": "ST", "editor": "ED_CONTROLLER_ST"})
+        nodedef["id"] = f"{FAKE_MAC6}_{nodedef['id']}"
+    rewritten_profile["editors"].append(
+        {
+            "id": "ED_CONTROLLER_ST",
+            "ranges": [{"subset": "0,1", "uom": "25", "names": {"0": "Not Connected", "1": "Connected"}}],
+        }
+    )
     assert generation_inputs == {
-        "profile": WIRE_PROFILE,
+        "profile": rewritten_profile,
         "server_entry": {"name": "AcmePool", "desc": "Acme pool controller"},
         "readme_body": "This plugin integrates with the Acme Pool API.",
         "override_bodies": {"start": 'def start(self):\n    LOGGER.info("hi")\n'},
@@ -409,6 +454,39 @@ async def test_server_entry_name_too_long_is_rejected(tmp_path):
     args = _base_args(server_entry={"name": "WayTooLongAPluginName"})
     result = await _generate(tmp_path, args)
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_server_entry_missing_name_is_rejected(tmp_path):
+    args = _base_args(server_entry={"desc": "Acme pool controller"})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+# --- controller node display name must include the project's own name ---
+
+
+@pytest.mark.asyncio
+async def test_controller_node_name_includes_the_project_name(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    main_py = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert "name='AcmePool Controller'" in plugin_py
+    assert "'AcmePool Controller'" in main_py
+
+
+@pytest.mark.asyncio
+async def test_controller_node_name_is_never_the_bare_word_controller(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    main_py = (tmp_path / "acme_pool" / "main.py").read_text()
+    # "Controller" only ever appears as part of "AcmePool Controller" or the
+    # Controller *class* name -- never as a standalone node-name value.
+    assert "'Controller'" not in plugin_py
+    assert "'Controller'" not in main_py
 
 
 @pytest.mark.asyncio
@@ -842,6 +920,41 @@ async def test_main_py_venv_reexec_uses_bare_python3_as_argv0(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_main_py_venv_reexec_skips_when_launched_by_the_real_host_framework(tmp_path):
+    # A plugin process the real host's rc.d/init-managed service framework
+    # is running gets reparented to init (PID 1) once its original forking
+    # parent exits, so its own parent command is "/sbin/init" -- true for
+    # both a real production install and a local install_generated_plugin
+    # test-on-hub. The .venv re-exec must not fire there, only for a
+    # directly-run process (terminal, VSCode debugger).
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert "os.getppid()" in source
+    assert '"/sbin/init"' in source
+    venv_guard_start = source.index("if sys.prefix == sys.base_prefix")
+    ps_check = source.index("os.getppid()")
+    execv_call = source.index("os.execv(_VENV_PYTHON")
+    # The ps/init check lives inside the existing .venv-exists guard, and
+    # runs before the (now further-nested) os.execv call.
+    assert venv_guard_start < ps_check < execv_call
+
+
+@pytest.mark.asyncio
+async def test_main_py_venv_reexec_ps_check_is_defensively_wrapped(tmp_path):
+    # Runs before udi_interface.LOGGER exists -- an unexpected failure (e.g.
+    # ps missing on an unusual system) must degrade silently to the old
+    # behavior (allow the re-exec), not crash the plugin before it starts.
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    subprocess_call = source.index("subprocess.run(")
+    except_clause = source.index("except Exception:")
+    execv_call = source.index("os.execv(_VENV_PYTHON")
+    assert subprocess_call < except_clause < execv_call
+
+
+@pytest.mark.asyncio
 async def test_install_sh_uses_venv_pip_when_present_else_falls_back_to_user_install(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
@@ -856,10 +969,11 @@ async def test_install_sh_uses_venv_pip_when_present_else_falls_back_to_user_ins
 
 @pytest.mark.asyncio
 async def test_extra_node_classes_are_written_as_separate_files(tmp_path):
-    args = _base_args(node_classes={"pump_node": '"""Pump node."""\n\nclass Pump:\n    pass\n'})
+    args = _base_args(node_classes={"pump_node": '"""Pump node."""\n\nclass Pump:\n    id = "switch"\n'})
     result = await _generate(tmp_path, args)
     assert "error" not in result
-    assert (tmp_path / "acme_pool" / "pump_node.py").is_file()
+    pump_source = (tmp_path / "acme_pool" / "pump_node.py").read_text()
+    assert f"id = '{FAKE_MAC6}_switch'" in pump_source
 
 
 @pytest.mark.asyncio
@@ -868,6 +982,106 @@ async def test_invalid_node_class_syntax_is_rejected(tmp_path):
     result = await _generate(tmp_path, args)
     assert "error" in result
     assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_node_class_missing_id_is_rejected(tmp_path):
+    args = _base_args(node_classes={"pump_node": "class Pump:\n    pass\n"})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert "id" in result["error"]
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_node_class_with_unrecognized_id_is_rejected(tmp_path):
+    args = _base_args(node_classes={"pump_node": 'class Pump:\n    id = "no_such_nodedef"\n'})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_mac_fetch_failure_is_rejected(tmp_path):
+    result = await _generate(tmp_path, _base_args(), nucore_interface=_FakeNuCoreInterface(mac_address=None))
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_profile_missing_controller_nodedef_is_rejected(tmp_path):
+    profile_without_controller = {
+        "editors": WIRE_PROFILE["editors"],
+        "nodedefs": [nd for nd in WIRE_PROFILE["nodedefs"] if nd["id"] != "controller"],
+        "linkdefs": [],
+    }
+    result = await _generate(tmp_path, _base_args(profile=profile_without_controller))
+    assert "error" in result
+    assert "controller" in result["error"]
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_controller_id_and_address_are_mac_derived(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert f"id = '{FAKE_MAC6}_controller'" in plugin_py
+    assert f"'{FAKE_MAC6}_ctl'" in plugin_py
+    profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
+    nodedef_ids = {nd["id"] for nd in profile_json["nodedefs"]}
+    assert nodedef_ids == {f"{FAKE_MAC6}_controller", f"{FAKE_MAC6}_switch"}
+
+
+# --- controller connection status (ST driver) is entirely tool-generated ---
+
+
+@pytest.mark.asyncio
+async def test_controller_always_declares_the_st_driver_and_conn_status(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "drivers = [{'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Status'}]" in plugin_py
+    assert "self.poly.addNode(self, conn_status='ST')" in plugin_py
+
+
+@pytest.mark.asyncio
+async def test_controller_nodedef_gets_a_matching_st_property_and_editor(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
+
+    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
+    assert {"id": "ST", "editor": "ED_CONTROLLER_ST"} in controller_nodedef["properties"]
+
+    st_editor = next(e for e in profile_json["editors"] if e["id"] == "ED_CONTROLLER_ST")
+    assert st_editor["ranges"] == [
+        {"subset": "0,1", "uom": "25", "names": {"0": "Not Connected", "1": "Connected"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_controller_st_property_is_overwritten_if_already_declared_differently(tmp_path):
+    profile_with_custom_st = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in profile_with_custom_st["nodedefs"]:
+        if nodedef["id"] == "controller":
+            nodedef["properties"].append({"id": "ST", "editor": "SOME_OTHER_EDITOR"})
+    profile_with_custom_st["editors"].append(
+        {"id": "ED_CONTROLLER_ST", "ranges": [{"min": 0, "max": 1, "uom": "2"}]}
+    )
+
+    result = await _generate(tmp_path, _base_args(profile=profile_with_custom_st))
+    assert "error" not in result
+    profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
+
+    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
+    st_properties = [p for p in controller_nodedef["properties"] if p["id"] == "ST"]
+    assert st_properties == [{"id": "ST", "editor": "ED_CONTROLLER_ST"}]
+
+    st_editor = next(e for e in profile_json["editors"] if e["id"] == "ED_CONTROLLER_ST")
+    assert st_editor["ranges"] == [
+        {"subset": "0,1", "uom": "25", "names": {"0": "Not Connected", "1": "Connected"}}
+    ]
 
 
 # --- guard 2: developer commissioning ---

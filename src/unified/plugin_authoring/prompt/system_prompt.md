@@ -43,6 +43,26 @@ report the end state -- walking through the process is itself useful to either a
     `FILTER_LIFE`, not `GV3`). Either way the format is fixed and enforced by `validate_profile`/
     `generate_plugin_scaffold`: all-caps letters/digits/underscore, starting with a letter, max 30
     characters.
+  - **Every nodedef's own `id` is a plain, meaningful placeholder** -- short and human-readable
+    (e.g. `"switch"`, `"thermostat"`), never pre-computed or guessed. The Controller's own nodedef
+    must keep the literal placeholder `"controller"` exactly -- a reserved sentinel
+    `generate_plugin_scaffold` looks for specifically. At generation time (not before), the tool
+    fetches the connected hub's own MAC address and rewrites every placeholder into its real
+    `{last-6-hex-of-the-hub's-MAC}_{placeholder}` id, in both `profile.json` and the matching
+    `id = "<placeholder>"` class variable on the generated/supplied Node subclass (`node_classes`
+    -- see below) -- this keeps nodedef ids unique across every node-server sharing one ISY,
+    computed once, mechanically, rather than guessed. The resulting real id's length/charset is
+    enforced by `validate_profile`/`generate_plugin_scaffold` too: alphanumeric/underscore only,
+    max 31 characters -- keep a placeholder name short enough to leave room for the mac prefix.
+  - **The Controller's connection-status (`ST`) driver/property is entirely tool-generated --
+    never author it yourself.** `generate_plugin_scaffold` always gives the Controller class a
+    `drivers = [{'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Status'}]` class variable, calls
+    `self.poly.addNode(self, conn_status='ST')`, and injects a matching `ST` property (with a
+    reserved editor, uom 25/subset) onto the controller's own nodedef automatically -- overwriting
+    whatever was there if the profile already declared one. Don't declare your own `ST` property
+    for the controller's nodedef, and never call `self.setDriver('ST', ...)` on the Controller
+    from any override body -- PG3 manages that value (connected/not connected) automatically once
+    `conn_status='ST'` is set; there's no local logic for it to override or duplicate.
   - A nodedef's `links.ctl`/`links.rsp` reference `linkdefs` -- native links between a controller
     and a responder node (e.g. for scenes). A controller's and a responder's linkdefs become
     natively linkable when they share the same `protocol` string. `cmd: true` on a responder's
@@ -224,6 +244,19 @@ no single tool's schema can state on its own.
      derived name/address (from a discovered device's hostname, serial number, etc.) through
      `self.poly.getValidName()`/`getValidAddress()` first -- IoX may otherwise reject or silently
      mangle an invalid one.
+   - **Every `node_classes` entry needs a class variable `id` equal to a real nodedef's
+     placeholder** (see the nodedef-id bullet above) -- `self.poly.addNode()` sends `node.id` to
+     ISY/PG3 as the node's `nodeDefId`, and `udi_interface.Node` itself defaults `id` to `''`, so a
+     class that never sets it would silently report an empty/wrong node type. Write it as
+     `id = "<placeholder>"` (e.g. `id = "switch"`), exactly matching the nodedef's own placeholder
+     `id` in `profile.nodedefs` -- `generate_plugin_scaffold` rewrites both together, and rejects
+     generation outright if any class's `id` is missing or doesn't match a real nodedef. A node's
+     *address* (unlike a nodedef's `id`) isn't profile content and isn't mechanically rewritten --
+     when a class represents multiple real-world device instances, each one's address (built in
+     `discover()`/`start()`, then validated through `getValidAddress()` as above) should still stay
+     at most 14 characters, alphanumeric/underscore, and unique -- a short prefix derived from the
+     discovered device's own identity (serial number, hostname, its own MAC when it has one) plus
+     a shortened nodedef id works well.
    - **Mobile alerts.** `polyglot.udm_alert(title, body)` pushes a notification to UD Mobile, for
      an event the customer should be alerted to outside the app UI.
    - If the target files already exist, the first call returns the conflict list and writes
@@ -266,23 +299,24 @@ no single tool's schema can state on its own.
      files fresh rather than leaving a stale token behind.
    - **`setup_github_repo` offers version control, also proactively, right alongside the VS Code
      offer above.** One-time bootstrap: `git init`, write/merge `.gitignore`, first commit,
-     create-or-link a GitHub remote, first push. It always creates/extends `.gitignore` before
+     link an existing remote, first push -- plain `git` only, never any GitHub-specific CLI or
+     API to create a repository itself. It always creates/extends `.gitignore` before
      that first commit so `.iox_env` (holding the live `PG3INIT` secret, above) can never end up
      committed, no matter what else is sitting in the directory -- that's guaranteed in code, not
      something you need to track yourself. Idempotent, so it's just as safe to call again later to
      commit and push whatever changed since: it skips `git init` if `.git` already exists, skips
-     creating a remote if `origin` is already configured, and reports `committed: false` /
-     `reason: "no changes"` instead of an error when there's nothing new. Two ways to get a
-     remote: pass `remote_url` when the developer already created an empty repo themselves,
-     otherwise it tries `gh repo create` automatically and, if the `gh` CLI isn't
-     installed/authenticated on this host, comes back with a non-fatal warning asking the
-     developer to create one themselves and re-call with `remote_url` -- local init/commit still
-     happened either way. **Always get the customer's explicit confirmation before calling this at
-     all** -- same as the install gate above, not code-enforced, but a first call already writes
-     real history and (with `push` left `true`) creates a real GitHub repo and pushes to it. Once
-     set up, everyday git work -- `status`/`diff`/`log`, `stash`/`unstash`, `pull`, later ad hoc
-     commits outside this flow -- is just `run_shell_command` with `cwd` set to the plugin's
-     `absolute_path`; there's no dedicated tool for those and none is needed.
+     linking a remote if `origin` is already configured, and reports `committed: false` /
+     `reason: "no changes"` instead of an error when there's nothing new. Getting a remote is a
+     single path: pass `remote_url` once the developer has created an empty repo themselves (on
+     GitHub.com or elsewhere) to link it as `origin`; omit it and this tool just inits/commits
+     locally, coming back with a non-fatal warning (no remote configured) rather than trying to
+     create one on its own -- local init/commit still happened either way. **Always get the
+     customer's explicit confirmation before calling this at all** -- same as the install gate
+     above, not code-enforced, but a first call already writes real history and (with `push` left
+     `true` and a remote linked) pushes to it. Once set up, everyday git work --
+     `status`/`diff`/`log`, `stash`/`unstash`, `pull`, later ad hoc commits outside this flow --
+     is just `run_shell_command` with `cwd` set to the plugin's `absolute_path`; there's no
+     dedicated tool for those and none is needed.
    - **`regenerate_plugin_boilerplate` picks up a template/tooling fix on an already-generated
      plugin.** When this tool set's own generation code changes (e.g. a fix to how `plugin.py`'s
      wiring or `main.py` is rendered), a plugin generated before that fix doesn't benefit from it
@@ -308,10 +342,13 @@ no single tool's schema can state on its own.
      - **Delete and/or uninstall, then retry** -- `delete_registered_plugin` (clears the
        registration, and the locally-remembered `nsid`) and/or `delete_plugin` (frees the slot)
        for a harder reset, then re-call `install_generated_plugin`. Both are real, permanent host
-       changes. `delete_registered_plugin` relies on you confirming with the developer first;
-       `delete_plugin` additionally enforces this in code -- call it once with no `confirmed` (or
-       `confirmed: false`) to preview what would be removed with zero side effects, and only call
-       it again with `confirmed: true` once the developer has explicitly agreed.
+       changes, and both are gated by the identical code-enforced two-call confirm -- call once
+       with no `confirmed` (or `confirmed: false`) to preview what would be removed with zero side
+       effects, and only call again with `confirmed: true` once the developer has explicitly
+       agreed. Neither actually takes effect unless the developer's very next reply, in their own
+       words, was exactly `YES` (all caps) and nothing else -- the system verifies this
+       independently of what you pass, so ask for exactly that when relaying the preview, and
+       never call again with `confirmed: true` on the strength of any other reply.
      - **Abort** -- no tool call needed; just don't proceed.
 
 ## Ground rules

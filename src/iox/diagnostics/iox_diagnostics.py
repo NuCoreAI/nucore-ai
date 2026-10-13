@@ -165,6 +165,38 @@ class IoXDiagnostics:
             logger.error(f"Failed to parse system options JSON: {e}")
             return {}
 
+    async def _fetch_system_description(self) -> dict[str, Any] | None:
+        """Fetches and parses the hub's UPnP ``/desc`` device description
+        into a dict (``currOSVersion``, ``friendlyName``, ``UDN``, etc.), or
+        ``None`` on any failure (non-200 response, XML parse error) --
+        shared by ``get_full_system_config`` and ``get_device_mac_address``
+        so the fetch/parse logic lives in exactly one place."""
+        desc = await self._iox_wrapper.get("/desc")
+        if desc is None or desc.status_code != 200:
+            logger.error(f"Failed to get system description: {desc.status_code if desc else 'No response'}")
+            return None
+        try:
+            ns = {"upnp": "urn:schemas-upnp-org:device-1-0"}
+            root = ET.fromstring(desc.text)
+            system_opts = root.find("upnp:device", ns)
+            return _element_to_dict_excluding(system_opts, exclude={"serviceList"})
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse system options XML: {e}")
+            return None
+
+    async def get_device_mac_address(self) -> str | None:
+        """The connected hub's own MAC address (from ``/desc``'s ``UDN``,
+        e.g. ``uuid:00:1d:e0:xx:xx:xx`` -- the ``uuid:`` prefix stripped),
+        or ``None`` if the hub is unreachable or didn't return one. A
+        single-request path to the one field ``generate_plugin_scaffold``
+        needs, instead of paying for ``get_full_system_config``'s other
+        four requests."""
+        system_opt = await self._fetch_system_description()
+        if system_opt is None:
+            return None
+        mac = system_opt.get("UDN", "").replace("uuid:", "").strip()
+        return mac or None
+
     # get system configuration
     async def get_full_system_config(self, **kwargs) -> dict[str, str] | None:
         full_config = {}
@@ -247,33 +279,21 @@ class IoXDiagnostics:
 
 
         # the system description from /desc and parse it into a dict
-        desc = await self._iox_wrapper.get("/desc")
-        if desc is None or desc.status_code != 200:
-            logger.error(f"Failed to get system description: {desc.status_code if desc else 'No response'}")
-        else:
-            # parse the result into a dict
-            try:
-                ns = {"upnp": "urn:schemas-upnp-org:device-1-0"}
-                root = ET.fromstring(desc.text)
-                system_opts = root.find("upnp:device", ns)
-                system_opt = _element_to_dict_excluding(system_opts, exclude={"serviceList"})
-                if system_opt is not None:
-                    full_config["Current OS Version"] = system_opt.get("currOSVersion", "")
-                    full_config["Upgrade-to OS Version"] = system_opt.get("upgradeOSVersion", "")
-                    full_config["Friendly Name"] = system_opt.get("friendlyName", "")
-                    full_config["MAC Address"] = system_opt.get("UDN", "").replace("uuid:", "")
-                    #full_config["Model Name"] = system_opt.get("modelName", "")
-                    #full_config["Model Number"] = system_opt.get("modelNumber", "")
-                    full_config["Network Interface IP"] = system_opt.get("interfaceIP", "")
-                    if len(interface_adapters) > 0:
-                        full_config["Network Interface Adapters"] = interface_adapters
-                    if len(usb_lines) > 0:
-                        full_config["USB Devices"] = usb_lines
+        system_opt = await self._fetch_system_description()
+        if system_opt is not None:
+            full_config["Current OS Version"] = system_opt.get("currOSVersion", "")
+            full_config["Upgrade-to OS Version"] = system_opt.get("upgradeOSVersion", "")
+            full_config["Friendly Name"] = system_opt.get("friendlyName", "")
+            full_config["MAC Address"] = system_opt.get("UDN", "").replace("uuid:", "")
+            #full_config["Model Name"] = system_opt.get("modelName", "")
+            #full_config["Model Number"] = system_opt.get("modelNumber", "")
+            full_config["Network Interface IP"] = system_opt.get("interfaceIP", "")
+            if len(interface_adapters) > 0:
+                full_config["Network Interface Adapters"] = interface_adapters
+            if len(usb_lines) > 0:
+                full_config["USB Devices"] = usb_lines
 
-                    iot_provisioned = system_opt.get("iotProvisioned", "")
-
-            except ET.ParseError as e:
-                logger.error(f"Failed to parse system options XML: {e}")
+            iot_provisioned = system_opt.get("iotProvisioned", "")
 
         # now system software/packages
         upgrades  = await self._iox_wrapper.get("/api/system/packages")

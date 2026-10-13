@@ -21,6 +21,9 @@ class FakeRuntime:
     async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         return IntentHandlerResult(intent="unified", output={"text": self._text})
 
+    def is_tool_set_enabled(self, tool_set_name: str) -> bool:
+        return True
+
 
 class FakeStreamHandler:
     def __init__(self, chunk_count: int = 0):

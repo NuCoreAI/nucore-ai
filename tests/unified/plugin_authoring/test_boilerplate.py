@@ -21,19 +21,34 @@ from unified.plugin_authoring.handlers.scaffold import generate_plugin_scaffold
 DEVELOPER_EMAIL = "dev@example.com"
 DEVELOPER_NAME = "Dev Name"
 
+# "AA:BB:CC:DD:EE:FF" -> mac6 "ddeeff" -- see test_scaffold.py's own fixture for why.
+FAKE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
+
 WIRE_PROFILE = {
     "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
     "nodedefs": [
         {
-            "id": "ND_SWITCH",
+            "id": "switch",
             "name": "Switch",
             "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
             "links": {"ctl": [], "rsp": []},
-        }
+        },
+        {
+            "id": "controller",
+            "name": "Controller",
+            "properties": [],
+            "cmds": {"sends": [], "accepts": []},
+            "links": {"ctl": [], "rsp": []},
+        },
     ],
     "linkdefs": [],
 }
+
+
+class _FakeNuCoreInterface:
+    async def get_device_mac_address(self):
+        return FAKE_MAC_ADDRESS
 
 
 def _ledger_with_evidence() -> EvidenceLedger:
@@ -45,7 +60,7 @@ def _ledger_with_evidence() -> EvidenceLedger:
 async def _generate(tmp_path, args):
     developer_config.write_developer_config(str(tmp_path), email=DEVELOPER_EMAIL, name=DEVELOPER_NAME)
     return await generate_plugin_scaffold(
-        None, args, ledger=_ledger_with_evidence(), secret_values=[], plugin_output_root=str(tmp_path)
+        _FakeNuCoreInterface(), args, ledger=_ledger_with_evidence(), secret_values=[], plugin_output_root=str(tmp_path)
     )
 
 
@@ -131,6 +146,35 @@ async def test_regenerates_boilerplate_files_only(tmp_path):
     assert (plugin_dir / "profile.json").read_text() == profile_before
     assert (plugin_dir / "server_entry.json").read_text() == server_entry_before
     assert (plugin_dir / "README.md").read_text() == readme_before
+
+
+@pytest.mark.asyncio
+async def test_regeneration_rebuilds_controller_node_name_from_stored_server_entry_name(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    main_py = (plugin_dir / "main.py").read_text()
+    assert "name='AcmePool Controller'" in plugin_py
+    assert "'AcmePool Controller'" in main_py
+
+
+@pytest.mark.asyncio
+async def test_regeneration_preserves_the_controller_st_driver_and_conn_status(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    assert "drivers = [{'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Status'}]" in plugin_py
+    assert "self.poly.addNode(self, conn_status='ST')" in plugin_py
 
 
 @pytest.mark.asyncio

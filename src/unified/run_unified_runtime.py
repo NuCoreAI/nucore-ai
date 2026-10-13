@@ -9,7 +9,7 @@ import ipaddress
 import ssl
 import uuid
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 import websockets
 from dotenv import load_dotenv
@@ -25,6 +25,7 @@ from unified.provider_clients import resolve_env_placeholder
 from unified.session_store import SessionStore
 from unified.dispatch_builder import build_default_dispatch_adapter
 from unified.stream_handler import StreamHandler
+from unified.tool_set_switch import disabled_target_message, switched_message
 from nucore import NuCoreInterface, PromptFormatTypes
 from utils import configure_logging, configure_prompt_logging, get_logger
 
@@ -90,17 +91,27 @@ class EisyUIContext:
 
     _SWITCH_COMMANDS = {"/developer": "plugin_authoring", "/customer": "unified"}
 
-    def process_message(self, message_data: str)->str:
+    def process_message(
+        self, message_data: str, is_target_enabled: Callable[[str], bool] | None = None
+    ) -> tuple[str | None, str | None]:
         """
             Process an incoming message from the Eisy UI.
-            If it's a context message, store the context and return None.
-            If it's a user message, prepend the context (if any) and return the
-            combined message.
+            If it's a context message, store the context and return (None, None).
+            If it's a user message, return (message, None) to forward it to the
+            runtime as normal, unless it's a /developer//customer switch command --
+            see _apply_switch_command_or_return for that case.
             Always keep the last context since the UI sends a context with every user
             interaction with the UI, so the context is always up-to-date for the latest user message.
 
             :param message_data: The raw JSON string received from the WebSocket, expected to contain a "type" field.
-            :return str: The processed message to send to the runtime, or None if no message should be sent.
+            :param is_target_enabled: Callable checking whether a given tool-set name is enabled on
+                this installation (typically UnifiedRuntime.is_tool_set_enabled) -- passed through to
+                _apply_switch_command_or_return. None means "treat every target as enabled" (callers
+                that don't care, e.g. most existing tests).
+            :return: (forward_text, direct_reply) -- at most one is non-None. forward_text is the
+                message to dispatch to the runtime this turn; direct_reply is text to deliver straight
+                back to the user (a switch confirmation or a "not enabled" error) without dispatching
+                anything to the runtime at all. See _apply_switch_command_or_return.
 
         """
         try:
@@ -128,38 +139,52 @@ class EisyUIContext:
                     identity_key = self.get_identity_key()
                     if identity_key is not None:
                         self._session_store.set_ui_context(identity_key, self.context)
-                return None
+                return None, None
             if type == "message":
                 self.message = message.get("message", None)
                 text = self.message.strip() if self.message else None
-                return self._apply_switch_command_or_return(text)
+                return self._apply_switch_command_or_return(text, is_target_enabled)
             logger.warning(f"Received message with unrecognized type: {type}")
-            return None
+            return None, None
         except Exception as e:
             # Not JSON -- a plain string, as every REPL/--query line always
             # is (unlike a WebSocket connection, nothing ever JSON-wraps
             # REPL input). The /developer and /customer commands must be
             # recognized here too, or they only ever work over WebSocket.
             text = message_data.strip() if message_data else None
-            return self._apply_switch_command_or_return(text)
+            return self._apply_switch_command_or_return(text, is_target_enabled)
 
-    def _apply_switch_command_or_return(self, text: str | None) -> str | None:
+    def _apply_switch_command_or_return(
+        self, text: str | None, is_target_enabled: Callable[[str], bool] | None
+    ) -> tuple[str | None, str | None]:
         """If *text* is exactly ``/developer``/``/customer``, apply the
-        sticky switch and return ``None`` (no query dispatched this turn);
-        otherwise return *text* unchanged. Shared by both the WebSocket
-        ``"type": "message"`` path and the plain-string (REPL/--query)
-        fallback above -- same operation the model's own
-        switch_to_developer_mode/switch_to_customer_mode tool performs (see
-        design/developers/merged-toolsets.md). If the target isn't actually
-        enabled on this installation, UnifiedRuntime falls back to its own
-        default tool set rather than erroring -- the model-driven tool path
-        (not this one) is where a disabled target gets explained back to
-        the user.
+        sticky switch (if the target is enabled) and return a direct reply;
+        otherwise return *text* unchanged to be forwarded as the turn's
+        query. Shared by both the WebSocket ``"type": "message"`` path and
+        the plain-string (REPL/--query) fallback above -- same operation the
+        model's own switch_to_developer_mode/switch_to_customer_mode tool
+        performs (see design/developers/merged-toolsets.md).
+
+        Returns ``(forward_text, direct_reply)``, at most one non-``None``:
+
+        - Not a recognized switch command: ``(text, None)`` -- forward to
+          the runtime unchanged.
+        - Recognized, target enabled (or *is_target_enabled* is ``None`` --
+          caller doesn't care): applies the sticky switch, returns
+          ``(None, switched_message(target))``.
+        - Recognized, target NOT enabled: leaves ``active_tool_set``
+          unchanged, returns ``(None, disabled_target_message(target))`` --
+          the exact wording the model-driven switch tool itself returns, so
+          this command "succeed[s], or get[s] back the same kind of error"
+          per merged-toolsets.md, never a silent no-op.
         """
-        if text in self._SWITCH_COMMANDS:
-            self.active_tool_set = self._SWITCH_COMMANDS[text]
-            return None
-        return text
+        target = self._SWITCH_COMMANDS.get(text)
+        if target is None:
+            return text, None
+        if is_target_enabled is not None and not is_target_enabled(target):
+            return None, disabled_target_message(target)
+        self.active_tool_set = target
+        return None, switched_message(target)
 
     def get_context(self)->dict:
         """Get the current context stored in the UI context object.
@@ -528,7 +553,16 @@ async def _run_once(
                            eisy_ui_context has no durable identity yet (e.g.
                            the client never sent a context message).
     """
-    query = eisy_ui_context.process_message(query)
+    query, direct_reply = eisy_ui_context.process_message(query, runtime.is_tool_set_enabled)
+    if direct_reply is not None:
+        # A /developer//customer switch command's own confirmation or
+        # "not enabled" error -- delivered immediately, without dispatching
+        # anything to the runtime this turn (see
+        # EisyUIContext._apply_switch_command_or_return).
+        if runtime.stream_handler is not None:
+            await runtime.stream_handler.send_chunk(direct_reply, True)
+        else:
+            print(direct_reply)
     if not query:
         return
     # Prefer the durable client_id+user_id identity over the per-connection

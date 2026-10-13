@@ -490,12 +490,29 @@ async def test_delete_requires_a_known_nsid(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_delete_success_clears_nsid_from_disk(tmp_path):
+async def test_delete_without_confirmed_previews_without_deleting(tmp_path):
     plugin_dir = tmp_path / "acme_pool"
     _write_server_entry(plugin_dir, {"name": "AcmePool", "nsid": "local.acme_pool"})
     backend = FakeBackend()
 
     result = await delete_registered_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["confirmation_required"] is True
+    assert result["nsid"] == "local.acme_pool"
+    assert not backend.delete_calls
+    on_disk = json.loads((plugin_dir / "server_entry.json").read_text())
+    assert on_disk["nsid"] == "local.acme_pool", "nothing should be deleted/cleared before confirmation"
+
+
+@pytest.mark.asyncio
+async def test_delete_success_clears_nsid_from_disk(tmp_path):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_server_entry(plugin_dir, {"name": "AcmePool", "nsid": "local.acme_pool"})
+    backend = FakeBackend()
+
+    result = await delete_registered_plugin(
+        backend, {"location": "acme_pool", "confirmed": True}, plugin_output_root=str(tmp_path)
+    )
 
     assert result == {"location": "acme_pool", "nsid": "local.acme_pool", "deleted": True}
     assert backend.delete_calls == ["local.acme_pool"]
@@ -511,7 +528,9 @@ async def test_delete_failure_reported_distinctly(tmp_path):
     backend = FakeBackend()
     backend.delete_response = {"successful": False}
 
-    result = await delete_registered_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await delete_registered_plugin(
+        backend, {"location": "acme_pool", "confirmed": True}, plugin_output_root=str(tmp_path)
+    )
 
     assert "error" in result
     on_disk = json.loads((plugin_dir / "server_entry.json").read_text())
