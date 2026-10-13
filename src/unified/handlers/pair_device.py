@@ -1,6 +1,25 @@
 """``pair_device`` -- add/pair or remove one physical device, as a
 standalone global tool, callable any time.
 
+CONVERSATIONAL ORDER when adding a new device: ask about a QR code
+*before* asking the protocol, not after --
+1. Ask the customer whether they have a QR code to scan (or a pairing/
+   setup code to type in instead). If yes: call ``include`` with
+   ``scan_qr_code``/``raw_code`` + ``client_id``, omitting ``protocol``
+   entirely -- see ``_include_via_qr_scan`` below, which never needs to
+   know the protocol up front (``open_qr_scan()``'s own wire payload has
+   no protocol field at all -- confirmed against ``iox_wrapper.py``).
+   Works for insteon/zwave/matter; never relevant for zigbee in practice
+   (a zigbee device never has a QR code in this system, so this question
+   alone already rules it out).
+2. Only if they say no, *then* ask which protocol, and follow the
+   per-protocol procedure below (zwave/zigbee -> ``include`` with
+   ``protocol`` set, no code; insteon -> ask if they know the address,
+   ``add_by_address`` if yes, ``include``/linking mode if no; matter -> a
+   QR/pairing code is mandatory -- this is really step 1's question asked
+   specifically for Matter, not a new one, since there is no fallback for
+   it at all).
+
 Three actions, one call each -- no multi-turn "start, customer replies,
 finish" shape for any protocol:
 - ``add_by_address`` -- the customer already has/reads the device's own
@@ -18,6 +37,10 @@ finish" shape for any protocol:
   every eisy-ui client) -- best-effort/non-fatal, just closing any stale
   dialog before a fresh one opens; a failure there is logged and never
   blocks the real pairing attempt. Then:
+    - **protocol genuinely unknown** (step 1 above -- the customer said yes
+      to a QR code before the model ever asked the protocol): straight to
+      ``_include_via_qr_scan`` with ``protocol=None``. The result simply
+      omits ``"protocol"`` rather than fabricating a value.
     - **zigbee**: always the bare protocol-level include call -- no QR/code
       question, no by-address option (it has none). Driven by its own event
       category (`_27`), action format `"{category}.{type}"` -- sub-type `2`
@@ -27,9 +50,13 @@ finish" shape for any protocol:
     - **insteon**: has two genuinely different methods, and the customer
       should be asked which they want rather than one being assumed:
       ``add_by_address`` (they already know the device's address) or
-      ``include`` (linking mode). *Only once linking mode is chosen* does
-      the QR/code question below apply.
-    - **matter/zwave, and insteon once linking mode is chosen**: ask whether
+      ``include`` (linking mode). By the time this question is reached, the
+      QR-code question (step 1 above) has already been answered "no" --
+      reaching here never re-asks it.
+    - **matter/zwave, and insteon once linking mode is chosen, when the
+      protocol happened to already be known when the QR question was
+      asked** (i.e. the model already had a concrete protocol in hand, not
+      the step-1 unknown-protocol case above): ask whether
       the customer has a QR code (``scan_qr_code: true``, no ``raw_code``)
       or a pairing code/setup code/device address to type in instead
       (``raw_code``) -- either sets off ``open_qr_scan(client_id, raw=
@@ -42,7 +69,8 @@ finish" shape for any protocol:
       re-check, exactly the idiom already used below for Matter's own
       ``exclude`` path) until a new node appears or ``_WAIT_TOTAL_TIMEOUT_S``
       elapses, then reports it the same way the bare protocol-level call
-      does.
+      does. See ``_include_via_qr_scan``, shared verbatim with the
+      protocol-unknown case above.
     - **matter, with neither a QR code nor any other code**: there's no
       manual-linking-mode fallback for Matter at all -- returns a message
       telling the customer a QR/pairing code is required, with no tool call
@@ -136,10 +164,12 @@ from nucore import NuCoreInterface, NuCoreError
 from utils import get_logger
 
 from ._event_wait import (
+    drain_node_additions,
+    register_node_listener,
     wait_for_event,
     wait_for_matching_event,
     wait_for_node_event,
-    wait_for_node_event_around,
+    wait_for_node_additions_around,
     wait_until,
 )
 
@@ -386,8 +416,74 @@ async def _remove_zmatter_device(
     }
 
 
+async def _include_via_qr_scan(
+    nucore_interface: NuCoreInterface, args: dict[str, Any], *, protocol: str | None, raw_code: str | None
+) -> Any:
+    """Shared QR/code-scan body for ``include`` -- reachable either once
+    *protocol* is already known (zwave/matter, or insteon once linking
+    mode is chosen) or with *protocol* genuinely unknown (the customer
+    said they have a QR code before the model ever asked which protocol --
+    see module docstring's QR-code-first note). ``open_qr_scan()`` itself
+    never needs *protocol* at all (confirmed against ``iox_wrapper.py`` --
+    it's not part of the wire payload), so this works identically either
+    way; the result simply omits ``"protocol"`` when it's unknown rather
+    than fabricating a value -- the model can resolve the real one
+    afterward via ``get_device_family`` if it's ever needed."""
+    client_id = args.get("client_id")
+    if not client_id:
+        return {
+            "error": "client_id is required to open the QR-scan dialog -- copy it from "
+                     "the ui_context block, never invent it"
+        }
+    before = set(nucore_interface.nodes.keys())
+    ok = await nucore_interface.open_qr_scan(client_id, raw=raw_code)
+    if not ok:
+        return {"error": "failed to open the QR-scan dialog"}
+    # Neither protocol has a confirmed "QR-scan session ended" event -- poll
+    # generically instead, same idiom _remove_zmatter_device already uses
+    # for Matter's own exclude path below.
+    await wait_until(
+        nucore_interface, "_3", None,
+        lambda: bool(set(nucore_interface.nodes.keys()) - before),
+        nucore_interface._refresh_device_structure,
+        _WAIT_TOTAL_TIMEOUT_S,
+    )
+    devices = await _collect_new_devices(nucore_interface, before)
+    result = {
+        "action": "include", "status": "inclusion_committed",
+        "new_devices": devices,
+        "note": "No new devices appeared during the QR-scan window." if not devices else
+                "Rename/assign these as needed using the addresses above.",
+    }
+    if protocol is not None:
+        result["protocol"] = protocol
+    return result
+
+
 async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    protocol = args.get("protocol")
+    protocol = args.get("protocol") or None
+    action = args.get("action")
+    raw_code = args.get("raw_code") or None
+    use_qr = bool(args.get("scan_qr_code")) or bool(raw_code)
+
+    if protocol is None:
+        # The customer said they have a QR code before the model ever asked
+        # which protocol -- see module docstring's QR-code-first note. Only
+        # valid for include+QR; add_by_address/exclude/a bare (non-QR)
+        # include genuinely need to know the protocol first, so there's
+        # nothing else this branch can do.
+        if action != "include" or not use_qr:
+            return {
+                "error": "protocol is required unless action=include with scan_qr_code or "
+                         "raw_code set (the QR-code path, which never needs to know the "
+                         "protocol up front)"
+            }
+        try:
+            await nucore_interface.dismiss_discovery_dialogs()
+        except Exception as e:
+            logger.warning(f"dismiss_discovery_dialogs failed (continuing anyway): {e}")
+        return await _include_via_qr_scan(nucore_interface, args, protocol=None, raw_code=raw_code)
+
     valid_actions = _PROTOCOL_ACTIONS.get(protocol)
     if valid_actions is None:
         return {"error": f"unknown protocol '{protocol}' -- must be one of: {sorted(_PROTOCOL_ACTIONS)}"}
@@ -400,7 +496,6 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
             "then try again."
         )
 
-    action = args.get("action")
     if action not in valid_actions:
         return {"error": f"action '{action}' is not valid for protocol '{protocol}' -- must be one of: {sorted(valid_actions)}"}
 
@@ -421,60 +516,65 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         # add_device() only confirms the hub accepted the request -- it is
         # not authoritative about the device's real address. The _3/"ND"
         # (node added) event's own `node` field *is* the hub's actual
-        # address for the device that was just added (same principle as
+        # address for each device that was just added (same principle as
         # zwave exclude's _3/"NR" event, below) -- that, and only that, is
-        # what this handler trusts from here on. Registering for that event
-        # BEFORE calling add_device() (not after) matters here specifically:
-        # unlike a physical pairing/exclusion button press, a plain REST
-        # call can complete -- and the hub can fire+dispatch the resulting
-        # event -- fast enough that a listener registered only afterward
-        # would miss it forever.
-        ok, real_address = await wait_for_node_event_around(
-            nucore_interface, "_3", "ND", _WAIT_TOTAL_TIMEOUT_S,
+        # what this handler trusts from here on. One address add can
+        # enumerate more than one hub-side node, each with its own "ND" --
+        # _3/"AA" (all nodes added, fires even for a single node) is what
+        # actually signals enumeration is fully settled, so every "ND" up
+        # to that point is collected, not just the first. This must be ONE
+        # continuous wait, not "wait for ND, then separately wait for AA"
+        # -- there is no event replay/buffer in this codebase, so either a
+        # second "ND" or the "AA" itself could fire in the gap between two
+        # separate waits and be missed forever. Registering the combined
+        # listener BEFORE calling add_device() (not after) matters here
+        # specifically: unlike a physical pairing/exclusion button press, a
+        # plain REST call can complete -- and the hub can fire+dispatch the
+        # resulting event -- fast enough that a listener registered only
+        # afterward would miss it forever.
+        ok, added_addresses = await wait_for_node_additions_around(
+            nucore_interface, "_3", "ND", "AA", _NODE_ADDED_GRACE_TIMEOUT_S,
             lambda: nucore_interface.add_device(
                 device_address, name=args.get("name"), device_type=args.get("device_type"),
             ),
         )
         if not ok:
             return {"error": f"failed to add device '{device_address}'"}
-        if real_address is None:
+        if not added_addresses:
             return {
                 "error": (
                     f"'{device_address}' was accepted by the hub but no node-added event arrived "
-                    f"after {_WAIT_TOTAL_TIMEOUT_S}s of waiting -- try again shortly."
+                    f"after {_NODE_ADDED_GRACE_TIMEOUT_S}s of waiting -- try again shortly."
                 )
             }
 
-        # One address add can enumerate more than one hub-side node, with a
-        # wait in between -- _3/"AA" (all nodes added) signals enumeration is
-        # fully settled even for a single node, so this gives any trailing
-        # sibling node a chance to appear before usability is checked below.
-        # No per-node address in its payload (unlike "ND"), so it's only ever
-        # used as a settle signal, not for real_address -- and a timeout here
-        # is not an error, same tolerant best-effort as include's own grace
-        # wait below.
-        await wait_for_event(nucore_interface, "_3", "AA", _NODE_ADDED_GRACE_TIMEOUT_S)
-
+        real_address = added_addresses[0]
         # Wildcard, not just "NI" -- becoming usable takes two separate
         # events (_3/ND for bare presence, already consumed above, then a
         # later _3/NI once its device profile resolves -- see
         # _is_device_usable), and narrowing to one action risks never waking
-        # for the other.
+        # for the other. Every enumerated node must become usable, not just
+        # the first (mirrors _collect_new_devices's own all(...) below).
         found = await wait_until(
             nucore_interface, "_3", None,
-            lambda: _is_device_usable(nucore_interface, real_address),
+            lambda: all(_is_device_usable(nucore_interface, a) for a in added_addresses),
             nucore_interface._refresh_device_structure,
             _WAIT_TOTAL_TIMEOUT_S,
         )
         if not found:
             return {
                 "error": (
-                    f"'{real_address}' was added on the hub but never became fully usable "
+                    f"{added_addresses} was added on the hub but did not all become fully usable "
                     f"(device profile resolved) after {_WAIT_TOTAL_TIMEOUT_S}s of waiting -- "
                     "try again shortly."
                 )
             }
-        return {"protocol": protocol, "action": action, "device_address": real_address, "status": "added"}
+        return {
+            "protocol": protocol, "action": action, "device_address": real_address, "status": "added",
+            "new_devices": [
+                {"address": a, "name": nucore_interface.nodes[a].name} for a in added_addresses
+            ],
+        }
 
     if action == "include":
         try:
@@ -482,36 +582,8 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
         except Exception as e:
             logger.warning(f"dismiss_discovery_dialogs failed (continuing anyway): {e}")
 
-        raw_code = args.get("raw_code") or None
-        use_qr = bool(args.get("scan_qr_code")) or bool(raw_code)
-
         if protocol != "zigbee" and use_qr:
-            client_id = args.get("client_id")
-            if not client_id:
-                return {
-                    "error": "client_id is required to open the QR-scan dialog -- copy it from "
-                             "the ui_context block, never invent it"
-                }
-            before = set(nucore_interface.nodes.keys())
-            ok = await nucore_interface.open_qr_scan(client_id, raw=raw_code)
-            if not ok:
-                return {"error": "failed to open the QR-scan dialog"}
-            # Neither protocol has a confirmed "QR-scan session ended" event
-            # -- poll generically instead, same idiom _remove_zmatter_device
-            # already uses for Matter's own exclude path below.
-            await wait_until(
-                nucore_interface, "_3", None,
-                lambda: bool(set(nucore_interface.nodes.keys()) - before),
-                nucore_interface._refresh_device_structure,
-                _WAIT_TOTAL_TIMEOUT_S,
-            )
-            devices = await _collect_new_devices(nucore_interface, before)
-            return {
-                "protocol": protocol, "action": action, "status": "inclusion_committed",
-                "new_devices": devices,
-                "note": "No new devices appeared during the QR-scan window." if not devices else
-                        "Rename/assign these as needed using the addresses above.",
-            }
+            return await _include_via_qr_scan(nucore_interface, args, protocol=protocol, raw_code=raw_code)
 
         if protocol == "matter":
             return (
@@ -520,23 +592,42 @@ async def pair_device(nucore_interface: NuCoreInterface, args: dict[str, Any]) -
                 "Matter."
             )
 
+        # Registered BEFORE discover_devices() -- same register-before-trigger
+        # guarantee as add_by_address's own combined ND/AA wait above, closing
+        # the race for the *entire* window from here through the session-ended
+        # event below through its trailing grace period, not just the grace
+        # period alone. Any "_3" event that arrives while the session-ended
+        # wait (a completely different control) is in flight is simply queued
+        # here, not lost -- drained once that wait returns.
+        node_waiter = register_node_listener(nucore_interface, "_3")
         try:
-            ok = await nucore_interface.discover_devices(
-                device_type=args.get("device_type"), protocol=protocol, mode="include",
-            )
-        except NuCoreError as e:
-            return {"error": str(e)}
-        if not ok:
-            return {"error": "failed to start include mode"}
+            try:
+                ok = await nucore_interface.discover_devices(
+                    device_type=args.get("device_type"), protocol=protocol, mode="include",
+                )
+            except NuCoreError as e:
+                return {"error": str(e)}
+            if not ok:
+                return {"error": "failed to start include mode"}
 
-        before = set(nucore_interface.nodes.keys())
-        control, complete_action = _INCLUDE_COMPLETE_EVENT[protocol]
-        timeout = _INSTEON_LINKING_MODE_TIMEOUT_S if protocol == "insteon" else _WAIT_TOTAL_TIMEOUT_S
-        await wait_for_event(nucore_interface, control, complete_action, timeout)
-        # The pairing session has ended -- give the actual node-added event a
-        # brief grace period to land too, in case node creation lags slightly
-        # behind the session-ended signal (see _NODE_ADDED_GRACE_TIMEOUT_S).
-        await wait_for_event(nucore_interface, "_3", "AA", _NODE_ADDED_GRACE_TIMEOUT_S)
+            before = set(nucore_interface.nodes.keys())
+            control, complete_action = _INCLUDE_COMPLETE_EVENT[protocol]
+            timeout = _INSTEON_LINKING_MODE_TIMEOUT_S if protocol == "insteon" else _WAIT_TOTAL_TIMEOUT_S
+            await wait_for_event(nucore_interface, control, complete_action, timeout)
+            # The pairing session has ended -- drain every "ND" collected
+            # since registration (possibly already queued from mid-session),
+            # plus any further ones with a fresh per-event grace window, in
+            # case node creation lags slightly behind the session-ended
+            # signal, finishing on "AA" (see _NODE_ADDED_GRACE_TIMEOUT_S).
+            # The collected list itself is discarded -- _collect_new_devices's
+            # own before/after diff below remains the source of truth for
+            # new_devices; this only fixes when that diff is safe to take.
+            await drain_node_additions(nucore_interface, node_waiter, "_3", "ND", "AA", _NODE_ADDED_GRACE_TIMEOUT_S)
+        finally:
+            # Idempotent -- drain_node_additions already unregisters on its
+            # own exit paths; this is the backstop for the early-return paths
+            # above, where it never got that far.
+            nucore_interface.unregister_listener(node_waiter._listener_id, "_3", None)
         await nucore_interface._refresh_device_structure()
 
         devices = await _collect_new_devices(nucore_interface, before)

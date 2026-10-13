@@ -28,6 +28,19 @@ group_scene_ops/routine_automation:
   miss it). Covers the event firing synchronously from inside the trigger
   itself, a falsy trigger short-circuiting without waiting, timing out with
   None, and unregistering on every exit path.
+- ``register_node_listener``/``drain_node_additions``/
+  ``wait_for_node_additions_around``: a single continuous wait that
+  collects every "added" event (e.g. "ND") into a list, resetting a
+  per-event timeout after each one, finishing on a terminal "done" event
+  (e.g. "AA") -- replacing what would otherwise be two separate single-shot
+  waits (one race this whole module exists to avoid: a terminal event, or
+  a second "added" event, arriving in the gap between the first wait
+  returning and the second one's listener actually registering). Covers
+  accumulating more than one "ND" before "AA", discarding an unrelated
+  action without resetting the window or appearing in the result, timing
+  out with nothing ever collected, a falsy trigger short-circuiting
+  without waiting, an event fired synchronously inside the trigger, and
+  unregistering on every exit path.
 """
 
 from __future__ import annotations
@@ -38,10 +51,13 @@ import pytest
 
 from nucore.nucore_interface import NuCoreInterface
 from unified.handlers._event_wait import (
+    drain_node_additions,
+    register_node_listener,
     wait_for_event,
     wait_for_matching_event,
     wait_for_node_event,
     wait_for_node_event_around,
+    wait_for_node_additions_around,
     wait_until,
 )
 
@@ -359,3 +375,95 @@ async def test_wait_for_node_event_around_returns_none_on_timeout():
     assert ok is True
     assert node is None
     assert backend._event_listeners == {}
+
+
+# ---------------------------------------------------------------------------
+# register_node_listener / drain_node_additions / wait_for_node_additions_around
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_drain_node_additions_collects_every_nd_before_aa():
+    backend = FakeBackend()
+    waiter = register_node_listener(backend, "_3")
+
+    async def fire_events_shortly():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3D 1", {})
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "AA", None, {})
+
+    asyncio.create_task(fire_events_shortly())
+
+    addresses = await drain_node_additions(backend, waiter, "_3", "ND", "AA", per_event_timeout=2)
+
+    assert addresses == ["1A 2B 3C 1", "1A 2B 3D 1"]
+    assert backend._event_listeners == {}
+
+
+@pytest.mark.asyncio
+async def test_drain_node_additions_discards_an_unrelated_action_without_resetting_the_window():
+    backend = FakeBackend()
+    waiter = register_node_listener(backend, "_3")
+
+    async def fire_events_shortly():
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "NI", "1A 2B 3C 1", {})  # unrelated -- discarded
+        await asyncio.sleep(0.01)
+        backend._dispatch_event_listeners("_3", "AA", None, {})
+
+    asyncio.create_task(fire_events_shortly())
+
+    addresses = await drain_node_additions(backend, waiter, "_3", "ND", "AA", per_event_timeout=2)
+
+    assert addresses == ["1A 2B 3C 1"]  # "NI" never appears in the result
+    assert backend._event_listeners == {}
+
+
+@pytest.mark.asyncio
+async def test_drain_node_additions_returns_empty_list_on_timeout_with_nothing_collected():
+    backend = FakeBackend()
+    waiter = register_node_listener(backend, "_3")
+
+    addresses = await drain_node_additions(backend, waiter, "_3", "ND", "AA", per_event_timeout=0.05)
+
+    assert addresses == []
+    assert backend._event_listeners == {}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_node_additions_around_catches_an_event_fired_synchronously_by_the_trigger():
+    backend = FakeBackend()
+
+    async def trigger():
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        backend._dispatch_event_listeners("_3", "AA", None, {})
+        return True
+
+    ok, addresses = await wait_for_node_additions_around(
+        backend, "_3", "ND", "AA", per_event_timeout=2, trigger=trigger
+    )
+
+    assert ok is True
+    assert addresses == ["1A 2B 3C 1"]
+    assert backend._event_listeners == {}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_node_additions_around_short_circuits_on_a_falsy_trigger():
+    backend = FakeBackend()
+
+    async def failing_trigger():
+        return False
+
+    ok, addresses = await wait_for_node_additions_around(
+        backend, "_3", "ND", "AA", per_event_timeout=0.05, trigger=failing_trigger
+    )
+
+    assert ok is False
+    assert addresses == []
+    assert backend._event_listeners == {}  # unregistered without ever waiting

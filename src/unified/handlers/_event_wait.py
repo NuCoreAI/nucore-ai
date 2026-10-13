@@ -214,3 +214,99 @@ async def wait_for_node_event_around(
         return True, None
     finally:
         nucore_interface.unregister_listener(waiter._listener_id, control, action)
+
+
+def register_node_listener(nucore_interface: NuCoreInterface, control: str) -> _RegisteredWaiter:
+    """Registers (synchronously) a wildcard (``action=None``) listener for
+    *control* -- for a caller that needs registration to exist before some
+    other action that might fire a matching event immediately, but which
+    must do its own work (typically awaiting a *different* event on a
+    *different* control) in between registering and actually collecting
+    from it -- see ``include``'s use in ``pair_device.py``, which must
+    also wait for its own protocol's session-ended event before draining
+    this. Any matching event that arrives in that gap is safely queued,
+    not lost (there is no separate replay/buffer needed -- the queue
+    itself holds it).
+
+    Pair with ``drain_node_additions``, which always unregisters; a caller
+    that never reaches that call must unregister it itself via
+    ``nucore_interface.unregister_listener(waiter._listener_id, control,
+    None)``.
+    """
+    return _RegisteredWaiter(nucore_interface, control, None)
+
+
+async def drain_node_additions(
+    nucore_interface: NuCoreInterface,
+    waiter: _RegisteredWaiter,
+    control: str,
+    added_action: str,
+    done_action: str,
+    per_event_timeout: float,
+) -> list[str]:
+    """Consumes *waiter* (already registered -- see
+    ``register_node_listener``), collecting every *added_action* event's
+    own ``node`` field into a list, resetting the wait to a fresh
+    *per_event_timeout* window after each one received -- so a burst of
+    several nodes enumerating in turn, each arriving just under the wire,
+    never times out the whole operation prematurely -- finishing as soon
+    as *done_action* arrives.
+
+    Returns whatever was collected, in arrival order -- possibly empty, if
+    a window elapses with nothing new at all. Any event on *control* that
+    is neither *added_action* nor *done_action* is discarded without
+    resetting the window (it's noise, not progress). Always unregisters
+    *waiter* before returning.
+    """
+    collected: list[str] = []
+    try:
+        while True:
+            try:
+                node, _control, action, _event_info = await asyncio.to_thread(
+                    waiter._queue.get, timeout=per_event_timeout
+                )
+            except queue.Empty:
+                return collected
+            if action == added_action:
+                collected.append(node)
+                continue
+            if action == done_action:
+                return collected
+            # Some other action on this control -- discarded, no reset.
+    finally:
+        nucore_interface.unregister_listener(waiter._listener_id, control, None)
+
+
+async def wait_for_node_additions_around(
+    nucore_interface: NuCoreInterface,
+    control: str,
+    added_action: str,
+    done_action: str,
+    per_event_timeout: float,
+    trigger: Callable[[], Awaitable[bool]],
+) -> tuple[bool, list[str]]:
+    """Like ``wait_for_node_event_around``, but for a trigger that can
+    enumerate more than one node before it's truly finished (e.g. one
+    Insteon ``add_by_address`` call can add several hub-side nodes in
+    turn) -- ``register_node_listener`` + *trigger* (guaranteed registered
+    first, same race ``wait_for_node_event_around`` already closes for a
+    single event) + ``drain_node_additions``, in one call. Only fits a
+    trigger whose own resulting event(s) are the only thing being waited
+    for -- a caller that must also wait for a *differently-controlled*
+    event in between (e.g. ``include``'s own protocol session-ended event)
+    uses ``register_node_listener``/``drain_node_additions`` separately
+    instead, with that other wait run in between the two.
+
+    Returns ``(trigger_ok, addresses)``: *trigger_ok* is whatever
+    *trigger()* itself returned; if it's falsy, the listener is
+    unregistered immediately without waiting and *addresses* is ``[]``.
+    """
+    waiter = register_node_listener(nucore_interface, control)
+    trigger_ok = await trigger()
+    if not trigger_ok:
+        nucore_interface.unregister_listener(waiter._listener_id, control, None)
+        return False, []
+    addresses = await drain_node_additions(
+        nucore_interface, waiter, control, added_action, done_action, per_event_timeout
+    )
+    return True, addresses

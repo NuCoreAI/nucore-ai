@@ -226,8 +226,61 @@ async def test_add_by_address_succeeds():
     assert result == {
         "protocol": "insteon", "action": "add_by_address",
         "device_address": "1A 2B 3C 1", "status": "added",
+        "new_devices": [{"address": "1A 2B 3C 1", "name": "1A 2B 3C 1"}],
     }
     assert backend.add_device_calls == [("1A 2B 3C 1", None, None)]
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_succeeds_with_a_bare_triple_address():
+    # Regression: the model must never need to supply/collect a button/group
+    # number to pair -- a bare 3-byte address alone must succeed end-to-end
+    # (not just at normalize_address() in isolation), with the system
+    # defaulting it to the device's main group ("1") automatically.
+    backend = FakeBackend()
+    asyncio.create_task(_fire_node_added_event_shortly(backend, "1A 2B 3C 1"))
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C",
+    })
+    assert result == {
+        "protocol": "insteon", "action": "add_by_address",
+        "device_address": "1A 2B 3C 1", "status": "added",
+        "new_devices": [{"address": "1A 2B 3C 1", "name": "1A 2B 3C 1"}],
+    }
+    assert backend.add_device_calls == [("1A 2B 3C 1", None, None)]
+
+
+@pytest.mark.asyncio
+async def test_add_by_address_collects_every_enumerated_node_before_aa():
+    # Regression: one address add can enumerate more than one hub-side
+    # node, each with its own "ND" -- this single combined wait must
+    # collect all of them (not just the first), and must not lose any to
+    # the ND-then-AA race this whole change closes (there is no event
+    # replay/buffer -- a second "ND" or the "AA" itself firing in the gap
+    # between two separate sequential waits would be missed forever).
+    backend = FakeBackend()
+    backend._pending_nodes["1A 2B 3D 1"] = "Sibling"
+
+    async def fire_events():
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3C 1", {})
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "ND", "1A 2B 3D 1", {})
+        await asyncio.sleep(0.02)
+        backend._dispatch_event_listeners("_3", "AA", None, {})
+
+    asyncio.create_task(fire_events())
+
+    result = await pair_device(backend, {
+        "protocol": "insteon", "action": "add_by_address", "device_address": "1A 2B 3C 1",
+    })
+
+    assert result["device_address"] == "1A 2B 3C 1"  # first/primary -- still safe to reference
+    assert result["status"] == "added"
+    assert {d["address"] for d in result["new_devices"]} == {"1A 2B 3C 1", "1A 2B 3D 1"}
+    names = {d["address"]: d["name"] for d in result["new_devices"]}
+    assert names["1A 2B 3D 1"] == "Sibling"
 
 
 @pytest.mark.asyncio
@@ -565,6 +618,52 @@ async def test_include_waits_for_the_node_added_event_after_the_session_ends():
 
 
 @pytest.mark.asyncio
+async def test_include_does_not_lose_an_aa_event_that_fires_before_the_session_ends():
+    # Regression: the old code only registered a listener for "_3"/"AA"
+    # AFTER the session-ended wait returned -- an "AA" that fired earlier
+    # (even synchronously from inside discover_devices() itself, as it
+    # does here) would be lost forever (no event replay/buffer), forcing
+    # the call to block for the full grace-period timeout for no reason.
+    # With the fix, the listener is registered before discover_devices()
+    # is ever called, so an early "AA" is safely queued and the call
+    # returns promptly once the session actually ends, instead of always
+    # paying the full grace period on top.
+    backend = FakeBackend()
+
+    async def discover_with_instant_enumeration(device_type=None, protocol=None, mode="include", **kwargs):
+        backend.discover_calls.append((device_type, protocol, mode))
+        backend._dispatch_event_listeners("_3", "ND", "11 11 11 1", {})
+        backend._dispatch_event_listeners("_3", "AA", None, {})
+        return True
+
+    async def reveal_the_new_node():
+        # The real hub only reflects a new node once something actually
+        # refreshes local state -- never synchronously inside the
+        # discover_devices() REST response itself, which is why this is
+        # separate from the ND/AA events above (those only ever carry an
+        # address, see module docstring, never update nucore_interface.nodes
+        # on their own).
+        backend.nodes["11 11 11 1"] = SimpleNamespace(name="11 11 11 1", node_def=object())
+        return True
+
+    backend.discover_devices = discover_with_instant_enumeration
+    backend._refresh_device_structure = reveal_the_new_node
+    asyncio.create_task(_fire_complete_event_shortly(backend, "zwave", delay=0.02))
+
+    # The monkeypatched grace period is 0.1s (see _fast_wait_timeout) -- if
+    # the early "AA" were lost, the call would need at least that much
+    # extra time after the session-ended event before giving up on its own
+    # (also missed) separate wait. 0.08s is enough slack for the real,
+    # non-raced path (the 0.02s session-ended delay plus scheduling noise)
+    # while still being tight enough to fail if the race regresses.
+    result = await asyncio.wait_for(
+        pair_device(backend, {"protocol": "zwave", "action": "include"}), timeout=0.08
+    )
+
+    assert [d["address"] for d in result["new_devices"]] == ["11 11 11 1"]
+
+
+@pytest.mark.asyncio
 async def test_include_waits_for_the_new_devices_profile_too():
     # Regression, same underlying issue as add_by_address: the node-added
     # grace period only confirms the address exists, not that its device
@@ -719,6 +818,67 @@ async def test_include_with_raw_code_calls_open_qr_scan_with_that_raw_value(prot
     assert backend.discover_calls == []
     assert result["status"] == "inclusion_committed"
     assert result["new_devices"] == []
+
+
+@pytest.mark.asyncio
+async def test_include_with_qr_code_succeeds_without_a_protocol():
+    # The whole point of the fix: the model must be able to ask about a QR
+    # code BEFORE ever asking the protocol -- protocol is genuinely omitted
+    # here, not just defaulted, and open_qr_scan() itself never needed it
+    # anyway (confirmed against iox_wrapper.py -- it's not part of the wire
+    # payload).
+    backend = FakeBackend()
+
+    async def adds_a_device_shortly():
+        await asyncio.sleep(0.02)
+        backend.nodes["NEW001"] = SimpleNamespace(name="NEW001", node_def=object())
+
+    asyncio.create_task(adds_a_device_shortly())
+
+    result = await pair_device(backend, {"action": "include", "scan_qr_code": True, "client_id": "client-1"})
+
+    assert backend.open_qr_scan_calls == [("client-1", None)]
+    assert result["status"] == "inclusion_committed"
+    assert [d["address"] for d in result["new_devices"]] == ["NEW001"]
+    assert "protocol" not in result  # genuinely unknown -- never fabricated
+
+
+@pytest.mark.asyncio
+async def test_include_with_raw_code_succeeds_without_a_protocol():
+    backend = FakeBackend()
+
+    result = await pair_device(
+        backend, {"action": "include", "raw_code": "0123-4567", "client_id": "client-1"}
+    )
+
+    assert backend.open_qr_scan_calls == [("client-1", "0123-4567")]
+    assert result["status"] == "inclusion_committed"
+    assert "protocol" not in result
+
+
+@pytest.mark.asyncio
+async def test_requires_protocol_when_not_using_the_qr_path():
+    backend = FakeBackend()
+
+    result = await pair_device(backend, {"action": "include"})
+
+    assert "error" in result
+    assert "protocol" in result["error"]
+    assert backend.discover_calls == []
+    assert backend.open_qr_scan_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["add_by_address", "exclude"])
+async def test_non_include_actions_still_require_protocol_even_with_qr_args(action):
+    # add_by_address/exclude can never use the no-protocol QR path --
+    # omitting protocol must still be an error regardless of scan_qr_code.
+    backend = FakeBackend()
+
+    result = await pair_device(backend, {"action": action, "scan_qr_code": True, "client_id": "client-1"})
+
+    assert "error" in result
+    assert backend.open_qr_scan_calls == []
 
 
 @pytest.mark.asyncio
