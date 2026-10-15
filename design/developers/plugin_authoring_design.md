@@ -29,6 +29,19 @@ installed and started with no profile registered with the hub at all, since writ
 `profile.json` to disk never did anything by itself (see
 [Domain and plugin models](domain_and_plugin_models.md) §6).
 
+A direct comparison of the generated `authorize=True` wiring against the installed
+`udi_interface` package's own OAuth source (not just its docs) found that OAuth support, while
+present since Stage 2, was non-functional in practice: `__customNSHandler` forwarded the `CUSTOMNS`
+`"oauth"` key to `oauthService` but never the `"oauthTokens"` key it resends on every restart, so a
+previously-authenticated user's tokens were never reloaded; `__oauthHandler` never called
+`oauthService.oauthHandler(token)` at all, so even a brand-new authentication was silently
+discarded; and even with both fixed, nothing re-invoked `start()` once the human got around to
+authenticating, since `__start`'s own 10s `configDone` wait gives up long before that realistically
+happens. All three are fixed (see stage 8) — `start()` now always runs exactly once, regardless of
+which of the three paths (on-time `configDone`, a delayed one, or a later `OAUTH` event) first
+observes a real access token. The `oauth` config was also completed: `name`/`parameters` were
+missing from both the schema and (`name`) from validation entirely.
+
 ## 1. Developer tooling research (`plugin_dev_tooling.md`)
 
 **Ecosystem research**, done live (GitHub, UDI's own wiki/PyPI/VS Code Marketplace), since the
@@ -260,7 +273,9 @@ Stage 6's device detection.
    from generation, not a fused step — lets the model/customer review generated artifacts before
    anything touches the real hub, and lets this tool alone be re-called if only install/start
    failed.
-4. **OAuth wiring** — covered by Stage 2's own `authorize` conditional; no separate code.
+4. **OAuth wiring** — covered by Stage 2's own `authorize` conditional; no separate code. (A
+   token-persistence/retry correctness bug in this wiring was found and fixed later — see
+   "Current status" and stage 8.)
 5. **AI-tool wiring** — covered by Stage 2's own `ai_enabled` conditional
    (`CUSTOMREQUEST`/`handle_custom_request`, dispatch by `tool_name`,
    `customResponseError`/`customResponse` matching the canonical pattern); every declared AI tool
@@ -271,3 +286,61 @@ Stage 6's device detection.
    shell-command snapshots (before/after the customer plugs the device in), extracting
    vendor/product id for `server_entry.devd`. Never runs a shell command itself —
    `run_shell_command` does that.
+7. **Webhook wiring** — covered by Stage 2's own `webhook_enabled` conditional
+   (`WEBHOOK`→`handle_webhook`, an unconditional `self.poly.webhookStart()` call in `__init__`, and
+   a matching `{"enableWebhook": True}` option passed into `main.py`'s `Interface(...)`
+   construction — confirmed against the installed `udi_interface` package that `send()` only
+   enqueues, so there's no connection-ordering reason to gate this behind `configDone` the way
+   OAuth's token check is). `handle_webhook` is required in `override_bodies` whenever
+   `webhook_enabled` is true, the same "generated together" rule Stage 5's AI-tool helpers use.
+   `requirements.txt`'s `udi_interface` floor was also bumped from `>=3.0.57` to `>=3.4.7` for
+   every generated plugin (not just webhook ones), matching this repo's own pinned version.
+   Expected to be rare, like `ai_enabled` — most integrations only poll or call out, never receive
+   inbound pushed calls.
+8. **OAuth2 token-lifecycle fix** — three bugs in Stage 2's `authorize` conditional, found by
+   diffing the generated wiring against the installed `udi_interface` package's own OAuth source
+   rather than just its docs. `__customNSHandler` now forwards both `"oauth"` and `"oauthTokens"`
+   `CUSTOMNS` keys to `oauthService` (previously only `"oauth"` — the saved-tokens key PG3 resends
+   on every restart was silently dropped, so re-authentication was required after every restart).
+   `__oauthHandler` now calls `self.oauthService.oauthHandler(token)` (previously it only logged —
+   a fresh authentication's token was discarded immediately, so OAuth never worked at all even on
+   first use). And `__start`/`__configDoneHandler`/`__oauthHandler` now all funnel through a new,
+   idempotent `__runStartOnce` (guarded by `self.startCalled`, a `threading.Condition`-protected
+   check-and-set) instead of `__start` alone calling `self.start()` — `__start`'s own 10s
+   `configDone` wait permanently gives up long before a human realistically clicks "Authenticate",
+   and even an already-authenticated restart can independently blow past that same window since
+   `OAuth._updateRefreshTimer()`'s token-refresh HTTP call runs synchronously inside the same
+   thread `CONFIGDONE` itself waits on. Whichever of the three paths first observes a real access
+   token now runs `start()`, exactly once, regardless of ordering. Separately, `server_entry.oauth`
+   gained the `name`/`parameters` fields the real PG3 Oauth Configuration schema always had but
+   this tool never exposed, plus a guard requiring `name`/`auth_endpoint`/`token_endpoint` whenever
+   `authorize` is true (previously unvalidated — a generated plugin's `oauth` config could be
+   missing all three with no error at generation time).
+9. **ST-property enforcement** — every nodedef except the Controller's own now needs exactly one
+   property with `id == "ST"` (`validate_profile`'s new `_check_nodedef_has_st_property`), chosen
+   by the model to match whatever "status" means for that device (current temperature for a
+   thermostat, on/off for a relay, current level for a dimmer, ...); its `name` stays the real,
+   descriptive name rather than being forced to "Status" the way the Controller's own auto-injected
+   `ST` property is. A second, closely related check (`_check_no_duplicate_property_ids`) rejects
+   any nodedef — Controller included — that declares two properties sharing the same `id`; this
+   also closed a latent bug in `_ensure_controller_st_property`, which previously only overwrote
+   the *first* author-supplied `ST`-id property on the controller and silently left a second one
+   in place. The Controller nodedef is exempted from the "must have ST" check specifically in the
+   standalone `validate_profile` tool, since its `ST` property is unconditionally injected later by
+   `generate_plugin_scaffold` regardless of what's submitted, and the system prompt tells the model
+   never to author it itself.
+10. **main.py venv re-exec: skip condition and PATH fix** — `render_main_py`'s `.venv` re-exec
+    previously skipped whenever the process was reparented to `init` (`_is_framework_launch`
+    alone), on the assumption that this meant a real production install. But a developer's own
+    `install_generated_plugin` test-on-hub goes through the identical rc.d/`init` reparenting, so
+    that check alone wrongly skipped the re-exec there too, leaving the process on a bare system
+    `python3` that never got `install.sh`'s `.venv`-installed dependencies. Fixed by adding a
+    second check, `_is_framework_user` (`getpass.getuser().startswith("plugin_")`, independently
+    defensive like the existing ppid check) — a real production service user is provisioned by the
+    host framework and named accordingly, while a developer's hub test runs as their own account.
+    The re-exec is now skipped only when both checks agree. Separately, `PATH` is now prepended
+    with `.venv/bin` immediately before `os.execv` — `os.execv`'s own first argument already picks
+    the right interpreter for that one call, but `argv[0]` is deliberately the bare string
+    `"python3"` (for rc.subr's own service-identity matching), so anything downstream that
+    re-resolves that name via `PATH` instead of the exact PID would otherwise find the system
+    interpreter again.

@@ -29,7 +29,7 @@ WIRE_PROFILE = {
         {
             "id": "switch",
             "name": "Switch",
-            "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+            "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
             "links": {"ctl": [], "rsp": []},
         },
@@ -51,6 +51,14 @@ PROFILE_WITH_DANGLING_EDITOR = {
         {"id": "controller", "properties": [], "cmds": {}},
     ],
     "linkdefs": [],
+}
+
+# A minimal oauth config satisfying the name/auth_endpoint/token_endpoint required-when-authorize
+# guard -- reused by every authorize test that doesn't care about the oauth config's own content.
+COMPLETE_OAUTH_CONFIG = {
+    "name": "Acme API",
+    "auth_endpoint": "https://x/auth",
+    "token_endpoint": "https://x/token",
 }
 
 
@@ -192,6 +200,92 @@ async def test_ai_tools_without_ai_enabled_is_rejected(tmp_path):
     assert "error" in result
 
 
+# --- guard 4b: controller cmds.accepts -> commands dispatch dict ---
+
+
+def _profile_with_controller_accepts(accepts):
+    profile = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in profile["nodedefs"]:
+        if nodedef["id"] == "controller":
+            nodedef["cmds"]["accepts"] = accepts
+    return profile
+
+
+@pytest.mark.asyncio
+async def test_controller_commands_dict_is_generated_for_non_colliding_accepts_command(tmp_path):
+    profile = _profile_with_controller_accepts([{"id": "DISCOVER"}, {"id": "QUERYALL"}])
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "def queryall(self, *args, **kwargs):" in plugin_py
+    assert "'QUERYALL': queryall" in plugin_py
+
+
+@pytest.mark.asyncio
+async def test_controller_commands_dict_reuses_discover_override_on_collision(tmp_path):
+    profile = _profile_with_controller_accepts([{"id": "DISCOVER"}, {"id": "QUERYALL"}])
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "'DISCOVER': discover" in plugin_py
+    assert plugin_py.count("def discover(") == 1
+
+
+@pytest.mark.asyncio
+async def test_override_bodies_can_supply_a_custom_body_for_a_new_command_method(tmp_path):
+    profile = _profile_with_controller_accepts([{"id": "QUERYALL"}])
+    args = _base_args(
+        profile=profile,
+        override_bodies={"queryall": 'def queryall(self):\n    LOGGER.info("query all")\n'},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert 'LOGGER.info("query all")' in plugin_py
+
+
+@pytest.mark.asyncio
+async def test_commands_dict_is_placed_after_the_methods_it_references(tmp_path):
+    profile = _profile_with_controller_accepts([{"id": "DISCOVER"}, {"id": "QUERYALL"}])
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" not in result
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+
+    import ast as ast_module
+
+    tree = ast_module.parse(plugin_py)
+    controller = next(n for n in ast_module.walk(tree) if isinstance(n, ast_module.ClassDef) and n.name == "Controller")
+    method_linenos = {
+        n.name: n.lineno for n in controller.body if isinstance(n, (ast_module.FunctionDef, ast_module.AsyncFunctionDef))
+    }
+    commands_stmt = next(
+        stmt
+        for stmt in controller.body
+        if isinstance(stmt, ast_module.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast_module.Name)
+        and stmt.targets[0].id == "commands"
+    )
+    assert commands_stmt.lineno > method_linenos["discover"]
+    assert commands_stmt.lineno > method_linenos["queryall"]
+
+
+@pytest.mark.asyncio
+async def test_controller_invalid_command_id_is_rejected(tmp_path):
+    profile = _profile_with_controller_accepts([{"id": "2-BAD"}])
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_colliding_derived_command_names_are_rejected(tmp_path):
+    profile = _profile_with_controller_accepts([{"id": "QueryAll"}, {"id": "QUERYALL"}])
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
 # --- guard 5: ast.parse + class-membership round trip ---
 
 
@@ -254,7 +348,7 @@ async def test_oauth_client_secret_defaults_to_placeholder_when_omitted(tmp_path
         server_entry={
             "name": "AcmePool",
             "authorize": True,
-            "oauth": {"auth_endpoint": "https://x/auth", "token_endpoint": "https://x/token"},
+            "oauth": dict(COMPLETE_OAUTH_CONFIG),
         }
     )
     result = await _generate(tmp_path, args)
@@ -271,7 +365,7 @@ async def test_oauth_client_secret_with_a_real_value_is_refused(tmp_path):
         server_entry={
             "name": "AcmePool",
             "authorize": True,
-            "oauth": {"client_secret": "real-secret-value"},
+            "oauth": {**COMPLETE_OAUTH_CONFIG, "client_secret": "real-secret-value"},
         }
     )
     result = await _generate(tmp_path, args)
@@ -279,12 +373,82 @@ async def test_oauth_client_secret_with_a_real_value_is_refused(tmp_path):
     assert not (tmp_path / "acme_pool").exists()
 
 
+# --- guard 8: oauth.name/auth_endpoint/token_endpoint required when authorize ---
+
+
+@pytest.mark.asyncio
+async def test_oauth_missing_name_is_rejected(tmp_path):
+    args = _base_args(
+        server_entry={
+            "name": "AcmePool",
+            "authorize": True,
+            "oauth": {"auth_endpoint": "https://x/auth", "token_endpoint": "https://x/token"},
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_oauth_missing_auth_endpoint_is_rejected(tmp_path):
+    args = _base_args(
+        server_entry={
+            "name": "AcmePool",
+            "authorize": True,
+            "oauth": {"name": "Acme API", "token_endpoint": "https://x/token"},
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_oauth_missing_token_endpoint_is_rejected(tmp_path):
+    args = _base_args(
+        server_entry={
+            "name": "AcmePool",
+            "authorize": True,
+            "oauth": {"name": "Acme API", "auth_endpoint": "https://x/auth"},
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_oauth_omitted_entirely_when_authorize_is_rejected(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_oauth_name_and_parameters_round_trip_into_server_entry(tmp_path):
+    args = _base_args(
+        server_entry={
+            "name": "AcmePool",
+            "authorize": True,
+            "oauth": {**COMPLETE_OAUTH_CONFIG, "parameters": {"access_type": "offline"}},
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    oauth = json.loads(entry["oauth"])
+    assert oauth["name"] == "Acme API"
+    assert oauth["parameters"] == {"access_type": "offline"}
+
+
 # --- authorize / ai_enabled wiring ---
 
 
 @pytest.mark.asyncio
 async def test_authorize_true_adds_oauth_subscription_and_service(tmp_path):
-    args = _base_args(server_entry={"name": "AcmePool", "authorize": True})
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
     result = await _generate(tmp_path, args)
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
@@ -299,6 +463,124 @@ async def test_authorize_false_omits_oauth_subscription(tmp_path):
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
     assert "self.poly.OAUTH" not in source
     assert "udi_interface.OAuth" not in source
+
+
+# --- OAuth2 token-lifecycle fix: oauthTokens forwarding, oauthHandler delegation,
+# and the late-authentication start() retry path (see design/developers/
+# plugin_authoring_design.md stage 8 for the three bugs this closes) ---
+
+
+@pytest.mark.asyncio
+async def test_custom_ns_handler_forwards_oauth_tokens_key_to_oauth_service(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    handler_section = source[source.index("def __customNSHandler(self, key, data):") :]
+    handler_section = handler_section[: handler_section.index("def __customDataHandler")]
+    assert 'if key in ("oauth", "oauthTokens"):' in handler_section
+    assert "self.oauthService.customNsHandler(key, data)" in handler_section
+
+
+@pytest.mark.asyncio
+async def test_oauth_handler_delegates_token_to_oauth_service(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    handler_section = source[source.index("def __oauthHandler(self, token):") :]
+    handler_section = handler_section[: handler_section.index("def __customDataHandler")]
+    assert "self.oauthService.oauthHandler(token)" in handler_section
+
+
+@pytest.mark.asyncio
+async def test_oauth_handler_unblocks_start_after_late_authentication(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    handler_section = source[source.index("def __oauthHandler(self, token):") :]
+    handler_section = handler_section[: handler_section.index("def __customDataHandler")]
+    assert "self.oauthService.getAccessToken()" in handler_section
+    assert "self.configDoneAlready = True" in handler_section
+    assert "self.configDone.notifyAll()" in handler_section
+    assert "self.__runStartOnce()" in handler_section
+
+
+@pytest.mark.asyncio
+async def test_authorize_init_sets_up_start_called_guard(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.startCalled = False" in source
+
+
+@pytest.mark.asyncio
+async def test_run_start_once_method_exists_and_is_idempotent(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "def __runStartOnce(self):" in source
+    run_once_section = source[source.index("def __runStartOnce(self):") :]
+    assert "if self.startCalled:" in run_once_section
+    assert "self.startCalled = True" in run_once_section
+    assert "self.start()" in run_once_section
+
+
+@pytest.mark.asyncio
+async def test_start_in_authorize_plugin_delegates_through_run_start_once(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    start_section = source[source.index("def __start(self):") : source.index("def __stop(self):")]
+    assert "self.__runStartOnce()" in start_section
+    assert "self.start()" not in start_section
+
+
+# --- webhook_enabled wiring ---
+
+
+@pytest.mark.asyncio
+async def test_webhook_enabled_true_adds_webhook_subscription_and_start_call(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "webhook_enabled": True},
+        override_bodies={"handle_webhook": "def handle_webhook(self, data):\n    pass\n"},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.poly.subscribe(self.poly.WEBHOOK, self.handle_webhook)" in source
+    assert "self.poly.webhookStart()" in source
+    assert "def handle_webhook(self, data):" in source
+
+
+@pytest.mark.asyncio
+async def test_webhook_enabled_false_omits_webhook_subscription(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.poly.WEBHOOK" not in source
+    assert "webhookStart" not in source
+    assert "handle_webhook" not in source
+
+
+@pytest.mark.asyncio
+async def test_webhook_enabled_without_handle_webhook_override_is_rejected(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "webhook_enabled": True}, override_bodies={})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_override_without_webhook_enabled_is_rejected(tmp_path):
+    args = _base_args(override_bodies={"handle_webhook": "def handle_webhook(self, data):\n    pass\n"})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
 
 
 # --- __start must wait for configDone before calling the LLM-authored
@@ -351,7 +633,7 @@ async def test_config_done_handler_notifies_unconditionally_when_not_authorize(t
 
 @pytest.mark.asyncio
 async def test_config_done_handler_gates_on_oauth_token_when_authorize(tmp_path):
-    args = _base_args(server_entry={"name": "AcmePool", "authorize": True})
+    args = _base_args(server_entry={"name": "AcmePool", "authorize": True, "oauth": dict(COMPLETE_OAUTH_CONFIG)})
     result = await _generate(tmp_path, args)
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
@@ -361,6 +643,7 @@ async def test_config_done_handler_gates_on_oauth_token_when_authorize(tmp_path)
     assert 'self.poly.Notices["auth"]' in handler_section
     assert "self.configDoneAlready = True" in handler_section
     assert "self.configDone.notifyAll()" in handler_section
+    assert "self.__runStartOnce()" in handler_section
 
 
 @pytest.mark.asyncio
@@ -398,7 +681,7 @@ async def test_generation_inputs_json_is_written_with_the_normalized_inputs(tmp_
     rewritten_profile = json.loads(json.dumps(WIRE_PROFILE))
     for nodedef in rewritten_profile["nodedefs"]:
         if nodedef["id"] == "controller":
-            nodedef["properties"].append({"id": "ST", "editor": "ED_CONTROLLER_ST"})
+            nodedef["properties"].append({"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"})
         nodedef["id"] = f"{FAKE_MAC6}_{nodedef['id']}"
     rewritten_profile["editors"].append(
         {
@@ -883,6 +1166,27 @@ async def test_main_py_logs_the_profile_update_response(tmp_path):
     assert 'LOGGER.info("Profile update response: %s", response)' in source
 
 
+@pytest.mark.asyncio
+async def test_main_py_passes_enable_webhook_option_when_webhook_enabled(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "webhook_enabled": True},
+        override_bodies={"handle_webhook": "def handle_webhook(self, data):\n    pass\n"},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert 'udi_interface.Interface([], {"enableWebhook": True})' in source
+
+
+@pytest.mark.asyncio
+async def test_main_py_omits_enable_webhook_option_when_webhook_disabled(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    assert "udi_interface.Interface([])" in source
+    assert "enableWebhook" not in source
+
+
 # --- main.py/install.sh both self-detect a local-dev .venv (see
 # setup_dev_venv) -- production never has one, so both checks are always a
 # no-op there; the host always launches main.py with its bare system
@@ -925,19 +1229,59 @@ async def test_main_py_venv_reexec_skips_when_launched_by_the_real_host_framewor
     # is running gets reparented to init (PID 1) once its original forking
     # parent exits, so its own parent command is "/sbin/init" -- true for
     # both a real production install and a local install_generated_plugin
-    # test-on-hub. The .venv re-exec must not fire there, only for a
-    # directly-run process (terminal, VSCode debugger).
+    # test-on-hub, so parentage alone can't tell them apart. The .venv
+    # re-exec is only skipped when BOTH that parentage check AND a
+    # framework-provisioned username (starting "plugin_") agree -- a
+    # developer's own hub test, despite matching parentage, still runs as
+    # their own user, so it still re-execs into .venv.
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "main.py").read_text()
     assert "os.getppid()" in source
     assert '"/sbin/init"' in source
+    assert "getpass.getuser()" in source
+    assert '"plugin_"' in source
+    # Pins the fix itself, not just token presence -- a regression back to
+    # gating on _is_framework_launch alone would still pass every other
+    # assertion in this file.
+    assert "if not (_is_framework_launch and _is_framework_user):" in source
     venv_guard_start = source.index("if sys.prefix == sys.base_prefix")
     ps_check = source.index("os.getppid()")
+    user_check = source.index("getpass.getuser()")
     execv_call = source.index("os.execv(_VENV_PYTHON")
-    # The ps/init check lives inside the existing .venv-exists guard, and
-    # runs before the (now further-nested) os.execv call.
-    assert venv_guard_start < ps_check < execv_call
+    # The ps/init and username checks live inside the existing .venv-exists
+    # guard, and both run before the (now further-nested) os.execv call.
+    assert venv_guard_start < ps_check < user_check < execv_call
+
+
+@pytest.mark.asyncio
+async def test_main_py_venv_reexec_prepends_venv_bin_to_path(tmp_path):
+    # argv[0] is deliberately the bare "python3" (see the test above/the
+    # argv0 regression test) for rc.subr's own service-identity matching --
+    # anything downstream that re-resolves that bare name via PATH instead
+    # of the exact PID must still land on this venv's interpreter, not the
+    # system one.
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    path_prepend = 'os.environ["PATH"] = os.path.dirname(_VENV_PYTHON) + os.pathsep + os.environ.get("PATH", "")'
+    assert path_prepend in source
+    assert source.index(path_prepend) < source.index("os.execv(_VENV_PYTHON")
+
+
+@pytest.mark.asyncio
+async def test_main_py_venv_reexec_user_check_is_defensively_wrapped(tmp_path):
+    # Same reasoning as the ppid check -- runs before udi_interface.LOGGER
+    # exists, so an unexpected failure (e.g. getpass.getuser() raising on an
+    # unusual system) must degrade silently to the old behavior (allow the
+    # re-exec), not crash the plugin before it starts.
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "main.py").read_text()
+    user_check = source.index("getpass.getuser()")
+    except_clauses = [i for i in range(len(source)) if source.startswith("except Exception:", i)]
+    execv_call = source.index("os.execv(_VENV_PYTHON")
+    assert any(user_check < i < execv_call for i in except_clauses)
 
 
 @pytest.mark.asyncio
@@ -969,7 +1313,15 @@ async def test_install_sh_uses_venv_pip_when_present_else_falls_back_to_user_ins
 
 @pytest.mark.asyncio
 async def test_extra_node_classes_are_written_as_separate_files(tmp_path):
-    args = _base_args(node_classes={"pump_node": '"""Pump node."""\n\nclass Pump:\n    id = "switch"\n'})
+    args = _base_args(
+        node_classes={
+            "pump_node": (
+                '"""Pump node."""\n\nclass Pump:\n    id = "switch"\n\n'
+                "    def don(self, *args, **kwargs):\n        pass\n\n"
+                '    commands = {"DON": don}\n'
+            )
+        }
+    )
     result = await _generate(tmp_path, args)
     assert "error" not in result
     pump_source = (tmp_path / "acme_pool" / "pump_node.py").read_text()
@@ -999,6 +1351,77 @@ async def test_node_class_with_unrecognized_id_is_rejected(tmp_path):
     result = await _generate(tmp_path, args)
     assert "error" in result
     assert not (tmp_path / "acme_pool").exists()
+
+
+# --- guard 7b: a node class's commands = {...} dict must cover its own
+# nodedef's cmds.accepts ids (WIRE_PROFILE's "switch" nodedef declares
+# cmds.accepts = [{"id": "DON"}]) ---
+
+
+@pytest.mark.asyncio
+async def test_node_class_commands_dict_satisfying_required_accepts_is_accepted(tmp_path):
+    args = _base_args(
+        node_classes={
+            "pump_node": (
+                'class Pump:\n    id = "switch"\n\n'
+                "    def don(self, *args, **kwargs):\n        pass\n\n"
+                '    commands = {"DON": don}\n'
+            )
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_node_class_commands_dict_missing_required_entry_is_rejected(tmp_path):
+    args = _base_args(node_classes={"pump_node": 'class Pump:\n    id = "switch"\n    commands = {}\n'})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert "DON" in result["error"]
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_node_class_with_no_commands_dict_at_all_is_rejected_when_accepts_is_non_empty(tmp_path):
+    args = _base_args(node_classes={"pump_node": 'class Pump:\n    id = "switch"\n'})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert "commands" in result["error"]
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_node_class_dynamic_commands_assignment_is_treated_as_missing(tmp_path):
+    args = _base_args(
+        node_classes={
+            "pump_node": (
+                'class Pump:\n    id = "switch"\n\n'
+                "    def don(self, *args, **kwargs):\n        pass\n\n"
+                "    def __init__(self):\n        self.commands = {\"DON\": self.don}\n"
+            )
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_node_class_with_empty_accepts_nodedef_needs_no_commands_dict(tmp_path):
+    profile = json.loads(json.dumps(WIRE_PROFILE))
+    profile["nodedefs"].append(
+        {
+            "id": "no_cmds",
+            "name": "No Cmds",
+            "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
+            "cmds": {"sends": [], "accepts": []},
+            "links": {"ctl": [], "rsp": []},
+        }
+    )
+    args = _base_args(profile=profile, node_classes={"bare_node": 'class Bare:\n    id = "no_cmds"\n'})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
 
 
 @pytest.mark.asyncio
@@ -1052,7 +1475,7 @@ async def test_controller_nodedef_gets_a_matching_st_property_and_editor(tmp_pat
     profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
 
     controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
-    assert {"id": "ST", "editor": "ED_CONTROLLER_ST"} in controller_nodedef["properties"]
+    assert {"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"} in controller_nodedef["properties"]
 
     st_editor = next(e for e in profile_json["editors"] if e["id"] == "ED_CONTROLLER_ST")
     assert st_editor["ranges"] == [
@@ -1076,12 +1499,60 @@ async def test_controller_st_property_is_overwritten_if_already_declared_differe
 
     controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
     st_properties = [p for p in controller_nodedef["properties"] if p["id"] == "ST"]
-    assert st_properties == [{"id": "ST", "editor": "ED_CONTROLLER_ST"}]
+    assert st_properties == [{"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"}]
 
     st_editor = next(e for e in profile_json["editors"] if e["id"] == "ED_CONTROLLER_ST")
     assert st_editor["ranges"] == [
         {"subset": "0,1", "uom": "25", "names": {"0": "Not Connected", "1": "Connected"}}
     ]
+
+
+@pytest.mark.asyncio
+async def test_controller_duplicate_st_properties_collapse_to_one(tmp_path):
+    # A profile with two author-supplied "ST" properties on the controller
+    # must not leave a stale duplicate behind after injection.
+    profile_with_duplicate_st = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in profile_with_duplicate_st["nodedefs"]:
+        if nodedef["id"] == "controller":
+            nodedef["properties"].append({"id": "ST", "name": "First", "editor": "SOME_EDITOR"})
+            nodedef["properties"].append({"id": "ST", "name": "Second", "editor": "SOME_OTHER_EDITOR"})
+
+    result = await _generate(tmp_path, _base_args(profile=profile_with_duplicate_st))
+    assert "error" not in result
+    profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
+
+    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
+    st_properties = [p for p in controller_nodedef["properties"] if p["id"] == "ST"]
+    assert st_properties == [{"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"}]
+
+
+# --- every non-controller nodedef needs exactly one ST property ---
+
+
+@pytest.mark.asyncio
+async def test_device_nodedef_missing_st_property_is_rejected(tmp_path):
+    profile = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in profile["nodedefs"]:
+        if nodedef["id"] == "switch":
+            nodedef["properties"] = [{"id": "ON_OFF", "name": "On Off", "editor": "ED_ONOFF"}]
+
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" in result
+    assert any("no 'ST' property" in detail for detail in result.get("details") or [])
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_device_nodedef_with_duplicate_property_id_is_rejected(tmp_path):
+    profile = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in profile["nodedefs"]:
+        if nodedef["id"] == "switch":
+            nodedef["properties"].append({"id": "ST", "name": "Status Again", "editor": "ED_ONOFF"})
+
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" in result
+    assert any("more than once" in detail for detail in result.get("details") or [])
+    assert not (tmp_path / "acme_pool").exists()
 
 
 # --- guard 2: developer commissioning ---
@@ -1224,7 +1695,7 @@ async def test_requirements_txt_always_includes_the_base_requirement(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     requirements = (tmp_path / "acme_pool" / "requirements.txt").read_text()
-    assert "udi_interface>=3.0.57" in requirements
+    assert "udi_interface>=3.4.7" in requirements
     assert "requirements.txt" in result["files_written"]
 
 
@@ -1233,13 +1704,13 @@ async def test_requirements_txt_includes_extra_requirements_and_dedupes(tmp_path
     args = _base_args(
         server_entry={
             "name": "AcmePool",
-            "extra_requirements": ["requests>=2.31.0", "udi_interface>=3.0.57", "requests>=2.31.0"],
+            "extra_requirements": ["requests>=2.31.0", "udi_interface>=3.4.7", "requests>=2.31.0"],
         }
     )
     result = await _generate(tmp_path, args)
     assert "error" not in result
     lines = (tmp_path / "acme_pool" / "requirements.txt").read_text().splitlines()
-    assert lines == ["udi_interface>=3.0.57", "requests>=2.31.0"]
+    assert lines == ["udi_interface>=3.4.7", "requests>=2.31.0"]
 
 
 @pytest.mark.asyncio

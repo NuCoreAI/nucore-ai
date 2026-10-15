@@ -24,13 +24,21 @@ DEVELOPER_NAME = "Dev Name"
 # "AA:BB:CC:DD:EE:FF" -> mac6 "ddeeff" -- see test_scaffold.py's own fixture for why.
 FAKE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 
+# See test_scaffold.py's own COMPLETE_OAUTH_CONFIG -- satisfies the name/auth_endpoint/
+# token_endpoint required-when-authorize guard.
+COMPLETE_OAUTH_CONFIG = {
+    "name": "Acme API",
+    "auth_endpoint": "https://x/auth",
+    "token_endpoint": "https://x/token",
+}
+
 WIRE_PROFILE = {
     "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
     "nodedefs": [
         {
             "id": "switch",
             "name": "Switch",
-            "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+            "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
             "links": {"ctl": [], "rsp": []},
         },
@@ -178,11 +186,30 @@ async def test_regeneration_preserves_the_controller_st_driver_and_conn_status(t
 
 
 @pytest.mark.asyncio
+async def test_regeneration_rebuilds_the_commands_dispatch_dict(tmp_path):
+    profile = json.loads(json.dumps(WIRE_PROFILE))
+    for nodedef in profile["nodedefs"]:
+        if nodedef["id"] == "controller":
+            nodedef["cmds"]["accepts"] = [{"id": "QUERYALL"}]
+    gen_result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    assert "def queryall(self, *args, **kwargs):" in plugin_py
+    assert "'QUERYALL': queryall" in plugin_py
+
+
+@pytest.mark.asyncio
 async def test_authorize_and_ai_enabled_are_preserved_across_refresh(tmp_path):
     args = _base_args(
         server_entry={
             "name": "AcmePool",
             "authorize": True,
+            "oauth": dict(COMPLETE_OAUTH_CONFIG),
             "ai_enabled": True,
             "aiTools": [{"name": "get_dates", "description": "x"}],
         },
@@ -204,3 +231,32 @@ async def test_authorize_and_ai_enabled_are_preserved_across_refresh(tmp_path):
     assert "custom start" in plugin_py
     assert "def handle_custom_request(self, request):" in plugin_py
     assert "def _get_dates(self, payload):" in plugin_py
+    assert "self.startCalled = False" in plugin_py
+    assert 'if key in ("oauth", "oauthTokens"):' in plugin_py
+    assert "self.oauthService.oauthHandler(token)" in plugin_py
+    assert "def __runStartOnce(self):" in plugin_py
+
+
+@pytest.mark.asyncio
+async def test_webhook_enabled_preserved_across_refresh(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "webhook_enabled": True},
+        override_bodies={
+            "start": 'def start(self):\n    LOGGER.info("custom start")\n',
+            "handle_webhook": "def handle_webhook(self, data):\n    pass\n",
+        },
+    )
+    gen_result = await _generate(tmp_path, args)
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    assert "self.poly.subscribe(self.poly.WEBHOOK, self.handle_webhook)" in plugin_py
+    assert "self.poly.webhookStart()" in plugin_py
+    assert "def handle_webhook(self, data):" in plugin_py
+
+    main_py = (plugin_dir / "main.py").read_text()
+    assert 'udi_interface.Interface([], {"enableWebhook": True})' in main_py

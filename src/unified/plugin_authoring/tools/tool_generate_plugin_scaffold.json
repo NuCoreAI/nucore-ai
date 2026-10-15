@@ -27,12 +27,12 @@
       },
       "node_classes": {
         "type": "object",
-        "description": "Extra device Node subclasses beyond the Controller, as {filename_without_py: full_python_source}, for profiles with more than one NodeDef. Each class must declare a class variable id = \"<placeholder>\" matching one of profile.nodedefs' own placeholder ids exactly -- generation rewrites both together into the real MAC-derived id, and refuses outright if any class's id is missing or doesn't match a real nodedef.",
+        "description": "Extra device Node subclasses beyond the Controller, as {filename_without_py: full_python_source}, for profiles with more than one NodeDef. Each class must declare a class variable id = \"<placeholder>\" matching one of profile.nodedefs' own placeholder ids exactly -- generation rewrites both together into the real MAC-derived id, and refuses outright if any class's id is missing or doesn't match a real nodedef. If that nodedef declares any cmds.accepts entries, the class must also declare a class-level commands = {...} dict literal with one entry per accepted command id, mapping it to a plain (unbound) method name defined earlier in the same class body (e.g. 'commands = {\"DON\": don}', with 'def don(self, *args, **kwargs): ...' written above it) -- udi_interface.Node.runCmd looks up command['cmd'] in self.commands and silently does nothing if it's missing, and calls the stored function as fun(self, command), so it must be a bare function reference, never self.xxx.",
         "additionalProperties": {"type": "string"}
       },
       "override_bodies": {
         "type": "object",
-        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true. Any name not supplied gets a safe no-op stub. Any other key is rejected. These fire in a fixed real-world order -- START, then CONFIG (processConfig), then CUSTOMPARAMS (parameterHandler), then CONFIGDONE -- and the tool-generated wiring already blocks start() until CONFIGDONE (or a timeout); write each override for its own place in that order rather than assuming config/params are already available earlier than CONFIGDONE. See the system prompt's 'Write override bodies for the real startup order' section for the full contract.",
+        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true, plus handle_webhook (receives headers/querystring/body as a single positional 'data' argument) when server_entry.webhook_enabled is true, plus one entry per Controller nodedef cmds.accepts command id that doesn't collide (case-insensitively, once lowercased) with one of the fixed names above -- e.g. an accepted command 'QUERYALL' needs a 'queryall' key here; an accepted command 'DISCOVER' instead reuses the existing 'discover' override, since it's the same event. Any name not supplied gets a safe no-op stub. Any other key is rejected. These fire in a fixed real-world order -- START, then CONFIG (processConfig), then CUSTOMPARAMS (parameterHandler), then CONFIGDONE -- and the tool-generated wiring already blocks start() until CONFIGDONE (or a timeout); write each override for its own place in that order rather than assuming config/params are already available earlier than CONFIGDONE. See the system prompt's 'Write override bodies for the real startup order' section for the full contract.",
         "additionalProperties": {"type": "string"}
       },
       "server_entry": {
@@ -53,14 +53,17 @@
           "authorize": {"type": "boolean", "description": "True if this plugin needs OAuth against the target API."},
           "oauth": {
             "type": "object",
-            "description": "OAuth endpoint config when authorize is true: auth_endpoint, token_endpoint, scope, addRedirect, addScope, token_parameters. Never include a real client_id/client_secret -- omit them and the placeholder is filled in automatically.",
+            "description": "OAuth endpoint config when authorize is true: name, auth_endpoint, token_endpoint, scope, addRedirect, addScope, parameters, token_parameters. Never include a real client_id/client_secret -- omit them and the placeholder is filled in automatically.",
+            "required": ["name", "auth_endpoint", "token_endpoint"],
             "properties": {
+              "name": {"type": "string", "description": "Human-readable label for the external service, shown on PG3's Authorize button/consent UI -- never read by udi_interface itself."},
               "auth_endpoint": {"type": "string"},
               "token_endpoint": {"type": "string"},
               "scope": {"type": "string"},
-              "addRedirect": {"type": "boolean"},
-              "addScope": {"type": "boolean"},
-              "token_parameters": {"type": "object"}
+              "addRedirect": {"type": "boolean", "description": "Adds redirect_uri to the token-endpoint request. Defaults to false."},
+              "addScope": {"type": "boolean", "description": "Adds scope to the token-endpoint request. Defaults to true."},
+              "parameters": {"type": "object", "description": "Extra parameters added to the authorization request (distinct from token_parameters, added to the token request)."},
+              "token_parameters": {"type": "object", "description": "Extra parameters added to the token-endpoint request."}
             }
           },
           "ai_enabled": {"type": "boolean", "description": "True only if this plugin exposes AI-callable tools via CUSTOMREQUEST."},
@@ -76,6 +79,10 @@
           },
           "discover": {"type": "boolean"},
           "fileUpload": {"type": "boolean"},
+          "webhook_enabled": {
+            "type": "boolean",
+            "description": "True only if this plugin needs to receive inbound webhook calls pushed from a third-party service (not merely to call out to one -- most integrations only poll). Requires the eisy/polisy host to be running PG3x with PG3 remote access configured and active on my.isy.io -- a hub/installer-level precondition this tool cannot verify or enable; ask rather than assume. Defaults to false. When true, override_bodies must include a 'handle_webhook' entry."
+          },
           "isyAccess": {"type": "boolean", "description": "True if this plugin needs any communication with eisy/ISY itself -- nodes, programs, commands, properties, etc. Defaults to false."},
           "requireEisyui": {"type": "boolean", "description": "True only if this plugin is meaningless outside eisyUI (no standalone configuration path at all). The developer must know this about their own plugin. Defaults to false."},
           "shortPoll": {"type": "integer"},

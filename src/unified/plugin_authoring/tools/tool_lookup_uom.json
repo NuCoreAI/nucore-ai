@@ -1,6 +1,6 @@
 {
   "name": "lookup_uom",
-  "description": "Search the Unit of Measure (UOM) catalogue by keyword, matching against each entry's name, label, description, and category. Use this when authoring an editor's ranges to find the right UOM id instead of guessing one from memory.",
+  "description": "Search the Unit of Measure (UOM) catalogue by keyword, matching against each entry's name, label, description, and category. Use this when authoring an editor's ranges to find the right UOM id for each unit choice, instead of guessing one from memory -- an editor may declare more than one range with a different UOM each (e.g. the same property reported in both Fahrenheit and Celsius), so call this once per unit when a property genuinely needs more than one.",
   "input_schema": {
     "type": "object",
     "required": ["keyword"],

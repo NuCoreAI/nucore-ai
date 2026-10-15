@@ -41,6 +41,7 @@ from .scaffold import (
     _VERSION_FILENAME,
     _assemble_plugin_py,
     _class_method_names,
+    _resolve_controller_command_dispatch,
 )
 
 
@@ -83,6 +84,7 @@ async def regenerate_plugin_boilerplate(
     authorize = bool(server_entry_input.get("authorize"))
     ai_enabled = bool(server_entry_input.get("ai_enabled"))
     file_upload = bool(server_entry_input.get("fileUpload"))
+    webhook_enabled = bool(server_entry_input.get("webhook_enabled"))
     ai_tool_names = [tool["name"] for tool in (server_entry_input.get("aiTools") or []) if isinstance(tool, dict) and tool.get("name")]
 
     override_bodies = generation_inputs.get("override_bodies") or {}
@@ -114,6 +116,18 @@ async def regenerate_plugin_boilerplate(
     mac6 = controller_node_id[: -len("_controller")]
     controller_address = f"{mac6}_ctl"
 
+    controller_nodedef = next(
+        (nd for nd in (stored_profile.get("nodedefs") or []) if isinstance(nd, dict) and nd.get("id") == controller_node_id),
+        None,
+    )
+    controller_accepts = ((controller_nodedef or {}).get("cmds") or {}).get("accepts") or []
+    controller_command_dispatch, dispatch_error = _resolve_controller_command_dispatch(controller_accepts)
+    if dispatch_error:
+        return {"error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has an invalid stored profile: {dispatch_error}"}
+    new_command_override_names = {
+        name for name in controller_command_dispatch.values() if name not in plugin_skeleton.BASE_OVERRIDE_METHODS
+    }
+
     plugin_py = _assemble_plugin_py(
         controller_class=controller_class,
         controller_node_id=controller_node_id,
@@ -123,12 +137,18 @@ async def regenerate_plugin_boilerplate(
         authorize=authorize,
         ai_enabled=ai_enabled,
         file_upload=file_upload,
+        webhook_enabled=webhook_enabled,
         override_bodies=override_bodies,
         ai_tool_names=ai_tool_names,
+        controller_command_dispatch=controller_command_dispatch,
         custom_param_docs=custom_param_docs,
     )
     main_py = plugin_skeleton.render_main_py(
-        controller_module, controller_class, controller_address=controller_address, controller_node_name=controller_node_name
+        controller_module,
+        controller_class,
+        controller_address=controller_address,
+        controller_node_name=controller_node_name,
+        webhook_enabled=webhook_enabled,
     )
     version_py = plugin_skeleton.render_version_py(version)
 
@@ -139,9 +159,12 @@ async def regenerate_plugin_boilerplate(
             return {"error": f"regenerated '{filename}' is not valid Python: {exc}"}
 
     expected_methods = set(plugin_skeleton.BASE_OVERRIDE_METHODS)
+    expected_methods.update(new_command_override_names)
     if ai_enabled:
         expected_methods.add(plugin_skeleton.AI_REQUEST_OVERRIDE_METHOD)
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
+    if webhook_enabled:
+        expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
     actual_methods = _class_method_names(plugin_py, controller_class) or set()
     missing_methods = expected_methods - actual_methods
     if missing_methods:

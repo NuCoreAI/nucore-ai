@@ -9,10 +9,11 @@ re-verified facts).
 
 ``handlers/scaffold.py`` splices LLM-authored override-method **bodies**
 (``start``/``stop``/``discover``/``shortPoll``/``longPoll``/``processConfig``/
-``parameterHandler``/``customParamHandler``/per-declared-AI-tool helpers) in
-after the pieces rendered here -- this module only ever emits the
-boilerplate half: ``__init__``, the private (name-mangled) wiring methods
-that ``subscribe()`` actually calls, and the two tiny bootstrap files.
+``parameterHandler``/``customParamHandler``/per-declared-AI-tool helpers/
+per-controller-nodedef-``cmds.accepts`` command helpers) in after the pieces
+rendered here -- this module only ever emits the boilerplate half:
+``__init__``, the private (name-mangled) wiring methods that ``subscribe()``
+actually calls, and the two tiny bootstrap files.
 """
 
 from __future__ import annotations
@@ -36,6 +37,11 @@ BASE_OVERRIDE_METHODS = (
 # listed separately from BASE_OVERRIDE_METHODS since it's conditional.
 AI_REQUEST_OVERRIDE_METHOD = "handle_custom_request"
 
+# The one webhook-wiring override, present only when webhook_enabled (Stage 7) -- listed
+# separately from BASE_OVERRIDE_METHODS since it's conditional, same reasoning as
+# AI_REQUEST_OVERRIDE_METHOD.
+WEBHOOK_OVERRIDE_METHOD = "handle_webhook"
+
 def default_override_method(name: str) -> str:
     """A safe, uniform stand-in for an override ``handlers/scaffold.py``
     didn't receive a body for -- ``*args, **kwargs`` accepts whatever
@@ -51,6 +57,25 @@ def ai_tool_helper_name(tool_name: str) -> str:
     ``_get_dates``, called as ``self._get_dates(payload)`` from
     ``handle_custom_request``)."""
     return f"_{tool_name}"
+
+
+def controller_command_method_name(command_id: str) -> str:
+    """The dispatch method name for one controller nodedef ``cmds.accepts``
+    id -- the ``BASE_OVERRIDE_METHODS`` entry it collides with
+    case-insensitively, if any (e.g. accepts id ``"DISCOVER"`` reuses the
+    already-wired ``discover()`` override -- ``self.poly.subscribe(self.poly
+    .DISCOVER, self.discover)`` in ``render_init`` -- rather than generating
+    a second method for the same event), or else the id lowercased
+    (``"QUERYALL"`` -> ``"queryall"``). Pure naming only -- the caller
+    (``handlers/scaffold.py``'s ``_resolve_controller_command_dispatch``)
+    validates the result is a legal, non-keyword, non-dunder Python
+    identifier and that no two command ids on the same class collide on the
+    same derived name."""
+    lowered = command_id.lower()
+    for base_name in BASE_OVERRIDE_METHODS:
+        if base_name.lower() == lowered:
+            return base_name
+    return lowered
 
 
 def render_custom_param_docs_call(custom_param_docs: str | None) -> str | None:
@@ -79,6 +104,7 @@ def render_init(
     authorize: bool,
     ai_enabled: bool,
     file_upload: bool,
+    webhook_enabled: bool,
     controller_address: str,
     controller_node_name: str,
     custom_param_docs: str | None = None,
@@ -120,6 +146,21 @@ def render_init(
     (no custom params, no previously-discovered nodes, no OAuth token), so
     the LLM-authored ``start()`` override must not run until ``CONFIGDONE``
     has fired, or a timeout gives up.
+
+    When *webhook_enabled*, both the ``WEBHOOK`` subscription and the paired
+    ``self.poly.webhookStart()`` call fire unconditionally right here in
+    ``__init__`` -- deliberately *not* gated behind the ``configDone`` wait
+    ``start()``'s override is (confirmed against the installed
+    ``udi_interface`` package: ``Interface.send()``, which both
+    ``webhookStart()``/``webhookResponse()`` call underneath, only enqueues
+    to an in-memory queue a background thread drains once connected -- there
+    is no connection-ordering hazard to wait for here, unlike OAuth's
+    genuinely-external "token not ready yet" case). ``webhookStart()`` itself
+    raises unless the matching ``{"enableWebhook": True}`` option was passed
+    to ``Interface(...)`` -- ``render_main_py`` always passes it whenever
+    *webhook_enabled* is true, so a raise here can only mean this tool's own
+    codegen let the two flags fall out of sync, which should fail loudly, not
+    be swallowed.
 
     *controller_address* is this plugin's own MAC-derived, generation-time-
     computed address (see ``handlers/scaffold.py``'s guard 4a) -- ``primary``
@@ -175,6 +216,7 @@ def render_init(
         )
     if authorize:
         lines.append("        self.oauthService = udi_interface.OAuth(self.poly)")
+        lines.append("        self.startCalled = False")
     lines.extend(
         [
             "        self.poly.subscribe(self.poly.START, self.__start, address)",
@@ -195,6 +237,9 @@ def render_init(
         lines.append("        self.poly.subscribe(self.poly.OAUTH, self.__oauthHandler)")
     if ai_enabled:
         lines.append(f"        self.poly.subscribe(self.poly.CUSTOMREQUEST, self.{AI_REQUEST_OVERRIDE_METHOD})")
+    if webhook_enabled:
+        lines.append(f"        self.poly.subscribe(self.poly.WEBHOOK, self.{WEBHOOK_OVERRIDE_METHOD})")
+        lines.append("        self.poly.webhookStart()")
     lines.append("        self.poly.addNode(self, conn_status='ST')")
     return "\n".join(lines) + "\n"
 
@@ -219,9 +264,47 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
     confirmed against the installed ``udi_interface`` package directly),
     surfacing a ``Notices['auth']`` banner and leaving ``configDoneAlready``
     false (so ``__start`` times out rather than hangs) when it isn't ready
-    yet."""
-    methods = [
-        '''    def __start(self):
+    yet.
+
+    For an *authorize* plugin specifically, a human may not click
+    "Authenticate" within ``__start``'s 10s window at all (the realistic
+    case on first boot) -- or ``OAuth._updateRefreshTimer()``'s own
+    synchronous token-refresh HTTP call (confirmed against the installed
+    package) can delay ``CONFIGDONE`` itself past that same window on a
+    restart with an already-expired token. Either way, ``__start``'s own
+    wait gives up permanently without ever calling ``self.start()``. So for
+    *authorize* only, ``__start``/``__configDoneHandler``/``__oauthHandler``
+    all funnel through ``__runStartOnce`` (guarded by ``self.startCalled``,
+    set up in ``render_init``) instead of ``__start`` calling ``self.
+    start()`` directly -- whichever of the three actually observes a real
+    access token first (an on-time ``configDone``, a delayed one, or a
+    fresh ``OAUTH`` event arriving well after boot) is the one that runs
+    it, exactly once, regardless of ordering. ``__oauthHandler`` additionally
+    must call ``self.oauthService.oauthHandler(token)`` and
+    ``__customNSHandler`` must forward the ``"oauthTokens"`` ``CUSTOMNS``
+    key the same way it already forwards ``"oauth"`` -- both confirmed
+    against the installed package as the only two paths that ever populate
+    ``self.oauthService``'s saved tokens at all; omitting either leaves
+    ``getAccessToken()`` permanently raising ``ValueError`` even after a
+    real, successful authentication."""
+    if authorize:
+        methods = [
+            '''    def __start(self):
+        LOGGER.info("%s: start", self.name)
+        if not self.configDoneAlready:
+            with self.configDone:
+                if not self.configDone.wait(timeout=10):
+                    LOGGER.error(
+                        "%s: timed out waiting for configDone -- will call start() once "
+                        "authentication completes instead", self.name,
+                    )
+                    return
+        self.__runStartOnce()
+''',
+        ]
+    else:
+        methods = [
+            '''    def __start(self):
         LOGGER.info("%s: start", self.name)
         try:
             if not self.configDoneAlready:
@@ -233,6 +316,8 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
         except Exception as ex:
             LOGGER.error("%s: start failed: %s", self.name, ex)
 ''',
+        ]
+    methods.extend([
         '''    def __stop(self):
         LOGGER.info("%s: stop", self.name)
         self.stop()
@@ -246,7 +331,7 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
         '''    def __configHandler(self, config):
         self.processConfig(config)
 ''',
-    ]
+    ])
     if authorize:
         methods.append(
             '''    def __configDoneHandler(self):
@@ -260,6 +345,7 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
         with self.configDone:
             self.configDoneAlready = True
             self.configDone.notifyAll()
+        self.__runStartOnce()
 '''
         )
     else:
@@ -284,7 +370,7 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
     if authorize:
         methods.append(
             '''    def __customNSHandler(self, key, data):
-        if key == "oauth":
+        if key in ("oauth", "oauthTokens"):
             self.oauthService.customNsHandler(key, data)
             return
         self.customParamHandler(key, data)
@@ -293,6 +379,16 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
         methods.append(
             '''    def __oauthHandler(self, token):
         LOGGER.info("%s: oauth token refreshed", self.name)
+        self.oauthService.oauthHandler(token)
+        try:
+            self.oauthService.getAccessToken()
+        except ValueError:
+            LOGGER.warning("%s: oauth token refresh did not yield a usable access token yet", self.name)
+            return
+        with self.configDone:
+            self.configDoneAlready = True
+            self.configDone.notifyAll()
+        self.__runStartOnce()
 '''
         )
     else:
@@ -311,11 +407,29 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
         LOGGER.debug("%s: bonjour: %s", self.name, response)
 '''
     )
+    if authorize:
+        methods.append(
+            '''    def __runStartOnce(self):
+        with self.configDone:
+            if self.startCalled:
+                return
+            self.startCalled = True
+        try:
+            self.start()
+        except Exception as ex:
+            LOGGER.error("%s: start failed: %s", self.name, ex)
+'''
+        )
     return "\n".join(methods)
 
 
 def render_main_py(
-    controller_module: str, controller_class: str, *, controller_address: str, controller_node_name: str
+    controller_module: str,
+    controller_class: str,
+    *,
+    controller_address: str,
+    controller_node_name: str,
+    webhook_enabled: bool,
 ) -> str:
     """Fully tool-generated, never LLM-authored -- bootstrap is nearly
     identical for every plugin: start Polyglot, send this plugin's Dynamic
@@ -348,22 +462,41 @@ def render_main_py(
     The re-exec additionally only fires when this process was launched
     directly (a terminal, the VSCode debugger via ``setup_vscode_debug_
     config``) -- never when the real host's own rc.d/``init``-managed
-    service framework started it. Confirmed on a live host: a daemonized
-    service process is reparented to ``init`` (PID 1) once its original
-    forking parent exits, so a genuinely framework-launched process's own
-    parent command is ``"/sbin/init"`` (checked via ``ps -o command= -p
-    <ppid>``) -- true for both a real production install and a local
-    ``install_generated_plugin`` test-on-hub, since both start the plugin
-    through the identical rc.d path. Skipping the re-exec there keeps a
-    hub-installed test running on the exact interpreter/dependencies a real
-    production install would use, so a ``.venv``-only dependency gap can
-    never hide behind dev convenience once the plugin is actually running
-    as a real managed service -- the ``.venv`` shortcut stays available only
-    for the lighter, direct-run debugging workflow it was built for. The
-    ``ps`` check itself is wrapped defensively (defaulting to "not
-    framework-launched", i.e. today's old behavior) since it runs before
+    service framework started it **as a genuine production install**.
+    Confirmed on a live host: a daemonized service process is reparented to
+    ``init`` (PID 1) once its original forking parent exits, so a genuinely
+    framework-launched process's own parent command is ``"/sbin/init"``
+    (checked via ``ps -o command= -p <ppid>``) -- but that alone isn't
+    enough to tell a real production install apart from a developer's own
+    ``install_generated_plugin`` test-on-hub, since **both** start the
+    plugin through the identical rc.d path and both get reparented the same
+    way. The two are told apart by which user the process runs as instead:
+    a real production install's service user is provisioned by the host
+    framework and its name starts with ``plugin_``; a developer testing
+    their own plugin runs as their own account. The re-exec is skipped only
+    when *both* the parentage check **and** the username check say this is
+    a framework-launched, framework-provisioned process -- a developer's
+    hub test, despite matching the parentage check, still runs under their
+    own username, so it still re-execs into ``.venv``, matching what
+    ``install.sh`` actually installed their dependencies into. Both checks
+    are wrapped defensively (each independently defaulting to ``False``,
+    i.e. "not a framework-launched production install", which preserves
+    today's old behavior of allowing the re-exec) since they run before
     ``udi_interface.LOGGER`` exists -- nowhere safe to surface a warning if
-    it ever fails.
+    either ever fails.
+
+    Immediately before the actual ``os.execv`` call, ``PATH`` is also
+    prepended with ``.venv/bin`` -- ``os.execv``'s own first argument
+    (``_VENV_PYTHON``, an absolute path) already selects the right
+    interpreter for *this* exec regardless of ``PATH``, but ``argv[0]`` is
+    deliberately left as the bare string ``"python3"`` (not a path) for the
+    rc.subr service-identity reason documented next to that call. Anything
+    downstream that re-resolves that bare ``"python3"`` by searching
+    ``PATH`` instead of using the exact PID (rc.subr's own restart handling,
+    or any later subprocess/exec call by name) would otherwise find the
+    system interpreter first and silently lose the venv again -- the same
+    class of problem the argv[0] handling next to it addresses, one step
+    further removed.
 
     *controller_address* is this plugin's own MAC-derived, generation-time-
     computed address (see ``handlers/scaffold.py``'s guard 4a) -- used for
@@ -372,7 +505,17 @@ def render_main_py(
     *controller_node_name* (``"<project name> Controller"``, built from
     ``server_entry.name``) is this Controller's display name -- never the
     bare word ``"Controller"``, which would be meaningless once a customer
-    has more than one node-server installed."""
+    has more than one node-server installed.
+
+    *webhook_enabled* controls the one feature-conditional piece of this
+    otherwise flag-independent bootstrap: when true, ``Interface(...)`` is
+    constructed with a second ``{{"enableWebhook": True}}`` options argument
+    -- required before ``render_init``'s ``self.poly.webhookStart()`` call
+    will do anything but raise (see ``render_init``). When false, the
+    rendered line is byte-identical to this file's own pre-webhook-support
+    output (``udi_interface.Interface([])``), so existing generated plugins
+    are unaffected."""
+    interface_options = ', {"enableWebhook": True}' if webhook_enabled else ""
     return f'''"""Generated by plugin_authoring -- bootstraps the plugin process. Do not
 edit by hand; regenerate via generate_plugin_scaffold instead. See
 context.md for this plugin's iteration history."""
@@ -397,17 +540,21 @@ if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
     #
     # Only re-exec when this process was launched directly (a terminal, the
     # VSCode debugger) -- never when the real host's own rc.d/init-managed
-    # service framework started it. A daemonized service process is
-    # reparented to init (PID 1) once its original forking parent exits, so
-    # a genuinely framework-launched process's own parent command is
-    # "/sbin/init" (confirmed on a live host) -- true for both a real
-    # production install and a local install_generated_plugin test-on-hub
-    # (both go through the identical rc.d start path). Skipping the re-exec
-    # there keeps a hub-installed test running on the exact
-    # interpreter/dependencies a real production install would use, so a
-    # venv-only dependency gap can't hide until real production. Defaults
-    # to "not framework-launched" (preserves the old behavior: allow the
-    # re-exec) if the check itself fails for any reason -- this runs before
+    # service framework started it as a genuine production install. A
+    # daemonized service process is reparented to init (PID 1) once its
+    # original forking parent exits, so a genuinely framework-launched
+    # process's own parent command is "/sbin/init" (confirmed on a live
+    # host) -- but that alone is true for both a real production install
+    # and a local install_generated_plugin test-on-hub, since both go
+    # through the identical rc.d start path. Tell them apart by the user
+    # the process runs as instead: a real production install's service
+    # user is provisioned by the host framework and starts with "plugin_";
+    # a developer's own hub test runs as their own account, and still
+    # needs the re-exec -- install.sh installed their dependencies into
+    # .venv, not system/--user site-packages. Skip the re-exec only when
+    # BOTH checks say this is a framework-launched, framework-provisioned
+    # process. Each check defaults to False (preserves the old behavior:
+    # allow the re-exec) if it fails for any reason -- this runs before
     # LOGGER exists, so there is nowhere safe to surface a warning yet.
     _is_framework_launch = False
     try:
@@ -418,7 +565,14 @@ if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
     except Exception:
         pass
 
-    if not _is_framework_launch:
+    _is_framework_user = False
+    try:
+        import getpass
+        _is_framework_user = getpass.getuser().startswith("plugin_")
+    except Exception:
+        pass
+
+    if not (_is_framework_launch and _is_framework_user):
         # argv[0] is the literal "python3" here, NOT _VENV_PYTHON -- confirmed
         # against a live host: rc.subr's check_pidfile()/_find_processes()
         # (/etc/rc.subr) matches the running process's own argv[0] against the
@@ -431,6 +585,12 @@ if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
         # isn't running and spawn a duplicate on every subsequent start,
         # orphaning this one. The actual interpreter binary that runs is still
         # _VENV_PYTHON (os.execv's own first argument, unaffected by argv[0]).
+        # See the argv[0] reasoning just above -- same reason, same fix, needed
+        # here too: anything that re-resolves the bare "python3" argv[0] by
+        # searching PATH instead of using the exact PID (rc.subr's own restart
+        # handling, or any later subprocess/exec call by name) should still
+        # find this venv's interpreter first, not the system one.
+        os.environ["PATH"] = os.path.dirname(_VENV_PYTHON) + os.pathsep + os.environ.get("PATH", "")
         os.execv(_VENV_PYTHON, ["python3"] + sys.argv)
 
 import json
@@ -444,7 +604,7 @@ LOGGER = udi_interface.LOGGER
 
 if __name__ == "__main__":
     try:
-        polyglot = udi_interface.Interface([])
+        polyglot = udi_interface.Interface([]{interface_options})
         polyglot.start(version.ud_plugin_version)
         profile_path = os.path.join(_PLUGIN_DIR, "profile.json")
         with open(profile_path, "r", encoding="utf-8") as f:

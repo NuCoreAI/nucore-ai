@@ -29,7 +29,7 @@ VALID_PROFILE = {
                         {
                             "id": "ND_SWITCH",
                             "name": "Switch",
-                            "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                            "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                             "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
                             "links": {"ctl": [], "rsp": []},
                         }
@@ -138,7 +138,7 @@ async def test_validate_profile_accepts_enum_uom_with_subset_range():
                 "nodedefs": [
                     {
                         "id": "ND_X",
-                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
                     }
@@ -315,7 +315,10 @@ async def test_validate_profile_accepts_meaningful_custom_property_id():
                 "nodedefs": [
                     {
                         "id": "ND_X",
-                        "properties": [{"id": "FILTER_LIFE", "editor": "ED_X"}],
+                        "properties": [
+                            {"id": "ST", "name": "Status", "editor": "ED_X"},
+                            {"id": "FILTER_LIFE", "name": "Filter Life", "editor": "ED_X"},
+                        ],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
                     }
@@ -325,6 +328,48 @@ async def test_validate_profile_accepts_meaningful_custom_property_id():
     }
     result = await validate_profile(None, {"profile": profile})
     assert result == {"valid": True, "errors": []}
+
+
+# --- property name cross-check (_check_property_has_name): the real hub's
+# Property spec requires both an id and a name, but nucore.profile's own
+# parser accepts a missing name silently -- must fail validation
+# mechanically rather than depend on the model remembering to supply one ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_property_missing_name():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "ED_X"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ND_X" in e and "ST" in e and "missing a 'name'" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_property_with_blank_name():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "name": "   ", "editor": "ED_X"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("missing a 'name'" in e for e in result["errors"])
 
 
 # --- nodedef id format cross-check (_check_nodedef_id_format): a nodedef id
@@ -378,8 +423,15 @@ async def test_validate_profile_accepts_mac_derived_nodedef_id():
             "instances": [{
                 "id": "inst1",
                 "name": "Test Instance",
-                "editors": [],
-                "nodedefs": [{"id": "ddeeff_controller", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "ddeeff_controller",
+                        "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
             }],
         }]
     }
@@ -449,7 +501,7 @@ async def test_validate_profile_accepts_nodedef_with_empty_links():
                 "nodedefs": [
                     {
                         "id": "ND_X",
-                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
                     }
@@ -506,7 +558,7 @@ async def test_validate_profile_accepts_linkdef_reference_that_matches():
                 "nodedefs": [
                     {
                         "id": "ND_X",
-                        "properties": [{"id": "ST", "editor": "ED_ONOFF"}],
+                        "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": ["I_STD"], "rsp": []},
                     }
@@ -590,6 +642,148 @@ async def test_validate_profile_accepts_non_cmd_linkdef_with_parameters():
                     }
                 ],
                 "nodedefs": [],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+# --- duplicate property id cross-check (_check_no_duplicate_property_ids): no
+# nodedef, including the controller's, may declare two properties sharing the
+# same id -- nucore.profile stores the properties list verbatim, so a
+# duplicate round-trips fine locally ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_duplicate_property_id_on_device_nodedef():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [
+                            {"id": "ST", "name": "Status", "editor": "ED_X"},
+                            {"id": "ST", "name": "Status Again", "editor": "ED_X"},
+                        ],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ND_X" in e and "ST" in e and "more than once" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_duplicate_property_id_on_controller_nodedef():
+    # The duplicate-id rule applies to the controller too, even though its ST
+    # property presence itself is exempted below -- a duplicate id is a
+    # structural problem regardless of which nodedef it's on.
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "controller",
+                        "properties": [
+                            {"id": "ST", "name": "Status", "editor": "ED_X"},
+                            {"id": "ST", "name": "Status Again", "editor": "ED_X"},
+                        ],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("controller" in e and "more than once" in e for e in result["errors"])
+
+
+# --- every-nodedef-needs-ST cross-check (_check_nodedef_has_st_property): a
+# device nodedef needs exactly one property representing its status. The
+# controller nodedef is exempted here specifically -- its ST property is
+# unconditionally injected later by generate_plugin_scaffold, and the system
+# prompt tells the model never to author it itself ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_device_nodedef_missing_st_property():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "FILTER_LIFE", "name": "Filter Life", "editor": "ED_X"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ND_X" in e and "no 'ST' property" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_device_nodedef_with_one_st_property():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "ED_X", "ranges": [{"min": 0, "max": 100, "uom": "1"}]}],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "name": "Current Temperature", "editor": "ED_X"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_does_not_require_st_on_controller_nodedef():
+    # The model is told never to author the controller's own ST property --
+    # generate_plugin_scaffold injects it unconditionally later -- so the
+    # standalone validate_profile call must not reject its absence here.
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "nodedefs": [
+                    {"id": "controller", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}
+                ],
             }],
         }]
     }

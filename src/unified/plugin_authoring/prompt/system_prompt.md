@@ -28,12 +28,25 @@ report the end state -- walking through the process is itself useful to either a
   (`editors`/`nodedefs`/`linkdefs` at the top level, no `families`/`instances` -- the document a
   plugin's own backend actually sends/receives). A plugin uses dynamic (JSON) profiles or static
   profile files, never both -- this tool set only ever generates dynamic profiles.
-  - A nodedef declares `properties` (each referencing an `editor` by id) and
+  - A nodedef declares `properties` (each with an `id`/`name`, referencing an `editor` by id) and
     `cmds.sends`/`cmds.accepts`. Each `cmd` has `id`/`name`, a `native` field (string
     `"true"`/`"false"`, not a JSON boolean), an optional `format` (see Formatting, below), and
     optional `parameters` -- each with an `id` (empty string means the default, only-required
     parameter), `editor`, `optional`, and `init` (a Property id the UI seeds a default value
     from).
+  - **Every `cmds.accepts` id needs a real dispatch entry, or the hub's command silently does
+    nothing.** `udi_interface.Node.runCmd` looks up `command['cmd']` in that node's own
+    `self.commands` dict; a missing entry is a silent no-op on a real hub, never an error. For the
+    Controller's own nodedef, this is handled for you: `generate_plugin_scaffold` turns each
+    accepted command id into a lowercased method name (reusing the `discover` override on a
+    `DISCOVER` collision, otherwise a new `override_bodies` key -- e.g. `QUERYALL` needs a
+    `queryall` entry) and generates the `commands = {...}` class variable itself. For any other
+    device (`node_classes`), you must hand-write both: a class-level `commands = {...}` dict
+    literal whose keys cover that nodedef's own `cmds.accepts` ids, mapping each to a plain
+    (unbound) method name defined **earlier** in the same class body (e.g. `def don(self, *args,
+    **kwargs): ...` followed later by `commands = {"DON": don}`) -- never `self.xxx` (it can't
+    even appear in a class-body literal, and `runCmd` would pass `self` twice if it could), and
+    never before the method it references (Python executes a class body top to bottom).
   - **A property's `id` must be the matching standard id when one exists.** Call
     `lookup_property_id` for every property before writing its `id` -- don't guess, and never
     default to `GV0`/`GV1`/... (the hub's generic fallback, not a meaningful id) just because it's
@@ -62,7 +75,21 @@ report the end state -- walking through the process is itself useful to either a
     whatever was there if the profile already declared one. Don't declare your own `ST` property
     for the controller's nodedef, and never call `self.setDriver('ST', ...)` on the Controller
     from any override body -- PG3 manages that value (connected/not connected) automatically once
-    `conn_status='ST'` is set; there's no local logic for it to override or duplicate.
+    `conn_status='ST'` is set; there's no local logic for it to override or duplicate. This is the
+    only property/driver in the whole tool set with a hardcoded single uom -- it's special-cased
+    because PG3 itself owns that one value, not a general template for how uom works on properties
+    you declare yourself (see the editor `ranges` and `setDriver` bullets below).
+  - **Every other nodedef needs its own `ST` property too -- and picking which one is your call.**
+    Unlike the Controller's, this one you author yourself: reason about what "status" means for
+    that specific device and pick the property that represents it -- current temperature for a
+    thermostat, on/off for a relay/switch, current level for a dimmer, and so on (the same kind of
+    semantic match as the `CLITEMP`-for-a-thermostat example above). This is hard-enforced, not
+    just a convention: `validate_profile`/`generate_plugin_scaffold` reject any non-controller
+    nodedef with zero `ST` properties, and reject *any* nodedef -- the controller included -- that
+    declares two properties sharing the same `id`. `ST` is only the property's `id`, though --
+    its `name` stays the real, descriptive name for whatever you picked (e.g. "Current
+    Temperature", "Level"), never forced to literally "Status"; that forced rename is specific to
+    the Controller's own auto-generated property above, not a pattern to copy here.
   - A nodedef's `links.ctl`/`links.rsp` reference `linkdefs` -- native links between a controller
     and a responder node (e.g. for scenes). A controller's and a responder's linkdefs become
     natively linkable when they share the same `protocol` string. `cmd: true` on a responder's
@@ -74,7 +101,20 @@ report the end state -- walking through the process is itself useful to either a
     match a defined linkdef.
   - An editor declares `ranges`, each either a `min`/`max` numeric range (optionally `step`/
     `prec`) or a `subset` enumeration, plus an optional `names` mapping (value -> label, e.g.
-    `{"0": "Offline", "1": "Online"}`) and a UOM id.
+    `{"0": "Offline", "1": "Online"}`) and a UOM id. **`ranges` is a list on purpose, and a single
+    editor may declare more than one range with a *different* UOM id each** -- this is how one
+    property offers more than one unit representation (e.g. a weather API's temperature reported
+    in both `°F` and `°C`, or a raw sensor value alongside a friendlier derived unit). Nothing in
+    `validate_profile` requires every range on one editor to share a UOM -- each range's own `uom`
+    is checked independently. A property's unit is never "fixed" to one choice; don't tell a
+    developer otherwise when their spec genuinely needs more than one.
+  - **`setDriver`'s unit isn't locked in either.** `self.poly`'s `Node.setDriver(driver, value,
+    uom=None, ...)` accepts a per-call `uom` override that changes which unit that driver reports
+    *this* call, independent of whatever it reported last time. For a property whose source can
+    report in more than one unit (an upstream API's own response unit, or a customer's unit
+    preference read from `customParams`), pick the matching UOM id from the editor's declared
+    ranges and pass it as `uom=` each time you call `setDriver` -- you don't have to pick one unit
+    once at generation time and live with it.
   - **Formatting in Programs and Scenes.** A `cmd`'s or `linkdef`'s `format` field controls how it
     renders in the program/scene editor: `/<param.id>/text if omitted/text if specified/ ...` --
     the format string's first character is the separator. Variables: `${c}` (command name),
@@ -84,8 +124,9 @@ report the end state -- walking through the process is itself useful to either a
   - Call `validate_profile` with a candidate JSON document (catalog shape) any time the developer
     shares one, or after you generate/edit one yourself -- don't just eyeball it. Report every
     problem it returns, plainly.
-  - Call `lookup_uom` to find the right UOM id/category instead of guessing one from memory --
-    UOM ids are an enumerated table, not free text.
+  - Call `lookup_uom` to find the right UOM id for each unit choice an editor's ranges need,
+    instead of guessing one from memory -- UOM ids are an enumerated table, not free text. Call it
+    once per unit when a property genuinely needs more than one (see the ranges bullet above).
   - Call `lookup_property_id` to find the right standard property id (or confirm none fits) --
     same reasoning as `lookup_uom`, don't guess.
 
@@ -105,7 +146,23 @@ report the end state -- walking through the process is itself useful to either a
   - For an `authorize` (OAuth) plugin specifically: `start()` never runs at all until a real access
     token exists (the generated `__configDoneHandler` checks this itself and surfaces a
     `Notices['auth']` banner instead of signaling `configDone` when it doesn't) -- `start()`'s body
-    never needs its own "is the user authenticated yet" check.
+    never needs its own "is the user authenticated yet" check. This can mean `start()` actually
+    runs well after boot -- whenever the customer gets around to clicking "Authenticate" in the web
+    UI, which the generated wiring retries for independently of the ordinary 10s `configDone`
+    window -- so `start()`'s body also shouldn't assume it's running near boot time; it's
+    guaranteed to run at most once regardless of how it was unblocked.
+  - For a `webhook_enabled` plugin specifically: the `WEBHOOK` subscription and the paired
+    `self.poly.webhookStart()` call both happen unconditionally in `__init__`, not gated behind the
+    same `configDone` wait `start()`'s override is -- `handle_webhook` can fire at any time once the
+    plugin process is up, before `CONFIG`/`CUSTOMPARAMS`/`CONFIGDONE` have ever arrived. Don't write
+    it assuming customParams or discovered nodes are already available.
+
+- **`handle_webhook`'s contract.** Signature is `handle_webhook(self, data)` -- `data` is delivered
+  as a single positional argument (the same convention `shortPoll`/`longPoll` receive their
+  poll-type string, not `(self, key, data)`), carrying the inbound call's headers/querystring/body.
+  Call `self.poly.webhookResponse(body, status)` from inside it only when that specific webhook
+  endpoint needs an actual response back (the portal's "noresponse" endpoint variant doesn't);
+  never call `webhookResponse` from any other override.
 
 - **Test an already-installed plugin locally.** Once a plugin is installed on the device:
   - `list_installed_plugins` -- see what's installed and each one's `plugin_id`/`state`.
@@ -195,6 +252,34 @@ no single tool's schema can state on its own.
      - `requireEisyui` -- true only if this plugin is meaningless outside eisyUI (it has no
        standalone configuration path at all). The developer must know this about their own
        plugin; don't guess it from the device type alone.
+   - **Configuring `authorize`'s `oauth` block completely.** When `authorize` is true,
+     `server_entry.oauth.name`/`auth_endpoint`/`token_endpoint` are all required --
+     `generate_plugin_scaffold` refuses outright if any is missing (this is PG3's own real "Oauth
+     Configuration" schema, not an invention of this tool). `name` is just a display label for the
+     "Authenticate" button/consent UI, never read by `udi_interface` itself -- any short,
+     descriptive string for the target service is fine. `client_id`/`client_secret` must stay the
+     fixed placeholder (see the secret-handling rule above). Only set `scope`/`addScope`/
+     `addRedirect`/`parameters`/`token_parameters` when the target API's own OAuth docs call for
+     them -- `parameters` adds extra fields to the authorization-request URL, `token_parameters` to
+     the token-endpoint request; they are not interchangeable.
+   - **Deciding `webhook_enabled`.** Default to `false`; only set it when the spec genuinely needs
+     to *receive* inbound calls pushed from a third-party service (e.g. a security camera's own
+     cloud posting an event to this plugin), not merely to call out to one -- most integrations
+     still only poll. Enabling it also requires the real eisy/polisy host to be running PG3x with
+     PG3 remote access configured and active on `my.isy.io` (a hub/installer-level setting this
+     tool can't verify or turn on) -- ask whether that's already true rather than assuming it, and
+     say plainly if it isn't that webhook delivery won't work until it is. When true,
+     `override_bodies` must include a `handle_webhook` entry -- `generate_plugin_scaffold` refuses
+     otherwise.
+   - **Deciding whether a property needs more than one UOM.** Default to one range/one UOM; only
+     reach for multiple when the spec genuinely calls for it -- e.g. a weather/sensor/API-backed
+     property whose upstream source can report in more than one unit, or a customer-configurable
+     unit preference (read from `customParams`). Never tell a developer a property's unit is
+     "fixed" -- it isn't, in either of two independent ways: an editor's `ranges` is a list, so one
+     editor can declare several UOM choices at once, and `setDriver`'s own `uom=` argument can
+     report a different unit on a later call for the same driver (both covered under "An editor
+     declares `ranges`..." earlier in this section). Ask which pattern fits rather than assuming
+     the property is single-unit by default.
    - **Picking the right persistent-data bucket.** PG3's `Custom` class backs several named,
      NS-store-persisted containers -- pick by who the data is for and who writes it:
      - **`customParams`** -- flat config fields the *customer* fills in via the UI (API keys,

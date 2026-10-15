@@ -25,6 +25,13 @@ a profile document outside this chat loop.
   through ``nucore.profile`` locally, but the real hub requires all-caps
   letters/digits/underscore, starting with a letter, max 30 chars (see
   ``standard_property_ids.py``).
+- every NodeDef property has a non-empty ``name`` (``_check_property_has_name``) --
+  ``nucore.profile``'s own parser accepts a missing ``name`` silently (``pdict.get("name")``, no
+  debug log at all -- see ``nucore/schemas/README.md``'s leniency-policy note), but the real
+  hub's Property spec (``design/developers/legacy/plugin_model.md`` §3 /
+  ``design/developers/domain_and_plugin_models.md``'s structure table) lists ``name`` with no
+  '(Optional)' marker -- same required status as ``id``/``editor`` -- so without this a nameless
+  property would only ever be caught once a customer actually tries to register it on a real hub.
 - every NodeDef's own ``id`` against the real hub's format constraint
   (``_check_nodedef_id_format``) -- alphanumeric/underscore only, max 31
   chars; same permissive-locally/strict-on-the-real-hub gap as property
@@ -43,6 +50,23 @@ a profile document outside this chat loop.
   (developer.isy.io/docs/API/pg/DynamicProfiles) say a ``cmd: true``
   linkdef "must not specify any parameters"; ``nucore.profile`` doesn't
   enforce this either.
+- no NodeDef declares two properties sharing the same ``id``
+  (``_check_no_duplicate_property_ids``) -- ``nucore.profile`` stores
+  whatever's in the ``properties`` list verbatim, so two entries with the
+  same ``id`` round-trip fine locally even though the real hub would only
+  ever see one of them.
+- every NodeDef except the Controller's own (``id == "controller"``, still
+  the placeholder at this point) has exactly one property with
+  ``id == "ST"`` (``_check_nodedef_has_st_property``) -- every device needs
+  one property representing its status (current temperature for a
+  thermostat, on/off for a relay, current level for a dimmer, ...), but
+  nothing in ``nucore.profile`` requires this. The Controller nodedef is
+  exempted here specifically because its own ``ST`` property is
+  unconditionally injected later by ``generate_plugin_scaffold``
+  (``_ensure_controller_st_property``) regardless of what's submitted, and
+  the system prompt tells the model never to author it itself -- requiring
+  it in this standalone check would fail a correctly-authored profile for
+  following that instruction.
 
 These cross-checks exist because the system prompt tells the model to call
 ``lookup_uom``/``lookup_property_id`` instead of guessing from memory, and
@@ -156,6 +180,43 @@ def _check_property_id_format(raw_profile: dict[str, Any]) -> list[str]:
                             f"nodedef '{nodedef_id}': property id '{property_id}' must be all-caps "
                             f"letters/digits/underscore, start with a letter, and be at most "
                             f"{MAX_PROPERTY_ID_LENGTH} characters (e.g. 'ST', 'CLITEMP', 'FLOW_RATE')"
+                        )
+    return errors
+
+
+def _check_property_has_name(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef's ``properties`` and flags any property whose
+    ``name`` is missing, not a string, or empty/whitespace-only. The real
+    hub's Property spec (``design/developers/legacy/plugin_model.md`` §3
+    and ``design/developers/domain_and_plugin_models.md``'s structure
+    table) lists ``name`` with no '(Optional)' marker -- the same required
+    status as ``id``/``editor`` -- but ``nucore.profile``'s own parser
+    accepts a missing ``name`` silently (``pdict.get("name")``,
+    ``src/nucore/profile.py:277``, no debug log at all -- see
+    ``nucore/schemas/README.md``'s leniency-policy note), so without this a
+    nameless property would only ever be caught once a customer actually
+    tries to register it on a real hub.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id") or "?"
+                for prop in nodedef.get("properties") or []:
+                    if not isinstance(prop, dict):
+                        continue
+                    property_id = prop.get("id") or "?"
+                    name = prop.get("name")
+                    if not isinstance(name, str) or not name.strip():
+                        errors.append(
+                            f"nodedef '{nodedef_id}': property '{property_id}' is missing a 'name' "
+                            "-- every property must have both an id and a name"
                         )
     return errors
 
@@ -297,6 +358,78 @@ def _check_linkdef_cmd_parameters(raw_profile: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _check_no_duplicate_property_ids(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef's ``properties`` and flags any ``id`` that
+    appears more than once within the same nodedef -- ``nucore.profile``
+    just stores the ``properties`` list verbatim, so two entries sharing an
+    ``id`` round-trip fine locally even though the real hub would only ever
+    see one of them. Applies to every nodedef, including the Controller's.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id") or "?"
+                seen: set[str] = set()
+                for prop in nodedef.get("properties") or []:
+                    if not isinstance(prop, dict):
+                        continue
+                    property_id = prop.get("id")
+                    if not isinstance(property_id, str):
+                        continue
+                    if property_id in seen:
+                        errors.append(
+                            f"nodedef '{nodedef_id}': property id '{property_id}' is declared "
+                            "more than once -- every property id must be unique within a nodedef"
+                        )
+                    seen.add(property_id)
+    return errors
+
+
+def _check_nodedef_has_st_property(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef except the Controller's own (``id ==
+    "controller"``, still the placeholder at this point) and requires
+    exactly one property with ``id == "ST"`` -- every device needs one
+    property representing its status (current temperature for a
+    thermostat, on/off for a relay, current level for a dimmer, ...), but
+    ``nucore.profile`` doesn't require this at all. The Controller nodedef
+    is exempted here because its own ``ST`` property is unconditionally
+    injected later by ``generate_plugin_scaffold``
+    (``_ensure_controller_st_property``) regardless of what's submitted,
+    and the system prompt tells the model never to author it itself.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id") or "?"
+                if nodedef_id == "controller":
+                    continue
+                st_count = sum(
+                    1
+                    for prop in nodedef.get("properties") or []
+                    if isinstance(prop, dict) and prop.get("id") == "ST"
+                )
+                if st_count == 0:
+                    errors.append(
+                        f"nodedef '{nodedef_id}' has no 'ST' property -- every nodedef needs one "
+                        "property representing that device's status"
+                    )
+    return errors
+
+
 async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     """*nucore_interface* is unused -- this tool never touches the hub, it
     only exercises nucore's local profile parser plus this module's own
@@ -328,10 +461,13 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
         capture.messages
         + _check_uom_consistency(raw_profile)
         + _check_property_id_format(raw_profile)
+        + _check_property_has_name(raw_profile)
         + _check_nodedef_id_format(raw_profile)
         + _check_links_object_present(raw_profile)
         + _check_linkdef_references(raw_profile)
         + _check_linkdef_cmd_parameters(raw_profile)
+        + _check_no_duplicate_property_ids(raw_profile)
+        + _check_nodedef_has_st_property(raw_profile)
     )
     return {"valid": not errors, "errors": errors}
 

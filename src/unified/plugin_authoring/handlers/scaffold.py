@@ -49,13 +49,24 @@ one failing writes nothing:
     guard 7, file-writing) ever sees the placeholder form. This keeps
     nodedef ids unique across every node-server sharing one ISY, computed
     once at generation time rather than guessed by the model.
+4b. The Controller's own nodedef's ``cmds.accepts`` ids must each resolve
+    to a legal, non-keyword, non-dunder Python method name (lowercased,
+    reusing the matching ``plugin_skeleton.BASE_OVERRIDE_METHODS`` entry
+    on a case-insensitive collision -- e.g. ``"DISCOVER"`` reuses the
+    already-wired ``discover()`` override -- see
+    ``_resolve_controller_command_dispatch``), with no two ids colliding on
+    the same derived name. ``_assemble_plugin_py`` uses this resolved
+    mapping to generate a class-level ``commands = {...}`` dispatch dict
+    (see ``udi_interface.Node.runCmd``) plus a stub method for every
+    non-colliding entry.
 5. ``override_bodies``' keys must be a subset of this spec's allowed
    override-method names (the fixed set in ``plugin_skeleton
    .BASE_OVERRIDE_METHODS``, plus ``handle_custom_request`` and one helper
-   name per declared AI tool when ``ai_enabled``) -- and, when
-   ``ai_enabled``, every declared AI tool must have a matching helper and
-   vice versa (Stage 5's "generated together" rule: one without the other
-   is a guard failure, not a silent gap).
+   name per declared AI tool when ``ai_enabled``, plus guard 4b's
+   non-colliding per-command names) -- and, when ``ai_enabled``, every
+   declared AI tool must have a matching helper and vice versa (Stage 5's
+   "generated together" rule: one without the other is a guard failure,
+   not a silent gap).
 6. The assembled ``plugin.py`` and every extra node-class file must
    round-trip through ``ast.parse`` -- generated code is written, never
    imported or executed. Every override method, after being normalized to
@@ -71,13 +82,29 @@ one failing writes nothing:
    itself defaults ``id`` to ``''``, and ``Interface.addNode()`` sends
    ``node.id`` to ISY/PG3 as ``nodeDefId``, so a missing or dangling ``id``
    would otherwise silently report the wrong (or no) node type to the hub.
+7b. Every class resolved by guard 7 must also carry a class-level
+    ``commands = {...}`` dict literal (see ``_node_class_command_ids``)
+    whose keys cover every id in that class's own nodedef's
+    ``cmds.accepts`` -- a dynamically-assigned ``self.commands = {...}``
+    in ``__init__`` does not satisfy this (treated the same as missing;
+    see ``_node_class_command_ids``'s docstring for why there's no
+    legitimate dynamic alternative). Applies to both the generated
+    Controller (where it should never actually fail, since
+    ``_assemble_plugin_py`` shares guard 4b's own resolved mapping -- this
+    is defense in depth) and every free-text ``node_classes`` file (where
+    it's the actual enforcement point, since nothing else requires an
+    LLM-authored device class to dispatch its own declared commands).
 8. No LLM-authored text (override bodies, node-class files, readme_body,
    tests, aiPrompt, extra_requirements) and no ``server_entry`` value may
    contain a configured secret literally (``secret_guard.find_secret``);
-   when ``authorize`` is set, ``server_entry.oauth.client_id``/
-   ``client_secret`` must equal ``secret_guard.OAUTH_PLACEHOLDER`` exactly
-   -- any other literal value (including an omitted one, which this tool
-   fills in with the placeholder itself) is refused outright.
+   when ``authorize`` is set, ``server_entry.oauth.name``/``auth_endpoint``/
+   ``token_endpoint`` must be present (the real PG3 Oauth Configuration's
+   own required fields, confirmed against the upstream ``udi_python_
+   interface`` docs -- never enforced until this check existed), and
+   ``client_id``/``client_secret`` must equal ``secret_guard.
+   OAUTH_PLACEHOLDER`` exactly -- any other literal value (including an
+   omitted one, which this tool fills in with the placeholder itself) is
+   refused outright.
 
 Overwrite flow, unchanged from the Phase 3 draft this replaces: if any
 target file already exists and the caller hasn't passed
@@ -92,6 +119,7 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import keyword
 import textwrap
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -127,14 +155,14 @@ _DEFAULT_CONTROLLER_CLASS = "Controller"
 # actual connected/disconnected value itself once conn_status='ST' is set; neither the LLM nor any
 # generated override body ever sets it directly.
 _CONTROLLER_ST_EDITOR_ID = "ED_CONTROLLER_ST"
-_CONTROLLER_ST_PROPERTY = {"id": "ST", "editor": _CONTROLLER_ST_EDITOR_ID}
+_CONTROLLER_ST_PROPERTY = {"id": "ST", "name": "Status", "editor": _CONTROLLER_ST_EDITOR_ID}
 _CONTROLLER_ST_EDITOR = {
     "id": _CONTROLLER_ST_EDITOR_ID,
     "ranges": [{"subset": "0,1", "uom": "25", "names": {"0": "Not Connected", "1": "Connected"}}],
 }
 _DEFAULT_RUN_AS = "admin"
 _DEFAULT_VERSION = "1.0.0"
-_BASE_REQUIREMENT = "udi_interface>=3.0.57"
+_BASE_REQUIREMENT = "udi_interface>=3.4.7"
 _INSTALL_FILENAME = "install.sh"
 # .venv/bin/pip3 branch is local-dev-only (see setup_dev_venv) -- production
 # never has a .venv here, so the --user fallback is the only path ever taken
@@ -155,10 +183,13 @@ def _ensure_controller_st_property(raw_profile: dict[str, Any]) -> None:
     """Unconditionally makes the controller's own nodedef (``id ==
     "controller"``, still the plain placeholder at this point -- called
     before guard 4a's id rewrite) declare a property
-    ``{"id": "ST", "editor": _CONTROLLER_ST_EDITOR_ID}``, and makes
+    ``{"id": "ST", "name": "Status", "editor": _CONTROLLER_ST_EDITOR_ID}``, and makes
     ``raw_profile["editors"]`` contain a matching ``_CONTROLLER_ST_EDITOR``
-    -- replacing either if something with that id already exists there,
-    appending otherwise. Guarantees the Controller's Python-side
+    -- removing every existing ``"ST"``-id property first (not just the
+    first match), so an author-supplied duplicate can't survive injection,
+    then appending the one canonical property; the editor is replaced if
+    something with that id already exists, appended otherwise. Guarantees
+    the Controller's Python-side
     ``drivers = [...]`` (``_assemble_plugin_py``) and
     ``conn_status='ST'`` (``render_init``) always have a real nodedef
     property/editor behind them, regardless of what the LLM did or didn't
@@ -167,12 +198,11 @@ def _ensure_controller_st_property(raw_profile: dict[str, Any]) -> None:
     for nodedef in raw_profile.get("nodedefs") or []:
         if isinstance(nodedef, dict) and nodedef.get("id") == "controller":
             properties = nodedef.setdefault("properties", [])
-            for i, prop in enumerate(properties):
-                if isinstance(prop, dict) and prop.get("id") == "ST":
-                    properties[i] = dict(_CONTROLLER_ST_PROPERTY)
-                    break
-            else:
-                properties.append(dict(_CONTROLLER_ST_PROPERTY))
+            # Drop every existing "ST" entry (not just the first) before appending the one
+            # canonical property -- a profile with two author-supplied "ST" properties here would
+            # otherwise leave the second one behind as an undetected duplicate.
+            properties[:] = [p for p in properties if not (isinstance(p, dict) and p.get("id") == "ST")]
+            properties.append(dict(_CONTROLLER_ST_PROPERTY))
             break
 
     editors = raw_profile.setdefault("editors", [])
@@ -290,6 +320,80 @@ def _node_class_ids(module_source: str) -> dict[str, str | None]:
     return result
 
 
+def _node_class_command_ids(module_source: str) -> dict[str, set[str] | None]:
+    """Maps each top-level class name in *module_source* to the set of
+    string keys in its class-level ``commands = {...}`` dict literal, or
+    ``None`` if that class never assigns one as a literal -- no assignment
+    at all, a dynamic ``self.commands = {...}`` written in ``__init__``
+    instead, or a dict with a non-string key. Used by guard 7b to confirm
+    every generated Node subclass dispatches every command its own nodedef
+    declares in ``cmds.accepts`` -- deliberately strict, not a graceful
+    skip: the only "dynamic" alternative to a class-body literal is a
+    ``self.xxx`` bound-method reference, which is itself wrong for
+    ``udi_interface.Node.runCmd``'s ``fun(self, command)`` call convention
+    (see ``_resolve_controller_command_dispatch``), so there is no
+    legitimate dynamic pattern worth being lenient about."""
+    tree = ast.parse(module_source)
+    result: dict[str, set[str] | None] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        declared: set[str] | None = None
+        for stmt in node.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == "commands"
+            ):
+                if isinstance(stmt.value, ast.Dict) and all(
+                    isinstance(k, ast.Constant) and isinstance(k.value, str) for k in stmt.value.keys
+                ):
+                    declared = {k.value for k in stmt.value.keys}
+                else:
+                    declared = None
+        result[node.name] = declared
+    return result
+
+
+def _resolve_controller_command_dispatch(accepts: list[Any]) -> tuple[dict[str, str] | None, str | None]:
+    """Resolves a nodedef's raw ``cmds.accepts`` list into an ordered
+    ``{cmd_id: method_name}`` mapping -- *method_name* is the existing
+    ``plugin_skeleton.BASE_OVERRIDE_METHODS`` entry it collides with
+    case-insensitively (reused, never re-stubbed -- see
+    ``plugin_skeleton.controller_command_method_name``), or else the id
+    lowercased. Returns ``(None, error)`` if any entry isn't an object with
+    a non-empty string ``id``, any resolved name isn't a legal/non-keyword/
+    non-dunder-shaped Python identifier, or two different ids resolve to
+    the same method name."""
+    dispatch: dict[str, str] = {}
+    first_id_for_name: dict[str, str] = {}
+    for entry in accepts:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]:
+            return None, f"cmds.accepts entry {entry!r} has no non-empty string 'id'"
+        cmd_id = entry["id"]
+        method_name = plugin_skeleton.controller_command_method_name(cmd_id)
+        if method_name not in plugin_skeleton.BASE_OVERRIDE_METHODS:
+            if not method_name.isidentifier() or keyword.iskeyword(method_name):
+                return None, (
+                    f"cmds.accepts command id '{cmd_id}' does not lowercase to a legal, "
+                    "non-reserved Python identifier -- cannot generate a commands dispatch method for it"
+                )
+            if method_name.startswith("__") and method_name.endswith("__"):
+                return None, (
+                    f"cmds.accepts command id '{cmd_id}' lowercases to '{method_name}', which looks "
+                    "like a reserved Python dunder method name -- choose a different id"
+                )
+        if method_name in first_id_for_name and first_id_for_name[method_name] != cmd_id:
+            return None, (
+                f"cmds.accepts command ids '{first_id_for_name[method_name]}' and '{cmd_id}' both "
+                f"lowercase to the same method name '{method_name}' -- rename one"
+            )
+        first_id_for_name[method_name] = cmd_id
+        dispatch[cmd_id] = method_name
+    return dispatch, None
+
+
 def _rewrite_id_literals(module_source: str, id_rewrite_map: dict[str, str]) -> str:
     """Splices every class-level ``id = "<placeholder>"`` string literal in
     *module_source* into ``id_rewrite_map[placeholder]``, for every
@@ -352,8 +456,10 @@ def _assemble_plugin_py(
     authorize: bool,
     ai_enabled: bool,
     file_upload: bool,
+    webhook_enabled: bool,
     override_bodies: dict[str, str],
     ai_tool_names: list[str],
+    controller_command_dispatch: dict[str, str],
     custom_param_docs: str | None = None,
 ) -> str:
     parts = [
@@ -372,6 +478,7 @@ def _assemble_plugin_py(
             authorize=authorize,
             ai_enabled=ai_enabled,
             file_upload=file_upload,
+            webhook_enabled=webhook_enabled,
             custom_param_docs=custom_param_docs,
             controller_address=controller_address,
             controller_node_name=controller_node_name,
@@ -383,6 +490,11 @@ def _assemble_plugin_py(
     for name in plugin_skeleton.BASE_OVERRIDE_METHODS:
         body = override_bodies.get(name) or plugin_skeleton.default_override_method(name)
         parts.append(_reindent_method(body) + "\n")
+    for cmd_id, method_name in controller_command_dispatch.items():
+        if method_name in plugin_skeleton.BASE_OVERRIDE_METHODS:
+            continue  # reuses the override stub already emitted above, never re-stubbed
+        body = override_bodies.get(method_name) or plugin_skeleton.default_override_method(method_name)
+        parts.append(_reindent_method(body) + "\n")
     if ai_enabled:
         body = override_bodies.get(plugin_skeleton.AI_REQUEST_OVERRIDE_METHOD) or plugin_skeleton.default_override_method(
             plugin_skeleton.AI_REQUEST_OVERRIDE_METHOD
@@ -392,18 +504,46 @@ def _assemble_plugin_py(
             helper_name = plugin_skeleton.ai_tool_helper_name(tool_name)
             body = override_bodies.get(helper_name) or plugin_skeleton.default_override_method(helper_name)
             parts.append(_reindent_method(body) + "\n")
+    if webhook_enabled:
+        body = override_bodies.get(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD) or plugin_skeleton.default_override_method(
+            plugin_skeleton.WEBHOOK_OVERRIDE_METHOD
+        )
+        parts.append(_reindent_method(body) + "\n")
+    if controller_command_dispatch:
+        # commands' values must be bare, unbound function names defined earlier in this same
+        # class body -- udi_interface.Node.runCmd calls fun(self, command) where
+        # fun = self.commands[command['cmd']], so a bound self.xxx reference would pass self
+        # twice, and self.xxx can't even appear in a class-body literal in the first place.
+        # This dict must therefore come after every method name it references.
+        parts.append("    # --- command dispatch (profile cmds.accepts; see udi_interface.Node.runCmd) ---\n")
+        entries = ", ".join(f"{cmd_id!r}: {method_name}" for cmd_id, method_name in controller_command_dispatch.items())
+        parts.append(f"    commands = {{{entries}}}\n")
     return "".join(parts)
 
 
 def _validate_override_keys(
-    *, override_bodies: dict[str, str], ai_enabled: bool, ai_tool_names: list[str]
+    *,
+    override_bodies: dict[str, str],
+    ai_enabled: bool,
+    ai_tool_names: list[str],
+    webhook_enabled: bool,
+    new_command_override_names: set[str],
 ) -> str | None:
     """Returns an error message, or ``None`` if ``override_bodies``' keys
-    are exactly the allowed set for this spec (guard 4)."""
+    are exactly the allowed set for this spec (guard 5). *new_command_
+    override_names* (guard 4b's non-``BASE_OVERRIDE_METHODS`` controller
+    ``cmds.accepts`` names) is added to ``allowed`` the same way AI-tool
+    helpers are, but -- unlike AI-tool helpers -- never required to be
+    present: a missing one just defaults to ``plugin_skeleton.
+    default_override_method``'s no-op stub, same as any ``BASE_OVERRIDE_
+    METHODS`` entry."""
     allowed = set(plugin_skeleton.BASE_OVERRIDE_METHODS)
+    allowed.update(new_command_override_names)
     if ai_enabled:
         allowed.add(plugin_skeleton.AI_REQUEST_OVERRIDE_METHOD)
         allowed.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
+    if webhook_enabled:
+        allowed.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
 
     unknown = set(override_bodies) - allowed
     if unknown:
@@ -414,6 +554,12 @@ def _validate_override_keys(
         missing_helpers = helper_names - set(override_bodies)
         if missing_helpers:
             return f"aiTools declared without a matching override_bodies helper: {sorted(missing_helpers)}"
+    if webhook_enabled and plugin_skeleton.WEBHOOK_OVERRIDE_METHOD not in override_bodies:
+        return (
+            "server_entry.webhook_enabled is true but override_bodies has no "
+            f"'{plugin_skeleton.WEBHOOK_OVERRIDE_METHOD}' entry -- a plugin that enables webhooks "
+            "must author its own handler for incoming webhook calls"
+        )
     return None
 
 
@@ -501,6 +647,11 @@ def _build_server_entry(
     if authorize:
         entry["authorize"] = True
         oauth = dict(server_entry.get("oauth") or {})
+        if not (oauth.get("name") and oauth.get("auth_endpoint") and oauth.get("token_endpoint")):
+            return None, (
+                "server_entry.oauth requires name, auth_endpoint, and token_endpoint when "
+                "authorize is true"
+            )
         for secret_field in ("client_id", "client_secret"):
             configured = oauth.get(secret_field)
             if configured is not None and configured != OAUTH_PLACEHOLDER:
@@ -696,6 +847,19 @@ async def generate_plugin_scaffold(
     if not profile_result.get("valid"):
         return {"error": "profile is invalid", "details": profile_result.get("errors")}
 
+    # Guard 4b
+    controller_nodedef = next(
+        (nd for nd in raw_profile["nodedefs"] if isinstance(nd, dict) and nd.get("id") == controller_node_id),
+        None,
+    )
+    controller_accepts = ((controller_nodedef or {}).get("cmds") or {}).get("accepts") or []
+    controller_command_dispatch, dispatch_error = _resolve_controller_command_dispatch(controller_accepts)
+    if dispatch_error:
+        return {"error": dispatch_error}
+    new_command_override_names = {
+        name for name in controller_command_dispatch.values() if name not in plugin_skeleton.BASE_OVERRIDE_METHODS
+    }
+
     server_entry_input = args.get("server_entry")
     if not isinstance(server_entry_input, dict):
         return {"error": "server_entry must be a JSON object"}
@@ -753,6 +917,7 @@ async def generate_plugin_scaffold(
     authorize = bool(server_entry_input.get("authorize"))
     ai_enabled = bool(server_entry_input.get("ai_enabled"))
     file_upload = bool(server_entry_input.get("fileUpload"))
+    webhook_enabled = bool(server_entry_input.get("webhook_enabled"))
     ai_tools = server_entry_input.get("aiTools") or []
     if not isinstance(ai_tools, list):
         return {"error": "server_entry.aiTools must be a list"}
@@ -765,7 +930,13 @@ async def generate_plugin_scaffold(
         return {"error": "server_entry.aiTools was given but server_entry.ai_enabled is not true"}
 
     # Guard 5
-    key_error = _validate_override_keys(override_bodies=override_bodies, ai_enabled=ai_enabled, ai_tool_names=ai_tool_names)
+    key_error = _validate_override_keys(
+        override_bodies=override_bodies,
+        ai_enabled=ai_enabled,
+        ai_tool_names=ai_tool_names,
+        webhook_enabled=webhook_enabled,
+        new_command_override_names=new_command_override_names,
+    )
     if key_error:
         return {"error": key_error}
 
@@ -782,12 +953,18 @@ async def generate_plugin_scaffold(
         authorize=authorize,
         ai_enabled=ai_enabled,
         file_upload=file_upload,
+        webhook_enabled=webhook_enabled,
         override_bodies=override_bodies,
         ai_tool_names=ai_tool_names,
+        controller_command_dispatch=controller_command_dispatch,
         custom_param_docs=custom_param_docs,
     )
     main_py = plugin_skeleton.render_main_py(
-        controller_module, controller_class, controller_address=controller_address, controller_node_name=controller_node_name
+        controller_module,
+        controller_class,
+        controller_address=controller_address,
+        controller_node_name=controller_node_name,
+        webhook_enabled=webhook_enabled,
     )
     version_py = plugin_skeleton.render_version_py(version)
 
@@ -816,10 +993,48 @@ async def generate_plugin_scaffold(
                              "exactly match a nodedef actually defined in the profile"
                 }
 
+    # Guard 7b
+    nodedef_accepts_by_id = {
+        nd["id"]: ((nd.get("cmds") or {}).get("accepts") or [])
+        for nd in raw_profile["nodedefs"]
+        if isinstance(nd, dict) and isinstance(nd.get("id"), str)
+    }
+    for filename, source in {_PLUGIN_FILENAME: plugin_py, **{f"{n}.py": c for n, c in node_classes.items()}}.items():
+        class_command_keys = _node_class_command_ids(source)
+        for class_name, declared_id in _node_class_ids(source).items():
+            if declared_id not in nodedef_ids:
+                continue  # already rejected by guard 7
+            required_accepts = nodedef_accepts_by_id.get(declared_id, [])
+            if not required_accepts:
+                continue
+            required_dispatch, name_error = _resolve_controller_command_dispatch(required_accepts)
+            if name_error:
+                return {"error": f"nodedef '{declared_id}' (class '{class_name}' in '{filename}'): {name_error}"}
+            required_ids = set(required_dispatch)
+            declared_commands = class_command_keys.get(class_name)
+            if declared_commands is None:
+                return {
+                    "error": f"generated '{filename}''s '{class_name}' class has no class-level "
+                             f"commands = {{...}} dict literal, but nodedef '{declared_id}'s "
+                             f"cmds.accepts requires dispatch entries for {sorted(required_ids)} -- "
+                             "udi_interface.Node.runCmd() silently does nothing for a command id "
+                             "missing from self.commands"
+                }
+            missing = required_ids - declared_commands
+            if missing:
+                return {
+                    "error": f"generated '{filename}''s '{class_name}' class's commands = {{...}} dict "
+                             f"is missing dispatch entry/entries for command id(s) {sorted(missing)} "
+                             f"declared in nodedef '{declared_id}'s cmds.accepts"
+                }
+
     expected_methods = set(plugin_skeleton.BASE_OVERRIDE_METHODS)
+    expected_methods.update(new_command_override_names)
     if ai_enabled:
         expected_methods.add(plugin_skeleton.AI_REQUEST_OVERRIDE_METHOD)
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
+    if webhook_enabled:
+        expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
     actual_methods = _class_method_names(plugin_py, controller_class) or set()
     missing_methods = expected_methods - actual_methods
     if missing_methods:
