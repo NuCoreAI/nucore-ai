@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nucore-ai"
-version = "3.0.0"
+version = "3.0.1"
 description = "Lightweight library for command/control/optimization/automation of smart home devices using LLMs"
 readme = "README.md"
 license = "MIT"
@@ -35,6 +35,4 @@ exclude = ["tests*", "*.tests", "*.tests.*"]
 [tool.setuptools.package-data]
 nucore = ["schemas/*.json", "schemas/defs/*.json"]
 unified = ["prompt/*.md", "tools/*.json", "runtime_config.example.json", "runtime_config.openai.example.json", "runtime_config.grok.example.json"]
-"unified.diagnostics" = ["prompts/*.md"]
-"unified.planning" = ["prompts/*.md"]
-"unified.dev_tools" = ["prompt/*.md", "tools/*.json"]
+"unified.plugin_authoring" = ["prompt/*.md", "tools/*.json"]
