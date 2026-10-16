@@ -50,6 +50,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "lookup_uom": profile_authoring.lookup_uom,
     "lookup_property_id": profile_authoring.lookup_property_id,
     "configure_plugin": plugin_management.configure_plugin,
+    "get_plugin_config": plugin_management.get_plugin_config,
     "list_installed_plugins": plugin_management.list_installed_plugins,
     "plugin_ops": plugin_management.plugin_ops,
     "get_plugin_capabilities": plugin_management.get_plugin_capabilities,

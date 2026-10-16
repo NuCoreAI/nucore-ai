@@ -2096,13 +2096,17 @@ class IoXWrapper(NuCoreInterface):
             logger.error(f"Error performing plugin {operation} operation: {ex}")
             return None
 
-    async def configure_plugin(self, plugin_id:str, config:dict[str, Any], key:str="customparams"):
+    async def configure_plugin(
+        self, plugin_id:str, config:dict[str, Any] | list[Any],
+        key:Literal["customparams", "customtypeddata", "oauth"]="customparams",
+    ):
         """
         Configure a plugin on the device -- writes a custom record value
         under the given key.
         :param plugin_id: The ID of the plugin to configure.
-        :param config: A dictionary containing the configuration parameters.
-        :param key: Which custom record to write -- "customparams" (default) or "oauth".
+        :param config: The configuration parameters (a dict, or a list for "customtypeddata").
+        :param key: Which custom record to write -- "customparams" (default), "customtypeddata",
+            or "oauth".
         :return: response from the API or None if failure
 
         API:
@@ -2116,6 +2120,30 @@ class IoXWrapper(NuCoreInterface):
             return response.json()
         except Exception as ex:
             logger.error(f"Error configuring plugin '{plugin_id}' key '{key}': {ex}")
+            return None
+
+    async def get_plugin_config(
+        self, plugin_id:str,
+        key:Literal["customparams", "customtypedparams", "customtypeddata", "oauth"]="customparams",
+    ):
+        """
+        Reads a plugin's custom record value under the given key -- the
+        read side of configure_plugin.
+        :param plugin_id: The ID of the plugin to read.
+        :param key: Which custom record to read -- "customparams" (default), "customtypedparams",
+            "customtypeddata", or "oauth".
+        :return: response from the API or None if failure
+
+        API:
+        GET /api/plugin/:profileNum/custom/:key
+        """
+        try:
+            response = await self.get(f'/api/plugin/{plugin_id}/custom/{key}')
+            if response == None or response.status_code != 200:
+                return response if response else None
+            return response.json()
+        except Exception as ex:
+            logger.error(f"Error reading plugin '{plugin_id}' key '{key}': {ex}")
             return None
 
     async def get_plugin_prompt(self, plugin_id: str) -> dict:

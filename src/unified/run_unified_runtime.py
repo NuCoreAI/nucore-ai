@@ -752,11 +752,11 @@ _CUSTOMER_TOOLS_DIR = Path(__file__).parent / "tools"
 
 # The plugin-lifecycle tools (plus run_shell_command, Stage 6's hardware/USB
 # detection) plugin_authoring reuses as-is from the customer tool set (see
-# plugin_authoring/dispatch.py's module docstring for why these six and not
+# plugin_authoring/dispatch.py's module docstring for why these and not
 # the others) -- referenced directly rather than copied, so the two tool
-# sets never drift on what these schemas say. tool_plugin_delete.json is the
-# one real, confirmed delete in the list -- the other five are read-only or
-# operational.
+# sets never drift on what these schemas say. tool_plugin_delete.json and
+# tool_plugin_configure.json are the two real writes in the list -- the
+# rest are read-only or operational.
 _PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS = (
     "tool_plugin_list_installed.json",
     "tool_plugin_ops.json",
@@ -764,6 +764,8 @@ _PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS = (
     "tool_plugin_call.json",
     "tool_diagnostics_run_shell.json",
     "tool_plugin_delete.json",
+    "tool_plugin_configure.json",
+    "tool_plugin_get_config.json",
 )
 
 

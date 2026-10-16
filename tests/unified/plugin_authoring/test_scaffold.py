@@ -583,6 +583,113 @@ async def test_handle_webhook_override_without_webhook_enabled_is_rejected(tmp_p
     assert not (tmp_path / "acme_pool").exists()
 
 
+# --- custom_typed_params wiring ---
+
+VALID_TYPED_PARAMS = [
+    {"name": "host", "title": "Host", "isRequired": True},
+    {"name": "port", "title": "Port", "isRequired": True, "type": "NUMBER"},
+]
+TYPED_DATA_HANDLER_BODY = "def customTypedDataHandler(self, custom_params):\n    self.CustomTypedData.load(custom_params)\n"
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_adds_subscription_and_custom_objects(tmp_path):
+    args = _base_args(
+        custom_typed_params=VALID_TYPED_PARAMS,
+        override_bodies={"customTypedDataHandler": TYPED_DATA_HANDLER_BODY},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.CustomTypedParams = udi_interface.Custom(self.poly, 'customtypedparams')" in source
+    assert "self.CustomTypedData = udi_interface.Custom(self.poly, 'customtypeddata')" in source
+    assert "self.poly.subscribe(self.poly.CUSTOMTYPEDDATA, self.customTypedDataHandler)" in source
+    assert "'host'" in source and "'port'" in source
+    assert "self.CustomTypedParams.load(" in source and ", True)" in source
+    assert "def customTypedDataHandler(self, custom_params):" in source
+    assert "self.CustomTypedData.load(custom_params)" in source
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_omitted_when_not_given(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "CustomTypedParams" not in source
+    assert "CustomTypedData" not in source
+    assert "CUSTOMTYPEDDATA" not in source
+    assert "customTypedDataHandler" not in source
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_without_handler_override_is_rejected(tmp_path):
+    args = _base_args(custom_typed_params=VALID_TYPED_PARAMS, override_bodies={})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_data_handler_override_without_custom_typed_params_is_rejected(tmp_path):
+    args = _base_args(override_bodies={"customTypedDataHandler": TYPED_DATA_HANDLER_BODY})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_does_not_require_custom_param_docs(tmp_path):
+    # Unlike customParams, custom_typed_params entries are self-documenting (their own 'desc'),
+    # so no custom_param_docs is required even though none was given here.
+    args = _base_args(
+        custom_typed_params=VALID_TYPED_PARAMS,
+        override_bodies={"customTypedDataHandler": TYPED_DATA_HANDLER_BODY},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_rejects_non_list(tmp_path):
+    result = await _generate(tmp_path, _base_args(custom_typed_params={"name": "host"}))
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_rejects_missing_name(tmp_path):
+    result = await _generate(tmp_path, _base_args(custom_typed_params=[{"title": "Host"}]))
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_rejects_missing_title(tmp_path):
+    result = await _generate(tmp_path, _base_args(custom_typed_params=[{"name": "host"}]))
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_rejects_bad_type(tmp_path):
+    args = _base_args(custom_typed_params=[{"name": "host", "title": "Host", "type": "INTEGER"}])
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_rejects_doubly_nested_params(tmp_path):
+    args = _base_args(
+        custom_typed_params=[
+            {
+                "name": "entries",
+                "title": "Entries",
+                "isList": True,
+                "params": [{"name": "inner", "title": "Inner", "params": [{"name": "x", "title": "X"}]}],
+            }
+        ]
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+
+
 # --- __start must wait for configDone before calling the LLM-authored
 # start() override -- nothing is configured yet (no custom params, no
 # previously-discovered nodes, no OAuth token) when the real START event
@@ -697,6 +804,7 @@ async def test_generation_inputs_json_is_written_with_the_normalized_inputs(tmp_
         "node_classes": {},
         "tests": {},
         "custom_param_docs": None,
+        "custom_typed_params": None,
         "controller_class": "Controller",
         "controller_module": "plugin",
         "version": "1.2.3",

@@ -42,6 +42,15 @@ AI_REQUEST_OVERRIDE_METHOD = "handle_custom_request"
 # AI_REQUEST_OVERRIDE_METHOD.
 WEBHOOK_OVERRIDE_METHOD = "handle_webhook"
 
+# The one customTypedParams-wiring override, present only when custom_typed_params was given
+# (generate_plugin_scaffold's own top-level input, not a server_entry field -- see
+# render_custom_param_docs_call for why that split exists) -- listed separately from
+# BASE_OVERRIDE_METHODS for the same reason as WEBHOOK_OVERRIDE_METHOD: it only applies to
+# some plugins, never stubbed for one that didn't ask for it. Receives the customer-entered
+# values matching the pushed schema (the CUSTOMTYPEDDATA event's payload) as a single
+# positional argument, named to read clearly next to CUSTOMPARAMS' own parameterHandler.
+CUSTOM_TYPED_DATA_OVERRIDE_METHOD = "customTypedDataHandler"
+
 def default_override_method(name: str) -> str:
     """A safe, uniform stand-in for an override ``handlers/scaffold.py``
     didn't receive a body for -- ``*args, **kwargs`` accepts whatever
@@ -108,6 +117,7 @@ def render_init(
     controller_address: str,
     controller_node_name: str,
     custom_param_docs: str | None = None,
+    custom_typed_params: list[dict] | None = None,
 ) -> str:
     """The Controller's ``__init__`` method body (full ``def __init__...``
     through the final ``self.poly.addNode(self, conn_status='ST')``) -- the
@@ -139,6 +149,30 @@ def render_init(
     ``persist_dir``/``data_dir`` setup -- see that function for why this is
     its own separately-authored rich-text input, not something derived
     from ``customParams``' own minimal ``{field_name: value}`` map.
+
+    When *custom_typed_params* is given (a list of ``{name, title, type?,
+    defaultValue?, desc?, isRequired?, isList?, params?}`` dicts -- the
+    richer, schema-driven alternative to flat ``customParams``, confirmed
+    against the installed ``udi_interface`` package's ``Custom.load`` and
+    ``Interface.saveTypedParams`` docstring), two ``udi_interface.Custom``
+    instances are constructed right after the ``custom_param_docs_call``
+    line: ``self.CustomTypedParams`` (the schema, bucket ``'customtypedparams'``)
+    and ``self.CustomTypedData`` (the customer-entered values matching it,
+    bucket ``'customtypeddata'``) -- this exact pairing of names was chosen to
+    mirror ``udi_interface``'s own paired bucket names. *custom_typed_params*
+    itself is then pushed to PG3 via ``self.CustomTypedParams.load(..., True)``
+    -- the ``True`` matters: ``Custom.load``'s ``save`` argument defaults to
+    ``False``, which would leave the schema registered only in local memory
+    and never actually sent, so PG3 would never render the config UI for it.
+    The schema is embedded via ``!r`` (Python's ``repr()``), not a hand-built
+    literal -- every field in the shape above is a plain str/bool/None/list/
+    dict, so its repr is already valid Python source. A matching
+    ``self.poly.subscribe(self.poly.CUSTOMTYPEDDATA, self.customTypedDataHandler)``
+    is added to the subscribe block below; ``customTypedDataHandler`` is an
+    LLM-authored override (see ``CUSTOM_TYPED_DATA_OVERRIDE_METHOD``), not
+    wired here, since only the override body knows what to do with a given
+    plugin's own customer-entered values (typically at least
+    ``self.CustomTypedData.load(custom_params)`` to cache them).
 
     ``self.configDone``/``self.configDoneAlready`` back ``__start``'s
     wait-for-configDone gate (``render_private_wiring_methods``, below) --
@@ -207,6 +241,14 @@ def render_init(
     custom_param_docs_call = render_custom_param_docs_call(custom_param_docs)
     if custom_param_docs_call:
         lines.append(custom_param_docs_call)
+    if custom_typed_params:
+        lines.extend(
+            [
+                "        self.CustomTypedParams = udi_interface.Custom(self.poly, 'customtypedparams')",
+                "        self.CustomTypedData = udi_interface.Custom(self.poly, 'customtypeddata')",
+                f"        self.CustomTypedParams.load({custom_typed_params!r}, True)",
+            ]
+        )
     if node_classes:
         names = ", ".join(node_classes)
         lines.append(
@@ -227,6 +269,12 @@ def render_init(
             "        self.poly.subscribe(self.poly.CUSTOMPARAMS, self.parameterHandler)",
             "        self.poly.subscribe(self.poly.CUSTOMNS, self.__customNSHandler)",
             "        self.poly.subscribe(self.poly.CUSTOMDATA, self.__customDataHandler)",
+        ]
+    )
+    if custom_typed_params:
+        lines.append("        self.poly.subscribe(self.poly.CUSTOMTYPEDDATA, self.customTypedDataHandler)")
+    lines.extend(
+        [
             "        self.poly.subscribe(self.poly.ADDNODEDONE, self.__addNodeDoneHandler)",
             "        self.poly.subscribe(self.poly.DELNODEDONE, self.__removeNodeDoneHandler)",
             "        self.poly.subscribe(self.poly.DISCOVER, self.discover)",

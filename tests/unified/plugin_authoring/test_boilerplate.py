@@ -260,3 +260,27 @@ async def test_webhook_enabled_preserved_across_refresh(tmp_path):
 
     main_py = (plugin_dir / "main.py").read_text()
     assert 'udi_interface.Interface([], {"enableWebhook": True})' in main_py
+
+
+@pytest.mark.asyncio
+async def test_custom_typed_params_preserved_across_refresh(tmp_path):
+    typed_params = [{"name": "host", "title": "Host", "isRequired": True}]
+    args = _base_args(
+        custom_typed_params=typed_params,
+        override_bodies={
+            "start": 'def start(self):\n    LOGGER.info("custom start")\n',
+            "customTypedDataHandler": "def customTypedDataHandler(self, custom_params):\n    self.CustomTypedData.load(custom_params)\n",
+        },
+    )
+    gen_result = await _generate(tmp_path, args)
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    assert "self.CustomTypedParams = udi_interface.Custom(self.poly, 'customtypedparams')" in plugin_py
+    assert "self.CustomTypedData = udi_interface.Custom(self.poly, 'customtypeddata')" in plugin_py
+    assert "self.poly.subscribe(self.poly.CUSTOMTYPEDDATA, self.customTypedDataHandler)" in plugin_py
+    assert "def customTypedDataHandler(self, custom_params):" in plugin_py

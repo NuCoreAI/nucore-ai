@@ -51,6 +51,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_plugin_capabilities": plugin_management.get_plugin_capabilities,
     "call_plugin": plugin_management.call_plugin,
     "plugin_ops": plugin_management.plugin_ops,
+    "configure_plugin": plugin_management.configure_plugin,
+    "get_plugin_config": plugin_management.get_plugin_config,
     "diagnostics_not_responding": diagnostics.diagnostics_not_responding,
     "diagnostics_no_status_feedback": diagnostics.diagnostics_no_status_feedback,
     "restart_core_service": diagnostics.restart_core_service,

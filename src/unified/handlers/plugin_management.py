@@ -314,23 +314,38 @@ async def plugin_ops(nucore_interface: NuCoreInterface, args: dict[str, Any]) ->
     return {"plugin_id": plugin_id, "operation": operation, **(data if isinstance(data, dict) else {})}
 
 
-_VALID_CONFIG_KEYS = ("customparams", "oauth")
+# customtypedparams (the schema) is deliberately write-excluded: the plugin itself is the sole
+# legitimate writer of its own schema, via self.CustomTypedParams.load(..., True) at startup --
+# writing it externally would let a caller corrupt the very form PG3 renders. It's read-included
+# below, since PG3's own config-page UI has to read it from somewhere to render that form in the
+# first place (design/developers/plugin_apis.md:127-128 documents GET .../custom/:key as parsing
+# customtypedparams automatically), and a caller needs it to know a plugin's typed-params field
+# names/types before it can construct a valid customtypeddata write-back.
+_VALID_WRITE_CONFIG_KEYS = ("customparams", "customtypeddata", "oauth")
+_VALID_READ_CONFIG_KEYS = ("customparams", "customtypedparams", "customtypeddata", "oauth")
 
 
 async def configure_plugin(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
-    """Not wired into the customer-facing TOOL_HANDLERS table -- currently
-    only used by unified.plugin_authoring, for setting up a plugin under local
-    development/test. Add a "configure_plugin" entry to dispatch.py's
-    TOOL_HANDLERS if a customer-facing use ever needs it too."""
+    """Writes a plugin's custom-config record. See get_plugin_config for the
+    matching read side -- read current values (and, for customtypeddata,
+    the customtypedparams schema they must match) before writing, rather
+    than constructing a payload from scratch."""
     plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
     config = args.get("config")
     key = args.get("key") or "customparams"
     if not plugin_id:
         return {"error": "plugin_id is required -- call list_installed_plugins for the real plugin_id"}
-    if not isinstance(config, dict):
-        return {"error": "config must be a JSON object of configuration parameters"}
-    if key not in _VALID_CONFIG_KEYS:
-        return {"error": f"key must be one of {_VALID_CONFIG_KEYS}"}
+    if key not in _VALID_WRITE_CONFIG_KEYS:
+        return {"error": f"key must be one of {_VALID_WRITE_CONFIG_KEYS}"}
+    # customtypeddata's real wire shape isn't confirmed anywhere in this codebase -- the installed
+    # udi_interface SDK's Custom.load() describes it with the same "not a key/value pair but just
+    # an array of dicts" doc-comment it uses for customtypedparams' own confirmed list shape, so
+    # this accepts either a dict or a list for that key rather than asserting one. customparams/
+    # oauth are confirmed flat {field: value} dicts, so they keep the strict check.
+    allowed_types = (dict, list) if key == "customtypeddata" else (dict,)
+    if not isinstance(config, allowed_types):
+        type_names = "/".join(t.__name__ for t in allowed_types)
+        return {"error": f"config must be a JSON {type_names} for key '{key}'"}
 
     response = await nucore_interface.configure_plugin(plugin_id, config, key=key)
     if not isinstance(response, dict) or not response.get("successful"):
@@ -338,3 +353,27 @@ async def configure_plugin(nucore_interface: NuCoreInterface, args: dict[str, An
 
     data = response.get("data")
     return {"plugin_id": plugin_id, **(data if isinstance(data, dict) else {})}
+
+
+async def get_plugin_config(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
+    """Reads a plugin's custom-config record -- the matching read side of
+    configure_plugin. For customtypeddata, read customtypedparams first to
+    learn the schema the values must match (field names/types/isList/
+    params) before massaging and writing values back."""
+    plugin_id = await nucore_interface._get_plugin_number(args.get("plugin_id"))
+    key = args.get("key") or "customparams"
+    if not plugin_id:
+        return {"error": "plugin_id is required -- call list_installed_plugins for the real plugin_id"}
+    if key not in _VALID_READ_CONFIG_KEYS:
+        return {"error": f"key must be one of {_VALID_READ_CONFIG_KEYS}"}
+
+    response = await nucore_interface.get_plugin_config(plugin_id, key=key)
+    if not isinstance(response, dict) or not response.get("successful"):
+        return {"error": f"failed to read plugin '{plugin_id}' key '{key}'"}
+
+    # Unlike configure_plugin's response (confirmed to always nest a dict under "data"), the read
+    # side's "data" is whatever shape that custom key actually stores -- a dict for customparams/
+    # oauth, but possibly a list for customtypedparams/customtypeddata (see the shape note above).
+    # Returned verbatim under "config" rather than spread into the result, since a list can't be
+    # spread into a dict the way configure_plugin's confirmed-dict response is above.
+    return {"plugin_id": plugin_id, "key": key, "config": response.get("data")}

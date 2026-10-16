@@ -692,25 +692,59 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the plugin_ops method.")
 
-    async def configure_plugin(self, plugin_id:str, config:dict[str, Any], key:str="customparams"):
+    async def configure_plugin(
+        self, plugin_id:str, config:dict[str, Any] | list[Any],
+        key:Literal["customparams", "customtypeddata", "oauth"]="customparams",
+    ):
         """
         Configure a plugin on the device -- writes a custom record value
         under the given key (plugin-api.md's key-generic
         GET/POST /api/plugin/:profileNum/custom/:key). Default key
         "customparams" covers the ordinary developer-defined custom config
-        values; "oauth" targets the same OAuth config udi_interface.OAuth
-        reads via its CUSTOMNS subscription (client_id/client_secret/scope/
-        auth_endpoint/token_endpoint/etc.) -- one key-generic method rather
-        than a second dedicated tool for OAuth.
+        values; "customtypeddata" is the values matching a plugin's own
+        "customtypedparams" schema (see get_plugin_config to read that
+        schema and the current values first); "oauth" targets the same
+        OAuth config udi_interface.OAuth reads via its CUSTOMNS subscription
+        (client_id/client_secret/scope/auth_endpoint/token_endpoint/etc.) --
+        one key-generic method rather than a dedicated tool per key.
+        "customtypedparams" (the schema itself) is deliberately not a valid
+        key here -- only the plugin itself may write its own schema, at
+        startup.
         :param plugin_id: The ID of the plugin to configure.
-        :param config: A dictionary containing the configuration parameters.
-        :param key: Which custom record to write -- "customparams" (default) or "oauth".
+        :param config: The configuration parameters -- a dict for
+            "customparams"/"oauth" (confirmed flat {field: value} shape);
+            for "customtypeddata" either a dict or a list, since its real
+            wire shape isn't confirmed (see get_plugin_config).
+        :param key: Which custom record to write.
         :return: response from the API or None if failure
 
         API:
         POST /api/plugin/:profileNum/custom/:key
         """
         raise NotImplementedError("Subclasses must implement the configure_plugin method.")
+
+    async def get_plugin_config(
+        self, plugin_id:str,
+        key:Literal["customparams", "customtypedparams", "customtypeddata", "oauth"]="customparams",
+    ):
+        """
+        Reads a plugin's custom record value under the given key -- the
+        read side of configure_plugin. Unlike configure_plugin, "key" also
+        accepts "customtypedparams" here: reading a plugin's own typed-
+        params schema is safe (PG3's own config-page UI already does this
+        to render the typed-params form), even though writing that schema
+        externally is not allowed.
+        :param plugin_id: The ID of the plugin to read.
+        :param key: Which custom record to read.
+        :return: response from the API (its "data" is whatever shape that
+            key actually stores -- a dict for "customparams"/"oauth",
+            possibly a list for "customtypedparams"/"customtypeddata") or
+            None if failure
+
+        API:
+        GET /api/plugin/:profileNum/custom/:key
+        """
+        raise NotImplementedError("Subclasses must implement the get_plugin_config method.")
 
     async def get_plugin_prompt(self, plugin_id: str) -> dict:
         """

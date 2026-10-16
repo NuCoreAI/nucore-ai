@@ -90,6 +90,7 @@ async def regenerate_plugin_boilerplate(
     override_bodies = generation_inputs.get("override_bodies") or {}
     node_classes = generation_inputs.get("node_classes") or {}
     custom_param_docs = generation_inputs.get("custom_param_docs")
+    custom_typed_params = generation_inputs.get("custom_typed_params")
     controller_class = generation_inputs.get("controller_class") or _DEFAULT_CONTROLLER_CLASS
     controller_module = generation_inputs.get("controller_module") or _DEFAULT_CONTROLLER_MODULE
     version = generation_inputs.get("version") or _DEFAULT_VERSION
@@ -142,6 +143,7 @@ async def regenerate_plugin_boilerplate(
         ai_tool_names=ai_tool_names,
         controller_command_dispatch=controller_command_dispatch,
         custom_param_docs=custom_param_docs,
+        custom_typed_params=custom_typed_params,
     )
     main_py = plugin_skeleton.render_main_py(
         controller_module,
@@ -165,6 +167,8 @@ async def regenerate_plugin_boilerplate(
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if custom_typed_params:
+        expected_methods.add(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
     actual_methods = _class_method_names(plugin_py, controller_class) or set()
     missing_methods = expected_methods - actual_methods
     if missing_methods:

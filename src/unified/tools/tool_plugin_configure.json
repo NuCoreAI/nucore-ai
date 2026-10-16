@@ -1,0 +1,23 @@
+{
+  "name": "configure_plugin",
+  "description": "Write an installed plugin's custom-config record -- use this to set/change the values a plugin's own custom-config form exposes (API keys, polling interval, device-specific settings, etc.). Call list_installed_plugins first to get the real plugin_id. Call get_plugin_config first to read the current values (and, for key='customtypeddata', the matching 'customtypedparams' schema) rather than constructing a payload from scratch -- send back the same shape you read, modified. For a plugin generated with OAuth support, pass key='oauth' to update its real client_id/client_secret/scope after generation (the generated server_entry.json only ever contains placeholders there, never real secrets). This only applies to plugin-backed capabilities -- never call it for a native Insteon/Z-Wave/Zigbee/Matter device.",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id", "config"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The `plugin_id`, from list_installed_plugins."
+      },
+      "config": {
+        "type": ["object", "array"],
+        "description": "The configuration parameters to set. A flat JSON object of key/value pairs for key='customparams' or key='oauth'. For key='customtypeddata', send back whatever shape get_plugin_config(key='customtypeddata') returned (its exact wire shape isn't guaranteed to be a flat object), modified -- never construct one from scratch."
+      },
+      "key": {
+        "type": "string",
+        "enum": ["customparams", "customtypeddata", "oauth"],
+        "description": "Which custom record to write. Defaults to 'customparams' (ordinary developer-defined config values). 'customtypeddata' writes the customer-facing values for a plugin's richer, schema-driven typed-params config (read 'customtypedparams' via get_plugin_config first to learn the schema). 'oauth' sets the real OAuth client_id/client_secret/scope/endpoints for a plugin generated with OAuth support. Note: 'customtypedparams' (the schema itself) cannot be written here -- only the plugin itself may set its own schema."
+      }
+    }
+  }
+}

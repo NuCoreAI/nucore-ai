@@ -461,6 +461,7 @@ def _assemble_plugin_py(
     ai_tool_names: list[str],
     controller_command_dispatch: dict[str, str],
     custom_param_docs: str | None = None,
+    custom_typed_params: list[dict] | None = None,
 ) -> str:
     parts = [
         _module_header(f"{controller_class} controller"),
@@ -480,6 +481,7 @@ def _assemble_plugin_py(
             file_upload=file_upload,
             webhook_enabled=webhook_enabled,
             custom_param_docs=custom_param_docs,
+            custom_typed_params=custom_typed_params,
             controller_address=controller_address,
             controller_node_name=controller_node_name,
         ),
@@ -509,6 +511,11 @@ def _assemble_plugin_py(
             plugin_skeleton.WEBHOOK_OVERRIDE_METHOD
         )
         parts.append(_reindent_method(body) + "\n")
+    if custom_typed_params:
+        body = override_bodies.get(
+            plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD
+        ) or plugin_skeleton.default_override_method(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
+        parts.append(_reindent_method(body) + "\n")
     if controller_command_dispatch:
         # commands' values must be bare, unbound function names defined earlier in this same
         # class body -- udi_interface.Node.runCmd calls fun(self, command) where
@@ -521,12 +528,55 @@ def _assemble_plugin_py(
     return "".join(parts)
 
 
+_CUSTOM_TYPED_PARAM_TYPES = {"NUMBER", "STRING", "BOOLEAN"}
+
+
+def _validate_custom_typed_param_entries(entries: Any, *, nested: bool = False) -> str | None:
+    """Validates ``custom_typed_params``/``params`` against the
+    ``udi_interface`` ``customtypedparams`` shape (the only place this is
+    documented: the installed package's ``Interface.saveTypedParams``
+    docstring, confirmed against ``Custom.load``'s own special-cased
+    handling of the ``'customtypedparams'``/``'customtypeddata'`` keys) --
+    a list of ``{name, title, type?, defaultValue?, desc?, isRequired?,
+    isList?, params?}`` dicts. Only ``params`` (one level, matching the
+    tool schema's own one-level-deep ``params`` -- see ``tool_generate_
+    plugin_scaffold.json``) recurses with *nested* True, so a ``params``
+    entry can't itself declare a further ``params``. Returns an error
+    message, or ``None`` if valid."""
+    if not isinstance(entries, list):
+        return "custom_typed_params must be a list of {name, title, ...} objects"
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return f"custom_typed_params[{i}] must be an object"
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            return f"custom_typed_params[{i}].name is required and must be a non-empty string"
+        title = entry.get("title")
+        if not isinstance(title, str) or not title:
+            return f"custom_typed_params[{i}].title is required and must be a non-empty string"
+        if "type" in entry and entry["type"] not in _CUSTOM_TYPED_PARAM_TYPES:
+            return f"custom_typed_params[{i}].type must be one of {sorted(_CUSTOM_TYPED_PARAM_TYPES)}"
+        for bool_field in ("isRequired", "isList"):
+            if bool_field in entry and not isinstance(entry[bool_field], bool):
+                return f"custom_typed_params[{i}].{bool_field} must be a boolean"
+        if "desc" in entry and not isinstance(entry["desc"], str):
+            return f"custom_typed_params[{i}].desc must be a string"
+        if "params" in entry:
+            if nested:
+                return f"custom_typed_params[{i}].params cannot itself declare a nested 'params' (one level deep only)"
+            nested_error = _validate_custom_typed_param_entries(entry["params"], nested=True)
+            if nested_error:
+                return f"custom_typed_params[{i}].{nested_error}"
+    return None
+
+
 def _validate_override_keys(
     *,
     override_bodies: dict[str, str],
     ai_enabled: bool,
     ai_tool_names: list[str],
     webhook_enabled: bool,
+    custom_typed_params_enabled: bool,
     new_command_override_names: set[str],
 ) -> str | None:
     """Returns an error message, or ``None`` if ``override_bodies``' keys
@@ -536,7 +586,11 @@ def _validate_override_keys(
     helpers are, but -- unlike AI-tool helpers -- never required to be
     present: a missing one just defaults to ``plugin_skeleton.
     default_override_method``'s no-op stub, same as any ``BASE_OVERRIDE_
-    METHODS`` entry."""
+    METHODS`` entry. *custom_typed_params_enabled* (``custom_typed_params``
+    non-empty) requires ``CUSTOM_TYPED_DATA_OVERRIDE_METHOD`` present, same
+    reasoning as *webhook_enabled* below -- a no-op default there would
+    silently discard every value the customer enters in the typed-params
+    config UI."""
     allowed = set(plugin_skeleton.BASE_OVERRIDE_METHODS)
     allowed.update(new_command_override_names)
     if ai_enabled:
@@ -544,6 +598,8 @@ def _validate_override_keys(
         allowed.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         allowed.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if custom_typed_params_enabled:
+        allowed.add(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
 
     unknown = set(override_bodies) - allowed
     if unknown:
@@ -559,6 +615,13 @@ def _validate_override_keys(
             "server_entry.webhook_enabled is true but override_bodies has no "
             f"'{plugin_skeleton.WEBHOOK_OVERRIDE_METHOD}' entry -- a plugin that enables webhooks "
             "must author its own handler for incoming webhook calls"
+        )
+    if custom_typed_params_enabled and plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD not in override_bodies:
+        return (
+            "custom_typed_params was given but override_bodies has no "
+            f"'{plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD}' entry -- a plugin that declares "
+            "typed custom params must author its own handler for the customer-entered values "
+            "(typically at least self.CustomTypedData.load(custom_params))"
         )
     return None
 
@@ -914,6 +977,17 @@ async def generate_plugin_scaffold(
                      "required whenever there are custom parameters for the customer to fill in"
         }
 
+    # custom_typed_params is its own top-level input, not a server_entry field -- same reasoning
+    # as custom_param_docs above (render_custom_param_docs_call's docstring): it backs a runtime
+    # call the plugin itself makes (Custom(...).load(..., True)), not part of the StoreEntry
+    # registration payload. Unlike customParams, no matching custom_param_docs is required --
+    # each entry's own 'desc' field is already its documentation.
+    custom_typed_params = args.get("custom_typed_params")
+    if custom_typed_params is not None:
+        schema_error = _validate_custom_typed_param_entries(custom_typed_params)
+        if schema_error:
+            return {"error": schema_error}
+
     authorize = bool(server_entry_input.get("authorize"))
     ai_enabled = bool(server_entry_input.get("ai_enabled"))
     file_upload = bool(server_entry_input.get("fileUpload"))
@@ -935,6 +1009,7 @@ async def generate_plugin_scaffold(
         ai_enabled=ai_enabled,
         ai_tool_names=ai_tool_names,
         webhook_enabled=webhook_enabled,
+        custom_typed_params_enabled=bool(custom_typed_params),
         new_command_override_names=new_command_override_names,
     )
     if key_error:
@@ -958,6 +1033,7 @@ async def generate_plugin_scaffold(
         ai_tool_names=ai_tool_names,
         controller_command_dispatch=controller_command_dispatch,
         custom_param_docs=custom_param_docs,
+        custom_typed_params=custom_typed_params,
     )
     main_py = plugin_skeleton.render_main_py(
         controller_module,
@@ -1035,6 +1111,8 @@ async def generate_plugin_scaffold(
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if custom_typed_params:
+        expected_methods.add(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
     actual_methods = _class_method_names(plugin_py, controller_class) or set()
     missing_methods = expected_methods - actual_methods
     if missing_methods:
@@ -1104,6 +1182,7 @@ async def generate_plugin_scaffold(
         "node_classes": node_classes,
         "tests": tests,
         "custom_param_docs": custom_param_docs,
+        "custom_typed_params": custom_typed_params,
         "controller_class": controller_class,
         "controller_module": controller_module,
         "version": version,

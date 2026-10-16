@@ -147,16 +147,21 @@ just because it happens to exist — use `persist/` for that even when `fileUplo
 `polyglot.udm_alert(title, body)` pushes a notification to UD Mobile — for an event a customer
 should be alerted to outside the app UI (e.g. a plugin detecting a critical condition).
 
-**What `plugin_authoring` actually generates today**: only `customparams` (the schema half — see
+**What `plugin_authoring` actually generates today**: `customparams` (the schema half — see
 [Design decisions](plugin_authoring_design.md)) and `oauth`/`devd` placeholders are wired into
-`generate_plugin_scaffold`'s `server_entry.json`. The generated skeleton subscribes to
-`CUSTOMDATA` but its handler only logs — it doesn't read or write anything. `customtypedparams`/
-`customtypeddata`/`notices`/`nsdata` are real, SDK-level, PG3-rendered mechanisms, but nothing in
-this tool set generates or seeds them yet — hand-write them into the generated `plugin.py` when a
-spec genuinely calls for richer config or cross-restart state. Don't reach for `nsdata` as a
-destination for anything a customer edits or anything secret — that's `customparams`'/
-`customtypedparams`'/`oauth`'s job; `nsdata` is for a one-time developer-authored seed value, not
-an editable setting.
+`generate_plugin_scaffold`'s `server_entry.json`. `customtypedparams`/`customtypeddata` are also
+generated, via the sibling top-level `custom_typed_params` input (not a `server_entry` field —
+same reasoning as `custom_param_docs`: it backs a runtime call the plugin itself makes, not the
+registration payload): when given, `generate_plugin_scaffold` constructs
+`self.CustomTypedParams`/`self.CustomTypedData`, pushes the schema via
+`self.CustomTypedParams.load(..., True)`, and subscribes `CUSTOMTYPEDDATA` to an LLM-authored
+`customTypedDataHandler` override (required whenever `custom_typed_params` is non-empty). The
+generated skeleton subscribes to `CUSTOMDATA` but its handler only logs — it doesn't read or write
+anything. `notices`/`nsdata` are real, SDK-level, PG3-rendered mechanisms, but nothing in this tool
+set generates or seeds them yet — hand-write them into the generated `plugin.py` when a spec
+genuinely calls for them. Don't reach for `nsdata` as a destination for anything a customer edits
+or anything secret — that's `customparams`'/`customtypedparams`'/`oauth`'s job; `nsdata` is for a
+one-time developer-authored seed value, not an editable setting.
 
 **Stage 3 — IoX ingests the profile into its catalog.** PG3/IoX folds the submitted
 `{nodedefs, editors, linkdefs}` into the hub's overall profile catalog under `family = "10"`

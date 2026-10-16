@@ -170,6 +170,55 @@ async def test_configure_plugin_returns_none_on_connection_failure():
     assert await wrapper.configure_plugin("7", {}) is None
 
 
+# --- get_plugin_config (the GET counterpart) ---
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_defaults_to_customparams_key():
+    wrapper = _bare_wrapper()
+    calls = []
+
+    async def fake_get(path):
+        calls.append(path)
+        return FakeResp(json_data={"successful": True, "data": {"api_key": "placeholder"}})
+
+    wrapper.get = fake_get
+
+    result = await wrapper.get_plugin_config("7")
+
+    assert result == {"successful": True, "data": {"api_key": "placeholder"}}
+    assert calls == ["/api/plugin/7/custom/customparams"]
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_accepts_a_customtypedparams_key():
+    wrapper = _bare_wrapper()
+    calls = []
+
+    async def fake_get(path):
+        calls.append(path)
+        return FakeResp(json_data={"successful": True, "data": [{"name": "host", "title": "Host"}]})
+
+    wrapper.get = fake_get
+
+    result = await wrapper.get_plugin_config("7", key="customtypedparams")
+
+    assert result == {"successful": True, "data": [{"name": "host", "title": "Host"}]}
+    assert calls == ["/api/plugin/7/custom/customtypedparams"]
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_returns_none_on_connection_failure():
+    wrapper = _bare_wrapper()
+
+    async def fake_get(path):
+        return None
+
+    wrapper.get = fake_get
+
+    assert await wrapper.get_plugin_config("7") is None
+
+
 # --- get_local_store_plugins ---
 
 

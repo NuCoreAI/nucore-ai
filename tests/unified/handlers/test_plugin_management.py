@@ -68,12 +68,18 @@ class FakeBackend(NuCoreInterface):
         self.plugin_llm_result_response = {"successful": True, "data": {"result": "stub result"}}
         self.configure_response = {"successful": True, "data": {}}
         self.configure_calls = []
+        self.get_config_response = {"successful": True, "data": {}}
+        self.get_config_calls = []
         self.uninstall_response = {"successful": True}
         self.uninstall_calls = []
 
     async def configure_plugin(self, plugin_id, config, key="customparams"):
         self.configure_calls.append((plugin_id, config, key))
         return self.configure_response
+
+    async def get_plugin_config(self, plugin_id, key="customparams"):
+        self.get_config_calls.append((plugin_id, key))
+        return self.get_config_response
 
     async def get_active_plugins(self):
         return self.store_response
@@ -617,6 +623,19 @@ async def test_configure_plugin_rejects_an_invalid_key():
 
 
 @pytest.mark.asyncio
+async def test_configure_plugin_rejects_customtypedparams_key():
+    # The schema itself is read-only through this API -- only the plugin may write its own
+    # schema, at startup. See test_get_plugin_config_accepts_customtypedparams_key below for the
+    # read side, which does allow it.
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(
+        backend, {"plugin_id": "3", "config": [], "key": "customtypedparams"}
+    )
+    assert "error" in result
+    assert backend.configure_calls == []
+
+
+@pytest.mark.asyncio
 async def test_configure_plugin_requires_plugin_id():
     backend = FakeBackend()
     result = await plugin_management.configure_plugin(backend, {"config": {}})
@@ -635,6 +654,72 @@ async def test_configure_plugin_errors_on_backend_failure():
     backend = FakeBackend()
     backend.configure_response = {"successful": False}
     result = await plugin_management.configure_plugin(backend, {"plugin_id": "3", "config": {}})
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_accepts_a_list_config_for_customtypeddata():
+    # customtypeddata's real wire shape isn't confirmed -- the handler must not assume dict-only.
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(
+        backend, {"plugin_id": "3", "config": [{"name": "host", "value": "1.2.3.4"}], "key": "customtypeddata"}
+    )
+    assert result == {"plugin_id": 3}
+    assert backend.configure_calls == [(3, [{"name": "host", "value": "1.2.3.4"}], "customtypeddata")]
+
+
+@pytest.mark.asyncio
+async def test_configure_plugin_rejects_a_list_config_for_customparams():
+    # customparams is confirmed flat {field: value} -- still requires a dict.
+    backend = FakeBackend()
+    result = await plugin_management.configure_plugin(
+        backend, {"plugin_id": "3", "config": [{"name": "host"}], "key": "customparams"}
+    )
+    assert "error" in result
+    assert backend.configure_calls == []
+
+
+# --- get_plugin_config (the GET counterpart) ---
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_defaults_to_customparams_key():
+    backend = FakeBackend()
+    backend.get_config_response = {"successful": True, "data": {"api_key": "x"}}
+    result = await plugin_management.get_plugin_config(backend, {"plugin_id": "3"})
+    assert result == {"plugin_id": 3, "key": "customparams", "config": {"api_key": "x"}}
+    assert backend.get_config_calls == [(3, "customparams")]
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_accepts_customtypedparams_key():
+    backend = FakeBackend()
+    backend.get_config_response = {"successful": True, "data": [{"name": "host", "title": "Host"}]}
+    result = await plugin_management.get_plugin_config(backend, {"plugin_id": "3", "key": "customtypedparams"})
+    assert result == {"plugin_id": 3, "key": "customtypedparams", "config": [{"name": "host", "title": "Host"}]}
+    assert backend.get_config_calls == [(3, "customtypedparams")]
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_rejects_an_invalid_key():
+    backend = FakeBackend()
+    result = await plugin_management.get_plugin_config(backend, {"plugin_id": "3", "key": "notarealkey"})
+    assert "error" in result
+    assert backend.get_config_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_requires_plugin_id():
+    backend = FakeBackend()
+    result = await plugin_management.get_plugin_config(backend, {})
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_config_errors_on_backend_failure():
+    backend = FakeBackend()
+    backend.get_config_response = {"successful": False}
+    result = await plugin_management.get_plugin_config(backend, {"plugin_id": "3"})
     assert "error" in result
 
 

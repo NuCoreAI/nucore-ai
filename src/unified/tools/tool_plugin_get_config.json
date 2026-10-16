@@ -1,0 +1,19 @@
+{
+  "name": "get_plugin_config",
+  "description": "Read an installed plugin's custom-config record -- the matching read side of configure_plugin. Call list_installed_plugins first to get the real plugin_id. Call this before configure_plugin: for key='customtypedparams', to learn a plugin's typed-params schema (field names/types/isRequired/isList/params) before trying to set 'customtypeddata'; for 'customtypeddata', to read the current values before modifying them, since their exact shape isn't guaranteed to be a flat object -- send back whatever shape this returns, modified, rather than constructing one from scratch. This only applies to plugin-backed capabilities -- never call it for a native Insteon/Z-Wave/Zigbee/Matter device.",
+  "input_schema": {
+    "type": "object",
+    "required": ["plugin_id"],
+    "properties": {
+      "plugin_id": {
+        "type": "string",
+        "description": "The `plugin_id`, from list_installed_plugins."
+      },
+      "key": {
+        "type": "string",
+        "enum": ["customparams", "customtypedparams", "customtypeddata", "oauth"],
+        "description": "Which custom record to read. Defaults to 'customparams'. 'customtypedparams' reads a plugin's own typed-params schema (safe to read even though only the plugin itself may write it). 'customtypeddata' reads the customer-entered values matching that schema. 'oauth' reads the OAuth config (client_id/client_secret are never returned as real secrets by the host)."
+      }
+    }
+  }
+}

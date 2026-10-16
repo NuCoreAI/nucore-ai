@@ -32,7 +32,7 @@
       },
       "override_bodies": {
         "type": "object",
-        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true, plus handle_webhook (receives headers/querystring/body as a single positional 'data' argument) when server_entry.webhook_enabled is true, plus one entry per Controller nodedef cmds.accepts command id that doesn't collide (case-insensitively, once lowercased) with one of the fixed names above -- e.g. an accepted command 'QUERYALL' needs a 'queryall' key here; an accepted command 'DISCOVER' instead reuses the existing 'discover' override, since it's the same event. Any name not supplied gets a safe no-op stub. Any other key is rejected. These fire in a fixed real-world order -- START, then CONFIG (processConfig), then CUSTOMPARAMS (parameterHandler), then CONFIGDONE -- and the tool-generated wiring already blocks start() until CONFIGDONE (or a timeout); write each override for its own place in that order rather than assuming config/params are already available earlier than CONFIGDONE. See the system prompt's 'Write override bodies for the real startup order' section for the full contract.",
+        "description": "Full Python method source (the 'def ...():' line through its body, properly indented as a class method) for each override this plugin needs, keyed by method name: start, stop, discover, shortPoll, longPoll, processConfig, parameterHandler, customParamHandler -- plus handle_custom_request and one '_<tool_name>' helper per server_entry.aiTools entry when server_entry.ai_enabled is true, plus handle_webhook (receives headers/querystring/body as a single positional 'data' argument) when server_entry.webhook_enabled is true, plus customTypedDataHandler (receives the customer-entered values matching custom_typed_params' schema as a single positional argument -- typically at least self.CustomTypedData.load(custom_params)) when the top-level custom_typed_params input is non-empty, plus one entry per Controller nodedef cmds.accepts command id that doesn't collide (case-insensitively, once lowercased) with one of the fixed names above -- e.g. an accepted command 'QUERYALL' needs a 'queryall' key here; an accepted command 'DISCOVER' instead reuses the existing 'discover' override, since it's the same event. Any name not supplied gets a safe no-op stub. Any other key is rejected. These fire in a fixed real-world order -- START, then CONFIG (processConfig), then CUSTOMPARAMS (parameterHandler), then CONFIGDONE -- and the tool-generated wiring already blocks start() until CONFIGDONE (or a timeout); write each override for its own place in that order rather than assuming config/params are already available earlier than CONFIGDONE. See the system prompt's 'Write override bodies for the real startup order' section for the full contract.",
         "additionalProperties": {"type": "string"}
       },
       "server_entry": {
@@ -47,7 +47,7 @@
           "runAs": {"type": "string", "description": "OS account the plugin process runs as. Defaults to the commissioned developer's configure_developer(default_run_as=...) value, or 'admin' if that wasn't set either."},
           "customParams": {
             "type": "object",
-            "description": "A flat {field_name: value} object -- one entry per customer-facing config field (API keys, hosts, intervals). 'value' is each field's seeded initial value, commonly an empty string ('') or a minimal placeholder-like hint -- NOT documentation and not a real value (the customer fills in the real value afterward via configure_plugin). This is PG3's 'customparams' shape exactly -- not the richer typed-list shape ('customtypedparams') with per-field type/isRequired/defaultValue, which this tool does not generate. For the actual user-facing explanation of these fields, use the separate top-level custom_param_docs input, not this map.",
+            "description": "A flat {field_name: value} object -- one entry per customer-facing config field (API keys, hosts, intervals). 'value' is each field's seeded initial value, commonly an empty string ('') or a minimal placeholder-like hint -- NOT documentation and not a real value (the customer fills in the real value afterward via configure_plugin). This is PG3's 'customparams' shape exactly -- use this for simple scalar config. For a field needing real type enforcement, required-field validation, a repeatable list, or nested groups of fields, use the separate top-level custom_typed_params input instead (the richer 'customtypedparams' shape); the two can coexist but each field belongs in only one of them. For the actual user-facing explanation of customParams fields specifically, use the separate top-level custom_param_docs input, not this map.",
             "additionalProperties": {"type": "string"}
           },
           "authorize": {"type": "boolean", "description": "True if this plugin needs OAuth against the target API."},
@@ -110,6 +110,40 @@
       "custom_param_docs": {
         "type": "string",
         "description": "Rich, user-friendly markdown/html/text documentation for the customer-facing config fields declared in server_entry.customParams -- rendered verbatim into a self.poly.setCustomParamsDoc(...) call PG3 shows on the plugin's configuration page. Required whenever server_entry.customParams is non-empty (write real, helpful explanations -- e.g. where to find an API key, what format an IP address should be in -- never just the minimal values from customParams itself). Omit when server_entry.customParams is empty; a plugin with no customParams falls back to any POLYGLOT_CONFIG.md file in its own directory instead."
+      },
+      "custom_typed_params": {
+        "type": "array",
+        "description": "The richer, schema-driven alternative to server_entry.customParams' flat {field_name: value} shape -- udi_interface's 'customtypedparams' mechanism. Use this (instead of, or alongside, customParams) only when the config needs something flat key/value can't express: real type enforcement (NUMBER/BOOLEAN, not just strings), required-field validation enforced by the UI before submit, a repeatable list of values (isList), or a nested group of fields (params). A sibling top-level input, not a server_entry field, because it backs a runtime call the plugin itself makes (self.CustomTypedParams.load(..., True)) rather than the plugin's registration payload. Unlike customParams, no custom_param_docs entry is needed for these fields -- each field's own 'desc' is already its documentation. When non-empty, override_bodies must include a 'customTypedDataHandler' entry to receive the customer-entered values.",
+        "items": {
+          "type": "object",
+          "required": ["name", "title"],
+          "properties": {
+            "name": {"type": "string", "description": "The key this field's value is reported under in customTypedDataHandler's payload."},
+            "title": {"type": "string", "description": "Label shown in the UI."},
+            "type": {"type": "string", "enum": ["NUMBER", "STRING", "BOOLEAN"], "description": "Defaults to STRING."},
+            "defaultValue": {"description": "Optional default value shown before the customer edits it."},
+            "desc": {"type": "string", "description": "Tooltip/help text shown next to the field in the UI -- this field's own documentation, unlike customParams."},
+            "isRequired": {"type": "boolean", "description": "UI will not let the customer submit the form with this field empty."},
+            "isList": {"type": "boolean", "description": "UI treats this field as a repeatable list of values (or, with 'params', of objects)."},
+            "params": {
+              "type": "array",
+              "description": "Nested field definitions (one level only -- a 'params' entry cannot itself declare 'params'), making this entry itself a (list of) object(s) rather than a scalar.",
+              "items": {
+                "type": "object",
+                "required": ["name", "title"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "title": {"type": "string"},
+                  "type": {"type": "string", "enum": ["NUMBER", "STRING", "BOOLEAN"]},
+                  "defaultValue": {},
+                  "desc": {"type": "string"},
+                  "isRequired": {"type": "boolean"},
+                  "isList": {"type": "boolean"}
+                }
+              }
+            }
+          }
+        }
       },
       "tests": {
         "type": "object",

@@ -108,13 +108,32 @@ report the end state -- walking through the process is itself useful to either a
     `validate_profile` requires every range on one editor to share a UOM -- each range's own `uom`
     is checked independently. A property's unit is never "fixed" to one choice; don't tell a
     developer otherwise when their spec genuinely needs more than one.
-  - **`setDriver`'s unit isn't locked in either.** `self.poly`'s `Node.setDriver(driver, value,
-    uom=None, ...)` accepts a per-call `uom` override that changes which unit that driver reports
-    *this* call, independent of whatever it reported last time. For a property whose source can
-    report in more than one unit (an upstream API's own response unit, or a customer's unit
-    preference read from `customParams`), pick the matching UOM id from the editor's declared
-    ranges and pass it as `uom=` each time you call `setDriver` -- you don't have to pick one unit
-    once at generation time and live with it.
+  - **Nothing about a generated profile is fixed at generation time, full stop -- not ranges, not
+    `names`.** `generate_plugin_scaffold` only sends `profile.json` once, at startup
+    (`polyglot.updateJsonProfile(...)`, right before `polyglot.ready()`) -- that single call is the
+    *only* worked example you've ever been shown, but `updateJsonProfile` itself is an
+    add/replace-by-`id` operation, callable again at any point *while the plugin is running*, from
+    inside any override body: resending an `editors` entry with the same `id` but a different
+    `names` map replaces it; resending with a new `id` adds a new one. This is exactly how to
+    handle config entered live by the customer that the static profile can't predict at generation
+    time (e.g. a customer-entered list of named fences/zones/devices via `custom_typed_params`) --
+    rewrite the affected editor's `names` from the live list and call
+    `self.poly.updateJsonProfile({"editors": [...]}, {"waitResponse": True})` again whenever that
+    list changes (typically from the `customTypedDataHandler` override), instead of falling back to
+    showing the customer a raw index/number because "the profile can't hold runtime names." It can.
+  - **`setDriver`'s unit isn't locked in either, and it has a simpler escape hatch than touching
+    the profile at all.** The real signature is `Node.setDriver(driver, value, report=True,
+    force=False, uom=None, text=None)`. `uom=` is a per-call override that changes which unit that
+    driver reports *this* call, independent of whatever it reported last time -- for a property
+    whose source can report in more than one unit (an upstream API's own response unit, or a
+    customer's unit preference read from `customParams`), pick the matching UOM id from the
+    editor's declared ranges and pass it each time, rather than picking one unit once at generation
+    time and living with it. Separately, **`text=` sends a human-readable display string alongside
+    the numeric value on the same status message, with no editor/profile involvement whatsoever**
+    -- when a driver's real-world meaning is better shown as a live string than as a fixed
+    `names`-mapped index (e.g. `self.setDriver('GV0', fence_index, text=fence_name)` for a
+    customer-entered fence name), reach for `text=` before reaching for a profile update at all --
+    it's the lighter-weight tool for the same "the real label isn't known until runtime" problem.
   - **Formatting in Programs and Scenes.** A `cmd`'s or `linkdef`'s `format` field controls how it
     renders in the program/scene editor: `/<param.id>/text if omitted/text if specified/ ...` --
     the format string's first character is the separator. Variables: `${c}` (command name),
@@ -166,8 +185,11 @@ report the end state -- walking through the process is itself useful to either a
 
 - **Test an already-installed plugin locally.** Once a plugin is installed on the device:
   - `list_installed_plugins` -- see what's installed and each one's `plugin_id`/`state`.
+  - `get_plugin_config` -- read its current configuration (`customparams`, the `customtypedparams`
+    schema, `customtypeddata` values, or `oauth`).
   - `configure_plugin` -- set/update its configuration parameters (API keys, polling interval,
-    device-specific settings, etc.).
+    device-specific settings, etc.) -- read first with `get_plugin_config`, then send back the
+    same shape, modified.
   - `plugin_ops` -- start/stop/restart its service.
   - `get_plugin_capabilities` / `call_plugin` -- inspect and exercise the tools an AI-capable
     plugin itself declares, the same mechanism a customer-facing assistant would use.
@@ -296,10 +318,38 @@ no single tool's schema can state on its own.
        a `self.poly.setCustomParamsDoc(...)` call in the generated `__init__` -- you never hand-write
        that call yourself. A plugin with no `customParams` at all falls back to a
        `POLYGLOT_CONFIG.md` file in its own directory, if one exists.
-     - **`customTypedParams`/`customTypedData`** -- only when `customParams`' flat key/value can't
-       express the shape (a list of entries, nested objects, a typed boolean/number field). Not
-       auto-generated by `generate_plugin_scaffold` today -- hand-write the schema into the
-       generated `plugin.py` if a spec genuinely needs it; don't reach for it by default.
+     - **`customTypedParams`/`customTypedData`** -- the richer, schema-driven alternative to
+       `customParams`. Reach for it (instead of, or alongside, `customParams`) only when the config
+       genuinely needs one of: real type enforcement (`NUMBER`/`BOOLEAN`, not just strings),
+       required-field validation enforced by the UI before submit (`isRequired`), a repeatable list
+       of values (`isList`), or a nested group of fields (`params`). If a flat `{field_name: value}`
+       would do, use `customParams` instead -- it's simpler and is what most plugins need. Pass the
+       schema as the top-level `generate_plugin_scaffold` input `custom_typed_params` (a list of
+       `{name, title, type?, defaultValue?, desc?, isRequired?, isList?, params?}` dicts, same
+       shape `Interface.saveTypedParams`'s docstring documents) -- *not* a `server_entry` field, for
+       the same reason `custom_param_docs` isn't one: it backs a runtime call the plugin itself
+       makes (`self.CustomTypedParams.load(..., True)`), not the registration payload. Unlike
+       `customParams`, no separate `custom_param_docs` entry is needed -- each field's own `desc` is
+       already its documentation. When non-empty, `override_bodies` must include a
+       `customTypedDataHandler` entry (receives the customer-entered values as its one argument --
+       typically at least `self.CustomTypedData.load(custom_params)` to cache them); the tool
+       rejects generation otherwise, since a no-op there would silently discard every value the
+       customer enters. If a per-entry name from a `custom_typed_params` list (e.g. a customer's
+       own list of named fences/zones/devices) needs to show up as a node's property value,
+       **don't fall back to showing its numeric list position because "the profile can't hold
+       runtime names"** -- it can; see "Nothing about a generated profile is fixed at generation
+       time" earlier in this section for `updateJsonProfile`/`setDriver(text=...)`, either of which
+       handles this directly from `customTypedDataHandler`.
+       To inspect or test a generated plugin's typed-params config locally once it's installed,
+       use `get_plugin_config`/`configure_plugin` -- `get_plugin_config(plugin_id, key=
+       "customtypedparams")` reads the schema actually registered (field names/types/`isList`/
+       `params`), `get_plugin_config(plugin_id, key="customtypeddata")` reads the current
+       customer-entered values, and `configure_plugin(plugin_id, config=..., key=
+       "customtypeddata")` writes them back -- always read first and send back the same shape you
+       read, modified, rather than constructing a payload from scratch: `customtypeddata`'s exact
+       wire shape isn't confirmed anywhere in this codebase (it may not be a flat object the way
+       `customparams` is). `key="customtypedparams"` is read-only through this tool -- only the
+       plugin itself may write its own schema, at startup.
      - **`customData`** -- the plugin's own cross-restart state (cached/discovered values,
        non-secret session info), read and written by the plugin itself at runtime, never shown in
        any UI. The generated skeleton subscribes to the `CUSTOMDATA` event but its handler only
