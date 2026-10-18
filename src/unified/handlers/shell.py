@@ -25,23 +25,42 @@ from utils import get_logger
 
 logger = get_logger(__name__)
 
-# Resolved at call time, not hardcoded to /bin/bash -- its real location
-# varies by host (e.g. /usr/local/bin/bash on FreeBSD-based deployments).
-_BASH = shutil.which("bash") or "/bin/bash"
-
 _DEFAULT_TIMEOUT_S = 30
 _MAX_TIMEOUT_S = 120
 _MAX_OUTPUT_BYTES = 20_000  # per stream
 _READ_CHUNK_BYTES = 65_536
 
+# pkg/ports-installed binaries (bash, python3, pip3, ...) live under
+# /usr/local/bin on FreeBSD, not under the base-system /bin or /usr/bin --
+# and a daemon started via rc.d typically inherits a PATH that omits it.
+# Always search/guarantee these regardless of what PATH was inherited.
+_FALLBACK_PATH_DIRS = ("/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin")
+
+
+def _build_path() -> str:
+    dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    for extra in _FALLBACK_PATH_DIRS:
+        if extra not in dirs:
+            dirs.append(extra)
+    return os.pathsep.join(dirs)
+
+
 # Deliberately minimal -- the running process's own os.environ may hold
 # secrets (e.g. LLM/backend API credentials loaded via load_dotenv, see
 # run_unified_runtime.py) that spawned commands shouldn't inherit by default.
 _CHILD_ENV = {
-    "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin:/usr/local/sbin"),
+    "PATH": _build_path(),
     "LANG": os.environ.get("LANG", "C.UTF-8"),
     "TERM": os.environ.get("TERM", "xterm"),
 }
+
+# Searched against the same PATH the child actually runs with, not just the
+# backend process's own (possibly PATH-impoverished) ambient environment --
+# /bin/bash doesn't exist on FreeBSD even when bash is installed (it's under
+# /usr/local/bin there). Falls back to /bin/sh, guaranteed present on both
+# FreeBSD and Linux, since every command this module runs internally
+# (setup_dev_venv, generated install.sh) is plain POSIX with no bashisms.
+_BASH = shutil.which("bash", path=_CHILD_ENV["PATH"]) or "/bin/sh"
 
 
 class _BoundedReader:

@@ -104,7 +104,7 @@ here.
 ```shell
 python -m unified.run_unified_runtime \
   --runtime-config src/unified/runtime_config.example.json \
-  --plugin-output-root /usr/home/admin/.config/nucore_unified_runtime/local_plugins \
+  --plugin-output-root /tmp/eisyai/generated_plugins \
   --backend-api-classpath iox.IoXWrapper \
   --backend-api-base-url https://192.168.6.134 \
   --backend-api-username admin \
