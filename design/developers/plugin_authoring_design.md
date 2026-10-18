@@ -344,27 +344,22 @@ Stage 6's device detection.
     `"python3"` (for rc.subr's own service-identity matching), so anything downstream that
     re-resolves that name via `PATH` instead of the exact PID would otherwise find the system
     interpreter again.
-11. **`runAs` default superseded: handler's own OS account, not `"admin"`; Stage 10's username
-    heuristic replaced with a direct import probe** — `generate_plugin_scaffold` writes a
-    plugin's files under whatever OS account the nucore-ai backend itself runs as, but
-    `server_entry.json`'s `runAs` (which tells the hub which account to launch the plugin process
-    as) defaulted to a hardcoded `"admin"`, with no connection to the account that actually owns
-    those files. `install_generated_plugin` never re-owns anything (it only PUTs `path`/`runAs`
-    strings to the hub over HTTP), and the hub's own documented contract (`plugin_apis.md`) says
-    it validates that `path`/`executable`/`runAs` are accessible on the filesystem — so a
-    mismatch surfaces at registration or plugin-start time. Fixed by defaulting `runAs` to
-    `getpass.getuser()` (the handler's own account) instead of `"admin"`; an explicit
-    `server_entry.runAs` still overrides it, unchanged. The separate `configure_developer
-    (default_run_as=...)` override is removed entirely as redundant.
+11. **`runAs` default stays `"admin"`; Stage 10's username heuristic replaced with a direct
+    import probe anyway** — `runAs`'s default was briefly changed to the handler's own OS
+    account (`getpass.getuser()`) on the theory that it should match whatever account actually
+    owns the files `generate_plugin_scaffold` just wrote, since `install_generated_plugin` never
+    re-owns anything. That default was reverted back to the hardcoded `"admin"`; an explicit
+    `server_entry.runAs` still overrides it, unchanged.
 
-    This broke Stage 10's `_is_framework_user` heuristic (`getpass.getuser().startswith
-    ("plugin_")`): nucore-ai's own account can itself be `plugin_`-prefixed while nucore-ai is
-    being developer-tested on a real hub (a polyglot-provisioned node-server account, same as any
-    other plugin on this platform), so a generated plugin's `runAs` could now default to a
-    `plugin_`-prefixed value that *isn't* a true framework-provisioned production account for
-    that specific plugin — tripping the heuristic and wrongly skipping the `.venv` re-exec, then
-    crashing on `import udi_interface` (only ever installed into `.venv`, never system-wide, for
-    a local-dev-store account). Fixed by dropping the username/launch-parentage heuristic
-    entirely and checking the thing that actually matters instead: attempt
-    `import udi_interface` without entering `.venv`; re-exec only if that fails. Self-contained,
-    doesn't depend on any account-naming convention.
+    That OS-account default, while it was in place, broke Stage 10's `_is_framework_user`
+    heuristic (`getpass.getuser().startswith("plugin_")`): nucore-ai's own account can itself be
+    `plugin_`-prefixed while nucore-ai is being developer-tested on a real hub (a
+    polyglot-provisioned node-server account, same as any other plugin on this platform), so a
+    generated plugin's `runAs` could default to a `plugin_`-prefixed value that *isn't* a true
+    framework-provisioned production account for that specific plugin — tripping the heuristic
+    and wrongly skipping the `.venv` re-exec, then crashing on `import udi_interface` (only ever
+    installed into `.venv`, never system-wide, for a local-dev-store account). Fixed by dropping
+    the username/launch-parentage heuristic entirely and checking the thing that actually
+    matters instead: attempt `import udi_interface` without entering `.venv`; re-exec only if
+    that fails. Self-contained, doesn't depend on any account-naming convention — kept even after
+    the `runAs` default reverted, since it's strictly more direct than the heuristic it replaced.

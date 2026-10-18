@@ -118,7 +118,6 @@ from __future__ import annotations
 
 import ast
 import copy
-import getpass
 import json
 import keyword
 import textwrap
@@ -161,7 +160,7 @@ _CONTROLLER_ST_EDITOR = {
     "id": _CONTROLLER_ST_EDITOR_ID,
     "ranges": [{"subset": "0,1", "uom": "25", "names": {"0": "Not Connected", "1": "Connected"}}],
 }
-_DEFAULT_RUN_AS = "admin"  # last-resort fallback only, if _current_os_user() itself fails
+_DEFAULT_RUN_AS = "admin"
 _DEFAULT_VERSION = "1.0.0"
 _BASE_REQUIREMENT = "udi_interface>=3.4.7"
 _INSTALL_FILENAME = "install.sh"
@@ -625,19 +624,6 @@ def _validate_override_keys(
             "(typically at least self.CustomTypedData.load(custom_params))"
         )
     return None
-
-
-def _current_os_user() -> str:
-    """The account this handler itself is running as -- the default ``runAs``
-    fallback, since that's the account that actually owns the files
-    ``generate_plugin_scaffold`` just wrote (``install_generated_plugin``
-    never re-owns them; the hub launches the plugin as whatever ``runAs``
-    says, against whatever's already on disk). Falls back to
-    ``_DEFAULT_RUN_AS`` only if identity lookup itself fails."""
-    try:
-        return getpass.getuser()
-    except Exception:
-        return _DEFAULT_RUN_AS
 
 
 def _build_server_entry(
@@ -1135,7 +1121,7 @@ async def generate_plugin_scaffold(
                      f"{sorted(missing_methods)} -- likely an indentation issue in override_bodies"
         }
 
-    default_run_as = _current_os_user()
+    default_run_as = _DEFAULT_RUN_AS
     entry, entry_error = _build_server_entry(
         location=location,
         plugin_dir=plugin_dir,

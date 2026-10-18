@@ -879,15 +879,14 @@ async def test_controller_node_name_is_never_the_bare_word_controller(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path, monkeypatch):
-    monkeypatch.setattr(scaffold.getpass, "getuser", lambda: "fake_handler_account")
+async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
     assert entry["name"] == "AcmePool"
     assert entry["type"] == "python3"
     assert entry["executable"] == "main.py"
-    assert entry["runAs"] == "fake_handler_account"
+    assert entry["runAs"] == scaffold._DEFAULT_RUN_AS
     assert entry["status"] == "active"
     assert entry["purchaseOptions"] == []
     assert entry["install"] == "install.sh"
@@ -898,20 +897,7 @@ async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_server_entry_runas_falls_back_to_admin_if_os_user_lookup_fails(tmp_path, monkeypatch):
-    def _raise():
-        raise OSError("no such user")
-
-    monkeypatch.setattr(scaffold.getpass, "getuser", _raise)
-    result = await _generate(tmp_path, _base_args())
-    assert "error" not in result
-    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
-    assert entry["runAs"] == scaffold._DEFAULT_RUN_AS
-
-
-@pytest.mark.asyncio
-async def test_server_entry_runas_explicit_value_overrides_default(tmp_path, monkeypatch):
-    monkeypatch.setattr(scaffold.getpass, "getuser", lambda: "fake_handler_account")
+async def test_server_entry_runas_explicit_value_overrides_default(tmp_path):
     args = _base_args(server_entry={"name": "AcmePool", "runAs": "custom_user"})
     result = await _generate(tmp_path, args)
     assert "error" not in result
