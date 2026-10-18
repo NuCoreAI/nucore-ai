@@ -571,7 +571,6 @@ context.md for this plugin's iteration history."""
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -586,41 +585,28 @@ if sys.prefix == sys.base_prefix and os.access(_VENV_PYTHON, os.X_OK):
     # binary as the system one, so comparing resolved paths would never
     # see a difference and this would silently never fire.
     #
-    # Only re-exec when this process was launched directly (a terminal, the
-    # VSCode debugger) -- never when the real host's own rc.d/init-managed
-    # service framework started it as a genuine production install. A
-    # daemonized service process is reparented to init (PID 1) once its
-    # original forking parent exits, so a genuinely framework-launched
-    # process's own parent command is "/sbin/init" (confirmed on a live
-    # host) -- but that alone is true for both a real production install
-    # and a local install_generated_plugin test-on-hub, since both go
-    # through the identical rc.d start path. Tell them apart by the user
-    # the process runs as instead: a real production install's service
-    # user is provisioned by the host framework and starts with "plugin_";
-    # a developer's own hub test runs as their own account, and still
-    # needs the re-exec -- install.sh installed their dependencies into
-    # .venv, not system/--user site-packages. Skip the re-exec only when
-    # BOTH checks say this is a framework-launched, framework-provisioned
-    # process. Each check defaults to False (preserves the old behavior:
-    # allow the re-exec) if it fails for any reason -- this runs before
-    # LOGGER exists, so there is nowhere safe to surface a warning yet.
-    _is_framework_launch = False
+    # Whether to re-exec used to be decided by *how* this process was
+    # launched and *which account* it runs as (rc.d/init parentage plus a
+    # "plugin_"-prefixed username meant "framework-provisioned production
+    # account, dependencies already available, skip re-exec"). That broke
+    # once a generated plugin's own server_entry.json "runAs" could default
+    # to the authoring tool's own account -- which, while the authoring tool
+    # itself is being developer-tested on a real hub, can itself be
+    # "plugin_"-prefixed, making a local install_generated_plugin
+    # test-on-hub indistinguishable from a true production account by that
+    # heuristic alone. Check the actual thing that matters instead: can
+    # dependencies already be imported without this venv at all. Defaults
+    # to False (preserves the old behavior: allow the re-exec) if the
+    # import fails for any reason -- this runs before LOGGER exists, so
+    # there is nowhere safe to surface a warning yet.
+    _deps_already_available = False
     try:
-        _ppid_command = subprocess.run(
-            ["ps", "-o", "command=", "-p", str(os.getppid())], capture_output=True, text=True
-        ).stdout.strip()
-        _is_framework_launch = _ppid_command.startswith("/sbin/init")
+        import udi_interface  # noqa: F401 -- probe only; the real import below reuses this
+        _deps_already_available = True
     except Exception:
         pass
 
-    _is_framework_user = False
-    try:
-        import getpass
-        _is_framework_user = getpass.getuser().startswith("plugin_")
-    except Exception:
-        pass
-
-    if not (_is_framework_launch and _is_framework_user):
+    if not _deps_already_available:
         # argv[0] is the literal "python3" here, NOT _VENV_PYTHON -- confirmed
         # against a live host: rc.subr's check_pidfile()/_find_processes()
         # (/etc/rc.subr) matches the running process's own argv[0] against the

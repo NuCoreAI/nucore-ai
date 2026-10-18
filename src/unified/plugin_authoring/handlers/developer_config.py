@@ -1,15 +1,13 @@
 """``configure_developer`` -- one-time (or update) commissioning of the
 developer whose email/name ``generate_plugin_scaffold`` stamps into every
-generated ``server_entry.json``'s ``developer``/``author`` fields, and
-whose optional ``default_run_as`` becomes that plugin's ``runAs`` fallback
-(see ``_DEFAULT_RUN_AS`` in ``handlers/scaffold.py`` for the ultimate
-fallback when this isn't set either). The provided email must match this
-session's own authenticated identity (``EisyUIContext.get_user_id()``,
-threaded through as *get_user_id*) when one is known -- refuses outright
-on an actual mismatch. When no authenticated identity is available at all
-(e.g. the CLI/REPL path, which has no context-message mechanism to ever
-populate one), commissioning is still allowed: the check only ever blocks
-a confirmed mismatch, never the absence of an identity to compare against.
+generated ``server_entry.json``'s ``developer``/``author`` fields. The
+provided email must match this session's own authenticated identity
+(``EisyUIContext.get_user_id()``, threaded through as *get_user_id*) when
+one is known -- refuses outright on an actual mismatch. When no
+authenticated identity is available at all (e.g. the CLI/REPL path, which
+has no context-message mechanism to ever populate one), commissioning is
+still allowed: the check only ever blocks a confirmed mismatch, never the
+absence of an identity to compare against.
 
 Also ``get_developer_config`` -- the read-only counterpart a caller should
 check *first*, every time, before ever calling ``configure_developer``.
@@ -45,7 +43,6 @@ async def configure_developer(
     email = (args.get("email") or "").strip()
     name = (args.get("name") or "").strip()
     github_url = (args.get("github_url") or "").strip() or None
-    default_run_as = (args.get("default_run_as") or "").strip() or None
 
     if not email or "@" not in email:
         return {"error": "a valid email is required"}
@@ -61,7 +58,7 @@ async def configure_developer(
 
     try:
         config = developer_config.write_developer_config(
-            plugin_output_root, email=email, name=name, github_url=github_url, default_run_as=default_run_as
+            plugin_output_root, email=email, name=name, github_url=github_url
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -72,10 +69,10 @@ async def configure_developer(
 async def get_developer_config(
     nucore_interface: NuCoreInterface, args: dict[str, Any], *, plugin_output_root: str
 ) -> Any:
-    """Read-only: the ``{email, name, github_url?, default_run_as?}`` already
-    on file for this *plugin_output_root*, or ``{"configured": False}`` if
-    none has been commissioned yet. Never writes anything -- call this
-    before ``configure_developer``, not instead of checking it."""
+    """Read-only: the ``{email, name, github_url?}`` already on file for
+    this *plugin_output_root*, or ``{"configured": False}`` if none has
+    been commissioned yet. Never writes anything -- call this before
+    ``configure_developer``, not instead of checking it."""
     config = developer_config.load_developer_config(plugin_output_root)
     if config is None:
         return {"configured": False}

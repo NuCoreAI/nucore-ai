@@ -16,10 +16,6 @@
       "github_url": {
         "type": "string",
         "description": "Optional public GitHub repository URL for this developer. Omit if they don't have one or it isn't public."
-      },
-      "default_run_as": {
-        "type": "string",
-        "description": "Optional OS account every generated plugin's server_entry.json uses as its 'runAs' fallback, unless a given plugin's own server_entry.runAs overrides it. Omit to keep the tool's own built-in default ('admin')."
       }
     }
   }

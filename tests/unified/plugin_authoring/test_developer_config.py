@@ -36,22 +36,6 @@ def test_write_without_github_url_omits_the_key(tmp_path):
     assert "github_url" not in loaded
 
 
-def test_write_with_default_run_as_round_trips(tmp_path):
-    written = developer_config.write_developer_config(
-        str(tmp_path), email="dev@example.com", name="Dev Name", default_run_as="polyglot"
-    )
-    assert written["default_run_as"] == "polyglot"
-    loaded = developer_config.load_developer_config(str(tmp_path))
-    assert loaded["default_run_as"] == "polyglot"
-
-
-def test_write_without_default_run_as_omits_the_key(tmp_path):
-    written = developer_config.write_developer_config(str(tmp_path), email="dev@example.com", name="Dev Name")
-    assert "default_run_as" not in written
-    loaded = developer_config.load_developer_config(str(tmp_path))
-    assert "default_run_as" not in loaded
-
-
 def test_load_ignores_malformed_json(tmp_path):
     (tmp_path / developer_config.DEVELOPER_CONFIG_FILENAME).write_text("{not valid json")
     assert developer_config.load_developer_config(str(tmp_path)) is None
@@ -103,18 +87,6 @@ async def test_configure_developer_allows_no_authenticated_user_at_all(tmp_path)
     )
     assert result["configured"] is True
     assert developer_config.load_developer_config(str(tmp_path))["email"] == "dev@example.com"
-
-
-@pytest.mark.asyncio
-async def test_configure_developer_passes_through_default_run_as(tmp_path):
-    result = await configure_developer(
-        None,
-        {"email": "dev@example.com", "name": "Dev", "default_run_as": "polyglot"},
-        plugin_output_root=str(tmp_path),
-    )
-    assert result["configured"] is True
-    assert result["default_run_as"] == "polyglot"
-    assert developer_config.load_developer_config(str(tmp_path))["default_run_as"] == "polyglot"
 
 
 @pytest.mark.asyncio

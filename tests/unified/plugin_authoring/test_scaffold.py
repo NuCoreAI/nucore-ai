@@ -12,6 +12,7 @@ import pytest
 
 from unified.plugin_authoring import developer_config
 from unified.plugin_authoring.evidence_ledger import EvidenceLedger
+from unified.plugin_authoring.handlers import scaffold
 from unified.plugin_authoring.handlers.scaffold import generate_plugin_scaffold
 from unified.plugin_authoring.secret_guard import OAUTH_PLACEHOLDER
 
@@ -101,13 +102,10 @@ async def _generate(
     secret_values=None,
     get_user_id=None,
     skip_developer_config=False,
-    default_run_as=None,
     nucore_interface=None,
 ):
     if not skip_developer_config:
-        developer_config.write_developer_config(
-            str(tmp_path), email=DEVELOPER_EMAIL, name=DEVELOPER_NAME, default_run_as=default_run_as
-        )
+        developer_config.write_developer_config(str(tmp_path), email=DEVELOPER_EMAIL, name=DEVELOPER_NAME)
     return await generate_plugin_scaffold(
         nucore_interface if nucore_interface is not None else _FakeNuCoreInterface(),
         args,
@@ -881,14 +879,15 @@ async def test_controller_node_name_is_never_the_bare_word_controller(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path):
+async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path, monkeypatch):
+    monkeypatch.setattr(scaffold.getpass, "getuser", lambda: "fake_handler_account")
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
     assert entry["name"] == "AcmePool"
     assert entry["type"] == "python3"
     assert entry["executable"] == "main.py"
-    assert entry["runAs"] == "admin"
+    assert entry["runAs"] == "fake_handler_account"
     assert entry["status"] == "active"
     assert entry["purchaseOptions"] == []
     assert entry["install"] == "install.sh"
@@ -899,17 +898,22 @@ async def test_server_entry_omits_optional_keys_when_not_applicable(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_entry_runas_uses_developer_configs_default_run_as(tmp_path):
-    result = await _generate(tmp_path, _base_args(), default_run_as="polyglot")
+async def test_server_entry_runas_falls_back_to_admin_if_os_user_lookup_fails(tmp_path, monkeypatch):
+    def _raise():
+        raise OSError("no such user")
+
+    monkeypatch.setattr(scaffold.getpass, "getuser", _raise)
+    result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
-    assert entry["runAs"] == "polyglot"
+    assert entry["runAs"] == scaffold._DEFAULT_RUN_AS
 
 
 @pytest.mark.asyncio
-async def test_server_entry_runas_explicit_value_overrides_developer_default(tmp_path):
+async def test_server_entry_runas_explicit_value_overrides_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(scaffold.getpass, "getuser", lambda: "fake_handler_account")
     args = _base_args(server_entry={"name": "AcmePool", "runAs": "custom_user"})
-    result = await _generate(tmp_path, args, default_run_as="polyglot")
+    result = await _generate(tmp_path, args)
     assert "error" not in result
     entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
     assert entry["runAs"] == "custom_user"
@@ -1310,7 +1314,12 @@ async def test_main_py_re_execs_into_venv_before_importing_udi_interface(tmp_pat
     source = (tmp_path / "acme_pool" / "main.py").read_text()
     assert 'os.path.join(_PLUGIN_DIR, ".venv", "bin", "python3")' in source
     assert "os.execv(_VENV_PYTHON" in source
-    assert source.index("os.execv") < source.index("import udi_interface")
+    # The re-exec decision itself probes "import udi_interface" (before
+    # execv) to see whether a .venv is even needed -- but the real,
+    # unconditional import the rest of the file uses still comes after
+    # that decision; a failed probe discards the whole process via execv
+    # before ever reaching it.
+    assert source.index("os.execv") < source.rindex("import udi_interface")
 
 
 @pytest.mark.asyncio
@@ -1332,34 +1341,28 @@ async def test_main_py_venv_reexec_uses_bare_python3_as_argv0(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_main_py_venv_reexec_skips_when_launched_by_the_real_host_framework(tmp_path):
-    # A plugin process the real host's rc.d/init-managed service framework
-    # is running gets reparented to init (PID 1) once its original forking
-    # parent exits, so its own parent command is "/sbin/init" -- true for
-    # both a real production install and a local install_generated_plugin
-    # test-on-hub, so parentage alone can't tell them apart. The .venv
-    # re-exec is only skipped when BOTH that parentage check AND a
-    # framework-provisioned username (starting "plugin_") agree -- a
-    # developer's own hub test, despite matching parentage, still runs as
-    # their own user, so it still re-execs into .venv.
+async def test_main_py_venv_reexec_skips_when_deps_already_importable(tmp_path):
+    # Whether to re-exec is decided by directly probing whether dependencies
+    # (udi_interface) are already importable without entering .venv at all
+    # -- not by inferring it indirectly from launch parentage or a
+    # "plugin_"-prefixed username, since a generated plugin's own runAs can
+    # now default to the authoring tool's own account, which can itself be
+    # "plugin_"-prefixed while the tool is developer-tested on a real hub.
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "main.py").read_text()
-    assert "os.getppid()" in source
-    assert '"/sbin/init"' in source
-    assert "getpass.getuser()" in source
-    assert '"plugin_"' in source
+    assert "import udi_interface" in source
     # Pins the fix itself, not just token presence -- a regression back to
-    # gating on _is_framework_launch alone would still pass every other
-    # assertion in this file.
-    assert "if not (_is_framework_launch and _is_framework_user):" in source
+    # an unconditional re-exec would still pass a bare substring check.
+    assert "if not _deps_already_available:" in source
+    assert "_is_framework_launch" not in source
+    assert "_is_framework_user" not in source
     venv_guard_start = source.index("if sys.prefix == sys.base_prefix")
-    ps_check = source.index("os.getppid()")
-    user_check = source.index("getpass.getuser()")
+    probe = source.index("import udi_interface")
     execv_call = source.index("os.execv(_VENV_PYTHON")
-    # The ps/init and username checks live inside the existing .venv-exists
-    # guard, and both run before the (now further-nested) os.execv call.
-    assert venv_guard_start < ps_check < user_check < execv_call
+    # The import probe lives inside the existing .venv-exists guard, and
+    # runs before the (now further-nested) os.execv call.
+    assert venv_guard_start < probe < execv_call
 
 
 @pytest.mark.asyncio
@@ -1378,32 +1381,18 @@ async def test_main_py_venv_reexec_prepends_venv_bin_to_path(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_main_py_venv_reexec_user_check_is_defensively_wrapped(tmp_path):
-    # Same reasoning as the ppid check -- runs before udi_interface.LOGGER
-    # exists, so an unexpected failure (e.g. getpass.getuser() raising on an
-    # unusual system) must degrade silently to the old behavior (allow the
-    # re-exec), not crash the plugin before it starts.
+async def test_main_py_venv_reexec_probe_is_defensively_wrapped(tmp_path):
+    # Runs before udi_interface.LOGGER exists -- any failure importing
+    # udi_interface here (not just ModuleNotFoundError) must degrade
+    # silently to the old behavior (allow the re-exec), not crash the
+    # plugin before it starts.
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "main.py").read_text()
-    user_check = source.index("getpass.getuser()")
-    except_clauses = [i for i in range(len(source)) if source.startswith("except Exception:", i)]
-    execv_call = source.index("os.execv(_VENV_PYTHON")
-    assert any(user_check < i < execv_call for i in except_clauses)
-
-
-@pytest.mark.asyncio
-async def test_main_py_venv_reexec_ps_check_is_defensively_wrapped(tmp_path):
-    # Runs before udi_interface.LOGGER exists -- an unexpected failure (e.g.
-    # ps missing on an unusual system) must degrade silently to the old
-    # behavior (allow the re-exec), not crash the plugin before it starts.
-    result = await _generate(tmp_path, _base_args())
-    assert "error" not in result
-    source = (tmp_path / "acme_pool" / "main.py").read_text()
-    subprocess_call = source.index("subprocess.run(")
+    probe_import = source.index("import udi_interface")
     except_clause = source.index("except Exception:")
     execv_call = source.index("os.execv(_VENV_PYTHON")
-    assert subprocess_call < except_clause < execv_call
+    assert probe_import < except_clause < execv_call
 
 
 @pytest.mark.asyncio
