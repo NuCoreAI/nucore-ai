@@ -131,6 +131,7 @@ from nucore import NuCoreInterface
 from .. import developer_config, plugin_skeleton
 from ..evidence_ledger import EvidenceLedger, merge_sources, parse_sources_md, render_sources_md
 from ..path_confinement import confine_path
+from ..permissions_refresh import refresh_permissions_after_write
 from ..secret_guard import OAUTH_PLACEHOLDER, find_secret
 from . import profile_authoring
 
@@ -1235,10 +1236,15 @@ async def generate_plugin_scaffold(
         (plugin_dir / _DATA_DIRNAME).mkdir(parents=True, exist_ok=True)
         extra_dirs.append(f"{_DATA_DIRNAME}/")
 
-    return {
+    permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+
+    result = {
         "location": location,
         "absolute_path": str(plugin_dir),
         "files_written": sorted(str(p.relative_to(plugin_dir)) for p in candidate_files)
         + [_CONTEXT_FILENAME, _SOURCES_FILENAME]
         + extra_dirs,
     }
+    if permissions_refresh_error is not None:
+        result["permissions_refresh_error"] = permissions_refresh_error
+    return result

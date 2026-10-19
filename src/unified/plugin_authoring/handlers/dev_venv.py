@@ -44,6 +44,7 @@ from nucore import NuCoreInterface
 
 from ...handlers import shell
 from ..path_confinement import confine_path
+from ..permissions_refresh import refresh_permissions_after_write
 
 _REQUIREMENTS_FILENAME = "requirements.txt"
 _VENV_DIRNAME = ".venv"
@@ -99,10 +100,15 @@ async def setup_dev_venv(
             "stderr": result.get("stderr"),
         }
 
-    return {
+    permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+
+    venv_result = {
         "location": location,
         "venv_created": True,
         "venv_path": str(plugin_dir / _VENV_DIRNAME),
         "stdout": result.get("stdout"),
         "stderr": result.get("stderr"),
     }
+    if permissions_refresh_error is not None:
+        venv_result["permissions_refresh_error"] = permissions_refresh_error
+    return venv_result

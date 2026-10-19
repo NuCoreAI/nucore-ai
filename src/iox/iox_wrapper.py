@@ -2263,6 +2263,9 @@ class IoXWrapper(NuCoreInterface):
     async def get_core_services_status(self) -> dict[str, Any] | None:
         return await self.diagnostics.get_core_services_status()
 
+    async def refresh_eisy_ai_permissions(self) -> dict[str, Any] | None:
+        return await self.diagnostics.refresh_eisy_ai_permissions()
+
     async def get_device_family(self, device_id: str) -> str | None:
         return await self.diagnostics.get_device_family(device_id=device_id)
 

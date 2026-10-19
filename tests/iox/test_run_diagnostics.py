@@ -217,6 +217,18 @@ async def test_wrapper_get_core_services_status_delegates_to_diagnostics():
 
 
 @pytest.mark.asyncio
+async def test_wrapper_refresh_eisy_ai_permissions_delegates_to_diagnostics():
+    wrapper = _bare_wrapper_with_diagnostics()
+
+    async def fake():
+        return {"successful": True}
+
+    wrapper.diagnostics.refresh_eisy_ai_permissions = fake
+
+    assert await wrapper.refresh_eisy_ai_permissions() == {"successful": True}
+
+
+@pytest.mark.asyncio
 async def test_wrapper_get_device_family_delegates_to_diagnostics_with_device_id():
     wrapper = _bare_wrapper_with_diagnostics()
 

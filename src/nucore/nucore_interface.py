@@ -875,6 +875,15 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the get_core_services_status method.")
 
+    async def refresh_eisy_ai_permissions(self) -> dict[str, Any] | None:
+        """
+        Triggers the eisy-ai permissions-refresh service so freshly-written
+        or freshly-regenerated plugin files pick up correct OS ownership/
+        permissions. No params.
+        :return: The hub's response, or {"error": ...}.
+        """
+        raise NotImplementedError("Subclasses must implement the refresh_eisy_ai_permissions method.")
+
     async def get_device_family(self, device_id: str) -> str | None:
         """
         Returns a device's real protocol family: insteon, z-wave, zigbee,

@@ -30,6 +30,7 @@ from typing import Any
 
 from nucore import NuCoreInterface
 
+from ..permissions_refresh import refresh_permissions_after_write
 from .install import _is_successful, _read_server_entry
 
 _RC_D_DIR = Path("/usr/local/etc/rc.d")
@@ -105,9 +106,14 @@ async def setup_vscode_debug_config(
     }
     launch_json_path.write_text(json.dumps(launch_config, indent=4) + "\n", encoding="utf-8")
 
-    return {
+    permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+
+    result = {
         "location": location,
         "profile_num": profile_num,
         "iox_env_path": str(iox_env_path),
         "launch_json_path": str(launch_json_path),
     }
+    if permissions_refresh_error is not None:
+        result["permissions_refresh_error"] = permissions_refresh_error
+    return result

@@ -13,6 +13,11 @@ from unified.plugin_authoring.handlers import dev_venv
 from unified.plugin_authoring.handlers.dev_venv import setup_dev_venv
 
 
+class _FakeNuCoreInterface:
+    async def refresh_eisy_ai_permissions(self):
+        return {"successful": True}
+
+
 def _write_requirements(plugin_dir):
     plugin_dir.mkdir(parents=True, exist_ok=True)
     (plugin_dir / "requirements.txt").write_text("udi_interface>=3.0.57\n")
@@ -60,7 +65,7 @@ async def test_success_creates_venv_and_returns_its_path(tmp_path, monkeypatch):
 
     monkeypatch.setattr(dev_venv.shell, "run_shell_command", fake_run_shell_command)
 
-    result = await setup_dev_venv(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await setup_dev_venv(_FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
 
     assert result["venv_created"] is True
     assert result["venv_path"] == str(plugin_dir / ".venv")
@@ -145,7 +150,7 @@ async def test_broken_venv_missing_python3_is_rebuilt(tmp_path, monkeypatch):
 
     monkeypatch.setattr(dev_venv.shell, "run_shell_command", fake_run_shell_command)
 
-    result = await setup_dev_venv(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await setup_dev_venv(_FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
 
     assert result["venv_created"] is True
     assert len(calls) == 1
@@ -167,7 +172,7 @@ async def test_force_rebuilds_an_already_working_venv(tmp_path, monkeypatch):
     monkeypatch.setattr(dev_venv.shell, "run_shell_command", fake_run_shell_command)
 
     result = await setup_dev_venv(
-        None, {"location": "acme_pool", "force": True}, plugin_output_root=str(tmp_path)
+        _FakeNuCoreInterface(), {"location": "acme_pool", "force": True}, plugin_output_root=str(tmp_path)
     )
 
     assert result["venv_created"] is True

@@ -433,6 +433,24 @@ class IoXDiagnostics:
             logger.error(f"Failed to get core services status: {e}")
             return {"error": f"Failed to get core services status: {e}"}
 
+    async def refresh_eisy_ai_permissions(self) -> dict[str, Any]:
+        """
+        Triggers the eisy-ai permissions-refresh service so freshly-written
+        or freshly-regenerated plugin files pick up correct OS ownership/
+        permissions.
+        :return: The hub's raw JSON response, or {"error": ...}
+        """
+        try:
+            # /rest/udx.sys.ops/eisyai.ops/refresh_permissions
+            response = await self._iox_wrapper.post("/api/udx/rest/udx.sys.ops/eisyai.ops/refresh_permissions", "e=mc2")
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to refresh eisy-ai permissions: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to refresh eisy-ai permissions: {response.status_code if response else 'No response'}"}
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to refresh eisy-ai permissions: {e}")
+            return {"error": f"Failed to refresh eisy-ai permissions: {e}"}
+
     async def get_plugin_services_status(self) -> dict[str, Any]:
         """
         Get the status of plugin services. Not model-facing --

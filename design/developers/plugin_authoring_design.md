@@ -363,3 +363,25 @@ Stage 6's device detection.
     matters instead: attempt `import udi_interface` without entering `.venv`; re-exec only if
     that fails. Self-contained, doesn't depend on any account-naming convention — kept even after
     the `runAs` default reverted, since it's strictly more direct than the heuristic it replaced.
+12. **Permissions refresh after every batch of plugin-file writes** — a separate hub-side service
+    fixes up OS file/ownership permissions for generated eisy-ai plugin files, but nothing told it
+    when a batch of files had just changed, so a freshly generated or regenerated plugin could
+    fail to run until someone manually fixed permissions. Fixed with a new `NuCoreInterface`
+    method, `refresh_eisy_ai_permissions` (`POST /api/udx/rest/udx.sys.ops/eisyai.ops/
+    refresh_permissions`, same three-layer `NuCoreInterface` -> `IoXWrapper` -> `IoXDiagnostics`
+    shape, and the same placeholder `"e=mc2"` body, as the existing `udx.sys.ops` calls), called
+    once -- never once per file -- after each of five file-write batches finishes:
+    `generate_plugin_scaffold`, `setup_vscode_debug_config` (writes both `.iox_env` and
+    `.vscode/launch.json` in one call), `regenerate_plugin_boilerplate`, and `setup_dev_venv`
+    (its `.venv`/installed-dependencies tree is written via a shell command, not
+    `Path.write_text`, which is why it was easy to miss on a first pass). A shared helper,
+    `permissions_refresh.refresh_permissions_after_write`, normalizes the call so each of the
+    four handler files stays a two-line insert. Non-fatal throughout, same precedent as
+    `install_generated_plugin`'s automatic `setup_dev_venv` call: the files are already on disk
+    by the time this runs, so a hub-side failure is folded into the result dict as
+    `permissions_refresh_error` rather than treated as the write itself having failed.
+    Deliberately *not* wired into `handlers/install.py`'s `server_entry.json` nsid rewrites (no
+    new file is created there -- the file's permissions were already set when
+    `generate_plugin_scaffold` first wrote it) or `setup_github_repo`'s `.gitignore`/`.git`
+    writes (version-control metadata the hub never executes, unlike a broken `.venv` or a
+    missing-executable-bit `install.sh`).

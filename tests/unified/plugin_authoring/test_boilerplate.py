@@ -58,6 +58,9 @@ class _FakeNuCoreInterface:
     async def get_device_mac_address(self):
         return FAKE_MAC_ADDRESS
 
+    async def refresh_eisy_ai_permissions(self):
+        return {"successful": True}
+
 
 def _ledger_with_evidence() -> EvidenceLedger:
     ledger = EvidenceLedger()
@@ -139,7 +142,9 @@ async def test_regenerates_boilerplate_files_only(tmp_path):
     server_entry_before = (plugin_dir / "server_entry.json").read_text()
     readme_before = (plugin_dir / "README.md").read_text()
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
 
     assert result == {
         "location": "acme_pool",
@@ -162,7 +167,9 @@ async def test_regeneration_rebuilds_controller_node_name_from_stored_server_ent
     assert "error" not in gen_result
     plugin_dir = tmp_path / "acme_pool"
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
     assert "error" not in result
 
     plugin_py = (plugin_dir / "plugin.py").read_text()
@@ -177,7 +184,9 @@ async def test_regeneration_preserves_the_controller_st_driver_and_conn_status(t
     assert "error" not in gen_result
     plugin_dir = tmp_path / "acme_pool"
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
     assert "error" not in result
 
     plugin_py = (plugin_dir / "plugin.py").read_text()
@@ -195,7 +204,9 @@ async def test_regeneration_rebuilds_the_commands_dispatch_dict(tmp_path):
     assert "error" not in gen_result
     plugin_dir = tmp_path / "acme_pool"
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
     assert "error" not in result
 
     plugin_py = (plugin_dir / "plugin.py").read_text()
@@ -223,7 +234,9 @@ async def test_authorize_and_ai_enabled_are_preserved_across_refresh(tmp_path):
     assert "error" not in gen_result
     plugin_dir = tmp_path / "acme_pool"
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
     assert "error" not in result
 
     plugin_py = (plugin_dir / "plugin.py").read_text()
@@ -250,7 +263,9 @@ async def test_webhook_enabled_preserved_across_refresh(tmp_path):
     assert "error" not in gen_result
     plugin_dir = tmp_path / "acme_pool"
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
     assert "error" not in result
 
     plugin_py = (plugin_dir / "plugin.py").read_text()
@@ -276,7 +291,9 @@ async def test_custom_typed_params_preserved_across_refresh(tmp_path):
     assert "error" not in gen_result
     plugin_dir = tmp_path / "acme_pool"
 
-    result = await regenerate_plugin_boilerplate(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
     assert "error" not in result
 
     plugin_py = (plugin_dir / "plugin.py").read_text()

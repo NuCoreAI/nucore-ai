@@ -73,6 +73,9 @@ class _FakeNuCoreInterface:
     async def get_device_mac_address(self):
         return self._mac_address
 
+    async def refresh_eisy_ai_permissions(self):
+        return {"successful": True}
+
 
 def _ledger_with_evidence() -> EvidenceLedger:
     ledger = EvidenceLedger()

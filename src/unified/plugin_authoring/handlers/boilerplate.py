@@ -29,6 +29,7 @@ from nucore import NuCoreInterface
 
 from .. import plugin_skeleton
 from ..path_confinement import confine_path
+from ..permissions_refresh import refresh_permissions_after_write
 from .scaffold import (
     _DEFAULT_CONTROLLER_CLASS,
     _DEFAULT_CONTROLLER_MODULE,
@@ -182,7 +183,12 @@ async def regenerate_plugin_boilerplate(
     (plugin_dir / _VERSION_FILENAME).write_text(version_py, encoding="utf-8")
     (plugin_dir / _INSTALL_FILENAME).write_text(_INSTALL_SCRIPT_CONTENT, encoding="utf-8")
 
-    return {
+    permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+
+    result = {
         "location": location,
         "regenerated": [_PLUGIN_FILENAME, _MAIN_FILENAME, _VERSION_FILENAME, _INSTALL_FILENAME],
     }
+    if permissions_refresh_error is not None:
+        result["permissions_refresh_error"] = permissions_refresh_error
+    return result

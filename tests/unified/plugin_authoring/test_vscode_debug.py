@@ -25,6 +25,9 @@ class FakeBackend:
     async def get_installed_plugins(self):
         return self.installed_response
 
+    async def refresh_eisy_ai_permissions(self):
+        return {"successful": True}
+
 
 def _write_server_entry(plugin_dir, entry=None):
     plugin_dir.mkdir(parents=True, exist_ok=True)
