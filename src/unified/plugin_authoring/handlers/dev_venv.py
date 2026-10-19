@@ -1,14 +1,19 @@
 """``setup_dev_venv`` -- local/dev-testing only: creates a per-plugin
-``.venv`` and installs ``requirements.txt`` into it. Never runs as a side
-effect of ``generate_plugin_scaffold`` -- that tool only ever writes local
-files, never touches dependencies -- but ``install_generated_plugin``
-*does* now call this automatically, first thing, before it touches the
-real hub (see that module's own docstring): a developer no longer has to
-remember this separate call just to prepare for an install. A real
-production install still never ends up with a ``.venv`` it didn't ask
-for, because production never goes through this function at all --
-``install_generated_plugin`` calling it is still only ever exercising the
-local-dev path, the same path a developer calling it directly would have.
+``.venv`` and then installs ``requirements.txt`` into it by running the
+plugin's own generated ``install.sh`` (see ``handlers/scaffold.py``'s
+``_INSTALL_SCRIPT_CONTENT``), rather than re-implementing the install step
+here -- that way dev-testing and the real hub's own post-install run of
+``install.sh`` always share one definition of "how to install this
+plugin's deps". Never runs as a side effect of ``generate_plugin_scaffold``
+-- that tool only ever writes local files, never touches dependencies --
+but ``install_generated_plugin`` *does* now call this automatically, first
+thing, before it touches the real hub (see that module's own docstring): a
+developer no longer has to remember this separate call just to prepare for
+an install. A real production install still never ends up with a ``.venv``
+it didn't ask for, because production never goes through this function at
+all -- ``install_generated_plugin`` calling it is still only ever
+exercising the local-dev path, the same path a developer calling it
+directly would have.
 
 Also call this directly (still) before running a generated plugin's own
 ``tests/`` via ``run_shell_command`` (e.g.
@@ -47,6 +52,7 @@ from ..path_confinement import confine_path
 from ..permissions_refresh import refresh_permissions_after_write
 
 _REQUIREMENTS_FILENAME = "requirements.txt"
+_INSTALL_SCRIPT_FILENAME = "install.sh"
 _VENV_DIRNAME = ".venv"
 _VENV_TIMEOUT_S = 120  # shell.py's own _MAX_TIMEOUT_S ceiling -- venv creation plus installing udi_interface and friends can take a while.
 
@@ -72,6 +78,12 @@ async def setup_dev_venv(
             "error": f"no {_REQUIREMENTS_FILENAME} found at '{location}' -- call generate_plugin_scaffold first"
         }
 
+    install_script_path = plugin_dir / _INSTALL_SCRIPT_FILENAME
+    if not install_script_path.is_file():
+        return {
+            "error": f"no {_INSTALL_SCRIPT_FILENAME} found at '{location}' -- call generate_plugin_scaffold first"
+        }
+
     venv_python = plugin_dir / _VENV_DIRNAME / "bin" / "python3"
     force = bool(args.get("force"))
     if not force and venv_python.is_file() and os.access(venv_python, os.X_OK):
@@ -84,7 +96,7 @@ async def setup_dev_venv(
 
     command = (
         f"python3 -m venv --system-site-packages --clear {_VENV_DIRNAME} && "
-        f"{_VENV_DIRNAME}/bin/pip3 install -r {_REQUIREMENTS_FILENAME}"
+        f"./{_INSTALL_SCRIPT_FILENAME}"
     )
     result = await shell.run_shell_command(
         nucore_interface, {"command": command, "cwd": str(plugin_dir), "timeout_s": _VENV_TIMEOUT_S}

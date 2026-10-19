@@ -1,8 +1,9 @@
 """setup_dev_venv -- local/dev-testing only: creates/resets a per-plugin
-.venv and installs requirements.txt into it. shell.run_shell_command's
-actual subprocess execution is monkeypatched throughout -- genuinely
-creating a venv is slow and not what this unit test is checking; the
-handler's own validation/plumbing is.
+.venv and then runs the plugin's own generated install.sh to install
+requirements.txt into it. shell.run_shell_command's actual subprocess
+execution is monkeypatched throughout -- genuinely creating a venv is
+slow and not what this unit test is checking; the handler's own
+validation/plumbing is.
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ class _FakeNuCoreInterface:
 def _write_requirements(plugin_dir):
     plugin_dir.mkdir(parents=True, exist_ok=True)
     (plugin_dir / "requirements.txt").write_text("udi_interface>=3.0.57\n")
+    install_script = plugin_dir / "install.sh"
+    install_script.write_text("#!/usr/bin/env bash\n.venv/bin/pip3 install -r requirements.txt\n")
+    install_script.chmod(0o755)
 
 
 @pytest.mark.asyncio
@@ -50,6 +54,17 @@ async def test_missing_requirements_txt(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_missing_install_script(tmp_path):
+    plugin_dir = tmp_path / "acme_pool"
+    plugin_dir.mkdir()
+    (plugin_dir / "requirements.txt").write_text("udi_interface>=3.0.57\n")
+    result = await setup_dev_venv(None, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+    assert "error" in result
+    assert "install.sh" in result["error"]
+    assert "generate_plugin_scaffold" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_success_creates_venv_and_returns_its_path(tmp_path, monkeypatch):
     plugin_dir = tmp_path / "acme_pool"
     _write_requirements(plugin_dir)
@@ -72,7 +87,7 @@ async def test_success_creates_venv_and_returns_its_path(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["cwd"] == str(plugin_dir)
     assert ".venv" in calls[0]["command"]
-    assert "requirements.txt" in calls[0]["command"]
+    assert "install.sh" in calls[0]["command"]
 
 
 @pytest.mark.asyncio
