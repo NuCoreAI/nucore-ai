@@ -94,9 +94,19 @@ async def setup_dev_venv(
             "venv_path": str(plugin_dir / _VENV_DIRNAME),
         }
 
+    # --system-site-packages stays: FreeBSD installs many Python packages via
+    # pkg(8) straight into the base interpreter's system site-packages (e.g.
+    # py311-cffi, py311-pyaudio), and pip must see those as already satisfied
+    # rather than fight the OS over them. PYTHONNOUSERSITE=1 is scoped to just
+    # the install step, though, because --system-site-packages also exposes
+    # the *running process's own* user-site directory (~/.local/lib/...) --
+    # unrelated to FreeBSD pkg entirely -- which let pip treat a dependency as
+    # "already satisfied" by some other, unrelated account's private pip
+    # --user install instead of actually installing requirements.txt's own
+    # declared packages into this .venv.
     command = (
         f"python3 -m venv --system-site-packages --clear {_VENV_DIRNAME} && "
-        f"./{_INSTALL_SCRIPT_FILENAME}"
+        f"PYTHONNOUSERSITE=1 ./{_INSTALL_SCRIPT_FILENAME}"
     )
     result = await shell.run_shell_command(
         nucore_interface, {"command": command, "cwd": str(plugin_dir), "timeout_s": _VENV_TIMEOUT_S}
