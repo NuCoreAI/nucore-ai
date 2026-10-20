@@ -35,12 +35,14 @@ class FakeBackend:
         self.update_response = {"successful": True, "data": {}}
         self.delete_response = {"successful": True}
         self.plugin_ops_response = {"successful": True, "data": {}}
+        self.refresh_response = {"successful": True}
         self.register_calls = []
         self.install_calls = []
         self.plugin_ops_calls = []
         self.store_calls = 0
         self.update_calls = []
         self.delete_calls = []
+        self.refresh_calls = 0
 
     async def register_local_plugin(self, entry):
         self.register_calls.append(entry)
@@ -68,6 +70,10 @@ class FakeBackend:
     async def plugin_ops(self, plugin_id, operation):
         self.plugin_ops_calls.append((plugin_id, operation))
         return self.plugin_ops_response
+
+    async def refresh_eisy_ai_permissions(self):
+        self.refresh_calls += 1
+        return self.refresh_response
 
 
 def _write_server_entry(plugin_dir, entry=None):
@@ -212,6 +218,22 @@ async def test_full_success(tmp_path):
     }
     assert backend.register_calls == [entry]
     assert backend.install_calls == [("local.acme_pool", None)]
+    assert backend.plugin_ops_calls == [(7, "start")]
+    assert backend.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_permissions_refresh_failure_does_not_block_start(tmp_path):
+    """Mirrors the venv_setup_error composition: a refresh failure is
+    surfaced on the result but never stops the actual start attempt."""
+    _write_server_entry(tmp_path / "acme_pool")
+    backend = FakeBackend()
+    backend.refresh_response = {"error": "boom"}
+
+    result = await install_generated_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["started"] is True
+    assert result["pre_start_permissions_refresh_error"] == "boom"
     assert backend.plugin_ops_calls == [(7, "start")]
 
 

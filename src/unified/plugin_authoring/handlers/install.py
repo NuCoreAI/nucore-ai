@@ -24,6 +24,15 @@ local dev-venv setup and the actual remote install are unrelated concerns,
 and the real host's own ``install.sh`` already tolerates no ``.venv``
 being present (see that script's own fallback).
 
+Also refreshes eisy-ai permissions (``..permissions_refresh``) once, right
+before the start call -- a plugin directory whose ``logs/``/``__pycache__``/
+``.pytest_cache`` got written by this backend's own OS account (e.g. a
+prior local test run) would otherwise make the real host's start attempt
+crash with a ``PermissionError`` the moment the plugin's own ``runAs``
+account tries to open one of those files. Same non-fatal composition as
+``venv_setup_error``: surfaced as ``pre_start_permissions_refresh_error``
+on the eventual result, never blocks the start attempt itself.
+
 ``register_local_plugin`` is create-only ("Creates a new local dev
 plugin" -- design/developers/plugin_apis.md). So once a plugin has ever
 been registered, its host-assigned ``nsid`` is persisted back into its own
@@ -47,6 +56,7 @@ from typing import Any
 from nucore import NuCoreInterface
 
 from ..path_confinement import confine_path
+from ..permissions_refresh import refresh_permissions_after_write
 from .dev_venv import setup_dev_venv
 
 _SERVER_ENTRY_FILENAME = "server_entry.json"
@@ -202,6 +212,14 @@ async def install_generated_plugin(
             ),
         }
 
+    # Non-fatal, same composition as venv_setup_error above -- a plugin that
+    # previously had its logs/__pycache__/.pytest_cache written by this
+    # backend's own OS account (e.g. from an earlier test run) would
+    # otherwise crash on start with a PermissionError the moment the real
+    # host tries to open one of those files as the plugin's own runAs
+    # account instead.
+    permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+
     start_response = await nucore_interface.plugin_ops(profile_num, "start")
     if not _is_successful(start_response):
         return {"stage": "start", "error": f"failed to start plugin '{nsid}' (plugin_id {profile_num})"}
@@ -218,6 +236,8 @@ async def install_generated_plugin(
         result["persist_error"] = persist_error
     if venv_setup_error is not None:
         result["venv_setup_error"] = venv_setup_error
+    if permissions_refresh_error is not None:
+        result["pre_start_permissions_refresh_error"] = permissions_refresh_error
     return result
 
 
