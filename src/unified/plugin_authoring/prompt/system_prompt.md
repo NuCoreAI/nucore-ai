@@ -176,6 +176,20 @@ report the end state -- walking through the process is itself useful to either a
     plugin process is up, before `CONFIG`/`CUSTOMPARAMS`/`CONFIGDONE` have ever arrived. Don't write
     it assuming customParams or discovered nodes are already available.
 
+- **Using `nucore-ai` itself as a dependency, for reach beyond the plugin's own nodes.** A plugin
+  isn't limited to `udi_interface`'s own node model. Treat `nucore-ai` as an ordinary third-party
+  API dependency (`server_entry.extra_requirements: ["nucore-ai"]`) whenever the spec needs the
+  plugin to command/control, create/manage programs, read/write variables, or review/subscribe to
+  events for anything already configured on eisy -- not just its own discovered nodes. Its own
+  source is the API reference (`src/nucore/nucore_interface.py`'s `NuCoreInterface`,
+  `src/iox/iox_wrapper.py`'s `IoXWrapper`) -- don't restate its methods here. The one thing
+  specific to using it *from inside a plugin*: construct it in "Polyglot mode" from an override
+  body (most naturally `start()`, once config/customParams have arrived -- see the startup-order
+  bullet above) with `IoXWrapper(json_output=False, prompt_format_type=PromptFormatTypes.DEVICE,
+  poly=self.poly)` (`from iox.iox_wrapper import IoXWrapper`) -- it gets ISY credentials from the
+  plugin's own `poly` handle, no separate `base_url`/`username`/`password`. Set `isyAccess: true`
+  whenever this is used.
+
 - **`handle_webhook`'s contract.** Signature is `handle_webhook(self, data)` -- `data` is delivered
   as a single positional argument (the same convention `shortPoll`/`longPoll` receive their
   poll-type string, not `(self, key, data)`), carrying the inbound call's headers/querystring/body.
@@ -270,7 +284,9 @@ no single tool's schema can state on its own.
    - **Deciding `isyAccess`/`requireEisyui`.** Default both to `false`/no; only set them when the
      spec genuinely calls for it, and ask rather than assume:
      - `isyAccess` -- true if the plugin needs **any** communication with eisy/ISY itself: nodes,
-       programs, commands, properties, etc. -- not just devices narrowly.
+       programs, commands, properties, etc. -- not just devices narrowly. This includes reaching
+       beyond the plugin's own nodes via `nucore-ai` itself as a dependency (see the matching
+       Developer-tools bullet on using it).
      - `requireEisyui` -- true only if this plugin is meaningless outside eisyUI (it has no
        standalone configuration path at all). The developer must know this about their own
        plugin; don't guess it from the device type alone.

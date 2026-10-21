@@ -143,6 +143,16 @@ Deliberately excluded: `buy_plugin`/`delete_plugin`/`list_store_plugins`/`list_p
 that hands back a URL rather than installing anything -- `generate_plugin_scaffold` +
 `install_generated_plugin` are the real local-dev generate/install path).
 
+## Using `nucore-ai` itself as a dependency
+
+A generated plugin isn't limited to its own discovered nodes -- it can add `"nucore-ai"` to
+`server_entry.extra_requirements` and construct `IoXWrapper` (`src/iox/iox_wrapper.py`,
+`poly=self.poly`) from an override body for reach across anything already configured on eisy
+(devices, scenes, programs, variables, events) -- an ordinary third-party-API dependency, not a
+new scaffold mode. See `prompt/system_prompt.md`'s "Using `nucore-ai` itself as a dependency" for
+the one plugin-specific wiring detail; `nucore`/`iox`'s own source is the API reference, not
+duplicated here.
+
 ## Tests
 
 `tests/unified/plugin_authoring/` -- one file per module above
