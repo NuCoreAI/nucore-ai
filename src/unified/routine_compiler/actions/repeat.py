@@ -23,6 +23,13 @@ itself.
 ``while_repeat`` compares a NuCore variable to a plain literal only (not
 another variable) -- the schema's ``WhileConditionVar`` var-vs-var case is a
 rare enough sub-case to skip.
+
+An in-progress repeat is interruptible, same as wait: if the routine's own
+continuously-evaluated condition goes false mid-repeat, the hub cancels it
+and skips every action still to come in that then/else list (see
+design/design.md's entry on this). That's a hub execution-time behavior,
+not something this compiler needs to model -- it only ever produces the
+static {"type": "repeat", ...} dict below.
 """
 
 from __future__ import annotations

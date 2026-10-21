@@ -6,6 +6,13 @@ Grammar:
     device("<DEVICE_ID>").command("<command_id>", params=[param(id="<param_id>", value=<v>, uom=<uom_id>, precision=<precision>), ...])
     wait(duration(hour=<H>, minute=<M>, second=<S>))
     wait(duration(...), random=True)
+
+A pending wait is interruptible: if the routine's own continuously-evaluated
+condition goes false while a wait is still running, the hub cancels it and
+skips every action still to come in that then/else list. That's a hub
+execution-time behavior (see design/design.md's entry on this), not
+something this compiler needs to model -- it only ever produces the static
+{"type": "wait", ...} dict below; there's no "cancel" logic to add here.
 """
 
 from __future__ import annotations

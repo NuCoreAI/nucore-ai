@@ -411,6 +411,24 @@ gained one sentence stating the event-vs-window distinction explicitly, plus a f
 example (multiple known future date-windows, OR'd `between(...)` clauses) -- additive documentation
 only, no compiler or schema change.
 
+## `create_or_update_routine` DSL: documenting wait/repeat interruption semantics
+
+A real hub program-engine behavior had no documentation anywhere in this repo: a continuously-evaluated
+condition (`status()`, `between()`/`weekly_between()`/`weekly_for()`, `routine_is_true()`/
+`routine_is_false()`) interrupts a pending `wait()`, or an in-progress `repeat()`/`every()`/
+`while_repeat()` and everything still to come after it in the same then/else list, the instant the
+condition goes false -- confirmed absent via a repo-wide search for "interrupt"/condition-re-evaluation
+language across `src/` and `design/`, and in `cmd_wait.py`/`repeat.py`'s own docstrings, which describe
+only DSL grammar, not hub runtime behavior. Without this, the model had no way to know that a pattern
+like "notify only if status X has held for N hours" needs nothing beyond
+`if status(...): wait(duration(...)); notify(...)` -- it could easily add unnecessary re-check logic, or
+assert the pattern doesn't work, which `system_prompt.md`'s own CRITICAL RULES section warns against
+doing from general knowledge rather than this system's actual documented behavior. Fix:
+`tool_routine_create_or_update.json` gained one sentence stating the interruption behavior and its
+one-shot-event-condition exception, plus a worked example (notify-after-N-hours-of-continuous-status) --
+additive documentation only, no compiler or schema change, since interruption happens at hub execution
+time and is orthogonal to the shape of the compiled action-tree.
+
 ## CRITICAL RULES: cutting prose that wasn't earning its length
 
 A follow-up live test session (`~/workspace/eisy-ai/logs/nucore.prompt.jsonl`, session `a411443c`,
