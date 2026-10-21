@@ -71,7 +71,19 @@
           "aiTools": {
             "type": "array",
             "description": "Each declared AI tool: {name, description, params?}. Every entry needs a matching '_<name>' helper in override_bodies.",
-            "items": {"type": "object", "required": ["name", "description"]}
+            "items": {
+              "type": "object",
+              "required": ["name", "description"],
+              "properties": {
+                "name": {"type": "string", "description": "Tool name. Must match a '_<name>' helper defined in override_bodies."},
+                "description": {"type": "string", "description": "Shown to the AI deciding when and how to call this tool."},
+                "params": {
+                  "type": "object",
+                  "description": "Optional JSON-Schema-shaped parameter spec for this tool's own arguments, written through verbatim.",
+                  "additionalProperties": true
+                }
+              }
+            }
           },
           "nsdata": {
             "type": "object",
