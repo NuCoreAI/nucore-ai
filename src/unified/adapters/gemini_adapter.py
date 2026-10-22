@@ -69,17 +69,32 @@ def _sanitize_schema_for_gemini(schema: Any) -> Any:
       still carries one of these leftover keys is rejected ("...only
       allowed for OBJECT type"), so they're stripped whenever the resolved
       ``type`` doesn't match.
+
+    A ``properties`` map's own keys are arbitrary tool-parameter names, not
+    schema keywords -- e.g. ``get_property``'s top-level parameter is
+    itself named ``properties``. Recursing into that map with the same
+    dict-wide pass used for real schema nodes misidentifies it as a schema
+    node with no declared ``type`` and silently deletes the
+    ``properties``/``required``/``type``/``items``/``enum``-named entry
+    from it (live bug: this dropped ``get_property``'s whole ``properties``
+    parameter while leaving ``required: ["properties"]`` referencing it,
+    400ing with "required[0]: property is not defined"). Each entry is
+    therefore sanitized as its own schema node directly, bypassing the
+    dict-wide pass below.
     """
     if isinstance(schema, list):
         return [_sanitize_schema_for_gemini(item) for item in schema]
     if not isinstance(schema, dict):
         return schema
 
-    result = {
-        key: _sanitize_schema_for_gemini(value)
-        for key, value in schema.items()
-        if key != "additionalProperties"
-    }
+    result = {}
+    for key, value in schema.items():
+        if key == "additionalProperties":
+            continue
+        if key == "properties" and isinstance(value, dict):
+            result[key] = {name: _sanitize_schema_for_gemini(sub_schema) for name, sub_schema in value.items()}
+        else:
+            result[key] = _sanitize_schema_for_gemini(value)
 
     type_value = result.get("type")
     if isinstance(type_value, list):

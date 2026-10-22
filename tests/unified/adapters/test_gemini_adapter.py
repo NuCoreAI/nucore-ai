@@ -428,6 +428,40 @@ def test_export_tools_keeps_a_string_enum_of_string_values():
     assert protocol_schema["enum"] == ["insteon", "zwave", "zigbee", "matter", "x10"]
 
 
+def test_export_tools_keeps_a_parameter_literally_named_properties():
+    # Live bug: get_property's own top-level parameter is itself named
+    # "properties" ({"type": "object", "required": ["properties"],
+    # "properties": {"properties": {...}}}). The sanitizer's recursion
+    # mistook that "properties" map (keyed by arbitrary parameter names) for
+    # a schema node in its own right, found no "type" key on it, and -- via
+    # the "strip properties/required when the resolved type doesn't match"
+    # logic meant for real schema nodes -- deleted the "properties" entry
+    # from the map outright. That left "required": ["properties"] dangling
+    # with no matching entry, which Gemini 400'd on: "parameters.
+    # required[0]: property is not defined".
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_device_get_property.json")
+
+    tools = GeminiAdapter().export_tools([spec])
+
+    params_schema = tools[0]["functionDeclarations"][0]["parameters"]
+    assert "properties" in params_schema["properties"]
+    for required_name in params_schema.get("required", []):
+        assert required_name in params_schema["properties"], params_schema
+
+
+def test_export_tools_keeps_an_optional_parameter_literally_named_properties():
+    # Same collision as above, but with no "required" entry at all --
+    # get_device_history's "properties" parameter is optional, so the bug
+    # here never 400'd; it silently dropped the whole parameter instead,
+    # making it impossible for Gemini to ever be told to use it.
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_device_get_history.json")
+
+    tools = GeminiAdapter().export_tools([spec])
+
+    params_schema = tools[0]["functionDeclarations"][0]["parameters"]
+    assert "properties" in params_schema["properties"]
+
+
 def test_all_tool_files_export_cleanly_for_gemini_with_no_leftover_type_lists():
     # Guard against a future tool file reintroducing a "type" list, a
     # non-string enum, or an object/array-only key stranded on a
@@ -444,8 +478,18 @@ def test_all_tool_files_export_cleanly_for_gemini_with_no_leftover_type_lists():
                 assert "required" not in node, node
             if node.get("type") != "array":
                 assert "items" not in node, node
-            for value in node.values():
-                _assert_no_type_lists_or_bad_enums(value)
+            for key, value in node.items():
+                # A "properties" map's own keys are arbitrary tool-parameter
+                # names (e.g. get_property's own "properties" parameter),
+                # not schema keywords -- walking into the map itself with
+                # this same node-shaped check would misread a parameter
+                # named "properties"/"required"/etc. as a leftover keyword.
+                # Only its *values* are schema nodes.
+                if key == "properties" and isinstance(value, dict):
+                    for sub_schema in value.values():
+                        _assert_no_type_lists_or_bad_enums(sub_schema)
+                else:
+                    _assert_no_type_lists_or_bad_enums(value)
         elif isinstance(node, list):
             for item in node:
                 _assert_no_type_lists_or_bad_enums(item)
