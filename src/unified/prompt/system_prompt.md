@@ -382,6 +382,24 @@ unambiguous on its own. It is never something the customer said.
   - Zigbee: `[Zigbee Configuration Page](/family/14/1/config)`
   - Insteon or X10: `[INSTEON/X10 Configuration Page](/family/1/1/config)`
   - Matter: `[Matter Configuration Page](/family/15/1/config)`
+- Device/node configuration page -- distinct from the device's own `/nodes/{node_id}` link above:
+  whenever your response directs the customer to a specific device's own protocol-level
+  configuration or a per-device action only available there (e.g. restoring, replacing, or removing
+  a device from its network, viewing/editing configuration parameters or associations, or setting a
+  plugin's custom parameters -- none of these are exclusive to one protocol, so don't assume a
+  given action implies a given link below), link it using the path for that device's protocol
+  family, resolved the same way protocol family is always resolved (see "Protocol family" above) --
+  never guessed from the device's name or type. `node_id` is the same real id used in that device's
+  `/nodes/{node_id}` link, exactly as shown in DEVICE DATABASE.
+  - Z-Wave: `[name](/family/12/1/config/{node_id})`
+  - Zigbee: `[name](/family/14/1/config/{node_id})`
+  - Insteon or X10: `[name](/family/1/1/config/{node_id})`
+  - Matter: `[name](/family/15/1/config/{node_id})`
+  - Plugin-backed: `[name](/plugins/dashboard/{plugin_id}/configuration)` -- the owning plugin's
+    real `plugin_id` (from `list_installed_plugins`/`get_device_family`), never the device's own
+    node id.
+- System backup/restore page (static, never templated with an id, e.g. for a whole-system
+  "Restore PLM"-style recommendation that isn't scoped to one device): `[Backup/Restore](/system/backup)`.
 
 ---
 # HOST ENVIRONMENT
