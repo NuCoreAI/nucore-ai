@@ -28,6 +28,7 @@ from typing import Any
 from nucore import NuCoreInterface
 
 from .. import plugin_skeleton
+from ..file_change_notify import notify_files_changed
 from ..path_confinement import confine_path
 from ..permissions_refresh import refresh_permissions_after_write
 from .scaffold import (
@@ -96,32 +97,18 @@ async def regenerate_plugin_boilerplate(
     controller_module = generation_inputs.get("controller_module") or _DEFAULT_CONTROLLER_MODULE
     version = generation_inputs.get("version") or _DEFAULT_VERSION
 
-    # The stored profile already carries the MAC-derived id generate_plugin_scaffold's guard 4a
-    # rewrote the Controller's reserved "controller" placeholder into (always ending in
-    # "_controller") -- reused as-is here rather than re-fetching the hub's MAC again, since this
-    # tool only ever refreshes template-driven files, never re-derives LLM-authored/profile content.
     stored_profile = generation_inputs.get("profile") or {}
-    controller_node_id = next(
-        (
-            nd["id"]
-            for nd in (stored_profile.get("nodedefs") or [])
-            if isinstance(nd, dict) and isinstance(nd.get("id"), str) and nd["id"].endswith("_controller")
-        ),
-        None,
-    )
-    if controller_node_id is None:
-        return {
-            "error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has no stored nodedef ending in "
-            "'_controller' -- it predates the MAC-derived controller id/address convention; "
-            "regenerate once with generate_plugin_scaffold (confirm_overwrite: true) first"
-        }
-    mac6 = controller_node_id[: -len("_controller")]
-    controller_address = f"{mac6}_ctl"
-
+    controller_node_id = "controller"
+    controller_address = "ctl"
     controller_nodedef = next(
         (nd for nd in (stored_profile.get("nodedefs") or []) if isinstance(nd, dict) and nd.get("id") == controller_node_id),
         None,
     )
+    if controller_nodedef is None:
+        return {
+            "error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has no stored nodedef with id "
+            "'controller' -- regenerate once with generate_plugin_scaffold (confirm_overwrite: true) first"
+        }
     controller_accepts = ((controller_nodedef or {}).get("cmds") or {}).get("accepts") or []
     controller_command_dispatch, dispatch_error = _resolve_controller_command_dispatch(controller_accepts)
     if dispatch_error:
@@ -184,6 +171,15 @@ async def regenerate_plugin_boilerplate(
     (plugin_dir / _INSTALL_FILENAME).write_text(_INSTALL_SCRIPT_CONTENT, encoding="utf-8")
 
     permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+    files_changed_notify_error = await notify_files_changed(
+        nucore_interface,
+        [
+            str(plugin_dir / _PLUGIN_FILENAME),
+            str(plugin_dir / _MAIN_FILENAME),
+            str(plugin_dir / _VERSION_FILENAME),
+            str(plugin_dir / _INSTALL_FILENAME),
+        ],
+    )
 
     result = {
         "location": location,
@@ -191,4 +187,6 @@ async def regenerate_plugin_boilerplate(
     }
     if permissions_refresh_error is not None:
         result["permissions_refresh_error"] = permissions_refresh_error
+    if files_changed_notify_error is not None:
+        result["files_changed_notify_error"] = files_changed_notify_error
     return result

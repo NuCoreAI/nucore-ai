@@ -36,19 +36,15 @@ one failing writes nothing:
 4. ``profile`` must pass the exact same check
    ``profile_authoring.validate_profile`` runs -- reused directly rather
    than re-derived, so the two tools can never disagree on what's valid.
-4a. Every nodedef id in ``profile.nodedefs`` is a plain, LLM-chosen
-    placeholder (e.g. ``"controller"``, ``"switch"``) -- ``"controller"``
-    is required (the reserved placeholder for the Controller's own
-    nodedef). This guard fetches the connected hub's own MAC address
-    (``nucore_interface.get_device_mac_address()``; refuses outright if
-    the hub is unreachable) and rewrites every placeholder, in place, into
-    its real ``{last-6-hex-of-the-mac}_{placeholder}`` id -- in
-    ``profile.nodedefs`` and in every matching ``id = "<placeholder>"``
-    class variable found in ``node_classes``' source (see
-    ``_rewrite_id_literals``) -- before anything downstream (validation,
-    guard 7, file-writing) ever sees the placeholder form. This keeps
-    nodedef ids unique across every node-server sharing one ISY, computed
-    once at generation time rather than guessed by the model.
+4a. Every nodedef id in ``profile.nodedefs`` is the plugin's own final,
+    real id exactly as the LLM wrote it (e.g. ``"controller"``,
+    ``"switch"``) -- no hub call, no rewriting. ``"controller"`` is
+    required among them (the reserved id the generated Controller class
+    always claims). Nodedef ids only need to be unique within this one
+    profile, not globally -- mechanically enforced by
+    ``profile_authoring``'s own ``_check_no_duplicate_nodedef_ids``, part
+    of guard 4's ``validate_profile`` call just above this guard, not by
+    this guard itself.
 4b. The Controller's own nodedef's ``cmds.accepts`` ids must each resolve
     to a legal, non-keyword, non-dunder Python method name (lowercased,
     reusing the matching ``plugin_skeleton.BASE_OVERRIDE_METHODS`` entry
@@ -76,9 +72,9 @@ one failing writes nothing:
    mis-indented override that parses fine as a *module-level* function,
    silently never called by anything at runtime.
 7. Every class defined in the assembled ``plugin.py`` and in every extra
-   node-class file must carry a class-level ``id = "<...>"`` whose
-   (already-rewritten, per guard 4a) value matches a real nodedef id in
-   ``profile.nodedefs`` (see ``_node_class_ids``) -- ``udi_interface.Node``
+   node-class file must carry a class-level ``id = "<...>"`` whose value
+   matches a real nodedef id in ``profile.nodedefs`` (see
+   ``_node_class_ids``) -- ``udi_interface.Node``
    itself defaults ``id`` to ``''``, and ``Interface.addNode()`` sends
    ``node.id`` to ISY/PG3 as ``nodeDefId``, so a missing or dangling ``id``
    would otherwise silently report the wrong (or no) node type to the hub.
@@ -130,6 +126,7 @@ from nucore import NuCoreInterface
 
 from .. import developer_config, plugin_skeleton
 from ..evidence_ledger import EvidenceLedger, merge_sources, parse_sources_md, render_sources_md
+from ..file_change_notify import notify_files_changed
 from ..path_confinement import confine_path
 from ..permissions_refresh import refresh_permissions_after_write
 from ..secret_guard import OAUTH_PLACEHOLDER, find_secret
@@ -182,8 +179,7 @@ _INSTALL_SCRIPT_CONTENT = (
 
 def _ensure_controller_st_property(raw_profile: dict[str, Any]) -> None:
     """Unconditionally makes the controller's own nodedef (``id ==
-    "controller"``, still the plain placeholder at this point -- called
-    before guard 4a's id rewrite) declare a property
+    "controller"``) declare a property
     ``{"id": "ST", "name": "Status", "editor": _CONTROLLER_ST_EDITOR_ID}``, and makes
     ``raw_profile["editors"]`` contain a matching ``_CONTROLLER_ST_EDITOR``
     -- removing every existing ``"ST"``-id property first (not just the
@@ -194,8 +190,7 @@ def _ensure_controller_st_property(raw_profile: dict[str, Any]) -> None:
     ``drivers = [...]`` (``_assemble_plugin_py``) and
     ``conn_status='ST'`` (``render_init``) always have a real nodedef
     property/editor behind them, regardless of what the LLM did or didn't
-    author -- mutates *raw_profile* in place, same as the id rewrite just
-    below it."""
+    author -- mutates *raw_profile* in place."""
     for nodedef in raw_profile.get("nodedefs") or []:
         if isinstance(nodedef, dict) and nodedef.get("id") == "controller":
             properties = nodedef.setdefault("properties", [])
@@ -278,20 +273,6 @@ def _class_method_names(module_source: str, class_name: str) -> set[str] | None:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
     return None
-
-
-def _mac6(mac_address: str | None) -> str | None:
-    """Last 6 hex digits of *mac_address*, lowercased, with any colons/
-    dashes/other separators stripped -- or ``None`` if fewer than 6 hex
-    characters are present (no MAC at all, or a malformed one). Used to
-    build a nodedef id prefix that's unique across every node-server
-    sharing one ISY (guard 4a)."""
-    if not mac_address:
-        return None
-    hex_only = "".join(c for c in mac_address if c in "0123456789abcdefABCDEF")
-    if len(hex_only) < 6:
-        return None
-    return hex_only[-6:].lower()
 
 
 def _node_class_ids(module_source: str) -> dict[str, str | None]:
@@ -393,54 +374,6 @@ def _resolve_controller_command_dispatch(accepts: list[Any]) -> tuple[dict[str, 
         first_id_for_name[method_name] = cmd_id
         dispatch[cmd_id] = method_name
     return dispatch, None
-
-
-def _rewrite_id_literals(module_source: str, id_rewrite_map: dict[str, str]) -> str:
-    """Splices every class-level ``id = "<placeholder>"`` string literal in
-    *module_source* into ``id_rewrite_map[placeholder]``, for every
-    placeholder present in the map -- via exact AST source-span
-    replacement (``lineno``/``col_offset``/``end_lineno``/
-    ``end_col_offset``), not a blind string replace, so it can't
-    accidentally touch an unrelated string elsewhere in the file. Leaves a
-    class with no ``id`` assignment, or an ``id`` not in the map, untouched
-    -- guard 7 catches those as either a missing or an unrecognized id.
-    Returns *module_source* unchanged on a syntax error -- guard 6's own
-    ``ast.parse`` call reports that cleanly moments later; this function
-    isn't the place to raise it."""
-    try:
-        tree = ast.parse(module_source)
-    except SyntaxError:
-        return module_source
-    edits: list[tuple[int, int, int, int, str]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        for stmt in node.body:
-            if (
-                isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id == "id"
-                and isinstance(stmt.value, ast.Constant)
-                and isinstance(stmt.value.value, str)
-                and stmt.value.value in id_rewrite_map
-            ):
-                real_id = id_rewrite_map[stmt.value.value]
-                edits.append(
-                    (stmt.value.lineno, stmt.value.col_offset, stmt.value.end_lineno, stmt.value.end_col_offset, repr(real_id))
-                )
-    if not edits:
-        return module_source
-    lines = module_source.splitlines(keepends=True)
-    for lineno, col, end_lineno, end_col, replacement in sorted(edits, reverse=True):
-        if lineno == end_lineno:
-            line = lines[lineno - 1]
-            lines[lineno - 1] = line[:col] + replacement + line[end_col:]
-        else:
-            first = lines[lineno - 1][:col]
-            last = lines[end_lineno - 1][end_col:]
-            lines[lineno - 1 : end_lineno] = [first + replacement + last]
-    return "".join(lines)
 
 
 def _module_header(title: str) -> str:
@@ -877,34 +810,23 @@ async def generate_plugin_scaffold(
     raw_profile = args.get("profile")
     if not isinstance(raw_profile, dict):
         return {"error": "profile must be a JSON object"}
-    # Deep-copied before any rewriting below -- never mutate the caller's own
-    # profile dict in place (args is the caller's, not ours to modify).
+    # Deep-copied before any mutation below (_ensure_controller_st_property) --
+    # never mutate the caller's own profile dict in place (args is the caller's, not ours to
+    # modify).
     raw_profile = copy.deepcopy(raw_profile)
 
     # Guard 4a
-    mac6 = _mac6(await nucore_interface.get_device_mac_address())
-    if mac6 is None:
-        return {
-            "error": "could not determine the authoring hub's MAC address (hub unreachable, or "
-                     "/desc did not return one) -- a live, reachable hub is required so this "
-                     "plugin's nodedef ids stay globally unique"
-        }
-    placeholders = [
+    nodedef_ids = [
         nd["id"] for nd in (raw_profile.get("nodedefs") or []) if isinstance(nd, dict) and isinstance(nd.get("id"), str)
     ]
-    if "controller" not in placeholders:
+    if "controller" not in nodedef_ids:
         return {
             "error": "profile.nodedefs must include a nodedef with id 'controller' -- the "
-                     "generated Controller class always claims this reserved placeholder, which "
-                     "gets rewritten to a MAC-derived real id at generation time"
+                     "generated Controller class always claims this reserved id"
         }
     _ensure_controller_st_property(raw_profile)
-    id_rewrite_map = {placeholder: f"{mac6}_{placeholder}" for placeholder in placeholders}
-    for nodedef in raw_profile["nodedefs"]:
-        if isinstance(nodedef, dict) and isinstance(nodedef.get("id"), str):
-            nodedef["id"] = id_rewrite_map[nodedef["id"]]
-    controller_node_id = id_rewrite_map["controller"]
-    controller_address = f"{mac6}_ctl"
+    controller_node_id = "controller"
+    controller_address = "ctl"
 
     catalog_profile = _wrap_wire_profile_as_catalog(raw_profile)
     profile_result = await profile_authoring.validate_profile(nucore_interface, {"profile": catalog_profile})
@@ -947,7 +869,6 @@ async def generate_plugin_scaffold(
     node_classes = args.get("node_classes") or {}
     if not isinstance(node_classes, dict):
         return {"error": "node_classes must be a JSON object"}
-    node_classes = {name: _rewrite_id_literals(source, id_rewrite_map) for name, source in node_classes.items()}
     tests = args.get("tests") or {}
     if not isinstance(tests, dict):
         return {"error": "tests must be a JSON object"}
@@ -1053,7 +974,7 @@ async def generate_plugin_scaffold(
             return {"error": f"generated '{filename}' is not valid Python: {exc}"}
 
     # Guard 7
-    nodedef_ids = set(id_rewrite_map.values())
+    nodedef_ids = set(nodedef_ids)
     for filename, source in {_PLUGIN_FILENAME: plugin_py, **{f"{n}.py": c for n, c in node_classes.items()}}.items():
         for class_name, declared_id in _node_class_ids(source).items():
             if declared_id is None:
@@ -1237,6 +1158,9 @@ async def generate_plugin_scaffold(
         extra_dirs.append(f"{_DATA_DIRNAME}/")
 
     permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+    files_changed_notify_error = await notify_files_changed(
+        nucore_interface, [str(p) for p in candidate_files] + [str(context_path), str(sources_path)]
+    )
 
     result = {
         "location": location,
@@ -1247,4 +1171,6 @@ async def generate_plugin_scaffold(
     }
     if permissions_refresh_error is not None:
         result["permissions_refresh_error"] = permissions_refresh_error
+    if files_changed_notify_error is not None:
+        result["files_changed_notify_error"] = files_changed_notify_error
     return result

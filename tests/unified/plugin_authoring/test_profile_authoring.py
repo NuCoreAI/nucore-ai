@@ -150,6 +150,84 @@ async def test_validate_profile_accepts_enum_uom_with_subset_range():
     assert result == {"valid": True, "errors": []}
 
 
+# --- editor-shape cross-check (_check_editor_shape): a generated editor had
+# 'names' as a sibling of 'ranges' instead of nested inside the range object,
+# and 'uom' as a bare int -- nucore.profile's parser silently drops the
+# misplaced names and coerces the int uom, so validate_profile returned
+# {"valid": true} for it; this must fail mechanically instead ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_editor_level_names():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [
+                    {
+                        "id": "CNT_RUNNING",
+                        "ranges": [{"uom": "2", "subset": "0-1"}],
+                        "names": {"0": "Stopped", "1": "Counting"},
+                    }
+                ],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "CNT_RUNNING"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("unexpected field" in e and "names" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_non_string_uom():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [{"id": "CNT_RUNNING", "ranges": [{"uom": 2, "subset": "0-1"}]}],
+                "nodedefs": [{"id": "ND_X", "properties": [{"id": "ST", "editor": "CNT_RUNNING"}], "cmds": {}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("must be a quoted string" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_correctly_nested_names():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [
+                    {
+                        "id": "CNT_RUNNING",
+                        "ranges": [{"uom": "2", "subset": "0-1", "names": {"0": "Stopped", "1": "Counting"}}],
+                    }
+                ],
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "properties": [{"id": "ST", "name": "Status", "editor": "CNT_RUNNING"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
 # --- malformed catalog documents must report a clear validation error,
 # never leak a raw KeyError as "unexpected error: '<field>'" (regression:
 # a model-authored profile omitted instance.name entirely) ---
@@ -374,8 +452,8 @@ async def test_validate_profile_rejects_property_with_blank_name():
 
 # --- nodedef id format cross-check (_check_nodedef_id_format): a nodedef id
 # that isn't alphanumeric/underscore, or exceeds 31 characters, must fail
-# validation mechanically -- this is what actually catches an over-length
-# generate_plugin_scaffold-rewritten {mac6}_{placeholder} id ---
+# validation mechanically -- this is what actually catches an over-length or
+# bad-charset author-written id ---
 
 
 @pytest.mark.asyncio
@@ -416,7 +494,7 @@ async def test_validate_profile_rejects_too_long_nodedef_id():
 
 
 @pytest.mark.asyncio
-async def test_validate_profile_accepts_mac_derived_nodedef_id():
+async def test_validate_profile_accepts_underscore_in_nodedef_id():
     profile = {
         "families": [{
             "id": "fam1",
@@ -426,7 +504,7 @@ async def test_validate_profile_accepts_mac_derived_nodedef_id():
                 "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
                 "nodedefs": [
                     {
-                        "id": "ddeeff_controller",
+                        "id": "my_controller",
                         "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
@@ -437,6 +515,63 @@ async def test_validate_profile_accepts_mac_derived_nodedef_id():
     }
     result = await validate_profile(None, {"profile": profile})
     assert result == {"valid": True, "errors": []}
+
+
+# --- no-duplicate-nodedef-id cross-check (_check_no_duplicate_nodedef_ids): a
+# nodedef id only needs to be unique within one plugin's own profile, never
+# globally, but that uniqueness must still be enforced mechanically -- this
+# is never reset per family/instance, since a real generated profile always
+# has exactly one synthetic family/instance wrapping its whole nodedefs list ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_duplicate_nodedef_id_in_same_instance():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [],
+                "nodedefs": [
+                    {"id": "switch", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}},
+                    {"id": "switch", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}},
+                ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("switch" in e and "more than once" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_duplicate_nodedef_id_across_instances():
+    profile = {
+        "families": [
+            {
+                "id": "fam1",
+                "instances": [{
+                    "id": "inst1",
+                    "name": "Instance 1",
+                    "editors": [],
+                    "nodedefs": [{"id": "switch", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+                }],
+            },
+            {
+                "id": "fam2",
+                "instances": [{
+                    "id": "inst2",
+                    "name": "Instance 2",
+                    "editors": [],
+                    "nodedefs": [{"id": "switch", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+                }],
+            },
+        ]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("switch" in e and "more than once" in e for e in result["errors"])
 
 
 # --- links-object-present cross-check (_check_links_object_present): every

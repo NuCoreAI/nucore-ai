@@ -19,11 +19,6 @@ from unified.plugin_authoring.secret_guard import OAUTH_PLACEHOLDER
 DEVELOPER_EMAIL = "dev@example.com"
 DEVELOPER_NAME = "Dev Name"
 
-# "AA:BB:CC:DD:EE:FF" -> mac6 "ddeeff" -- every placeholder below is rewritten to
-# f"ddeeff_{placeholder}" by guard 4a.
-FAKE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
-FAKE_MAC6 = "ddeeff"
-
 WIRE_PROFILE = {
     "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
     "nodedefs": [
@@ -64,16 +59,12 @@ COMPLETE_OAUTH_CONFIG = {
 
 
 class _FakeNuCoreInterface:
-    """Minimal stand-in for the one method generate_plugin_scaffold's guard
-    4a calls -- generation never touches the hub otherwise."""
-
-    def __init__(self, mac_address: str | None = FAKE_MAC_ADDRESS):
-        self._mac_address = mac_address
-
-    async def get_device_mac_address(self):
-        return self._mac_address
+    """Minimal stand-in -- generation never touches the hub."""
 
     async def refresh_eisy_ai_permissions(self):
+        return {"successful": True}
+
+    async def notify_plugin_files_changed(self, paths):
         return {"successful": True}
 
 
@@ -165,6 +156,18 @@ async def test_rejects_profile_with_dangling_editor_reference(tmp_path):
 async def test_accepts_well_formed_wire_profile(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
+    assert "files_changed_notify_error" not in result
+
+
+@pytest.mark.asyncio
+async def test_files_changed_notify_failure_does_not_block_write(tmp_path):
+    class _FailingNotify(_FakeNuCoreInterface):
+        async def notify_plugin_files_changed(self, paths):
+            return {"error": "boom"}
+
+    result = await _generate(tmp_path, _base_args(), nucore_interface=_FailingNotify())
+    assert "files_written" in result
+    assert result["files_changed_notify_error"] == "boom"
 
 
 @pytest.mark.asyncio
@@ -790,7 +793,6 @@ async def test_generation_inputs_json_is_written_with_the_normalized_inputs(tmp_
     for nodedef in rewritten_profile["nodedefs"]:
         if nodedef["id"] == "controller":
             nodedef["properties"].append({"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"})
-        nodedef["id"] = f"{FAKE_MAC6}_{nodedef['id']}"
     rewritten_profile["editors"].append(
         {
             "id": "ED_CONTROLLER_ST",
@@ -1411,7 +1413,7 @@ async def test_extra_node_classes_are_written_as_separate_files(tmp_path):
     result = await _generate(tmp_path, args)
     assert "error" not in result
     pump_source = (tmp_path / "acme_pool" / "pump_node.py").read_text()
-    assert f"id = '{FAKE_MAC6}_switch'" in pump_source
+    assert 'id = "switch"' in pump_source
 
 
 @pytest.mark.asyncio
@@ -1511,13 +1513,6 @@ async def test_node_class_with_empty_accepts_nodedef_needs_no_commands_dict(tmp_
 
 
 @pytest.mark.asyncio
-async def test_mac_fetch_failure_is_rejected(tmp_path):
-    result = await _generate(tmp_path, _base_args(), nucore_interface=_FakeNuCoreInterface(mac_address=None))
-    assert "error" in result
-    assert not (tmp_path / "acme_pool").exists()
-
-
-@pytest.mark.asyncio
 async def test_profile_missing_controller_nodedef_is_rejected(tmp_path):
     profile_without_controller = {
         "editors": WIRE_PROFILE["editors"],
@@ -1531,15 +1526,15 @@ async def test_profile_missing_controller_nodedef_is_rejected(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_controller_id_and_address_are_mac_derived(tmp_path):
+async def test_controller_id_and_address_are_fixed_literals(tmp_path):
     result = await _generate(tmp_path, _base_args())
     assert "error" not in result
     plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
-    assert f"id = '{FAKE_MAC6}_controller'" in plugin_py
-    assert f"'{FAKE_MAC6}_ctl'" in plugin_py
+    assert "id = 'controller'" in plugin_py
+    assert "'ctl'" in plugin_py
     profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
     nodedef_ids = {nd["id"] for nd in profile_json["nodedefs"]}
-    assert nodedef_ids == {f"{FAKE_MAC6}_controller", f"{FAKE_MAC6}_switch"}
+    assert nodedef_ids == {"controller", "switch"}
 
 
 # --- controller connection status (ST driver) is entirely tool-generated ---
@@ -1560,7 +1555,7 @@ async def test_controller_nodedef_gets_a_matching_st_property_and_editor(tmp_pat
     assert "error" not in result
     profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
 
-    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
+    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == "controller")
     assert {"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"} in controller_nodedef["properties"]
 
     st_editor = next(e for e in profile_json["editors"] if e["id"] == "ED_CONTROLLER_ST")
@@ -1583,7 +1578,7 @@ async def test_controller_st_property_is_overwritten_if_already_declared_differe
     assert "error" not in result
     profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
 
-    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
+    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == "controller")
     st_properties = [p for p in controller_nodedef["properties"] if p["id"] == "ST"]
     assert st_properties == [{"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"}]
 
@@ -1607,7 +1602,7 @@ async def test_controller_duplicate_st_properties_collapse_to_one(tmp_path):
     assert "error" not in result
     profile_json = json.loads((tmp_path / "acme_pool" / "profile.json").read_text())
 
-    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == f"{FAKE_MAC6}_controller")
+    controller_nodedef = next(nd for nd in profile_json["nodedefs"] if nd["id"] == "controller")
     st_properties = [p for p in controller_nodedef["properties"] if p["id"] == "ST"]
     assert st_properties == [{"id": "ST", "name": "Status", "editor": "ED_CONTROLLER_ST"}]
 

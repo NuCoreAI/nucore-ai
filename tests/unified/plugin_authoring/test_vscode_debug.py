@@ -28,6 +28,9 @@ class FakeBackend:
     async def refresh_eisy_ai_permissions(self):
         return {"successful": True}
 
+    async def notify_plugin_files_changed(self, paths):
+        return {"successful": True}
+
 
 def _write_server_entry(plugin_dir, entry=None):
     plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -150,6 +153,24 @@ async def test_success_writes_iox_env_and_launch_json(tmp_path, monkeypatch):
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_files_changed_notify_failure_does_not_block_write(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_server_entry(plugin_dir, {"name": "AcmePool", "nsid": "local.acme_pool"})
+    rc_d_dir = tmp_path / "rc.d"
+    _write_rc_d_script(rc_d_dir, 7, pg3init="eyJhIjoxfQ==")
+    monkeypatch.setattr(vscode_debug, "_RC_D_DIR", rc_d_dir)
+
+    class _FailingNotify(FakeBackend):
+        async def notify_plugin_files_changed(self, paths):
+            return {"error": "boom"}
+
+    result = await setup_vscode_debug_config(_FailingNotify(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["iox_env_path"] == str(plugin_dir / ".iox_env")
+    assert result["files_changed_notify_error"] == "boom"
 
 
 @pytest.mark.asyncio

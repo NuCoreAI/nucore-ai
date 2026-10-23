@@ -2240,6 +2240,28 @@ class IoXWrapper(NuCoreInterface):
                 "data": str(ex),
             }
 
+    async def notify_plugin_files_changed(self, paths: list[str]) -> dict[str, Any]:
+        """
+        Tells the platform that plugin-authoring just generated, updated, or
+        removed one or more files on disk. The platform resolves the nsid
+        itself from each absolute path.
+        :param paths: Absolute paths of every file that changed in this batch.
+        :return: The hub's raw JSON response, or {"error": ...}.
+
+        API:
+        POST /api/plugin/code/files-changed
+        """
+        try:
+            headers = {"Content-Type": "application/json"}
+            response = await self.post('/api/plugin/code/files-changed', body=json.dumps({"paths": paths}), headers=headers)
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to notify plugin files changed: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to notify plugin files changed: {response.status_code if response else 'No response'}"}
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to notify plugin files changed: {e}")
+            return {"error": f"Failed to notify plugin files changed: {e}"}
+
     # ------------------------------------------------------------------
     # Diagnostics -- all actual investigation logic lives on IoXDiagnostics
     # (self.diagnostics); this just satisfies NuCoreInterface.

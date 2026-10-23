@@ -55,6 +55,7 @@ from typing import Any
 
 from nucore import NuCoreInterface
 
+from ..file_change_notify import notify_files_changed
 from ..path_confinement import confine_path
 from ..permissions_refresh import refresh_permissions_after_write
 from .dev_venv import setup_dev_venv
@@ -179,6 +180,7 @@ async def install_generated_plugin(
         return {"stage": "register", "error": f"register response for '{location}' did not include a nsid"}
 
     persist_error: str | None = None
+    files_changed_notify_error: str | None = None
     try:
         _persist_entry_with_nsid(entry_path, entry_body, nsid)
     except Exception as exc:
@@ -186,6 +188,8 @@ async def install_generated_plugin(
         # rolled back -- an unrelated local disk problem (permissions, full
         # disk) shouldn't be reported as a register-stage failure.
         persist_error = str(exc)
+    else:
+        files_changed_notify_error = await notify_files_changed(nucore_interface, [str(entry_path)])
 
     install_response = await nucore_interface.install_local_plugin(nsid)
     if not _is_successful(install_response):
@@ -238,6 +242,8 @@ async def install_generated_plugin(
         result["venv_setup_error"] = venv_setup_error
     if permissions_refresh_error is not None:
         result["pre_start_permissions_refresh_error"] = permissions_refresh_error
+    if files_changed_notify_error is not None:
+        result["files_changed_notify_error"] = files_changed_notify_error
     return result
 
 
@@ -271,7 +277,12 @@ async def update_registered_plugin(
 
     _persist_entry_with_nsid(entry_path, entry_body, nsid)
 
-    return {"location": location, "nsid": nsid, "updated": True}
+    files_changed_notify_error = await notify_files_changed(nucore_interface, [str(entry_path)])
+
+    result = {"location": location, "nsid": nsid, "updated": True}
+    if files_changed_notify_error is not None:
+        result["files_changed_notify_error"] = files_changed_notify_error
+    return result
 
 
 async def delete_registered_plugin(
@@ -323,4 +334,9 @@ async def delete_registered_plugin(
 
     entry_path.write_text(json.dumps(_strip_nsid(entry), indent=2) + "\n", encoding="utf-8")
 
-    return {"location": location, "nsid": nsid, "deleted": True}
+    files_changed_notify_error = await notify_files_changed(nucore_interface, [str(entry_path)])
+
+    result = {"location": location, "nsid": nsid, "deleted": True}
+    if files_changed_notify_error is not None:
+        result["files_changed_notify_error"] = files_changed_notify_error
+    return result

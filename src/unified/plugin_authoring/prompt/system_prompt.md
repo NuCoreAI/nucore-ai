@@ -56,17 +56,13 @@ report the end state -- walking through the process is itself useful to either a
     `FILTER_LIFE`, not `GV3`). Either way the format is fixed and enforced by `validate_profile`/
     `generate_plugin_scaffold`: all-caps letters/digits/underscore, starting with a letter, max 30
     characters.
-  - **Every nodedef's own `id` is a plain, meaningful placeholder** -- short and human-readable
-    (e.g. `"switch"`, `"thermostat"`), never pre-computed or guessed. The Controller's own nodedef
-    must keep the literal placeholder `"controller"` exactly -- a reserved sentinel
-    `generate_plugin_scaffold` looks for specifically. At generation time (not before), the tool
-    fetches the connected hub's own MAC address and rewrites every placeholder into its real
-    `{last-6-hex-of-the-hub's-MAC}_{placeholder}` id, in both `profile.json` and the matching
-    `id = "<placeholder>"` class variable on the generated/supplied Node subclass (`node_classes`
-    -- see below) -- this keeps nodedef ids unique across every node-server sharing one ISY,
-    computed once, mechanically, rather than guessed. The resulting real id's length/charset is
-    enforced by `validate_profile`/`generate_plugin_scaffold` too: alphanumeric/underscore only,
-    max 31 characters -- keep a placeholder name short enough to leave room for the mac prefix.
+  - **Every nodedef's own `id` is its final, real id exactly as you write it** -- short and
+    human-readable (e.g. `"switch"`, `"thermostat"`), never a placeholder to be rewritten later.
+    The Controller's own nodedef must keep the literal id `"controller"` exactly -- a reserved
+    sentinel `generate_plugin_scaffold` looks for specifically. A nodedef id only needs to be
+    unique within this one profile, not globally -- `validate_profile`/`generate_plugin_scaffold`
+    mechanically reject a nodedef id repeated anywhere in the same profile. The id's length/charset
+    is enforced too: alphanumeric/underscore only, max 31 characters.
   - **The Controller's connection-status (`ST`) driver/property is entirely tool-generated --
     never author it yourself.** `generate_plugin_scaffold` always gives the Controller class a
     `drivers = [{'driver': 'ST', 'value': 0, 'uom': 25, 'name': 'Status'}]` class variable, calls
@@ -99,9 +95,17 @@ report the end state -- walking through the process is itself useful to either a
     with `ctl`/`rsp` arrays, even when both are empty (`{"ctl": [], "rsp": []}`) --
     `validate_profile` rejects a nodedef missing it, or a `links.ctl`/`links.rsp` id that doesn't
     match a defined linkdef.
-  - An editor declares `ranges`, each either a `min`/`max` numeric range (optionally `step`/
-    `prec`) or a `subset` enumeration, plus an optional `names` mapping (value -> label, e.g.
-    `{"0": "Offline", "1": "Online"}`) and a UOM id. **`ranges` is a list on purpose, and a single
+  - An editor declares `ranges`, a list of range objects. **Each range object is self-contained:
+    `names` and `uom` are fields *inside* that same range object, siblings of `min`/`max` (or
+    `subset`) -- never siblings of `ranges` on the editor itself.** A full worked example: `{"id":
+    "online", "ranges": [{"uom": "25", "subset": "0,1", "names": {"0": "Offline", "1":
+    "Online"}}]}` -- note `uom` is a *quoted string* in this profile JSON (e.g. `"25"`, `"2"`),
+    never a bare number, even though the separate, Python-side Controller `drivers` class-variable
+    list shown above (`drivers = [{'driver': 'ST', 'value': 0, 'uom': 25, ...}]`) uses a plain int
+    for its own `uom` field -- that's a different context (a Python dict literal, not profile
+    JSON); don't carry that int-vs-string pattern over to an editor's `ranges`. Each range is
+    either a `min`/`max` numeric range (optionally `step`/`prec`) or a `subset` enumeration, with
+    `names` (value -> label) optional either way. **`ranges` is a list on purpose, and a single
     editor may declare more than one range with a *different* UOM id each** -- this is how one
     property offers more than one unit representation (e.g. a weather API's temperature reported
     in both `°F` and `°C`, or a raw sensor value alongside a friendlier derived unit). Nothing in
@@ -395,12 +399,12 @@ no single tool's schema can state on its own.
      derived name/address (from a discovered device's hostname, serial number, etc.) through
      `self.poly.getValidName()`/`getValidAddress()` first -- IoX may otherwise reject or silently
      mangle an invalid one.
-   - **Every `node_classes` entry needs a class variable `id` equal to a real nodedef's
-     placeholder** (see the nodedef-id bullet above) -- `self.poly.addNode()` sends `node.id` to
+   - **Every `node_classes` entry needs a class variable `id` equal to a real nodedef's own
+     `id`** (see the nodedef-id bullet above) -- `self.poly.addNode()` sends `node.id` to
      ISY/PG3 as the node's `nodeDefId`, and `udi_interface.Node` itself defaults `id` to `''`, so a
      class that never sets it would silently report an empty/wrong node type. Write it as
-     `id = "<placeholder>"` (e.g. `id = "switch"`), exactly matching the nodedef's own placeholder
-     `id` in `profile.nodedefs` -- `generate_plugin_scaffold` rewrites both together, and rejects
+     `id = "<id>"` (e.g. `id = "switch"`), exactly matching the nodedef's own
+     `id` in `profile.nodedefs` -- `generate_plugin_scaffold` rejects
      generation outright if any class's `id` is missing or doesn't match a real nodedef. A node's
      *address* (unlike a nodedef's `id`) isn't profile content and isn't mechanically rewritten --
      when a class represents multiple real-world device instances, each one's address (built in

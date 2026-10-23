@@ -196,9 +196,9 @@ def render_init(
     codegen let the two flags fall out of sync, which should fail loudly, not
     be swallowed.
 
-    *controller_address* is this plugin's own MAC-derived, generation-time-
-    computed address (see ``handlers/scaffold.py``'s guard 4a) -- ``primary``
-    and ``address`` both default to it (this Controller is its own primary,
+    *controller_address* is this plugin's own fixed Controller address, the
+    literal string ``"ctl"`` (see ``handlers/scaffold.py``'s guard 4a) --
+    ``primary`` and ``address`` both default to it (this Controller is its own primary,
     a self-referential singleton, same as the one real construction call in
     ``render_main_py`` always passes). ``name`` defaults to
     *controller_node_name* (``"<project name> Controller"`` -- never the bare
@@ -546,9 +546,9 @@ def render_main_py(
     class of problem the argv[0] handling next to it addresses, one step
     further removed.
 
-    *controller_address* is this plugin's own MAC-derived, generation-time-
-    computed address (see ``handlers/scaffold.py``'s guard 4a) -- used for
-    both ``primary`` and ``address`` in the one real construction call
+    *controller_address* is this plugin's own fixed Controller address, the
+    literal string ``"ctl"`` (see ``handlers/scaffold.py``'s guard 4a) --
+    used for both ``primary`` and ``address`` in the one real construction call
     below, matching this singleton's self-referential convention.
     *controller_node_name* (``"<project name> Controller"``, built from
     ``server_entry.name``) is this Controller's display name -- never the

@@ -1208,6 +1208,12 @@ def main(args:Any=None, poly=None) -> None:
             secret_values=secret_values,
             provider=provider,
         )
+        try:
+            # refresh the directory permissions for the plugin output root
+            asyncio.run(nucore_interface.refresh_eisy_ai_permissions())
+        except Exception as e:
+            logger.error(f"Failed to refresh Eisy AI permissions: {e}")
+
 
     if args.websocket_port or websocket_is_unix:
         # Native WebSocket server mode: this process itself is the server --

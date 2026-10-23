@@ -36,6 +36,13 @@ a profile document outside this chat loop.
   (``_check_nodedef_id_format``) -- alphanumeric/underscore only, max 31
   chars; same permissive-locally/strict-on-the-real-hub gap as property
   ids above.
+- no two NodeDefs in the whole document share the same ``id``
+  (``_check_no_duplicate_nodedef_ids``) -- nodedef ids only need to be
+  unique within one plugin's own profile, never globally, but
+  ``nucore.profile`` stores whatever's there verbatim, so two nodedefs
+  sharing an ``id`` round-trip fine locally even though ``poly.addNode()``
+  sending that id as the node's ``nodeDefId`` would collide on the real
+  hub.
 - every NodeDef has a ``links`` object with ``ctl``/``rsp`` arrays, even
   when empty (``_check_links_object_present``) -- confirmed mandatory
   against a real generated profile.json; ``nucore.profile`` leaves
@@ -67,6 +74,21 @@ a profile document outside this chat loop.
   the system prompt tells the model never to author it itself -- requiring
   it in this standalone check would fail a correctly-authored profile for
   following that instruction.
+- every editor's own shape -- no stray top-level fields, and every range's
+  ``uom`` is a JSON string (``_check_editor_shape``) -- this happened for
+  real: a generated ``CNT_RUNNING`` editor had ``names`` as a sibling of
+  ``ranges`` (instead of nested inside the range object alongside
+  ``subset``/``uom``) and ``uom`` as a bare int, and ``validate_profile``
+  returned ``{"valid": true}`` for it twice in the same session before
+  ``generate_plugin_scaffold`` wrote it to disk. ``nucore.profile``'s
+  parser doesn't catch either: ``Profile.__build_editor__`` reads
+  ``names`` off the *range* dict only (``rng.get("names", {})``), so a
+  misplaced ``names`` is silently invisible rather than an error -- the
+  editor parses "successfully" with no names at all. Separately,
+  ``nucore.uom.get_uom_by_id`` coerces an int ``uom`` to ``str`` before
+  lookup, so a bare-int ``uom`` also round-trips fine locally even though
+  it's schema-illegal (``nucore/schemas/defs/uom.schema.json`` requires a
+  string).
 
 These cross-checks exist because the system prompt tells the model to call
 ``lookup_uom``/``lookup_property_id`` instead of guessing from memory, and
@@ -238,10 +260,9 @@ def _check_nodedef_id_format(raw_profile: dict[str, Any]) -> list[str]:
     only, at most 31 characters. ``nucore.profile``'s parser doesn't check
     this at all (any non-empty string round-trips fine locally, per
     ``nucore/schemas/defs/id.schema.json``'s deliberately permissive
-    shape), so without this an over-length or bad-charset id (e.g. a
-    ``generate_plugin_scaffold``-rewritten ``{mac6}_{placeholder}`` id with
-    too long a placeholder) would only ever be caught once a customer
-    actually tries to register it on a real hub.
+    shape), so without this an over-length or bad-charset id, authored
+    directly and never caught locally, would only ever be caught once a
+    customer actually tries to register it on a real hub.
     """
     errors: list[str] = []
     for family in raw_profile.get("families") or []:
@@ -257,10 +278,46 @@ def _check_nodedef_id_format(raw_profile: dict[str, Any]) -> list[str]:
                 if not isinstance(nodedef_id, str) or not _is_valid_nodedef_id_format(nodedef_id):
                     errors.append(
                         f"nodedef id '{nodedef_id}' must be alphanumeric/underscore only and at "
-                        f"most {_MAX_NODEDEF_ID_LENGTH} characters (recommended: the last 6 hex "
-                        "digits of the authoring hub's MAC address, no colons, + '_' + a "
-                        "meaningful name, e.g. 'a1b2c3_thermostat')"
+                        f"most {_MAX_NODEDEF_ID_LENGTH} characters (a short, meaningful name, e.g. "
+                        "'thermostat' -- unique within this profile, not globally)"
                     )
+    return errors
+
+
+def _check_no_duplicate_nodedef_ids(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef across the whole document and flags any ``id``
+    that appears more than once -- nodedef ids only need to be unique
+    within one plugin's own profile, never globally (there is no hub-wide
+    rewrite step computing a globally-unique id), and this is never reset
+    per family/instance: a real generated profile always has exactly one
+    synthetic family/instance wrapping its entire flat nodedefs list
+    anyway (see ``handlers/scaffold.py``'s ``_wrap_wire_profile_as_catalog``).
+    ``nucore.profile`` stores whatever's in each instance's ``nodedefs``
+    list verbatim, so two nodedefs sharing an ``id`` round-trip fine
+    locally even though ``poly.addNode()`` sending that id as the node's
+    ``nodeDefId`` would collide on the real hub.
+    """
+    errors: list[str] = []
+    seen: set[str] = set()
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id")
+                if not isinstance(nodedef_id, str):
+                    continue
+                if nodedef_id in seen:
+                    errors.append(
+                        f"nodedef id '{nodedef_id}' is declared more than once -- every nodedef "
+                        "id must be unique within this profile (it no longer needs to be unique "
+                        "globally)"
+                    )
+                seen.add(nodedef_id)
     return errors
 
 
@@ -430,6 +487,51 @@ def _check_nodedef_has_st_property(raw_profile: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _check_editor_shape(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every editor and flags two shape mistakes ``nucore.profile``'s
+    parser tolerates silently rather than erroring on:
+    - any top-level field on the editor other than ``id``/``ranges`` --
+      most notably a ``names`` mapping placed beside ``ranges`` instead of
+      nested inside each range object (where it actually belongs, alongside
+      ``subset``/``uom``). ``Profile.__build_editor__``
+      (``src/nucore/profile.py``) only ever reads ``names`` off the range
+      dict (``rng.get("names", {})``), so a misplaced ``names`` is simply
+      invisible to the parser -- the editor "successfully" parses with no
+      names at all, rather than failing loudly.
+    - any range whose ``uom`` is present but not a JSON string --
+      ``nucore.uom.get_uom_by_id`` coerces an int to ``str`` before lookup,
+      so this round-trips fine locally even though
+      ``nucore/schemas/defs/uom.schema.json`` requires a string.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for editor in instance.get("editors") or []:
+                if not isinstance(editor, dict):
+                    continue
+                editor_id = editor.get("id") or "?"
+                extra_fields = sorted(set(editor) - {"id", "ranges"})
+                if extra_fields:
+                    errors.append(
+                        f"editor '{editor_id}': unexpected field(s) {extra_fields} -- only 'id' "
+                        "and 'ranges' belong on an editor; 'names' (and 'uom') belong inside each "
+                        "entry of 'ranges', not beside it"
+                    )
+                for rng in editor.get("ranges") or []:
+                    if not isinstance(rng, dict) or "uom" not in rng:
+                        continue
+                    if not isinstance(rng["uom"], str):
+                        errors.append(
+                            f"editor '{editor_id}': range uom {rng['uom']!r} must be a quoted "
+                            f"string (e.g. \"{rng['uom']}\"), not a number"
+                        )
+    return errors
+
+
 async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     """*nucore_interface* is unused -- this tool never touches the hub, it
     only exercises nucore's local profile parser plus this module's own
@@ -463,11 +565,13 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
         + _check_property_id_format(raw_profile)
         + _check_property_has_name(raw_profile)
         + _check_nodedef_id_format(raw_profile)
+        + _check_no_duplicate_nodedef_ids(raw_profile)
         + _check_links_object_present(raw_profile)
         + _check_linkdef_references(raw_profile)
         + _check_linkdef_cmd_parameters(raw_profile)
         + _check_no_duplicate_property_ids(raw_profile)
         + _check_nodedef_has_st_property(raw_profile)
+        + _check_editor_shape(raw_profile)
     )
     return {"valid": not errors, "errors": errors}
 

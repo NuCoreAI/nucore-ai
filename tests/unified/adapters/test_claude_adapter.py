@@ -373,6 +373,90 @@ async def test_only_the_last_three_system_blocks_carry_a_breakpoint():
     assert ["cache_control" in block for block in calls[0]["system"]] == [False, False, True, True, True]
 
 
+# --- cache_messages: a trailing breakpoint on the conversation itself,
+# mirroring Claude Code's own incremental caching of its growing transcript
+# (see AgenticLoop.run, which opts into this every round) -- opt-in and
+# budget-gated, since unified's 3-section system prompt plus the tools
+# breakpoint already spends the API's 4-breakpoint cap ---
+
+
+@pytest.mark.asyncio
+async def test_cache_messages_marks_last_text_message_when_budget_allows():
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+    tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
+    messages = [{"role": "system", "content": "static"}, {"role": "user", "content": "hi"}]
+
+    await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
+
+    assert calls[0]["messages"][-1]["content"] == [
+        {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+    ]
+    # The caller's own list/dicts must be untouched -- they're reused across
+    # every round of this same turn by AgenticLoop.run.
+    assert messages[-1]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_cache_messages_marks_last_block_of_list_content():
+    # The shape build_tool_round_trip_messages produces for a tool-result
+    # turn -- content is already a list of blocks, not a plain string.
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok1"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "ok2"},
+            ],
+        },
+    ]
+
+    await adapter.generate(messages=messages, config={"cache_messages": True})
+
+    sent = calls[0]["messages"][-1]["content"]
+    assert sent[0] == {"type": "tool_result", "tool_use_id": "t1", "content": "ok1"}
+    assert sent[1] == {
+        "type": "tool_result",
+        "tool_use_id": "t2",
+        "content": "ok2",
+        "cache_control": {"type": "ephemeral"},
+    }
+    # Original list/dict untouched.
+    assert "cache_control" not in messages[-1]["content"][-1]
+
+
+@pytest.mark.asyncio
+async def test_cache_messages_is_noop_once_breakpoint_budget_is_exhausted():
+    # unified's real shape: 5 system sections (only the last 3 get a
+    # breakpoint) + a tools breakpoint == 4, the API's hard cap -- nothing
+    # left to spend on the conversation itself.
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+    tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
+    messages = [{"role": "system", "content": f"s{i}"} for i in range(5)] + [{"role": "user", "content": "hi"}]
+
+    await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
+
+    assert calls[0]["messages"][-1]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_cache_messages_not_applied_when_not_requested():
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.messages.stream = _capture_stream(calls)
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert calls[0]["messages"][-1]["content"] == "hi"
+
+
 @pytest.mark.asyncio
 async def test_generate_surfaces_usage_including_cache_fields():
     # usage (including cache_creation_input_tokens/cache_read_input_tokens)

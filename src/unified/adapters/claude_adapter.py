@@ -47,6 +47,15 @@ class ClaudeAdapter(LLMAdapter):
         top-level ``system`` parameter (with its own cache breakpoint -- see
         the comment in the body); all other roles are forwarded as-is.
 
+        When ``config["cache_messages"]`` is truthy, the growing conversation
+        itself also gets a trailing cache breakpoint on the last content
+        block of the last message -- see ``_with_message_cache_breakpoint``
+        -- so a multi-round tool-calling turn reads its own prior rounds from
+        cache instead of reprocessing them from scratch each round. Opt-in,
+        not automatic: a one-shot call (e.g. ``history_compaction.py``'s
+        summarization request) would just pay the cache-write premium for a
+        breakpoint nothing ever reads back.
+
         Always issues the request via the SDK's streaming transport
         (``self._client.messages.stream``), regardless of ``config["stream"]``
         -- the Anthropic SDK itself refuses non-streaming calls whose
@@ -126,6 +135,16 @@ class ClaudeAdapter(LLMAdapter):
             kwargs["system"] = blocks
         if tools:
             kwargs["tools"] = self._with_tools_ttl(tools, ttl)
+        if cfg.get("cache_messages"):
+            # Claude's API hard-caps a request at 4 total cache breakpoints.
+            # `unified`'s 3-section system prompt plus the tools breakpoint
+            # already uses all 4 (see test_only_the_last_three_system_blocks_
+            # carry_a_breakpoint) -- this is deliberately a no-op there, not
+            # an error. `plugin_authoring`'s 1-2 section system prompt leaves
+            # 1-2 spare, which is what this spends.
+            used_breakpoints = min(len(blocks), 3) + (1 if tools else 0)
+            if used_breakpoints < 4:
+                kwargs["messages"] = self._with_message_cache_breakpoint(anthropic_messages)
         if cfg.get("tool_choice"):
             # Forwarded as-is, e.g. {"type": "any"} to force a call on a
             # turn the caller already knows needs one (see AgenticLoop's
@@ -212,6 +231,41 @@ class ClaudeAdapter(LLMAdapter):
         if not ttl or ttl == "5m" or "cache_control" not in tools[-1]:
             return tools
         return [*tools[:-1], {**tools[-1], "cache_control": self._cache_control(ttl)}]
+
+    @staticmethod
+    def _with_message_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Mark the last content block of the last message with a cache
+        breakpoint -- the same incremental-caching pattern Claude Code's own
+        harness uses on its growing transcript. Each later round in this
+        turn (or the next turn, within the TTL) sends a request whose prefix
+        up to and including this point is byte-identical to what a previous
+        call already cached, so only the newly appended tail is processed/
+        billed fresh instead of the whole accumulated history every time.
+
+        Always the plain 5m-default breakpoint (no configured ``ttl``): this
+        is necessarily the last breakpoint in the request (tools, then
+        system, then messages, per the API's own structural order), and a
+        longer TTL may never follow a shorter one -- same constraint
+        ``generate()``'s system-blocks loop already applies to its own last
+        (volatile) block.
+
+        Returns a new list -- *messages* is ``AgenticLoop.run``'s own list,
+        appended to and reused across every round of this turn, and must
+        not be mutated here (same reasoning as ``_with_tools_ttl``).
+        """
+        if not messages:
+            return messages
+        last = messages[-1]
+        content = last.get("content")
+        if isinstance(content, str):
+            if not content:
+                return messages
+            new_content: list[dict[str, Any]] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+        elif isinstance(content, list) and content:
+            new_content = [*content[:-1], {**content[-1], "cache_control": {"type": "ephemeral"}}]
+        else:
+            return messages
+        return [*messages[:-1], {**last, "content": new_content}]
 
     def export_tools(self, specs: list[ToolSpec]) -> list[dict[str, Any]]:
         """Convert :class:`ToolSpec` objects to Claude's native tool format.

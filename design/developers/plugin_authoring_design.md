@@ -385,3 +385,27 @@ Stage 6's device detection.
     `generate_plugin_scaffold` first wrote it) or `setup_github_repo`'s `.gitignore`/`.git`
     writes (version-control metadata the hub never executes, unlike a broken `.venv` or a
     missing-executable-bit `install.sh`).
+13. **Files-changed notification after every batch of plugin-file writes/removals** — a separate
+    concern from item 12 above: the platform (eisy-ui and friends) needs to know when a plugin's
+    on-disk files change at all, so it can re-read them, regardless of whether their OS permission
+    bits also needed fixing. Fixed with a new `NuCoreInterface` method,
+    `notify_plugin_files_changed` (`POST /api/plugin/code/files-changed`, body `{"paths": [...]}`
+    of absolute paths — the platform resolves the nsid itself from each one) — implemented
+    directly on `IoXWrapper`, not routed through `IoXDiagnostics`, since it's a sibling of the
+    other direct `/api/plugin/...` calls (`plugin_ops`, `configure_plugin`,
+    `handle_plugin_llm_result`), not a `udx.sys.ops` call. Called once per write/removal batch —
+    never once per file, and a no-op on an empty batch — via a parallel shared helper,
+    `file_change_notify.notify_files_changed`, folded into each result dict as
+    `files_changed_notify_error`. A single batch endpoint only, same single-call-per-batch
+    composition as item 12's `refresh_permissions_after_write`: wired into the same three
+    content-writing call sites (`generate_plugin_scaffold`, `regenerate_plugin_boilerplate`,
+    `setup_vscode_debug_config`), plus — unlike item 12 — all three places `handlers/install.py`
+    rewrites `server_entry.json`'s actual content (`install_generated_plugin`'s nsid persist,
+    `update_registered_plugin`'s re-persist, and `delete_registered_plugin`'s nsid-clear): item
+    12 skips that file because its *permission bits* never need re-touching after the first write,
+    but this feature cares about *content* changing, which genuinely happens at each of those
+    three call sites. Deliberately *not* wired into `setup_dev_venv` (its `.venv` tree is written
+    by a subprocess; the only path available in-process is the directory itself, not real files,
+    and of low value to a code-browsing UI), `setup_github_repo`'s `.gitignore`/`.git` writes
+    (version-control plumbing eisy-ui has no reason to read), or `handlers/install.py`'s other,
+    pre-start-only `refresh_permissions_after_write` call (no file is written there at all).

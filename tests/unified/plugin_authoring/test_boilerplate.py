@@ -21,9 +21,6 @@ from unified.plugin_authoring.handlers.scaffold import generate_plugin_scaffold
 DEVELOPER_EMAIL = "dev@example.com"
 DEVELOPER_NAME = "Dev Name"
 
-# "AA:BB:CC:DD:EE:FF" -> mac6 "ddeeff" -- see test_scaffold.py's own fixture for why.
-FAKE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
-
 # See test_scaffold.py's own COMPLETE_OAUTH_CONFIG -- satisfies the name/auth_endpoint/
 # token_endpoint required-when-authorize guard.
 COMPLETE_OAUTH_CONFIG = {
@@ -55,10 +52,10 @@ WIRE_PROFILE = {
 
 
 class _FakeNuCoreInterface:
-    async def get_device_mac_address(self):
-        return FAKE_MAC_ADDRESS
-
     async def refresh_eisy_ai_permissions(self):
+        return {"successful": True}
+
+    async def notify_plugin_files_changed(self, paths):
         return {"successful": True}
 
 
@@ -159,6 +156,38 @@ async def test_regenerates_boilerplate_files_only(tmp_path):
     assert (plugin_dir / "profile.json").read_text() == profile_before
     assert (plugin_dir / "server_entry.json").read_text() == server_entry_before
     assert (plugin_dir / "README.md").read_text() == readme_before
+
+
+@pytest.mark.asyncio
+async def test_files_changed_notify_failure_does_not_block_write(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+
+    class _FailingNotify(_FakeNuCoreInterface):
+        async def notify_plugin_files_changed(self, paths):
+            return {"error": "boom"}
+
+    result = await regenerate_plugin_boilerplate(
+        _FailingNotify(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+    assert result["regenerated"] == ["plugin.py", "main.py", "version.py", "install.sh"]
+    assert result["files_changed_notify_error"] == "boom"
+
+
+@pytest.mark.asyncio
+async def test_regeneration_keeps_the_controller_id_and_address_fixed_literals(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    assert "id = 'controller'" in plugin_py
+    assert "'ctl'" in plugin_py
 
 
 @pytest.mark.asyncio

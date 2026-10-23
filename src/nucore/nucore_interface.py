@@ -884,6 +884,21 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the refresh_eisy_ai_permissions method.")
 
+    async def notify_plugin_files_changed(self, paths: list[str]) -> dict[str, Any] | None:
+        """
+        Tells the platform that one or more of a plugin's on-disk files were
+        generated, updated, or removed, so eisy-ui and friends know to
+        re-read them. Fire once per write/removal batch, never once per
+        file.
+        :param paths: Absolute paths of every file that changed in this batch.
+        :return: The hub's response, or {"error": ...}.
+
+        API:
+        POST /api/plugin/code/files-changed
+        Body: {"paths": [...]}
+        """
+        raise NotImplementedError("Subclasses must implement the notify_plugin_files_changed method.")
+
     async def get_device_family(self, device_id: str) -> str | None:
         """
         Returns a device's real protocol family: insteon, z-wave, zigbee,

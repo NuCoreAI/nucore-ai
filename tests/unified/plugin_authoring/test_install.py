@@ -36,6 +36,7 @@ class FakeBackend:
         self.delete_response = {"successful": True}
         self.plugin_ops_response = {"successful": True, "data": {}}
         self.refresh_response = {"successful": True}
+        self.notify_response = {"successful": True}
         self.register_calls = []
         self.install_calls = []
         self.plugin_ops_calls = []
@@ -43,6 +44,7 @@ class FakeBackend:
         self.update_calls = []
         self.delete_calls = []
         self.refresh_calls = 0
+        self.notify_calls = []
 
     async def register_local_plugin(self, entry):
         self.register_calls.append(entry)
@@ -74,6 +76,10 @@ class FakeBackend:
     async def refresh_eisy_ai_permissions(self):
         self.refresh_calls += 1
         return self.refresh_response
+
+    async def notify_plugin_files_changed(self, paths):
+        self.notify_calls.append(paths)
+        return self.notify_response
 
 
 def _write_server_entry(plugin_dir, entry=None):
@@ -347,6 +353,20 @@ async def test_nsid_is_persisted_into_server_entry_after_success(tmp_path):
     on_disk = json.loads((plugin_dir / "server_entry.json").read_text())
     assert on_disk["nsid"] == "local.acme_pool"
     assert on_disk["name"] == "AcmePool"
+    assert backend.notify_calls == [[str(plugin_dir / "server_entry.json")]]
+
+
+@pytest.mark.asyncio
+async def test_files_changed_notify_failure_does_not_block_start(tmp_path):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_server_entry(plugin_dir)
+    backend = FakeBackend()
+    backend.notify_response = {"error": "boom"}
+
+    result = await install_generated_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["started"] is True
+    assert result["files_changed_notify_error"] == "boom"
 
 
 # --- nsid-known conflict detection ---
@@ -486,6 +506,20 @@ async def test_update_success_pushes_entry_and_repersists_nsid(tmp_path):
     on_disk = json.loads((plugin_dir / "server_entry.json").read_text())
     assert on_disk["nsid"] == "local.acme_pool"
     assert on_disk["desc"] == "updated desc"
+    assert backend.notify_calls == [[str(plugin_dir / "server_entry.json")]]
+
+
+@pytest.mark.asyncio
+async def test_update_files_changed_notify_failure_does_not_block_update(tmp_path):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_server_entry(plugin_dir, {"name": "AcmePool", "nsid": "local.acme_pool"})
+    backend = FakeBackend()
+    backend.notify_response = {"error": "boom"}
+
+    result = await update_registered_plugin(backend, {"location": "acme_pool"}, plugin_output_root=str(tmp_path))
+
+    assert result["updated"] is True
+    assert result["files_changed_notify_error"] == "boom"
 
 
 @pytest.mark.asyncio
@@ -541,6 +575,22 @@ async def test_delete_success_clears_nsid_from_disk(tmp_path):
     on_disk = json.loads((plugin_dir / "server_entry.json").read_text())
     assert "nsid" not in on_disk
     assert on_disk["name"] == "AcmePool"
+    assert backend.notify_calls == [[str(plugin_dir / "server_entry.json")]]
+
+
+@pytest.mark.asyncio
+async def test_delete_files_changed_notify_failure_does_not_block_delete(tmp_path):
+    plugin_dir = tmp_path / "acme_pool"
+    _write_server_entry(plugin_dir, {"name": "AcmePool", "nsid": "local.acme_pool"})
+    backend = FakeBackend()
+    backend.notify_response = {"error": "boom"}
+
+    result = await delete_registered_plugin(
+        backend, {"location": "acme_pool", "confirmed": True}, plugin_output_root=str(tmp_path)
+    )
+
+    assert result["deleted"] is True
+    assert result["files_changed_notify_error"] == "boom"
 
 
 @pytest.mark.asyncio

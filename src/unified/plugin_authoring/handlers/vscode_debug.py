@@ -30,6 +30,7 @@ from typing import Any
 
 from nucore import NuCoreInterface
 
+from ..file_change_notify import notify_files_changed
 from ..permissions_refresh import refresh_permissions_after_write
 from .install import _is_successful, _read_server_entry
 
@@ -107,6 +108,7 @@ async def setup_vscode_debug_config(
     launch_json_path.write_text(json.dumps(launch_config, indent=4) + "\n", encoding="utf-8")
 
     permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+    files_changed_notify_error = await notify_files_changed(nucore_interface, [str(iox_env_path), str(launch_json_path)])
 
     result = {
         "location": location,
@@ -116,4 +118,6 @@ async def setup_vscode_debug_config(
     }
     if permissions_refresh_error is not None:
         result["permissions_refresh_error"] = permissions_refresh_error
+    if files_changed_notify_error is not None:
+        result["files_changed_notify_error"] = files_changed_notify_error
     return result

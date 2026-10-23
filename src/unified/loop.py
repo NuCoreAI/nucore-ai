@@ -183,6 +183,17 @@ class AgenticLoop:
             intent_name = f"unified (round {iteration + 1})"
             await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
             round_config = dict(llm_config or {})
+            # Opt into ClaudeAdapter.generate()'s trailing conversation cache
+            # breakpoint (see its own docstring/_with_message_cache_breakpoint)
+            # -- every round here resends the whole accumulated `messages`
+            # list, including every prior round's tool_use/tool_result
+            # content from this same turn, so without this each round pays
+            # full price to reprocess what the previous round already sent.
+            # Harmless for a provider/profile that can't spend it (e.g.
+            # `unified`'s system prompt already uses the full 4-breakpoint
+            # budget) -- ClaudeAdapter no-ops rather than erroring, and every
+            # other adapter simply ignores an unrecognized config key.
+            round_config["cache_messages"] = True
             raw_response = await self.llm_client.generate(
                 messages=messages,
                 config=round_config,
