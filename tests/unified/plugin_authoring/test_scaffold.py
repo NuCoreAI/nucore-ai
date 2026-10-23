@@ -160,6 +160,34 @@ async def test_accepts_well_formed_wire_profile(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rejects_wire_profile_with_duplicate_case_editor_ids(tmp_path):
+    # validate_profile's wire-shape wrapping (profile_authoring.wrap_wire_profile_as_catalog,
+    # aliased here as _wrap_wire_profile_as_catalog) must still feed every _check_* function,
+    # including _check_no_duplicate_editor_ids -- not just the dangling-reference check above.
+    profile = {
+        "editors": [
+            {"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]},
+            {"id": "ed_onoff", "ranges": [{"uom": "51", "subset": "0,1"}]},
+        ],
+        "nodedefs": [
+            {
+                "id": "switch",
+                "name": "Switch",
+                "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
+                "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
+                "links": {"ctl": [], "rsp": []},
+            },
+            {"id": "controller", "name": "Controller", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}},
+        ],
+        "linkdefs": [],
+    }
+    result = await _generate(tmp_path, _base_args(profile=profile))
+    assert "error" in result
+    assert any("collide" in d for d in result.get("details") or [])
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
 async def test_files_changed_notify_failure_does_not_block_write(tmp_path):
     class _FailingNotify(_FakeNuCoreInterface):
         async def notify_plugin_files_changed(self, paths):
@@ -1033,6 +1061,90 @@ async def test_context_md_accumulates_across_calls(tmp_path):
     context = (tmp_path / "acme_pool" / "context.md").read_text()
     assert "First note." in context
     assert "Second note." in context
+
+
+@pytest.mark.asyncio
+async def test_context_md_cites_sources_consulted_this_call(tmp_path):
+    ledger = EvidenceLedger()
+    ledger.record_source(tier="web_search", url="https://example.com/API.md", title="API.md", license="MIT")
+
+    await _generate(tmp_path, _base_args(iteration_note="Quoted uom strings in the editor."), ledger=ledger)
+
+    context = (tmp_path / "acme_pool" / "context.md").read_text()
+    assert "Sources consulted: API.md (MIT)" in context
+
+
+@pytest.mark.asyncio
+async def test_context_md_omits_sources_line_when_nothing_new_consulted(tmp_path):
+    ledger1 = EvidenceLedger()
+    ledger1.record_source(tier="web_search", url="https://example.com/API.md", title="API.md", license="MIT")
+    await _generate(tmp_path, _base_args(iteration_note="Initial generation."), ledger=ledger1)
+
+    # Re-records the same source (already on disk from the first call --
+    # e.g. re-fetched to confirm something), so it's not new for this entry.
+    ledger2 = EvidenceLedger()
+    ledger2.record_source(tier="web_search", url="https://example.com/API.md", title="API.md", license="MIT")
+    await _generate(
+        tmp_path, _base_args(iteration_note="Quoted uom strings.", confirm_overwrite=True), ledger=ledger2
+    )
+
+    context = (tmp_path / "acme_pool" / "context.md").read_text()
+    second_entry = context.split("## ")[-1]
+    assert "Sources consulted" not in second_entry
+
+
+@pytest.mark.asyncio
+async def test_context_md_cites_only_sources_new_since_the_prior_call(tmp_path):
+    ledger1 = EvidenceLedger()
+    ledger1.record_source(tier="web_search", url="https://example.com/a", title="Source A", license="MIT")
+    await _generate(tmp_path, _base_args(iteration_note="First note."), ledger=ledger1)
+
+    # Same connection's ledger carries A forward (never reset per-call) and
+    # also records a genuinely new B -- only B should be cited this time.
+    ledger2 = EvidenceLedger()
+    ledger2.sources.extend(ledger1.sources)
+    ledger2.record_source(tier="web_search", url="https://example.com/b", title="Source B", license="Apache-2.0")
+    await _generate(tmp_path, _base_args(iteration_note="Second note.", confirm_overwrite=True), ledger=ledger2)
+
+    context = (tmp_path / "acme_pool" / "context.md").read_text()
+    second_entry = context.split("## ")[-1]
+    assert "Source B" in second_entry
+    assert "Source A" not in second_entry
+
+
+def test_sources_consulted_line_formats_multiple_sources():
+    line = scaffold._sources_consulted_line(
+        [
+            {"title": "API.md", "license": "MIT"},
+            {"title": "udi-poly-template-python", "license": "MIT"},
+        ]
+    )
+    assert line == "Sources consulted: API.md (MIT), udi-poly-template-python (MIT)"
+
+
+def test_sources_consulted_line_omits_license_when_absent():
+    line = scaffold._sources_consulted_line([{"title": "API.md", "license": None}])
+    assert line == "Sources consulted: API.md"
+
+
+def test_sources_consulted_line_falls_back_to_url_when_no_title():
+    line = scaffold._sources_consulted_line([{"url": "https://example.com/docs", "title": None, "license": None}])
+    assert line == "Sources consulted: https://example.com/docs"
+
+
+def test_sources_consulted_line_is_empty_for_no_sources():
+    assert scaffold._sources_consulted_line([]) == ""
+
+
+def test_context_entry_unchanged_when_sources_omitted():
+    omitted = scaffold._context_entry(iteration_note="A note.")
+    empty = scaffold._context_entry(iteration_note="A note.", sources=[])
+    assert "Sources consulted" not in omitted
+    # Strip each entry's leading "## <timestamp>\n\n" line before comparing
+    # -- the two calls get independent timestamps.
+    body_omitted = omitted.split("\n\n", 1)[1]
+    body_empty = empty.split("\n\n", 1)[1]
+    assert body_omitted == body_empty == "A note.\n\n"
 
 
 # --- sources.md: deduped, cross-session evidence record ---

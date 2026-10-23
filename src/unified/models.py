@@ -154,10 +154,30 @@ class ConversationTurn:
     Attributes:
         query:    The user's input text for this turn.
         response: The assistant's response text for this turn.
+        messages: The full provider-native message transcript this turn
+                  produced -- AgenticLoop.run()'s own ``new_messages``
+                  return value: the (possibly wrapped) user turn, every
+                  tool_use/tool_result round trip, and the final assistant
+                  reply, in whatever shape the active provider's adapter
+                  emits. Replayed verbatim as this turn's contribution to a
+                  later turn's ``history_messages`` when non-empty (see
+                  runtime.py's ``_replay_turn``); falls back to the plain
+                  ``query``/``response`` text pair when empty -- every turn
+                  predating this field, every turn history_compaction.py
+                  summarized away, and any caller that never captured a
+                  rich transcript to begin with.
+        provider: Which provider/adapter produced ``messages`` (e.g.
+                  ``"claude"``) -- ``messages``'s shape is provider-native,
+                  not portable across a provider change, so this lets a
+                  later turn refuse to replay it if the active provider no
+                  longer matches. ``None`` when unknown (every turn
+                  predating this field).
     """
 
     query: str
     response: str
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    provider: str | None = None
 
 
 @dataclass
@@ -200,9 +220,24 @@ class ConversationHistory:
     pending_failed: bool = False
     pending_turns: int = 0
 
-    def append(self, query: str, response: str) -> None:
-        """Add a new turn and evict the oldest if the window is full."""
-        self.turns.append(ConversationTurn(query=query, response=response))
+    def append(
+        self,
+        query: str,
+        response: str,
+        messages: list[dict[str, Any]] | None = None,
+        provider: str | None = None,
+    ) -> None:
+        """Add a new turn and evict the oldest if the window is full.
+
+        *messages*/*provider* are this turn's rich transcript and the
+        provider that produced it (see ``ConversationTurn``) -- both
+        optional, defaulting to today's exact text-only turn when omitted.
+        *messages* is copied, not aliased, so a caller that keeps mutating
+        its own list afterward can't retroactively corrupt stored history.
+        """
+        self.turns.append(
+            ConversationTurn(query=query, response=response, messages=list(messages or []), provider=provider)
+        )
         if len(self.turns) > self.max_turns:
             self.turns = self.turns[-self.max_turns:]
 

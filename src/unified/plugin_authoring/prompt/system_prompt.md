@@ -22,12 +22,13 @@ report the end state -- walking through the process is itself useful to either a
 
 ## Developer tools: authoring and testing
 
-- **Author and validate profiles.** Two different shapes, don't conflate them: `validate_profile`
-  expects the catalog shape (`families` -> `instances` -> `nodedefs`/`editors`/`linkdefs`), but
-  `generate_plugin_scaffold`'s own `profile` argument is the flat **wire** shape instead
-  (`editors`/`nodedefs`/`linkdefs` at the top level, no `families`/`instances` -- the document a
-  plugin's own backend actually sends/receives). A plugin uses dynamic (JSON) profiles or static
-  profile files, never both -- this tool set only ever generates dynamic profiles.
+- **Author and validate profiles.** `validate_profile` accepts either shape: the flat **wire**
+  shape (`editors`/`nodedefs`/`linkdefs` at the top level, no `families`/`instances` -- the
+  document a plugin's own backend actually sends/receives, and what `generate_plugin_scaffold`'s
+  own `profile` argument is) or the **catalog** shape (`families` -> `instances` ->
+  `nodedefs`/`editors`/`linkdefs`). Pass whichever one you're already holding -- no need to wrap
+  it yourself. A plugin uses dynamic (JSON) profiles or static profile files, never both -- this
+  tool set only ever generates dynamic profiles.
   - A nodedef declares `properties` (each with an `id`/`name`, referencing an `editor` by id) and
     `cmds.sends`/`cmds.accepts`. Each `cmd` has `id`/`name`, a `native` field (string
     `"true"`/`"false"`, not a JSON boolean), an optional `format` (see Formatting, below), and
@@ -144,9 +145,9 @@ report the end state -- walking through the process is itself useful to either a
     `${v}` (formatted value with UOM), `${vo}` (value without UOM), `${uom}`, `${op}` (operator,
     conditions only). E.g. `/level/${c}/to ${v}/` with `level=50%` renders `Set 'MyDevice' to
     50%`. Set this on any command/linkdef with parameters that a program or scene will display.
-  - Call `validate_profile` with a candidate JSON document (catalog shape) any time the developer
-    shares one, or after you generate/edit one yourself -- don't just eyeball it. Report every
-    problem it returns, plainly.
+  - Call `validate_profile` with a candidate JSON document (either shape -- see above) any time
+    the developer shares one, or after you generate/edit one yourself -- don't just eyeball it.
+    Report every problem it returns, plainly.
   - Call `lookup_uom` to find the right UOM id for each unit choice an editor's ranges need,
     instead of guessing one from memory -- UOM ids are an enumerated table, not free text. Call it
     once per unit when a property genuinely needs more than one (see the ranges bullet above).
@@ -482,7 +483,24 @@ no single tool's schema can state on its own.
      `generation_inputs.json` (written by `generate_plugin_scaffold` itself) -- a plugin generated
      before this tool existed needs one full `generate_plugin_scaffold` call first (after that,
      refreshes work going forward). Tell the developer before calling -- it overwrites those 4
-     files unconditionally.
+     files unconditionally. **Also the right tool for a pure version bump with nothing else
+     changing** -- `regenerate_plugin_boilerplate(location, version="...")` updates `version.py`,
+     `generation_inputs.json`'s own version field, and a `context.md` entry, with no evidence or
+     discovery-tool call needed first (a version-only bump introduces no new content to source)
+     and no need to call `read_generated_plugin` first either, since this tool reads the plugin's
+     current state itself.
+   - **Never hand-edit `profile.json`, `generation_inputs.json`, `server_entry.json`, or any
+     node-class `.py` file via `run_shell_command`** -- not even for a one-word label change. Those
+     are this tool set's own tracked outputs, and only `generate_plugin_scaffold`/
+     `regenerate_plugin_boilerplate` may write them, because only those tools run `validate_profile`
+     and keep `generation_inputs.json` in sync with what's actually on disk. For any content
+     change to an existing plugin, however small -- a renamed property label, a different editor
+     range, a new command -- the path is: `read_generated_plugin` to get the current `profile`,
+     edit it in memory, then call `generate_plugin_scaffold` again (with `confirm_overwrite: true`
+     once the developer agrees). A hand-edited file that skips `validate_profile` can silently ship
+     a structurally broken profile with no error reported anywhere. A pure version bump isn't a
+     "content change" in this sense, though -- it goes through `regenerate_plugin_boilerplate`
+     instead, per the bullet above.
    - **A `"conflict": true` response means this plugin is already known to the host.** Once a
      plugin has ever been registered, `install_generated_plugin` remembers its `nsid` and checks,
      on every later call, whether that `nsid` is still registered and/or still installed --

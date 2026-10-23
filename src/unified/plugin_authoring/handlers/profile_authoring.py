@@ -11,6 +11,22 @@ purely via ``Profile().load_from_json(...)`` and its captured debug-log
 output, below), just a reusable reference for anyone hand-authoring/vetting
 a profile document outside this chat loop.
 
+``validate_profile`` accepts either of the two shapes this codebase uses (see
+``nucore/schemas/README.md``'s "Two shapes" section): the **catalog** shape
+(``families: [{instances: [...]}]``) ``nucore.Profile.__parse_profile__``
+actually requires, or the flat **wire** shape (``editors``/``nodedefs``/
+``linkdefs`` at the top level -- what ``generate_plugin_scaffold``'s own
+``profile`` argument is, and what a plugin's backend actually sends/receives
+via ``polyglot.getJsonProfile()``/``updateJsonProfile()``). A wire-shaped
+document is wrapped into the catalog shape (``wrap_wire_profile_as_catalog``)
+before any of the checks below run -- without this, every check here (and
+``Profile.__parse_profile__`` itself) silently walks an absent/empty
+``families`` list and reports no errors at all, regardless of what's
+actually wrong with the document. This was a real, confirmed bug: this
+tool's own description tells a caller to pass either shape, but until this
+wrapping existed, a wire-shaped profile with real defects validated as
+``{"valid": true, "errors": []}`` every time.
+
 ``validate_profile`` also independently cross-checks several things
 ``nucore.profile``'s own parser doesn't:
 - every editor range's ``uom`` against the real UOM table
@@ -74,6 +90,17 @@ a profile document outside this chat loop.
   the system prompt tells the model never to author it itself -- requiring
   it in this standalone check would fail a correctly-authored profile for
   following that instruction.
+- every NodeDef has a non-empty ``name`` (``_check_nodedef_has_name``), accepting either ``nls``
+  (legacy) or ``name`` since ``nucore.profile``'s parser does (``profile.py:341``) -- the parser
+  accepts a missing one silently with no debug log, but ``handlers/workspace.py``'s resume-listing
+  already depends on ``nodedefs[0].get("name")``, so a nameless nodedef degrades this tool set's
+  own resume UX, not just the real hub's.
+- no two editors anywhere in the document share an id, case-insensitively
+  (``_check_no_duplicate_editor_ids``) -- ``nucore.profile``'s ``add_editor`` keys its
+  ``editors_dict`` by the *lowercased* id but dedupes on the *raw* one, so two editors differing
+  only by case don't just silently drop the second: depending on declaration order, the survivor
+  can be either the first or the second one, meaning a property's editor can silently resolve to
+  a completely different range/UOM than the one actually declared for it.
 - every editor's own shape -- no stray top-level fields, and every range's
   ``uom`` is a JSON string (``_check_editor_shape``) -- this happened for
   real: a generated ``CNT_RUNNING`` editor had ``names`` as a sibling of
@@ -89,6 +116,13 @@ a profile document outside this chat loop.
   lookup, so a bare-int ``uom`` also round-trips fine locally even though
   it's schema-illegal (``nucore/schemas/defs/uom.schema.json`` requires a
   string).
+
+Deliberately *not* checked: a LinkDef's ``name``. ``linkdef.schema.json`` documents it as
+intentionally optional per this directory's own leniency policy (``nucore/schemas/README.md``'s
+"Leniency policy" section), matching what ``nucore.profile``'s parser actually tolerates being
+absent. Adding a hard check here would make ``validate_profile`` reject a profile the schema
+calls legal, and this tool has no ``warnings`` channel to report a softer concern -- considered
+and declined, not an oversight.
 
 These cross-checks exist because the system prompt tells the model to call
 ``lookup_uom``/``lookup_property_id`` instead of guessing from memory, and
@@ -115,6 +149,48 @@ from ..standard_property_ids import (
     STANDARD_PROPERTY_IDS,
     is_valid_property_id_format,
 )
+
+
+def wrap_wire_profile_as_catalog(wire_profile: dict) -> dict:
+    """``profile`` here (and the stored ``profile.json`` ``workspace.py``
+    already reads back, per its shipped Phase 3 tests) is the Dynamic
+    Profiles **wire** shape -- ``editors``/``nodedefs``/``linkdefs`` as
+    top-level lists, the same document ``polyglot.getJsonProfile()``
+    returns. ``nucore.Profile.load_from_json`` -- and therefore
+    ``validate_profile``'s own checks -- expects nucore's internal
+    **catalog** shape instead (``families: [{instances: [...]}]``); passing
+    the wire shape straight through would silently validate nothing at all
+    (``raw.get("families", [])`` is just an empty list, no error). Wrap it
+    in one synthetic family/instance -- id/name are required by
+    ``Profile.__parse_profile__`` but meaningless here, so both are a fixed
+    placeholder -- purely so the real structural checks (dangling editor
+    references, malformed properties/commands) still run.
+
+    Moved here (from ``handlers/scaffold.py``, which still aliases this name
+    for its own call site) so ``validate_profile`` itself can wrap a
+    wire-shaped document before validating -- previously only
+    ``generate_plugin_scaffold``'s own internal guard did this, so a direct
+    ``validate_profile`` call (the one the system prompt tells the model to
+    make on a candidate document before generating) silently validated
+    nothing on the realistic, wire-shaped input it actually receives.
+    """
+    return {
+        "families": [
+            {
+                "id": "generated",
+                "name": "generated",
+                "instances": [
+                    {
+                        "id": "generated",
+                        "name": "generated",
+                        "editors": wire_profile.get("editors", []),
+                        "nodedefs": wire_profile.get("nodedefs", []),
+                        "linkdefs": wire_profile.get("linkdefs", []),
+                    }
+                ],
+            }
+        ]
+    }
 
 
 class _CaptureHandler(logging.Handler):
@@ -487,6 +563,84 @@ def _check_nodedef_has_st_property(raw_profile: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _check_nodedef_has_name(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every NodeDef and flags one whose ``nls``/``name`` are both
+    missing, not a string, or empty/whitespace-only. ``nucore.profile``'s
+    parser (``profile.py:341``, ``ndict.get("nls") or ndict.get("name")``)
+    accepts a missing name silently, with no debug log -- but
+    ``handlers/workspace.py``'s resume-listing already depends on
+    ``nodedefs[0].get("name")`` for a plugin's display label, so a nameless
+    nodedef degrades this tool set's own resume UX, not just a hypothetical
+    real-hub concern. Accepts either ``nls`` (legacy) or ``name``, matching
+    the parser exactly -- checking only ``name`` would reject an otherwise
+    legal profile using the legacy field.
+    """
+    errors: list[str] = []
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for nodedef in instance.get("nodedefs") or []:
+                if not isinstance(nodedef, dict):
+                    continue
+                nodedef_id = nodedef.get("id") or "?"
+                name = nodedef.get("nls") or nodedef.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    errors.append(
+                        f"nodedef '{nodedef_id}' is missing a 'name' (or legacy 'nls') -- every "
+                        "nodedef needs one, e.g. for this tool set's own resume listing"
+                    )
+    return errors
+
+
+def _check_no_duplicate_editor_ids(raw_profile: dict[str, Any]) -> list[str]:
+    """Walks every editor across the whole document and flags any id that
+    collides, case-insensitively, with another editor's id -- anywhere,
+    not just within one instance. ``nucore.profile``'s ``add_editor``
+    (``profile.py``) keys its ``editors_dict`` by the *lowercased* id but
+    dedupes on the *raw* one (``if edict["id"] not in editors_dict``), so
+    this is order-dependent silent data loss, not just "a second editor is
+    dropped": whichever editor is declared second either gets silently
+    dropped (if the first declaration's raw id already matches) or
+    silently *overwrites* the first (if the raw ids differ only by case),
+    depending purely on declaration order -- a property referencing either
+    id can silently resolve to a completely different range/UOM than the
+    one actually declared for it.
+    """
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    for family in raw_profile.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        for instance in family.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            for editor in instance.get("editors") or []:
+                if not isinstance(editor, dict):
+                    continue
+                editor_id = editor.get("id")
+                if not isinstance(editor_id, str):
+                    continue
+                key = editor_id.lower()
+                if key in seen and seen[key] != editor_id:
+                    errors.append(
+                        f"editor ids '{seen[key]}' and '{editor_id}' collide case-insensitively "
+                        "-- nucore.profile keys editors by lowercased id, so one of them is "
+                        "silently dropped or silently overwrites the other depending on "
+                        "declaration order, not just coexisting as two distinct editors"
+                    )
+                elif key in seen:
+                    errors.append(
+                        f"editor id '{editor_id}' is declared more than once -- every editor id "
+                        "must be unique within this profile"
+                    )
+                else:
+                    seen[key] = editor_id
+    return errors
+
+
 def _check_editor_shape(raw_profile: dict[str, Any]) -> list[str]:
     """Walks every editor and flags two shape mistakes ``nucore.profile``'s
     parser tolerates silently rather than erroring on:
@@ -532,6 +686,23 @@ def _check_editor_shape(raw_profile: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _detect_profile_shape(raw_profile: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """Returns ``(catalog_shaped_profile, shape_name)``, or ``None`` when
+    *raw_profile* has neither shape's defining keys -- nothing to validate.
+    ``"families"`` present (even if it turns out empty/malformed -- that's
+    a validation error below, not "no shape detected") wins over wire-shape
+    detection, matching ``nucore.Profile.__parse_profile__``'s own precedence
+    (it only ever reads ``families``)."""
+    if "families" in raw_profile:
+        families = raw_profile.get("families")
+        if isinstance(families, list) and families:
+            return raw_profile, "catalog"
+        return None
+    if any(key in raw_profile for key in ("nodedefs", "editors", "linkdefs")):
+        return wrap_wire_profile_as_catalog(raw_profile), "wire"
+    return None
+
+
 async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:
     """*nucore_interface* is unused -- this tool never touches the hub, it
     only exercises nucore's local profile parser plus this module's own
@@ -539,6 +710,17 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
     raw_profile = args.get("profile")
     if not isinstance(raw_profile, dict):
         return {"valid": False, "errors": ["'profile' must be a JSON object"]}
+
+    detected = _detect_profile_shape(raw_profile)
+    if detected is None:
+        return {
+            "valid": False,
+            "errors": [
+                "profile has neither 'families' (catalog shape) nor 'nodedefs'/'editors'/"
+                "'linkdefs' (wire shape) -- nothing to validate"
+            ],
+        }
+    catalog_profile, shape = detected
 
     profile_logger = logging.getLogger("nucore.profile")
     capture = _CaptureHandler()
@@ -550,7 +732,7 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
     original_level = profile_logger.level
     profile_logger.setLevel(logging.DEBUG)
     try:
-        Profile().load_from_json(raw_profile)
+        Profile().load_from_json(catalog_profile)
     except NuCoreError as exc:
         return {"valid": False, "errors": [str(exc)]}
     except Exception as exc:
@@ -561,19 +743,27 @@ async def validate_profile(nucore_interface: NuCoreInterface, args: dict[str, An
 
     errors = (
         capture.messages
-        + _check_uom_consistency(raw_profile)
-        + _check_property_id_format(raw_profile)
-        + _check_property_has_name(raw_profile)
-        + _check_nodedef_id_format(raw_profile)
-        + _check_no_duplicate_nodedef_ids(raw_profile)
-        + _check_links_object_present(raw_profile)
-        + _check_linkdef_references(raw_profile)
-        + _check_linkdef_cmd_parameters(raw_profile)
-        + _check_no_duplicate_property_ids(raw_profile)
-        + _check_nodedef_has_st_property(raw_profile)
-        + _check_editor_shape(raw_profile)
+        + _check_uom_consistency(catalog_profile)
+        + _check_property_id_format(catalog_profile)
+        + _check_property_has_name(catalog_profile)
+        + _check_nodedef_id_format(catalog_profile)
+        + _check_no_duplicate_nodedef_ids(catalog_profile)
+        + _check_links_object_present(catalog_profile)
+        + _check_linkdef_references(catalog_profile)
+        + _check_linkdef_cmd_parameters(catalog_profile)
+        + _check_no_duplicate_property_ids(catalog_profile)
+        + _check_nodedef_has_st_property(catalog_profile)
+        + _check_editor_shape(catalog_profile)
+        + _check_nodedef_has_name(catalog_profile)
+        + _check_no_duplicate_editor_ids(catalog_profile)
     )
-    return {"valid": not errors, "errors": errors}
+    result: dict[str, Any] = {"valid": not errors, "errors": errors}
+    if shape == "wire":
+        # Additive only -- the catalog-shape path's result stays exactly
+        # {"valid", "errors"} so existing exact-equality callers/tests are
+        # unaffected; "wire" is the newly-handled case worth surfacing.
+        result["shape"] = shape
+    return result
 
 
 async def lookup_uom(nucore_interface: NuCoreInterface, args: dict[str, Any]) -> Any:

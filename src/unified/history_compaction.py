@@ -11,6 +11,7 @@ single LLM call) rather than silently dropping them.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .adapters import LLMAdapter
@@ -38,8 +39,34 @@ def estimate_tokens(text: str) -> int:
     return len(text or "") // 4
 
 
+def _turn_tokens(turn: ConversationTurn) -> int:
+    """Estimate one turn's token footprint for the compaction budget check.
+
+    A turn with a non-empty rich ``.messages`` transcript (every tool_use/
+    tool_result round trip this turn produced -- see models.py's
+    ConversationTurn.messages) is sized from that transcript's full
+    JSON-serialized bytes, not just ``.query``/``.response`` -- those two
+    short text fields would badly undercount a turn that made several tool
+    calls (e.g. a multi-KB file read echoed back verbatim in a tool_result
+    block), letting compaction fire far later than the actual prompt size
+    sent to the model on every subsequent turn would justify.
+
+    Falls back to ``.query``/``.response`` alone -- today's exact estimate
+    -- for a turn with no rich transcript: pre-feature turns, the
+    ``_COMPACTED_QUERY_LABEL`` summary pseudo-turn, and every turn whose
+    messages a caller never captured. Never raises -- a serialization
+    failure degrades to the text-only estimate rather than propagating.
+    """
+    if turn.messages:
+        try:
+            return estimate_tokens(json.dumps(turn.messages, ensure_ascii=False, default=str))
+        except Exception:
+            pass
+    return estimate_tokens(turn.query) + estimate_tokens(turn.response)
+
+
 def _history_tokens(turns: list[ConversationTurn]) -> int:
-    return sum(estimate_tokens(t.query) + estimate_tokens(t.response) for t in turns)
+    return sum(_turn_tokens(t) for t in turns)
 
 
 def _render_turns_for_summary(turns: list[ConversationTurn]) -> str:

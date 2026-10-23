@@ -159,6 +159,117 @@ async def test_regenerates_boilerplate_files_only(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_version_override_updates_version_py_and_generation_inputs(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args(version="1.0.2"))
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+    inputs_before = json.loads((plugin_dir / "generation_inputs.json").read_text())
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool", "version": "1.0.3"}, plugin_output_root=str(tmp_path)
+    )
+
+    assert "error" not in result
+    assert set(result["regenerated"]) == {
+        "plugin.py",
+        "main.py",
+        "version.py",
+        "install.sh",
+        "generation_inputs.json",
+        "context.md",
+    }
+    assert 'ud_plugin_version = "1.0.3"' in (plugin_dir / "version.py").read_text()
+    inputs_after = json.loads((plugin_dir / "generation_inputs.json").read_text())
+    assert inputs_after["version"] == "1.0.3"
+    assert {k: v for k, v in inputs_after.items() if k != "version"} == {
+        k: v for k, v in inputs_before.items() if k != "version"
+    }
+
+
+@pytest.mark.asyncio
+async def test_version_override_appends_context_entry(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args(version="1.0.2"))
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(),
+        {"location": "acme_pool", "version": "1.0.3", "iteration_note": "Bump to 1.0.3, no other changes."},
+        plugin_output_root=str(tmp_path),
+    )
+    assert "error" not in result
+    assert "context.md" in result["regenerated"]
+    assert "Bump to 1.0.3, no other changes." in (plugin_dir / "context.md").read_text()
+
+
+@pytest.mark.asyncio
+async def test_version_override_defaults_the_context_note_when_omitted(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args(version="1.0.2"))
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool", "version": "1.0.3"}, plugin_output_root=str(tmp_path)
+    )
+    assert "error" not in result
+    assert "Version bumped 1.0.2 -> 1.0.3." in (plugin_dir / "context.md").read_text()
+
+
+@pytest.mark.asyncio
+async def test_same_version_override_is_a_no_op(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args(version="1.0.2"))
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+    context_before = (plugin_dir / "context.md").read_text()  # generate_plugin_scaffold always writes one entry
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool", "version": "1.0.2"}, plugin_output_root=str(tmp_path)
+    )
+    assert result["regenerated"] == ["plugin.py", "main.py", "version.py", "install.sh"]
+    assert (plugin_dir / "context.md").read_text() == context_before
+
+
+@pytest.mark.asyncio
+async def test_omitted_version_keeps_existing_behavior_unchanged(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args(version="1.0.2"))
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+    inputs_before = (plugin_dir / "generation_inputs.json").read_text()
+    context_before = (plugin_dir / "context.md").read_text()
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+    assert result["regenerated"] == ["plugin.py", "main.py", "version.py", "install.sh"]
+    assert (plugin_dir / "generation_inputs.json").read_text() == inputs_before
+    assert (plugin_dir / "context.md").read_text() == context_before
+
+
+@pytest.mark.asyncio
+async def test_version_override_rejects_non_string(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool", "version": 2}, plugin_output_root=str(tmp_path)
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_iteration_note_rejects_non_string(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(),
+        {"location": "acme_pool", "version": "1.0.3", "iteration_note": 2},
+        plugin_output_root=str(tmp_path),
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
 async def test_files_changed_notify_failure_does_not_block_write(tmp_path):
     gen_result = await _generate(tmp_path, _base_args())
     assert "error" not in gen_result

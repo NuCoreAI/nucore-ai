@@ -30,8 +30,11 @@ Dynamic Profiles has two different top-level shapes in this codebase:
 (`src/unified/plugin_authoring/handlers/scaffold.py`) writes the **wire** shape to disk as
 `profile.json` -- the same document `read_generated_plugin` later reads back, and what an
 installed plugin's own backend would send. It only wraps that into the **catalog** shape
-transiently, in memory (`_wrap_wire_profile_as_catalog`), to reuse `validate_profile`'s existing
-check before writing; the catalog shape itself is never what's persisted for this tool set.
+transiently, in memory (`profile_authoring.wrap_wire_profile_as_catalog`), to reuse
+`validate_profile`'s existing check before writing; the catalog shape itself is never what's
+persisted for this tool set. `validate_profile` itself does the same wrapping when called
+directly with a wire-shaped document (detected by the absence of a `families` key) -- both
+shapes are accepted, not just the catalog one; see `profile_authoring.py`'s module docstring.
 
 Both `$ref` into the same [`defs/`](defs/) object definitions (`NodeDef`, `Property`, `Cmd`,
 `Parameter`, `Editor`, `Range`, `LinkDef`, plus `id`/`icon`/`uom` leaf definitions), so the two
@@ -70,6 +73,14 @@ doesn't mark them so. Each affected `defs/*.schema.json` file's `description` ca
 it diverges from a literal reading of the table. This also means `dynamic_profile_update.schema.json`
 and `nucore_profile_catalog.schema.json` are validated against the **same**, lenient object
 definitions -- not a strict wire-format contract in one and a lenient parser-shape in the other.
+
+`validate_profile` (`src/unified/plugin_authoring/handlers/profile_authoring.py`) deliberately
+diverges from this leniency policy in a few places, on hub-readiness grounds rather than
+parser-compatibility ones: it hard-requires `Property.name` (`_check_property_has_name`),
+`NodeDef.links` (`_check_links_object_present`), and `NodeDef.name`/`nls`
+(`_check_nodedef_has_name`) even though the parser and these schemas both tolerate each one being
+absent. `LinkDef.name` was considered for the same treatment and *deliberately* left alone --
+it stays optional here and in `validate_profile` both, so this isn't re-litigated later.
 
 ## What's out of scope
 

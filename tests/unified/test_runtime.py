@@ -343,6 +343,136 @@ async def test_concurrent_handle_query_calls_for_same_session_are_serialized(mon
     assert any(m.get("content") == "first" for m in second_call["history_messages"])
 
 
+class _RichOnceLoop:
+    """Like _FakeLoop, but returns a non-empty, recognizable new_messages
+    transcript (a tool_use/tool_result round trip) on its first run() call,
+    a plain text-only turn on every call after that, and records every
+    call's history_messages -- what's needed to prove turn 2 actually saw
+    turn 1's rich transcript, not just the collapsed {query}/{response}
+    text pair."""
+
+    calls: list[dict] = []
+    TOOL_USE_BLOCK = {"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "x.py"}}
+    TOOL_RESULT_BLOCK = {"type": "tool_result", "tool_use_id": "toolu_1", "content": "file contents"}
+
+    def __init__(self, **kwargs):
+        pass
+
+    async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        _RichOnceLoop.calls.append({"user_message": user_message, "history_messages": list(history_messages)})
+        if len(_RichOnceLoop.calls) == 1:
+            new_messages = [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": [_RichOnceLoop.TOOL_USE_BLOCK]},
+                {"role": "user", "content": [_RichOnceLoop.TOOL_RESULT_BLOCK]},
+                {"role": "assistant", "content": "turn 1 answer"},
+            ]
+            return "turn 1 answer", new_messages
+        return "turn 2 answer", []
+
+
+@pytest.mark.asyncio
+async def test_history_messages_replays_the_prior_turns_rich_transcript_verbatim(monkeypatch):
+    # The actual fix: a turn's full tool_use/tool_result transcript -- not
+    # just its collapsed {query}/{response} text pair -- must survive into
+    # the *next* turn's history_messages.
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _RichOnceLoop)
+    _RichOnceLoop.calls = []
+    runtime = _runtime()
+
+    await runtime.handle_query("first query", session_id="rich-session")
+    await runtime.handle_query("second query", session_id="rich-session")
+
+    second_call = _RichOnceLoop.calls[1]
+    assert second_call["history_messages"] == [
+        {"role": "user", "content": "first query"},
+        {"role": "assistant", "content": [_RichOnceLoop.TOOL_USE_BLOCK]},
+        {"role": "user", "content": [_RichOnceLoop.TOOL_RESULT_BLOCK]},
+        {"role": "assistant", "content": "turn 1 answer"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_history_messages_falls_back_to_the_text_pair_when_a_turn_has_no_rich_messages(monkeypatch):
+    # Every existing fake/stub AgenticLoop.run() returns new_messages == []
+    # -- confirms that case still replays the plain {query}/{response} pair,
+    # unchanged from before this feature existed.
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _RecordingLoop)
+    _RecordingLoop.calls = []
+    runtime = _runtime()
+
+    await runtime.handle_query("first", session_id="plain-session")
+    await runtime.handle_query("second", session_id="plain-session")
+
+    second_call = _RecordingLoop.calls[1]
+    assert second_call["history_messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "first-response"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persisted_rich_messages_keep_the_exact_wrapped_content_actually_sent(monkeypatch):
+    # new_messages is persisted verbatim -- including its ui_context-wrapped
+    # first element -- not swapped back to the clean query. A swap was
+    # tried and measured (via the real prompt log) to defeat Anthropic's
+    # prompt caching: the next turn's replayed prefix must be byte-identical
+    # to what was actually sent (and cached) this turn to get a cache hit,
+    # and the wrapped text is exactly what was actually sent.
+    # ConversationTurn.query (a separate field, asserted below) is what
+    # stays clean, for text-only fallback/compaction use.
+    class _OneShotRichLoop:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            return "answer", [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": "answer"},
+            ]
+
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _OneShotRichLoop)
+    runtime = _runtime()
+
+    await runtime.handle_query("real query", session_id="ctx-session", framework_context={"screen": "home"})
+
+    history = runtime.session_store.get("ctx-session::unified", max_turns=20)
+    assert history.turns[-1].query == "real query"
+    assert history.turns[-1].messages[0] == {
+        "role": "user",
+        "content": "<ui_context>{'screen': 'home'}</ui_context>\n\nreal query",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_provider_mismatch_falls_back_to_the_text_pair_instead_of_replaying_incompatible_content(monkeypatch):
+    # A turn's rich .messages is in whatever shape the provider that
+    # produced it emits -- not portable across a provider change (e.g. a
+    # live config edit swapping providers for this tool set between
+    # reconnects, with the same shared ConversationHistory surviving).
+    # current_provider must be a known, disagreeing value here -- None
+    # (unknown) is deliberately permissive, covered by the fallback test
+    # above, not a mismatch.
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _RecordingLoop)
+    _RecordingLoop.calls = []
+    runtime = _runtime({"supported_llms": {"unified": {"provider": "claude"}}})
+    history = runtime.session_store.get("mismatch-session::unified", max_turns=20)
+    history.append(
+        "old query",
+        "old response",
+        [{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]}],
+        provider="openai",
+    )
+
+    await runtime.handle_query("second", session_id="mismatch-session")
+
+    call = _RecordingLoop.calls[0]
+    assert call["history_messages"] == [
+        {"role": "user", "content": "old query"},
+        {"role": "assistant", "content": "old response"},
+    ]
+
+
 # --- extra_tools/on_raw_response passthrough (plugin_authoring's Claude-
 # native web search path, run_unified_runtime.py's _build_plugin_authoring_tool_set) ---
 

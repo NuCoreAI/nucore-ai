@@ -138,6 +138,7 @@ async def test_validate_profile_accepts_enum_uom_with_subset_range():
                 "nodedefs": [
                     {
                         "id": "ND_X",
+                        "name": "Switch",
                         "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
@@ -216,6 +217,7 @@ async def test_validate_profile_accepts_correctly_nested_names():
                 "nodedefs": [
                     {
                         "id": "ND_X",
+                        "name": "Counter",
                         "properties": [{"id": "ST", "name": "Status", "editor": "CNT_RUNNING"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
@@ -393,6 +395,7 @@ async def test_validate_profile_accepts_meaningful_custom_property_id():
                 "nodedefs": [
                     {
                         "id": "ND_X",
+                        "name": "Device",
                         "properties": [
                             {"id": "ST", "name": "Status", "editor": "ED_X"},
                             {"id": "FILTER_LIFE", "name": "Filter Life", "editor": "ED_X"},
@@ -505,6 +508,7 @@ async def test_validate_profile_accepts_underscore_in_nodedef_id():
                 "nodedefs": [
                     {
                         "id": "my_controller",
+                        "name": "Controller",
                         "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
@@ -636,6 +640,7 @@ async def test_validate_profile_accepts_nodedef_with_empty_links():
                 "nodedefs": [
                     {
                         "id": "ND_X",
+                        "name": "Switch",
                         "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
@@ -693,6 +698,7 @@ async def test_validate_profile_accepts_linkdef_reference_that_matches():
                 "nodedefs": [
                     {
                         "id": "ND_X",
+                        "name": "Switch",
                         "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
                         "cmds": {},
                         "links": {"ctl": ["I_STD"], "rsp": []},
@@ -893,6 +899,7 @@ async def test_validate_profile_accepts_device_nodedef_with_one_st_property():
                 "nodedefs": [
                     {
                         "id": "ND_X",
+                        "name": "Thermostat",
                         "properties": [{"id": "ST", "name": "Current Temperature", "editor": "ED_X"}],
                         "cmds": {},
                         "links": {"ctl": [], "rsp": []},
@@ -917,8 +924,228 @@ async def test_validate_profile_does_not_require_st_on_controller_nodedef():
                 "id": "inst1",
                 "name": "Test Instance",
                 "nodedefs": [
-                    {"id": "controller", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}
+                    {
+                        "id": "controller",
+                        "name": "Controller",
+                        "properties": [],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
                 ],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+# --- wire-shape detection: validate_profile's own description tells the model
+# to pass either shape, but until this wrapping existed, a wire-shaped profile
+# (editors/nodedefs/linkdefs at the top level -- what generate_plugin_scaffold's
+# own `profile` argument is) silently validated as {"valid": true} no matter
+# what was wrong with it, because every _check_* function (and nucore's own
+# parser) only ever walks `families` ---
+
+WIRE_PROFILE_WITH_DANGLING_EDITOR = {
+    "nodedefs": [{"id": "ND_X", "name": "Switch", "properties": [{"id": "ST", "editor": "MISSING_EDITOR"}], "cmds": {}}],
+    "editors": [],
+    "linkdefs": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_wraps_wire_shape_and_reports_dangling_editor():
+    result = await validate_profile(None, {"profile": WIRE_PROFILE_WITH_DANGLING_EDITOR})
+    assert result["valid"] is False
+    assert any("MISSING_EDITOR" in e for e in result["errors"])
+    assert result["shape"] == "wire"
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_wraps_wire_shape_and_reports_editor_level_names():
+    profile = {
+        "editors": [
+            {
+                "id": "CNT_RUNNING",
+                "ranges": [{"uom": "2", "subset": "0-1"}],
+                "names": {"0": "Stopped", "1": "Counting"},
+            }
+        ],
+        "nodedefs": [{"id": "ND_X", "name": "Counter", "properties": [{"id": "ST", "editor": "CNT_RUNNING"}], "cmds": {}}],
+        "linkdefs": [],
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("unexpected field" in e and "names" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_wraps_wire_shape_and_reports_non_string_uom():
+    profile = {
+        "editors": [{"id": "CNT_RUNNING", "ranges": [{"uom": 2, "subset": "0-1"}]}],
+        "nodedefs": [{"id": "ND_X", "name": "Counter", "properties": [{"id": "ST", "editor": "CNT_RUNNING"}], "cmds": {}}],
+        "linkdefs": [],
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("must be a quoted string" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_well_formed_wire_profile():
+    profile = {
+        "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+        "nodedefs": [
+            {
+                "id": "ND_SWITCH",
+                "name": "Switch",
+                "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
+                "cmds": {"sends": [], "accepts": [{"id": "DON"}]},
+                "links": {"ctl": [], "rsp": []},
+            }
+        ],
+        "linkdefs": [],
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is True
+    assert result["errors"] == []
+    assert result["shape"] == "wire"
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_document_with_neither_shape():
+    result = await validate_profile(None, {"profile": {}})
+    assert result["valid"] is False
+    assert any("nothing to validate" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_families_present_but_empty():
+    result = await validate_profile(None, {"profile": {"families": []}})
+    assert result["valid"] is False
+    assert any("nothing to validate" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_catalog_shape_result_has_no_shape_key():
+    # Additive-only: the pre-existing catalog-shape path's result stays
+    # exactly {"valid", "errors"} so existing exact-equality callers are
+    # unaffected by this change.
+    result = await validate_profile(None, {"profile": VALID_PROFILE})
+    assert result == {"valid": True, "errors": []}
+    assert "shape" not in result
+
+
+# --- nodedef-name cross-check (_check_nodedef_has_name): the real hub's
+# NodeDef spec requires a name, and handlers/workspace.py's own resume-listing
+# depends on nodedefs[0].name, but nucore.profile's parser accepts a missing
+# one silently (accepting either 'nls' or 'name') ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_nodedef_missing_name():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "nodedefs": [{"id": "ND_X", "properties": [], "cmds": {}, "links": {"ctl": [], "rsp": []}}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ND_X" in e and "missing a 'name'" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_nodedef_with_legacy_nls_field():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "nodedefs": [
+                    {
+                        "id": "ND_X",
+                        "nls": "Switch",
+                        "properties": [{"id": "ST", "name": "Status", "editor": "ED_ONOFF"}],
+                        "cmds": {},
+                        "links": {"ctl": [], "rsp": []},
+                    }
+                ],
+                "editors": [{"id": "ED_ONOFF", "ranges": [{"uom": "25", "subset": "0,1"}]}],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result == {"valid": True, "errors": []}
+
+
+# --- no-duplicate-editor-id cross-check (_check_no_duplicate_editor_ids):
+# nucore.profile's add_editor keys editors_dict by the lowercased id but
+# dedupes on the raw one, so two editors differing only by case silently
+# drop one or the other depending on declaration order ---
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_duplicate_editor_ids_case_insensitive_second_declared_lower():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [
+                    {"id": "ED_A", "ranges": [{"uom": "25", "subset": "0,1"}]},
+                    {"id": "ed_a", "ranges": [{"uom": "51", "subset": "0,1"}]},
+                ],
+                "nodedefs": [],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ED_A" in e and "ed_a" in e and "collide" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_rejects_duplicate_editor_ids_case_insensitive_second_declared_upper():
+    # Same collision, opposite declaration order -- must be caught either way.
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [
+                    {"id": "ed_a", "ranges": [{"uom": "25", "subset": "0,1"}]},
+                    {"id": "ED_A", "ranges": [{"uom": "51", "subset": "0,1"}]},
+                ],
+                "nodedefs": [],
+            }],
+        }]
+    }
+    result = await validate_profile(None, {"profile": profile})
+    assert result["valid"] is False
+    assert any("ed_a" in e and "ED_A" in e and "collide" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_accepts_distinct_editor_ids():
+    profile = {
+        "families": [{
+            "id": "fam1",
+            "instances": [{
+                "id": "inst1",
+                "name": "Test Instance",
+                "editors": [
+                    {"id": "ED_A", "ranges": [{"uom": "25", "subset": "0,1"}]},
+                    {"id": "ED_B", "ranges": [{"uom": "51", "subset": "0,1"}]},
+                ],
+                "nodedefs": [],
             }],
         }]
     }

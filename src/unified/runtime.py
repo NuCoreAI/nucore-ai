@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, NamedTuple
 
 from .adapters import LLMAdapter
-from .models import IntentHandlerResult
+from .models import ConversationTurn, IntentHandlerResult
 from .session_store import SessionStore
 from nucore import NuCoreInterface
 
@@ -59,6 +59,41 @@ def _build_user_message(
             f"cannot see it; this is the only context carried over:\n{notes})\n\n{message}"
         )
     return message
+
+
+def _replay_turn(turn: ConversationTurn, *, current_provider: str | None) -> list[dict[str, Any]]:
+    """What one stored turn contributes to the next turn's ``history_messages``:
+    its own rich transcript (``turn.messages`` -- AgenticLoop.run()'s full
+    tool_use/tool_result round trip, see models.py's ``ConversationTurn``)
+    when present and safe to replay, else the plain ``query``/``response``
+    text pair -- today's exact behavior.
+
+    A turn's ``messages`` is in whatever shape the provider that produced it
+    emits (e.g. Claude's native tool_use/tool_result content blocks) -- not
+    portable across a provider change. ``current_provider`` is ``None`` for
+    every caller that doesn't know it; ``turn.provider`` is ``None`` for
+    every turn predating this field or summarized away by
+    history_compaction.py. Replay only when both are known and agree, or
+    when either side doesn't know -- never block replay on ignorance, only
+    on an actual mismatch.
+    """
+    if turn.messages and (turn.provider is None or current_provider is None or turn.provider == current_provider):
+        return list(turn.messages)
+    return [
+        {"role": "user", "content": turn.query},
+        {"role": "assistant", "content": turn.response},
+    ]
+
+
+def _build_history_messages(turns: Iterable[ConversationTurn], *, current_provider: str | None) -> list[dict[str, Any]]:
+    """Flatten every turn's replay (see ``_replay_turn``) into one
+    ``history_messages`` list, in order -- the single implementation shared
+    by both call sites in ``handle_query`` (the initial build, and the
+    mid-turn switch-chaining re-key)."""
+    history_messages: list[dict[str, Any]] = []
+    for turn in turns:
+        history_messages.extend(_replay_turn(turn, current_provider=current_provider))
+    return history_messages
 
 
 def resolve_llm_profile(runtime_config: dict[str, Any], *, preferred_key: str = "unified") -> dict[str, Any]:
@@ -378,10 +413,10 @@ class UnifiedRuntime:
                 token_budget=int(profile_cfg.get("history_token_budget", 20000)),
             )
 
-            history_messages: list[dict[str, Any]] = []
-            for turn in history.turns:
-                history_messages.append({"role": "user", "content": turn.query})
-                history_messages.append({"role": "assistant", "content": turn.response})
+            current_provider = self._resolve_llm_config(current_tool_set).get("provider")
+            history_messages: list[dict[str, Any]] = _build_history_messages(
+                history.turns, current_provider=current_provider
+            )
 
             handoff_notes: list[str] = []
             user_message = _build_user_message(query, framework_context=framework_context, handoff_notes=handoff_notes)
@@ -400,7 +435,7 @@ class UnifiedRuntime:
                 # the same cache-warm server -- every other adapter ignores it.
                 llm_config["session_id"] = composite_session_id
                 try:
-                    final_text, _ = await loop.run(
+                    final_text, new_messages = await loop.run(
                         system_prompt=system_prompt,
                         history_messages=history_messages,
                         user_message=user_message,
@@ -420,16 +455,26 @@ class UnifiedRuntime:
                         composite_session_id,
                         max_turns=int(self._profile_config(current_tool_set).get("max_turns", 20)),
                     )
-                    history_messages = []
-                    for turn in history.turns:
-                        history_messages.append({"role": "user", "content": turn.query})
-                        history_messages.append({"role": "assistant", "content": turn.response})
+                    current_provider = self._resolve_llm_config(current_tool_set).get("provider")
+                    history_messages = _build_history_messages(history.turns, current_provider=current_provider)
                     user_message = _build_user_message(
                         query, framework_context=framework_context, handoff_notes=handoff_notes
                     )
                     continue
 
-            history.append(query, final_text)
+            # new_messages is persisted verbatim, including its own
+            # ui_context-wrapped first element (see loop.py's
+            # new_messages = [{"role": "user", "content": user_message}])
+            # -- not swapped back to the clean `query` the way
+            # ConversationTurn.query itself is. That swap was tried and
+            # measured to defeat Anthropic's prompt caching: a replayed
+            # prefix must be byte-identical to what was actually sent (and
+            # cached) during this turn for the *next* turn to get a cache
+            # hit on it, and the wrapped text is exactly what was actually
+            # sent. A later turn's own ui_context is always appended fresh
+            # at the end of its own user_message regardless, so an older
+            # wrapped snapshot sitting earlier in history is harmless.
+            history.append(query, final_text, new_messages, provider=current_provider)
 
         return IntentHandlerResult(
             intent="unified", output={"text": final_text, "active_tool_set": current_tool_set}

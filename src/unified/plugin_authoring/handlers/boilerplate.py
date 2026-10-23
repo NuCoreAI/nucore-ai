@@ -2,7 +2,8 @@
 (e.g. a change to ``plugin_skeleton.py``'s ``__start``/``configDone``
 wiring, or ``render_main_py``'s own re-exec logic) on a plugin that was
 already generated, without the caller re-supplying the whole original
-``generate_plugin_scaffold`` call.
+``generate_plugin_scaffold`` call -- or, when ``version`` is given, performs
+a pure version bump the same cheap way.
 
 Reads back ``generation_inputs.json`` (written by ``generate_plugin_scaffold``
 itself, see ``scaffold.py``) and re-renders only the files that are purely
@@ -12,6 +13,17 @@ template-driven -- ``plugin.py``, ``main.py``, ``version.py``, ``install.sh``
 installed -- see ``handlers/install.py``), ``profile.json``/``README.md``/
 tests/node-class files (LLM-authored or evidence-derived content, not
 template output that a code change here would ever affect).
+
+An optional ``version`` argument, when given and different from what's
+already stored, additionally updates ``generation_inputs.json``'s own
+``version`` field and appends a ``context.md`` entry -- the only two files
+beyond the four template ones this tool ever touches, and only when the
+version genuinely changes (a resupplied-but-identical version is a no-op).
+This needs none of ``generate_plugin_scaffold``'s machinery -- no evidence,
+no developer-identity check, no secret scan -- because a version bump
+introduces no new authored content; it's exactly the "template/tooling fix"
+case above, just triggered by a caller-supplied value instead of a code
+change.
 
 Plugins generated before this mechanism existed have no
 ``generation_inputs.json`` and can't be refreshed this way -- one full
@@ -32,6 +44,7 @@ from ..file_change_notify import notify_files_changed
 from ..path_confinement import confine_path
 from ..permissions_refresh import refresh_permissions_after_write
 from .scaffold import (
+    _CONTEXT_FILENAME,
     _DEFAULT_CONTROLLER_CLASS,
     _DEFAULT_CONTROLLER_MODULE,
     _DEFAULT_VERSION,
@@ -43,6 +56,7 @@ from .scaffold import (
     _VERSION_FILENAME,
     _assemble_plugin_py,
     _class_method_names,
+    _context_entry,
     _resolve_controller_command_dispatch,
 )
 
@@ -95,7 +109,18 @@ async def regenerate_plugin_boilerplate(
     custom_typed_params = generation_inputs.get("custom_typed_params")
     controller_class = generation_inputs.get("controller_class") or _DEFAULT_CONTROLLER_CLASS
     controller_module = generation_inputs.get("controller_module") or _DEFAULT_CONTROLLER_MODULE
-    version = generation_inputs.get("version") or _DEFAULT_VERSION
+
+    version_override = args.get("version")
+    if version_override is not None and not isinstance(version_override, str):
+        return {"error": "version must be a string"}
+    version_override = version_override.strip() if isinstance(version_override, str) else ""
+    iteration_note = args.get("iteration_note")
+    if iteration_note is not None and not isinstance(iteration_note, str):
+        return {"error": "iteration_note must be a string"}
+
+    stored_version = generation_inputs.get("version") or _DEFAULT_VERSION
+    version = version_override or stored_version
+    version_changed = bool(version_override) and version_override != stored_version
 
     stored_profile = generation_inputs.get("profile") or {}
     controller_node_id = "controller"
@@ -170,6 +195,21 @@ async def regenerate_plugin_boilerplate(
     (plugin_dir / _VERSION_FILENAME).write_text(version_py, encoding="utf-8")
     (plugin_dir / _INSTALL_FILENAME).write_text(_INSTALL_SCRIPT_CONTENT, encoding="utf-8")
 
+    regenerated = [_PLUGIN_FILENAME, _MAIN_FILENAME, _VERSION_FILENAME, _INSTALL_FILENAME]
+    extra_notify_paths: list[str] = []
+    if version_changed:
+        generation_inputs["version"] = version
+        inputs_path.write_text(json.dumps(generation_inputs, indent=2) + "\n", encoding="utf-8")
+        regenerated.append(_GENERATION_INPUTS_FILENAME)
+        extra_notify_paths.append(str(inputs_path))
+
+        context_path = plugin_dir / _CONTEXT_FILENAME
+        note = iteration_note.strip() if iteration_note and iteration_note.strip() else f"Version bumped {stored_version} -> {version}."
+        with context_path.open("a", encoding="utf-8") as fh:
+            fh.write(_context_entry(iteration_note=note))
+        regenerated.append(_CONTEXT_FILENAME)
+        extra_notify_paths.append(str(context_path))
+
     permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
     files_changed_notify_error = await notify_files_changed(
         nucore_interface,
@@ -178,12 +218,13 @@ async def regenerate_plugin_boilerplate(
             str(plugin_dir / _MAIN_FILENAME),
             str(plugin_dir / _VERSION_FILENAME),
             str(plugin_dir / _INSTALL_FILENAME),
+            *extra_notify_paths,
         ],
     )
 
     result = {
         "location": location,
-        "regenerated": [_PLUGIN_FILENAME, _MAIN_FILENAME, _VERSION_FILENAME, _INSTALL_FILENAME],
+        "regenerated": regenerated,
     }
     if permissions_refresh_error is not None:
         result["permissions_refresh_error"] = permissions_refresh_error

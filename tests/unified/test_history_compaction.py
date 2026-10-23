@@ -11,6 +11,7 @@ import pytest
 from unified.history_compaction import (
     _COMPACTED_QUERY_LABEL,
     _MIN_TURNS_TO_COMPACT,
+    _history_tokens,
     estimate_tokens,
     maybe_compact_history,
 )
@@ -173,3 +174,70 @@ def test_estimate_tokens_is_roughly_chars_over_four():
     assert estimate_tokens("") == 0
     assert estimate_tokens("abcd") == 1
     assert estimate_tokens("a" * 40) == 10
+
+
+def test_history_tokens_sizes_from_rich_messages_when_present():
+    # A turn whose query/response text is tiny but whose rich .messages
+    # transcript is large must be sized from that transcript, not just the
+    # two short text fields -- otherwise compaction undercounts badly and
+    # fires far too late relative to the real prompt size being sent.
+    big_messages = [{"role": "user", "content": [{"type": "tool_result", "content": "x" * 8000}]}]
+    turn = ConversationTurn(query="hi", response="ok", messages=big_messages)
+
+    assert _history_tokens([turn]) > estimate_tokens("hi") + estimate_tokens("ok")
+    assert _history_tokens([turn]) >= 1900  # ~8000 chars / 4, minus json overhead slack
+
+
+def test_history_tokens_falls_back_to_query_response_when_messages_empty():
+    turn = ConversationTurn(query="a" * 40, response="b" * 40)
+    assert _history_tokens([turn]) == estimate_tokens(turn.query) + estimate_tokens(turn.response)
+
+
+@pytest.mark.asyncio
+async def test_compaction_collapses_summarized_turns_rich_messages_to_text_only():
+    # Once a turn's rich transcript is folded into a summary, the
+    # replacement pseudo-turn must not carry any summarized turn's
+    # .messages forward -- compaction's whole point is a cheap textual
+    # sketch of older context, not keeping raw transcripts alive forever.
+    history = _history_with_turns(8, body=_big_body(2000))
+    for turn in history.turns[:4]:
+        turn.messages = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]}]
+    llm = _FakeLLMClient(text="the summary text")
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=100)
+
+    assert compacted is True
+    assert history.turns[0].query == _COMPACTED_QUERY_LABEL
+    assert history.turns[0].messages == []
+
+
+@pytest.mark.asyncio
+async def test_compaction_preserves_the_kept_turns_rich_messages():
+    # The newest half, which survives compaction untouched, must keep its
+    # own rich transcript -- only the summarized-away older half collapses.
+    history = _history_with_turns(8, body=_big_body(2000))
+    rich = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]}]
+    history.turns[-1].messages = rich
+    llm = _FakeLLMClient(text="the summary text")
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=100)
+
+    assert compacted is True
+    assert history.turns[-1].messages == rich
+
+
+@pytest.mark.asyncio
+async def test_summarization_prompt_ignores_rich_messages_and_uses_query_response_text():
+    # The summarization call's own prompt must stay driven by the clean
+    # query/response text, not balloon with a turn's raw tool-call JSON.
+    history = _history_with_turns(8, body=_big_body(2000))
+    history.turns[0].messages = [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {"giant": "z" * 50000}}]}
+    ]
+    llm = _FakeLLMClient(text="summary")
+
+    await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=100)
+
+    sent_prompt = llm.calls[0]["messages"][0]["content"]
+    assert "giant" not in sent_prompt
+    assert f"query 0 {_big_body(2000)}" in sent_prompt

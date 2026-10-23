@@ -210,37 +210,12 @@ def _ensure_controller_st_property(raw_profile: dict[str, Any]) -> None:
         editors.append(copy.deepcopy(_CONTROLLER_ST_EDITOR))
 
 
-def _wrap_wire_profile_as_catalog(wire_profile: dict) -> dict:
-    """``profile`` here (and the stored ``profile.json`` ``workspace.py``
-    already reads back, per its shipped Phase 3 tests) is the Dynamic
-    Profiles **wire** shape -- ``editors``/``nodedefs``/``linkdefs`` as
-    top-level lists, the same document ``polyglot.getJsonProfile()``
-    returns. ``nucore.Profile.load_from_json`` -- and therefore
-    ``profile_authoring.validate_profile`` -- expects nucore's internal
-    **catalog** shape instead (``families: [{instances: [...]}]``); passing
-    the wire shape straight through would silently validate nothing at all
-    (``raw.get("families", [])`` is just an empty list, no error). Wrap it
-    in one synthetic family/instance -- id/name are required by
-    ``Profile.__parse_profile__`` but meaningless here, so both are a fixed
-    placeholder -- purely so the real structural checks (dangling editor
-    references, malformed properties/commands) still run."""
-    return {
-        "families": [
-            {
-                "id": "generated",
-                "name": "generated",
-                "instances": [
-                    {
-                        "id": "generated",
-                        "name": "generated",
-                        "editors": wire_profile.get("editors", []),
-                        "nodedefs": wire_profile.get("nodedefs", []),
-                        "linkdefs": wire_profile.get("linkdefs", []),
-                    }
-                ],
-            }
-        ]
-    }
+# Moved to profile_authoring.py (as the public wrap_wire_profile_as_catalog) so
+# validate_profile itself can wrap a wire-shaped document before validating, not just this
+# module's own guard 4 -- see that function's docstring. Aliased back here under the original
+# private name since this is still this module's own call site (and schemas/README.md's
+# reference to it).
+_wrap_wire_profile_as_catalog = profile_authoring.wrap_wire_profile_as_catalog
 
 
 def _reindent_method(text: str) -> str:
@@ -751,9 +726,32 @@ def _render_license(*, sources: list[dict[str, Any]], author: str) -> str:
     return "".join(lines)
 
 
-def _context_entry(*, iteration_note: str) -> str:
+def _sources_consulted_line(sources: list[dict[str, Any]]) -> str:
+    """One compact line citing which evidence sources (see
+    EvidenceLedger.sources) actually drove this iteration -- e.g. "Sources
+    consulted: API.md (MIT), udi-poly-template-python (MIT)". Directly
+    links a context.md entry to the sources.md rows it came from, instead
+    of making a reader match fetched_at timestamps across the two files by
+    hand. Empty when nothing new was consulted for this call -- a pure
+    metadata/config tweak, or a version-only bump via
+    regenerate_plugin_boilerplate, which has no ledger at all."""
+    if not sources:
+        return ""
+    labels = []
+    for source in sources:
+        label = source.get("title") or source.get("url") or "unknown source"
+        license_ = source.get("license")
+        labels.append(f"{label} ({license_})" if license_ else label)
+    return "Sources consulted: " + ", ".join(labels)
+
+
+def _context_entry(*, iteration_note: str, sources: list[dict[str, Any]] | None = None) -> str:
     timestamp = datetime.now(timezone.utc).isoformat()
-    return f"## {timestamp}\n\n{iteration_note.rstrip()}\n\n"
+    entry = f"## {timestamp}\n\n{iteration_note.rstrip()}\n"
+    sources_line = _sources_consulted_line(sources or [])
+    if sources_line:
+        entry += f"\n{sources_line}\n"
+    return entry + "\n"
 
 
 async def generate_plugin_scaffold(
@@ -775,7 +773,16 @@ async def generate_plugin_scaffold(
 
     sources_path = plugin_dir / _SOURCES_FILENAME
     existing_sources_text = sources_path.read_text(encoding="utf-8") if sources_path.is_file() else ""
-    merged_sources = merge_sources(parse_sources_md(existing_sources_text), ledger.sources)
+    existing_sources = parse_sources_md(existing_sources_text)
+    merged_sources = merge_sources(existing_sources, ledger.sources)
+    # merge_sources returns existing + [genuinely new entries, in order] --
+    # see its own docstring -- so this slice is exactly what's new as of
+    # this specific call, not ledger.sources as a whole (which keeps
+    # growing across every call on one connection -- see EvidenceLedger's
+    # docstring -- and would otherwise make a later, unrelated iteration's
+    # context.md entry falsely claim credit for an earlier iteration's
+    # research).
+    new_sources_this_call = merged_sources[len(existing_sources):]
 
     # Guard 2
     developer_entry = developer_config.load_developer_config(plugin_output_root)
@@ -1139,7 +1146,7 @@ async def generate_plugin_scaffold(
     context_path = plugin_dir / _CONTEXT_FILENAME
     context_path.parent.mkdir(parents=True, exist_ok=True)
     with context_path.open("a", encoding="utf-8") as fh:
-        fh.write(_context_entry(iteration_note=iteration_note))
+        fh.write(_context_entry(iteration_note=iteration_note, sources=new_sources_this_call))
 
     sources_path.parent.mkdir(parents=True, exist_ok=True)
     sources_path.write_text(render_sources_md(merged_sources), encoding="utf-8")
