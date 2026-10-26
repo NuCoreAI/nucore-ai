@@ -344,6 +344,47 @@ config file holds settings a customer could reasonably supply (model, temperatur
 sets are enabled, ...), while where preferences/logs land on disk, and which root directory
 generated plugin scaffolds are confined to, are deployment/host concerns the system controls.
 
+## Running the MCP Server
+
+A separate entry point, `nucore-mcp-server` (`python -m unified.run_mcp_server`), exposes the same
+customer + `plugin_authoring` tool dispatch used above to any [MCP](https://modelcontextprotocol.io/)
+client instead of (or alongside) the WebSocket/REPL runtime -- useful for driving nucore-ai's tools
+from an MCP-native host (e.g. an IDE assistant) rather than through the agentic-loop chat interface.
+
+It serves over a Unix domain socket only -- no TCP, no app-level authentication. The socket file is
+created with mode `0660`, owned by this process's own uid/gid, before the server ever binds it;
+that filesystem permission is the *only* access control, the same trust model the WebSocket
+server's own Unix-socket mode uses. This server's one expected client is a single proxy process
+that embeds it directly -- see `design/mcp-server.md` for the full design, including why a real
+network-facing proxy with actual authentication (a later, not-yet-built phase) belongs in whichever
+repo embeds nucore-ai, not here.
+
+```shell
+nucore-mcp-server \
+  --unix-socket-path /tmp/nucore-mcp.sock \
+  --plugin-output-root /tmp/eisyai/generated_plugins \
+  --backend-api-classpath iox.IoXWrapper \
+  --backend-api-base-url https://192.168.6.134 \
+  --backend-api-username admin \
+  --backend-api-password yourpassword
+```
+
+| Flag | Description |
+|---|---|
+| `--unix-socket-path` | Required. Filesystem path to serve the MCP Streamable HTTP server on, as a Unix domain socket |
+| `--plugin-output-root` | Required. Allowed root directory for generated plugin scaffolds (the `plugin_authoring` tool set) |
+| `--backend-api-classpath` / `--backend-api-base-url` / `--backend-api-username` / `--backend-api-password` | Same meaning as the unified runtime's flags above |
+| `--search-engine` / `--search-engine-api-key` | `'brave'` or `'tavily'`; enables `search_web` for the plugin-authoring tool set, same as runtime config's `search_engine` |
+| `--preferences-dir` | Directory to store this installation's customer preferences (aliases/events) in |
+| `--log-level` / `--log-file` | Same meaning as the unified runtime's flags above |
+
+`tools/list` returns the full merged customer + `plugin_authoring` tool set (minus the two
+model-driven `/developer`/`/customer` mode-switch tools, which have no meaning to an MCP host that
+supplies its own orchestration), and `tools/call` dispatches through the exact same, unmodified
+tool handlers the WebSocket/REPL runtime uses. See `tests/unified/mcp/test_server.py` for coverage
+against the registered MCP handlers directly, and `design/mcp-server.md`'s "Verification" section
+for manually exercising the real Unix socket end-to-end.
+
 ## Supported Providers
 
 | Provider | Alias | Env Var |
@@ -487,4 +528,5 @@ Tested with [eisy](https://www.universal-devices.com/product/eisy-home-r2/).
 
 - Unified runtime architecture and tool reference: `src/unified/README.md`
 - Developer tool set (`plugin_authoring`) reference: `src/unified/plugin_authoring/README.md`
+- MCP server design and status: `design/mcp-server.md`
 

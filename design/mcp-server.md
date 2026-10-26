@@ -1,283 +1,322 @@
-# MCP SERVER (PROPOSAL, 2026-09-17)
+# MCP SERVER (Phase 1: plumbing, no real auth yet -- both halves implemented 2026-10-25)
 
-> **FOR FUTURE CONSIDERATION ONLY -- NOT IN USE.** No implementation exists yet. This document
-> captures a design that was worked out and reviewed with the user, then deliberately parked here
-> rather than built, so the research and decisions aren't lost. Nothing here reflects the current
-> system.
+> **Both halves are now implemented and tested.** nucore-ai: `src/unified/mcp/server.py`,
+> `src/unified/run_mcp_server.py` (the `nucore-mcp-server` console script), and
+> `tests/unified/mcp/test_server.py`. eisy-ai (the consumer repo): `mcp_proxy/` (`auth.py`,
+> `proxy.py`, `run_proxy.py`) and `tests/mcp_proxy/`, wired into `start_eisyai.py` behind the
+> `mcp_server: true` runtime-config flag described under "Phase 1 -- consumer repo" below, which is
+> no longer a future plan -- it's what that section now describes. **Still not safe for anything but
+> a controlled test box**: Phase 1's `AllowAllAuthHook` is real, working, and exactly as
+> unauthenticated as this document always said it would be -- see "Known issues found and fixed
+> after initial implementation" below for what *has* been hardened since, and the real `AuthHook`
+> remains the one genuinely unbuilt piece. This document still captures the full original design so
+> the research and decisions aren't lost. It supersedes all earlier versions of this file.
 
-## Purpose
+## How this design got here
 
-Expose this project's existing 33 tools (`src/unified/tools/tool_*.json` +
-`src/unified/dispatch.py`) over the **Model Context Protocol (MCP)**, so that any MCP-compatible
-host (Claude Desktop, Claude Code, or anything else speaking MCP) can call them directly --
-without going through this project's own `AgenticLoop`/LLM orchestration, since an MCP host
-supplies its own.
+Earlier passes considered exposing nucore-ai's tools over MCP via a network-reachable Streamable
+HTTP server authenticated by either an external OAuth 2.1 Authorization Server, or a static
+pre-shared bearer token. Both were rejected: several tools (`run_shell_command`, `call_plugin`,
+`restart_core_service`) are effectively full-system control, and the *existing* trust boundary for
+anything that dangerous is not an application-level credential at all -- it's the Unix-socket +
+OS-level peer-UID check `_run_websocket_server` already uses (`run_unified_runtime.py:898-1049`,
+`_get_unix_peer_uid` at `:711-725`). A standalone bearer secret reachable from anywhere on the LAN
+is a materially weaker boundary than that. The fix: don't touch that boundary at all. Model the MCP
+server exactly like the existing websocket listener (Unix socket, peer-UID check, no app-level auth
+needed on nucore's side), and put the one genuinely new, network-facing piece -- a pass-through
+proxy -- in the consumer repo (eisy-ai), with authentication deliberately deferred to a later phase
+behind a pluggable, swappable hook.
 
-Three decisions were confirmed with the user before designing:
-1. **Transport**: MCP's Streamable HTTP transport (not stdio), because the server must be
-   reachable by hosts that aren't necessarily on the same machine as the NuCore/IoX backend
-   ("accessible to everyone... from anywhere").
-2. **Auth**: the user will separately run/provide an OAuth 2.1 **Authorization Server** (internet-
-   hosted or local) -- this MCP server is a **Resource Server only**: it validates bearer tokens
-   issued elsewhere, and does not implement login/consent/token issuance itself.
-3. **Authorization model**: tiered scopes, not all-or-nothing, given the real blast radius of some
-   tools (`run_shell_command` = arbitrary shell on the backend host; `buy_plugin`-family = spends
-   money or acts on the customer's behalf; `send_command` = real device control).
+This reverses an intermediate decision from the same design conversation that nucore-ai should not
+be touched at all for this feature -- nucore-ai now hosts the real MCP server, since that's where
+the tool-dispatch logic and the Unix-socket pattern already live. It also drops the
+`mcp:read`/`control`/`admin` scope-tiering concept from earlier versions of this doc: tiering
+existed only to contain a weak standalone credential that no longer exists in this design. Nucore's
+MCP server now trusts anything that reaches its Unix socket completely, exactly like the
+chat/websocket path already does today.
 
-## Design
+**Phase 1 (this document's main subject) ships zero authentication on the one real network port in
+this design, by deliberate choice.** Its job is to prove the plumbing end-to-end (client -> TCP
+proxy -> Unix socket -> nucore's real tool dispatch) with an authentication hook that is a
+structural no-op stub. A later phase implements the real hook; the hard requirement carried into
+that phase is that it must be a drop-in swap of that one hook -- no rework of the proxy or of
+nucore-ai.
 
-### New files
+Verified directly against the real installed packages (not assumed): `uvicorn.run()` supports a
+`uds=` parameter, `httpx.AsyncHTTPTransport` supports `uds=` (httpx 0.28.1), and `starlette` is
+available for a minimal proxy ASGI app. The `mcp` SDK package is now a direct dependency
+(`pyproject.toml`/`requirements.txt`) and its real API (`mcp.server.lowlevel.Server`,
+`mcp.server.streamable_http_manager.StreamableHTTPSessionManager`, `mcp.types`) is what
+`src/unified/mcp/server.py` is actually built against -- see that module for the resolved shape,
+not the sketch below.
+
+## Tool inventory (unchanged from the previous version's analysis)
+
+Both tool sets stay merged: customer (`unified.dispatch.TOOL_HANDLERS`, 36 tools) + plugin-authoring
+(`unified.plugin_authoring.dispatch.build_tool_handlers(...)`, 20 tools of its own, 8 more reused
+verbatim from the customer set) = 56 unique tools, 57 with `search_web` configured. See "Tool
+inventory and registry mechanics" in this design's history (git blame this file) for the full
+per-tool breakdown and import-path details; none of that changed in this revision, only the
+authentication/transport model and where the code lives.
+
+## Architecture
 
 ```
-src/unified/backend_wiring.py     # extracted from run_unified_runtime.py (shared by both entry points)
-src/unified/mcp/__init__.py
-src/unified/mcp/scopes.py         # TOOL_SCOPE_TIERS + is_authorized()
-src/unified/mcp/auth.py           # JWTBearerTokenVerifier
-src/unified/mcp/server.py         # build_mcp_server(...)
-src/unified/run_mcp_server.py     # CLI entry point
+MCP client (LAN, no credentials in Phase 1)
+   --HTTP over TLS (consumer's own cert)-->
+consumer repo (e.g. eisy-ai) :8260 -- a pass-through proxy
+   - AuthHook.authenticate(request) -> bool   [Phase 1: AllowAllAuthHook, always True]
+   - on True: forward request via httpx.AsyncClient(transport=AsyncHTTPTransport(uds=...)),
+     stream the response back verbatim
+   --Unix domain socket (new; peer-UID checked, same process's own uid)-->
+nucore-ai -- unified.run_mcp_server (new)
+   - build_mcp_server(...): merges customer_dispatch.TOOL_HANDLERS + plugin_authoring's
+     build_tool_handlers(...), list_tools/call_tool handlers, NO scope tiering
+   - also serves list_resources/read_resource -- both tool sets' full system prompts,
+     read-only, see "Known issues found and fixed" below
+   - call_tool independently forces confirmed:false for the 5 delete-type tools/operations
+     runtime.py's chat-path wrapper also gates, before dispatch -- same section below
+   - advertises itself to clients as "eisy-ai" (server_name), not "nucore-ai"
+   - served via uvicorn with uds= instead of host/port
+   - runs as a thread inside the SAME consumer process, started the same way that process
+     already starts its existing unified-runtime thread
 ```
 
-The new server is a thin adapter, nothing more: `tool_*.json` -> `ToolSpec` (existing loader,
-`LLMAdapter.tools_spec_from_files`, already used by `runtime.py`) -> MCP `Tool` objects for
-`list_tools`; MCP `call_tool` -> scope check -> **the existing, unmodified**
-`dispatch.execute_tool` -> MCP result. It does **not** touch `UnifiedRuntime`, `AgenticLoop`,
-`SessionStore`, the LLM adapters, or the fabrication guard -- none of that exists for this use
-case, since the MCP host supplies its own orchestration.
+nucore-ai's half of this is consumer-agnostic: it only needs a Unix-socket path and backend-api
+wiring, the same inputs `run_unified_runtime.main` already takes. The proxy half (TLS, the network
+port, the auth hook, process wiring) is deliberately left to whichever repo embeds nucore-ai, since
+that's where TLS certs, process lifecycle, and (eventually) the real authentication mechanism
+already live.
 
-### `src/unified/backend_wiring.py`
+## Phase 1 -- nucore-ai
 
-Pure extraction, no behavior change: move `_load_secrets_file`/`_load_backend_api`/
-`_load_backend_api_cached` out of `run_unified_runtime.py` (already free functions, not trapped in
-`main()`) into this new module, dropping the leading underscore since they become genuinely shared
-surface. `run_unified_runtime.py` imports them back. Rationale for extracting rather than
-duplicating: the two entry points need byte-identical backend-wiring behavior, and duplicating ~40
-lines is pure drift risk (a fix in one copy silently not reaching the other).
+**Status: implemented**, in `src/unified/mcp/server.py` (`build_mcp_server`/`build_mcp_protocol_server`),
+`src/unified/run_mcp_server.py` (the `nucore-mcp-server` entry point and its own Unix-socket
+bind/chmod/chown), and `tests/unified/mcp/test_server.py`. The steps below are the original
+implementation plan, kept for the historical reasoning; where it differs from the real code, the
+real code wins.
 
-### `src/unified/mcp/scopes.py`
+1. **Spike, first**: `pip install mcp` (uvicorn/httpx/starlette already available); inspect the
+   real installed `mcp` API (`help(mcp.server.lowlevel.Server)`, etc.) before writing `server.py`
+   for real. Also resolve here: how to get the equivalent of `_get_unix_peer_uid` for a
+   uvicorn/ASGI-served Unix socket -- the raw `websockets` library exposed
+   `websocket.transport.get_extra_info("socket")` directly; confirm whether uvicorn's ASGI `scope`
+   exposes an equivalent raw socket handle, or whether the socket needs to be pre-created/bound/
+   chmod'd manually (`socket.socket(AF_UNIX)`, bind, `chmod 0o660`, `chown` to this process's own
+   uid/gid -- mirroring `_run_websocket_server`'s existing unix-socket handling at
+   `run_unified_runtime.py:1027-1048`) and handed to uvicorn via its `fd=` parameter instead of
+   `uds=`, so the peer-UID check can happen per-connection the same way it does today.
+2. New module `src/unified/mcp/server.py` -- `build_mcp_server(nucore_interface,
+   plugin_output_root, search_engine=None, search_engine_api_key=None, secret_values=None)`:
+   - `merged_handlers = dict(customer_dispatch.TOOL_HANDLERS)`, updated with
+     `plugin_authoring.dispatch.build_tool_handlers(ledger=EvidenceLedger(), ..., get_user_id=None)`.
+   - Tool specs loaded from both tools directories (`Path(customer_dispatch.__file__).parent /
+     "tools"` and `plugin_authoring.TOOLS_DIR`), filtered to `merged_handlers` keys -- drops both
+     orphan switch-tool files (58 -> 56/57 specs).
+   - `list_tools`: all filtered specs, unmodified (no scope annotation -- there are no tiers now).
+   - `call_tool`: unknown name -> protocol error; known name -> `await
+     plugin_authoring.dispatch.execute_tool(name, args, nucore_interface=nucore_interface,
+     tool_handlers=merged_handlers)` unmodified; wrap as `TextContent`+`structuredContent`; map
+     `{"error": ...}` to `isError=True`.
+3. New entry point `src/unified/run_mcp_server.py` -- `main(args=None, poly=None)`, same
+   pre-built-`Namespace` convention as `run_unified_runtime.main`. Builds `nucore_interface` via
+   the sibling `_load_backend_api`/`_BACKEND_API_JSON_OUTPUT`. Serves `build_mcp_server(...)`'s app
+   via `uvicorn.run(app, uds=args.unix_socket_path, ...)` (or `fd=`, per the spike's finding), then
+   applies the same unlink-stale-socket / chmod 0o660 / chown-to-own-uid-gid handling
+   `_run_websocket_server` already does, and the same `client_uid` peer check per connection.
+4. Packaging: add `mcp` to `pyproject.toml`/`requirements.txt` (uvicorn already present); version
+   bump. The production publish/upgrade mechanism for nucore-ai in whatever consumer deploys it was
+   never confirmed in earlier design rounds -- still flagged, not resolved here.
+5. Tests: `tests/unified/mcp/test_server.py` against the existing `FakeBackend` pattern --
+   `list_tools` returns the full merged set (56, 57 with `search_web`), `call_tool` dispatches
+   correctly for a member of each original tool set, unknown name -> protocol error. No scope
+   tests (nothing to test).
 
-```python
-SCOPE_READ = "mcp:read"
-SCOPE_CONTROL = "mcp:control"
-SCOPE_ADMIN = "mcp:admin"
-_TIER_RANK = {SCOPE_READ: 0, SCOPE_CONTROL: 1, SCOPE_ADMIN: 2}
+## Phase 1 -- consumer repo (e.g. eisy-ai)
 
-TOOL_SCOPE_TIERS: dict[str, str] = {
-    # mcp:read -- no side effects, including the two diagnostics tools (they
-    # query PLM/link-table state, never send a device command or change any
-    # device's operational state; verified against insteon_diag.py/diagnostics.py)
-    "get_device_detail": SCOPE_READ, "get_device_history": SCOPE_READ,
-    "get_property": SCOPE_READ, "get_core_services_status": SCOPE_READ,
-    "get_device_family": SCOPE_READ, "get_full_system_config": SCOPE_READ,
-    "get_group_detail": SCOPE_READ, "list_preferences": SCOPE_READ,
-    "get_plugin_capabilities": SCOPE_READ, "list_installed_plugins": SCOPE_READ,
-    "list_purchased_plugins": SCOPE_READ, "list_store_plugins": SCOPE_READ,
-    "get_routine_details": SCOPE_READ, "get_time_info": SCOPE_READ,
-    "list_variables": SCOPE_READ, "diagnostics_not_responding": SCOPE_READ,
-    "diagnostics_no_status_feedback": SCOPE_READ,
-    # mcp:control -- bounded, reversible state changes. install/buy/delete_plugin
-    # land here (not mcp:admin) because today they don't mutate anything --
-    # confirmed in plugin_management.py, each just resolves a real id and hands
-    # back an install_url/purchase_url/delete_url for the customer to finish on
-    # the web ("For security reasons, installation/deletion must be completed on
-    # the web, not by an LLM"); revisit if a real install/purchase/delete API is
-    # ever wired in. plugin_ops (start/stop/restart ONE plugin) also lands here,
-    # not mcp:admin, since it's scoped/reversible unlike restart_core_service.
-    "send_command": SCOPE_CONTROL, "node_op": SCOPE_CONTROL,
-    "multi_device_scene": SCOPE_CONTROL, "group_scene_op": SCOPE_CONTROL,
-    "pair_device": SCOPE_CONTROL, "preference_op": SCOPE_CONTROL,
-    "create_or_update_routine": SCOPE_CONTROL, "routine_status_op": SCOPE_CONTROL,
-    "variable_op": SCOPE_CONTROL, "install_plugin": SCOPE_CONTROL,
-    "buy_plugin": SCOPE_CONTROL, "delete_plugin": SCOPE_CONTROL,
-    "plugin_ops": SCOPE_CONTROL,
-    # mcp:admin -- high/unbounded blast radius.
-    "run_shell_command": SCOPE_ADMIN, "restart_core_service": SCOPE_ADMIN,
-    # call_plugin invokes an arbitrary third-party plugin's own tool with
-    # model-supplied args -- its real blast radius is plugin-defined and not
-    # audited by this codebase, so it's treated as the risky end of the scale
-    # rather than bucketed with NuCore's own well-bounded control tools.
-    "call_plugin": SCOPE_ADMIN,
-}
+**Status: implemented**, in eisy-ai's `mcp_proxy/` package (`auth.py`, `proxy.py`, `run_proxy.py`)
+and `tests/mcp_proxy/`, with `start_eisyai.py` spawning both the nucore-ai MCP thread and this
+proxy's thread behind the `mcp_server: true` runtime-config flag (documented in eisy-ai's
+`README.md`/`POLYGLOT_CONFIG.md`). Same caveat as the nucore-ai section above: the steps below are
+the original plan, kept for the reasoning; the real code wins where it differs (it mostly doesn't --
+this one came together close to the sketch).
 
-def is_authorized(tool_name: str, granted_scopes: set[str]) -> bool:
-    """Hierarchical: mcp:admin implies mcp:control implies mcp:read, so the
-    Authorization Server only needs to issue a client's single highest scope.
-    Unknown tool name -> deny (fail closed)."""
-    required = TOOL_SCOPE_TIERS.get(tool_name)
-    if required is None:
-        return False
-    required_rank = _TIER_RANK[required]
-    return any(_TIER_RANK.get(s, -1) >= required_rank for s in granted_scopes)
-```
+1. New package (e.g. `mcp_proxy/`):
+   - `auth.py`: `class AuthHook(Protocol): async def authenticate(self, request) -> bool` +
+     `class AllowAllAuthHook: async def authenticate(self, request) -> bool: return True` -- the
+     Phase 1 default, with a loud docstring/log line marking it as a stub with no real security,
+     not something to ship toward a real customer-facing unit.
+   - `proxy.py`: minimal Starlette ASGI app, one catch-all route: call
+     `auth_hook.authenticate(request)` -> `False` -> `403`; `True` -> forward the request via
+     `httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds=socket_path))` to nucore's Unix
+     socket, stream the response (status/headers/body, including chunked/SSE-style bodies for
+     Streamable HTTP) back to the client verbatim.
+   - `run_proxy.py`: `main(args=None)` -- builds the configured `AuthHook` (Phase 1:
+     `AllowAllAuthHook()`), builds the proxy app, `uvicorn.run(app, host="0.0.0.0", port=8260,
+     ssl_certfile=..., ssl_keyfile=...)`.
+2. Process wiring in whatever launches the consumer's existing unified-runtime thread today:
+   - Single config gate (e.g. a `mcp_server: true` boolean, default false/absent) wraps spawning of
+     *both* new threads together -- nucore's Unix-socket MCP thread and the proxy thread. No
+     partial-enablement state.
+   - Agree on one Unix-socket path both sides use (e.g. `/tmp/mcp-listener`, sibling to whatever
+     the existing unified-runtime thread already uses).
+   - Spawn nucore's new MCP thread with a `client_uid` set to this same process's own uid (mirrors
+     the existing websocket thread's `websocket_client_id` role) and backend-api args
+     **byte-identical** to the existing runtime thread's args, so nucore's
+     `_load_backend_api_cached` lru_cache hands both threads the same `NuCoreInterface` instance --
+     no second backend connection.
+   - Spawn the proxy thread bound to port 8260, with TLS cert/key from whatever self-signed-cert
+     helper the consumer already has, and `auth_hook = AllowAllAuthHook()`.
+3. Packaging: add `starlette`, `uvicorn`, `httpx` as direct dependencies (even though they may
+   already be transitively present via nucore-ai, this repo's own new code imports them directly).
+   If the consumer has an explicit packaged-file manifest (e.g. a release-packaging script), make
+   sure the new proxy package is added to it -- easy to forget, would silently ship nothing.
+4. Tests: `AllowAllAuthHook` returns `True`; a proxy test forwards a request to a trivial fake ASGI
+   app bound to a temp Unix socket within the test itself and asserts the response is relayed
+   verbatim -- no real nucore dependency needed for this specific test.
 
-This mapping was checked key-for-key against `dispatch.TOOL_HANDLERS`'s real 33 keys (read
-directly from `src/unified/dispatch.py:30-64`) -- all 33 present, no typos, no drift from the
-user's original tiering except four corrections made during design review: diagnostics tools moved
-down to `mcp:read` (they're investigative, never mutate device state); plugin install/buy/delete/
-ops moved down to `mcp:control` (they don't actually mutate anything today, just hand back a URL
-for the customer to finish on the web); `call_plugin` moved up to `mcp:admin` (its real blast
-radius is plugin-defined and not audited by this codebase). Add a test asserting
-`set(TOOL_SCOPE_TIERS) == set(dispatch.TOOL_HANDLERS)` so a future 34th tool fails loudly instead
-of silently landing unscoped (and thus denied-by-default for everyone).
+## Known issues found and fixed after initial implementation
 
-### `src/unified/mcp/auth.py` -- `JWTBearerTokenVerifier`
+Four real problems surfaced only once both halves existed and were actually exercised -- none of
+them hypothetical, all reproduced and fixed directly:
 
-Validates JWT access tokens issued by the externally-run Authorization Server (JWT chosen as the
-default per the user's instruction, since it's what most modern OAuth servers -- Auth0/
-Keycloak/Okta/authentik -- issue; RFC 7662 opaque-token introspection is a documented, not-built,
-extension point for the rare AS that doesn't do JWTs):
+1. **uvicorn's own logging setup crashed under eisy-ai's real embedding.** `udi_interface` (the
+   third-party PG3 package eisy-ai is built on) unconditionally replaces `sys.stdout`/`sys.stderr`
+   with its own `LoggerWriter` objects at import time (`write`/`flush` only, no `isatty()`). Both
+   `run_mcp_server.py`'s `uvicorn.Config(...)` and `mcp_proxy/run_proxy.py`'s `uvicorn.run(...)`
+   left `use_colors` at its default (`None`), so uvicorn's `DefaultFormatter.__init__` fell through
+   to calling `sys.stdout.isatty()` directly -- `AttributeError`, re-raised by `logging.config
+   .dictConfig` as `ValueError: Unable to configure formatter 'default'`, on every single startup
+   once `mcp_server: true`. Fixed in both files: `use_colors = sys.stdout.isatty() if
+   hasattr(sys.stdout, "isatty") else False`, passed explicitly instead of left as the default.
+2. **The proxy's default 5-second timeout broke any slow tool call.** `mcp_proxy/proxy.py`'s
+   `httpx.AsyncClient` had no `timeout=` at all, so it inherited httpx's flat 5-second default on
+   every leg (connect/read/write/pool). Any MCP tool call that legitimately runs -- or goes quiet
+   mid-stream for -- more than 5 seconds (any LLM-backed tool, easily) tripped `httpx.ReadTimeout`
+   partway through `_stream_body`'s `aiter_raw()` loop, breaking the response mid-stream. Fixed:
+   `timeout=None` on that client -- this proxy is explicitly "a dumb pass-through... transport
+   only" by its own docstring, so it shouldn't impose a tighter deadline than the real MCP client's
+   own patience, especially over a local, trusted Unix socket.
+3. **The MCP transport silently dropped context and a safety floor that the chat path has.** Found
+   while debugging a real interaction where an MCP-driven model had no device ids and shelled out to
+   `/rest/nodes` directly instead. Two distinct gaps, both because `build_mcp_protocol_server`'s
+   `call_tool` calls `plugin_authoring.dispatch.execute_tool(...)` directly, bypassing everything
+   `UnifiedRuntime.handle_query` normally wraps around a tool call:
+   - *Informational*: neither tool set's system prompt (CRITICAL RULES, per-concept rules, DEVICE
+     DATABASE/ROUTINES DATABASE, host environment, developer-identity/evidence rules, ...) ever
+     reached an MCP client -- the MCP server never called either `prompt_builder` module, and
+     exposed no resources/prompts at all. Fixed by registering `list_resources`/`read_resource` on
+     the same `Server`, returning `eisy-ai://system-prompt/unified` and
+     `eisy-ai://system-prompt/plugin-authoring` -- each one calling that tool set's own existing
+     prompt-builder function verbatim (`prompt_builder.build_system_prompt(nucore_interface)` /
+     `plugin_authoring.build_system_prompt_sections(nucore_interface)`), so there's no new rendering
+     logic and no drift risk from the chat path's own prompts. **Follow-up, found testing against
+     Claude Desktop**: MCP resources are something a *human* attaches via that client's own UI --
+     the model has no way to call `resources/read` on its own initiative there, so the fix above
+     never actually reached it in practice (confirmed: the model's own narration never even
+     mentioned trying). Added a second, tool-shaped way to get the exact same content: a new
+     `get_system_prompt` tool (`tool_set: "unified" | "plugin_authoring"`), handled directly inside
+     `_call_tool` (not routed through `plugin_authoring.dispatch.execute_tool`/`merged_handlers` --
+     the chat path never needs it, since it already has this standing in context automatically) and
+     calling the exact same `_render_system_prompt` helper the resources now also share, so both
+     surfaces stay byte-identical by construction. Keep both: resources are still the spec-correct
+     primitive and work on any client that does surface them; the tool is the one every MCP client's
+     model can reliably call on its own, regardless of that client's resource-surfacing choices.
+   - *Safety*: `runtime.py`'s `_wrap_dispatch_for_delete_confirmation` independently forces
+     `confirmed` to `False` for `delete_plugin`/`delete_registered_plugin` and
+     `node_op`/`routine_status_op`/`variable_op` (`operation == "delete"`) unless the *human's own
+     literal chat message that turn* was exactly `"YES"` -- but it's only ever applied inside
+     `UnifiedRuntime.handle_query`, which the MCP path never reaches. (Checked directly: all five
+     already have their own independent handler-level preview-then-confirm gate, so an MCP caller
+     was never able to one-shot delete -- but an MCP-driven model could preview-then-confirm on its
+     own say-so, with no real human ever required to approve it.) Fixed by a new, MCP-only
+     `_deny_mcp_delete_confirmation` helper in `server.py` that forces `confirmed: False` for that
+     exact same allowlist (imported read-only from `runtime.py`) before every `call_tool`
+     dispatch -- not an attempt to invent a weaker MCP-native "confirmation" concept (there's no
+     human chat turn on this transport to check), just an honest "irreversible deletes aren't
+     available over MCP in this phase."
+4. **The proxy leaked its upstream connection on every downstream client disconnect.**
+   `mcp_proxy/proxy.py`'s streaming generator (now `_stream_upstream_body`, originally an inline
+   `_stream_body` closure) called `await upstream_response.aclose()` *after* its `async for`
+   loop, with no `finally`. When the downstream MCP client disconnects while the proxy is still
+   streaming bytes back from the upstream -- routine for a long-lived Streamable HTTP connection,
+   not rare -- uvicorn cancels the whole per-request task mid-read, skipping that trailing
+   `aclose()` entirely and leaking the upstream httpx response and its Unix-socket connection-pool
+   entry. Surfaced as an uncaught `asyncio.CancelledError` propagating out of `_stream_body` during
+   live testing. Fixed: wrapped the loop in `try`/`finally` so cleanup always runs regardless of how
+   the generator exits; extracted the generator to module level (`_stream_upstream_body`, taking
+   `upstream_response` as a parameter) so the cleanup guarantee has a direct unit test
+   (`tests/mcp_proxy/test_proxy.py`) rather than depending on reproducing a real network disconnect.
 
-- Fetches signing keys from the issuer's JWKS endpoint (`--oauth-jwks-uri` override, else
-  `<issuer>/.well-known/jwks.json`) via `PyJWT`'s `PyJWKClient(cache_keys=True, lifespan=300)` --
-  no separate caching layer needed, the client handles refresh-on-miss itself. Run the (blocking)
-  key lookup via `asyncio.to_thread(...)` since `verify_token` is async and this is per-request I/O
-  on a cache miss.
-- Verifies `iss` (must equal `--oauth-issuer-url`), `aud` (must equal `--oauth-resource-server-url`
-  unless `--oauth-audience` overrides it), `exp`, with `--oauth-clock-skew-s` (default 60) leeway.
-- Extracts granted scopes from the `scope` claim (space-separated string, OAuth-standard) or `scp`
-  claim (list form, seen on some providers) as fallback -- auto-detect both, no extra config flag.
-- Any `jwt.PyJWTError` (bad signature, expired, wrong issuer/audience, malformed) -> return `None`
-  -> SDK turns this into a 401 with the standard `WWW-Authenticate` challenge.
+**Explicit constraint this fix was built under, worth preserving here**: both fixes under item 3
+live entirely inside `src/unified/mcp/server.py` (plus its own test file) -- zero edits to
+`runtime.py`, either `prompt_builder.py`, either `dispatch.py`, or any handler file. The chat and
+MCP paths stay two genuinely separate execution paths that happen to read from the same source
+modules, not one path patched to special-case the other.
 
-### `src/unified/mcp/server.py` -- `build_mcp_server(...)`
+## Explicit modularity contract for the next phase
 
-- Loads `ToolSpec`s once at startup via the existing `LLMAdapter.tools_spec_from_files(sorted(
-  (tools_dir).glob("tool_*.json")))` -- same loader, same files, zero duplication with `runtime.py`.
-- `list_tools` handler: returns **all 33 tools, unfiltered by caller identity**, each description
-  annotated with its required tier (`"[requires scope: mcp:admin]"`). Deliberate: `tools/list` and
-  `tools/call` are independent JSON-RPC methods, so hiding a tool from the list provides no actual
-  security -- the only real boundary is the per-call scope check below. Filtering the list is a
-  UX-only nicety, addable later, not built now.
-- `call_tool` handler: unknown tool name -> raise (protocol error). Known name -> look up its tier
-  in `TOOL_SCOPE_TIERS`, compare against the authenticated caller's token scopes (attached by the
-  SDK's own auth middleware before this handler runs) via `is_authorized`. Insufficient scope ->
-  `CallToolResult(isError=True, content=[TextContent(text="insufficient scope: ...")])` -- a normal
-  recoverable tool-call failure the host's own LLM can explain to its user, not a crash. Authorized
-  -> call `dispatch.execute_tool(name, args, nucore_interface=nucore_interface)` **unchanged** ->
-  wrap the dict result as both `TextContent` (JSON-serialized, for text-only clients) and
-  `structuredContent` (for clients that read typed results directly); map `execute_tool`'s existing
-  `{"error": ...}` convention onto MCP's `isError` flag.
+- `AuthHook` is the **only** seam the next phase touches in the consumer repo: implement a new
+  class satisfying `authenticate(request) -> bool` (validating whatever real mechanism gets
+  decided -- platform session, JWT, mTLS, etc.) and swap it into `run_proxy.main`'s construction.
+  Zero changes to `proxy.py`'s relay logic. Zero changes to nucore-ai at all -- nucore's Unix
+  socket keeps trusting anything that reaches it, exactly as it does today for the chat/websocket
+  path.
+- If a future phase needs to carry per-caller identity/role into nucore's tool-dispatch decisions
+  (e.g. different customers get different tool access), that would require widening `AuthHook`'s
+  return type beyond a boolean and reintroducing a scope-tiering layer on nucore's side -- noted as
+  a possible later extension, not designed or built now.
 
-### `src/unified/run_mcp_server.py` -- CLI entry point
+## Concurrency/safety (carried over, still applies)
 
-A small, **purpose-built** argparse parser -- do not reuse `run_unified_runtime.py`'s full parser,
-which carries ~20 flags (`--runtime-config`, `--query`, `--websocket-port`, `--max-iterations`,
-etc.) describing the LLM-agentic-loop path that has no meaning here and would just confuse
-`--help`. New flags: `--host`/`--port` (HTTP listener), `--oauth-issuer-url`/
-`--oauth-resource-server-url` (both required, no sane default), `--oauth-jwks-uri`/
-`--oauth-audience`/`--oauth-clock-skew-s` (optional, sensible defaults). Reused verbatim from
-`run_unified_runtime.py` (via `backend_wiring.py`): `--backend-api-classpath`/
-`--backend-api-base-url`/`--backend-api-username`/`--backend-api-password`, `--preferences-dir`
-(needed -- `list_preferences`/`preference_op` degrade silently without it), `--json-output`,
-`--log-level`/`--log-file`.
+No new serialization layer needed. `nucore_interface` is already shared process-wide across every
+concurrent WebSocket connection in production today (`_run_websocket_server`'s own docstring); one
+process-wide `NuCoreInterface` shared across many concurrent MCP callers is consistent with this
+codebase's existing model. The PLM serial line is already self-protecting
+(`_begin_plm_op`/`_end_plm_op` in `src/iox/diagnostics/insteon_diag.py` fail-fast on a second
+concurrent caller). `run_shell_command` spawns real OS subprocesses with no relation to
+`NuCoreInterface` -- many concurrent callers reaching it means many concurrent shell processes, an
+OS resource-exhaustion concern independent of the auth question. Rate limiting and audit logging
+remain explicitly out of scope for this phase, flagged so they aren't mistaken for an oversight.
 
-Startup sequence: load backend API -> build `nucore_interface` (process-wide, one instance -- see
-Concurrency below) -> build `JWTBearerTokenVerifier` -> `build_mcp_server(...)` -> run its ASGI app
-via `uvicorn.run(...)`.
+## Verification
 
-### `pyproject.toml` / `requirements.txt` changes
+Automated: `pytest` in both repos for the new modules.
 
-Add (both files stay in sync manually today, matching current practice; pin to latest stable *at
-implementation time*, not decided here): `mcp` (official SDK -- confirm whether the base package or
-its `[cli]` extra is needed for the Streamable HTTP ASGI app, see Verification step 1),
-`uvicorn` (explicit direct dependency since the entry point calls it directly), `pyjwt`, and
-`cryptography` (PyJWT's RS256/ES256 dependency -- declare directly rather than via extras syntax,
-matching this repo's flat `dependencies = [...]` list style). Add a `[project.scripts]` block (none
-exists today):
-```toml
-[project.scripts]
-nucore-mcp-server = "unified.run_mcp_server:main"
-```
+Manual, end-to-end, with the config flag on in a test environment:
+1. Confirm the Unix socket exists with the expected permissions, and that a connection attempt from
+   a different uid is rejected (peer-UID check working -- mirrors today's websocket behavior).
+2. Confirm the proxy is listening on `0.0.0.0:8260` over TLS.
+3. Connect an MCP client through the proxy **with no credentials at all** and confirm `tools/list`
+   returns the full 56/57-tool set, `resources/list` returns both system-prompt resources, and a
+   real tool call from each original tool set (e.g. `get_time_info` and `lookup_uom`) succeeds
+   end-to-end through the whole chain -- this *is* the point of this phase, proving the plumbing
+   before any auth exists.
+4. Confirm a `node_op` (or any of the other 4 gated tools/operations) call with `confirmed: true`
+   still comes back as a preview over MCP, never a real delete -- see "Known issues found and
+   fixed" above.
+5. Explicit, loud reminder (a runbook note, not just this doc): this configuration must only run on
+   a controlled test box, never a real customer-facing unit, until the real `AuthHook`
+   implementation replaces `AllowAllAuthHook`.
 
-## Concurrency/safety
+## Open questions
 
-No new serialization layer needed. Confirmed directly in `run_unified_runtime.py`
-(`_run_websocket_server`'s own docstring, lines ~579 and ~784): `nucore_interface` is **already**
-shared process-wide across every concurrent WebSocket connection in production today -- this isn't
-a new risk the MCP server introduces, it's the existing model. The one genuinely non-reentrant
-resource, the PLM serial line, is already self-protecting: `_begin_plm_op`/`_end_plm_op` in
-`src/iox/diagnostics/insteon_diag.py` fail-fast (refuse a second concurrent caller immediately with
-a clean error) rather than queue or corrupt state. `NuCoreInterface.__init__` also holds
-`self._subscribe_lock`/`self._event_listeners_lock` (`threading.Lock`, confirmed at
-`nucore_interface.py:70,72`) around its event-subscription machinery, independent of caller count.
-One process-wide `NuCoreInterface` shared across many concurrent authenticated MCP callers is
-therefore consistent with this codebase's existing model.
+Resolved, against the real installed packages, during nucore-ai-side implementation:
 
-Non-blocking note: `run_shell_command` (`mcp:admin`) spawns real OS subprocesses with no relation
-to `NuCoreInterface` -- many concurrent admin-scoped callers means many concurrent shell processes,
-an OS resource-exhaustion concern. Rate limiting is explicitly out of scope (below); flagged here
-only so it isn't mistaken for an oversight.
+- **Exact `mcp` server construction API**: `mcp.server.lowlevel.Server` with `@server.list_tools()`/
+  `@server.call_tool()` decorators, wrapped by `mcp.server.streamable_http_manager
+  .StreamableHTTPSessionManager` for the actual Streamable HTTP ASGI app -- see
+  `src/unified/mcp/server.py`.
+- **Per-connection peer-UID check for a uvicorn/ASGI-served Unix socket**: confirmed not reachable.
+  uvicorn's ASGI `scope["client"]` is a parsed address tuple computed once at connection time, never
+  the raw socket, so there is no supported hook to call `getpeereid()` from inside request handling
+  (unlike the raw `websockets` library's `_run_websocket_server` path, which can). The deliberate
+  tradeoff this server ships with instead: filesystem permissions alone (`chmod 0o660`, owned by
+  this process's own uid/gid, set before uvicorn ever binds -- see `run_mcp_server.py`'s
+  `_bind_unix_socket`) are airtight for this server's one expected client (the proxy process that
+  embeds this library); revisit only if more than one distinct process ever embeds it. See
+  `run_mcp_server.py`'s module docstring for the full reasoning.
 
-## Testing
-
-Unit-testable without a live OAuth server or live hardware, following this repo's existing
-`FakeBackend(NuCoreInterface)` pattern (e.g. `tests/unified/handlers/test_diagnostics.py`) and the
-`object.__new__(Cls)` bare-instance pattern used throughout `tests/`:
-
-- `tests/unified/mcp/test_scopes.py` -- `TOOL_SCOPE_TIERS` keys exactly match
-  `dispatch.TOOL_HANDLERS` keys; `is_authorized`'s hierarchy behavior (an `mcp:admin` grant passes
-  an `mcp:read`-tier tool; an `mcp:read`-only grant fails an `mcp:control`-tier tool).
-- `tests/unified/mcp/test_server.py` -- `build_mcp_server(...)` against a `FakeBackend` and a stub
-  `TokenVerifier` returning a fixed `AccessToken`; assert all 33 tools appear in `list_tools`; a
-  read-scoped token calling `send_command` gets `isError=True`; a control-scoped token calling
-  `send_command` reaches `execute_tool` (assert via `FakeBackend`'s call-recording); an unknown tool
-  name raises.
-- `tests/unified/mcp/test_auth.py` -- self-signed JWT + local JWKS (generate an RSA keypair with
-  `cryptography` in the test, monkeypatch the JWKS lookup to return the test key): right scopes
-  extracted from both `scope`- and `scp`-claim shapes; expired/wrong-issuer/wrong-audience tokens
-  all rejected.
-- `tests/unified/test_backend_wiring.py` -- the extracted functions, carrying over whatever
-  coverage `run_unified_runtime.py`'s existing tests already have for the pre-extraction versions.
-
-Necessarily manual: a real OAuth token flow against the user's actual Authorization Server (confirm
-the 401 + `WWW-Authenticate` + RFC 9728 protected-resource-metadata document for an unauthenticated
-request), and an actual MCP host completing a real tool call end-to-end.
-
-## Out of scope (explicitly, not just omitted)
-
-- **The OAuth Authorization Server itself** (login/consent/token issuance/client registration) --
-  the user's separate infrastructure.
-- **TLS termination** -- flagged as a hard deployment requirement, not optional polish: the bearer
-  token rides in a plain `Authorization` header, and `uvicorn.run(...)` as sketched above serves
-  plain HTTP. A reverse proxy (nginx/Caddy/Traefik) or `--ssl-certfile`/`--ssl-keyfile` in front is
-  required for any deployment reachable off the local machine -- which is the entire reason
-  Streamable HTTP was chosen over stdio. Shipping without it defeats the auth model.
-- **Rate limiting** and **audit logging** (beyond existing `logger.error`/`.info` calls) -- both
-  reasonable, cheap follow-ups (`AccessToken.subject`/`client_id` are already available in
-  `call_tool`) but not built now.
-- **Per-tool argument-level authorization** (e.g. scoping a token to only certain devices/folders)
-  -- the three tool-level tiers gate which tools a token can call, not which arguments.
-
-## Open questions to resolve before implementation
-
-These come from official MCP Python SDK documentation fetched via an automated summarizing tool,
-which can drift from the real, installed package -- **before writing `server.py`/`auth.py` for
-real, install `mcp` and directly inspect it** (`python -c "import mcp.server.lowlevel as l;
-help(l.Server)"`, read the installed source) rather than trusting the sketch above verbatim:
-
-1. Exact server construction API -- constructor kwargs (`on_list_tools=`/`on_call_tool=`) vs.
-   decorators (`@server.list_tools()`/`@server.call_tool()`) vs. a different class name entirely
-   (docs inconsistently referred to `Server` and `MCPServer`).
-2. Where `token_verifier`/`AuthSettings` actually get wired -- server constructor vs.
-   `streamable_http_app(...)` call vs. separate ASGI middleware.
-3. How the authenticated `AccessToken` is actually exposed inside the `call_tool` handler (a `ctx`
-   attribute vs. a context-var-based helper like `mcp.server.auth.get_access_token()`).
-4. Whether the base `mcp` package pulls in `starlette`/`uvicorn` transitively, or whether `mcp[cli]`
-   is needed for the Streamable HTTP app to work -- affects the exact `pyproject.toml` line.
-5. **Scope hierarchy default** (`mcp:admin` implicitly covers `mcp:control`/`mcp:read`) -- this is
-   this design's default; confirm it matches how the user's Authorization Server will actually
-   issue scopes (single highest scope per client vs. every scope explicitly listed) before relying
-   on it.
-
-## Verification (when this is picked up)
-
-1. `pip install mcp pyjwt cryptography uvicorn` (or the finalized pinned versions) into the venv;
-   resolve Open Questions 1-4 above against the real installed package before finalizing
-   `server.py`/`auth.py`.
-2. `python -m pytest tests/unified/mcp/ tests/unified/test_backend_wiring.py -q`.
-3. `python -m pytest tests/ -q` -- confirm no regression to the existing suite.
-4. Manually run `python -m unified.run_mcp_server --oauth-issuer-url ... --oauth-resource-server-url
-   ... --backend-api-...` and hit `/.well-known/oauth-protected-resource/...` unauthenticated
-   (expect 401 + `WWW-Authenticate`), then a real token from the user's Authorization Server against
-   `tools/list` and one read-tier `tools/call`.
-5. Point a real MCP host (Claude Desktop/Code configured for a remote Streamable HTTP + OAuth
-   server) at it and complete one real tool call end-to-end against live IoX/NuCore hardware.
+Still open: the real `AuthHook` implementation (Phase 1's own `AllowAllAuthHook` is the only one
+that exists) -- everything else under "Phase 1 -- consumer repo (e.g. eisy-ai)" above is now built,
+see that section's own status line.

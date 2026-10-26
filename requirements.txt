@@ -7,6 +7,9 @@ httpx
 udi_interface
 websockets
 python-dotenv
+mcp
+uvicorn
+starlette
 ##### In case you want to use litellm:
 # orjson
 # litellm
