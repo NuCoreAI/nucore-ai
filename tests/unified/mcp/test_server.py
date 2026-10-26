@@ -274,6 +274,7 @@ async def test_call_tool_node_op_delete_always_previews_over_mcp(server):
     result = await call_tool(req)
     assert result.root.isError is False
     assert result.root.structuredContent["confirmation_required"] is True
+    assert "mcp_note" in result.root.structuredContent
 
 
 @pytest.mark.asyncio
@@ -289,6 +290,50 @@ async def test_call_tool_delete_plugin_always_previews_over_mcp(server):
     result = await call_tool(req)
     assert result.root.isError is False
     assert result.root.structuredContent["confirmation_required"] is True
+    assert "mcp_note" in result.root.structuredContent
+
+
+@pytest.mark.asyncio
+async def test_call_tool_delete_confirmation_mcp_note_explains_it_is_permanent(server):
+    """The handler's own message promises a literal customer 'YES' will get
+    this through -- true on the chat path, a dead end here, since
+    _deny_mcp_delete_confirmation always forces confirmed back to False no
+    matter how many times this is retried. Confirmed directly: a real
+    client retried after getting a real YES from the customer, got the
+    identical preview back, and had no way to tell this apart from a
+    transient failure. The MCP-specific note must say this plainly rather
+    than let the handler's chat-path wording mislead the model."""
+    _, call_tool = _get_handlers(server)
+    req = types.CallToolRequest(
+        params=types.CallToolRequestParams(
+            name="node_op", arguments={"operation": "delete", "node_id": "n1", "confirmed": True}
+        )
+    )
+    result = await call_tool(req)
+    note = result.root.structuredContent["mcp_note"]
+    assert "never be honored" in note
+    assert "preview-only over MCP" in note
+    assert "do not retry" in note.lower()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_list_result_is_wrapped_not_auto_detected(server):
+    """get_routine_details' own documented shape is "a list, one entry per
+    id" -- confirmed directly against the real MCP SDK: its own auto-wrap
+    mistakes a plain list of business-data dicts for already-built content
+    blocks and crashes with a wall of pydantic "Field required" errors, an
+    opaque "response-format error" to a real client with no way to tell it
+    was this server's bug. _call_tool must wrap a non-dict result itself."""
+    _, call_tool = _get_handlers(server)
+    req = types.CallToolRequest(
+        params=types.CallToolRequestParams(name="get_routine_details", arguments={"ids": [1, 2]})
+    )
+    result = await call_tool(req)
+    assert result.root.isError is False
+    wrapped = result.root.structuredContent["result"]
+    assert isinstance(wrapped, list)
+    assert [entry["id"] for entry in wrapped] == [1, 2]
+    assert all("error" in entry for entry in wrapped)  # FakeBackend's get_routine is unimplemented
 
 
 # --- get_system_prompt: the tool-callable fallback for clients (e.g. Claude

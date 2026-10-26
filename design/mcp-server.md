@@ -247,6 +247,33 @@ them hypothetical, all reproduced and fixed directly:
    the generator exits; extracted the generator to module level (`_stream_upstream_body`, taking
    `upstream_response` as a parameter) so the cleanup guarantee has a direct unit test
    (`tests/mcp_proxy/test_proxy.py`) rather than depending on reproducing a real network disconnect.
+5. **The delete-preview response's own wording told an MCP-driven model to do something that can
+   never work.** Item 3's safety fix forces `confirmed: False` for the five gated delete
+   tools/operations, so each one always resolves to its own handler's existing
+   `confirmation_required: True` preview -- but that handler's message is written for the chat
+   path, where retrying with a real human's literal "YES" *does* get the delete through. Over MCP
+   there is no human chat turn to produce, so that promise is a dead end: a real client retried the
+   call after relaying a real "YES" from the customer, got back the identical preview, and had no
+   way to tell this apart from a transient failure worth retrying again. Fixed in `_call_tool`:
+   whenever a dispatched call is one of the five gated tools/operations (`_is_delete_confirmation_attempt`,
+   factored out of `_deny_mcp_delete_confirmation` so both share the exact same check) and the
+   handler's own result comes back with `confirmation_required: True`, an `mcp_note` field is added
+   to the result explaining plainly that this is always preview-only over MCP by design, retrying
+   with `confirmed: true` will never change the outcome, and the customer needs to delete from the
+   eisy's own UI directly (or use a non-destructive alternative like disable). Nothing about the
+   underlying handler or the chat path changes -- the note is additive, MCP-only context.
+6. **A non-dict handler result (e.g. a plain list) crashed instead of returning.** The SDK's own
+   `call_tool` decorator auto-wraps a plain `dict` result as both `structuredContent` and a JSON
+   `TextContent`, which `_call_tool` relied on for every result shape -- but `get_routine_details`'s
+   own documented return shape is "a list, one entry per id", not a dict. Confirmed directly against
+   the installed SDK: handed a plain list of business-data dicts, its auto-wrap heuristic assumes
+   it's already a list of real MCP content blocks and tries to build `CallToolResult.content`
+   straight from them, which fails pydantic validation with a wall of "Field required" errors -- a
+   real client saw this as an opaque response-format error with no way to tell it was this server's
+   bug, not theirs. Fixed: `_call_tool` now checks for a dict result explicitly and, for anything
+   else, builds the `CallToolResult` itself (`structuredContent={"result": result}` -- confirmed
+   against the installed SDK's own type annotation that `structuredContent` must itself be a dict --
+   plus a JSON `TextContent`) instead of leaning on the SDK's two-shape auto-wrap heuristic.
 
 **Explicit constraint this fix was built under, worth preserving here**: both fixes under item 3
 live entirely inside `src/unified/mcp/server.py` (plus its own test file) -- zero edits to
@@ -293,8 +320,9 @@ Manual, end-to-end, with the config flag on in a test environment:
    end-to-end through the whole chain -- this *is* the point of this phase, proving the plumbing
    before any auth exists.
 4. Confirm a `node_op` (or any of the other 4 gated tools/operations) call with `confirmed: true`
-   still comes back as a preview over MCP, never a real delete -- see "Known issues found and
-   fixed" above.
+   still comes back as a preview over MCP, never a real delete, and that the preview's
+   `structuredContent` carries an `mcp_note` explaining this is permanent and not worth
+   retrying -- see "Known issues found and fixed" above.
 5. Explicit, loud reminder (a runbook note, not just this doc): this configuration must only run on
    a controlled test box, never a real customer-facing unit, until the real `AuthHook`
    implementation replaces `AllowAllAuthHook`.

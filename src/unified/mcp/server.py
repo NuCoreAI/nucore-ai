@@ -93,6 +93,16 @@ def _build_merged_handlers(
     return handlers
 
 
+def _is_delete_confirmation_attempt(name: str, arguments: dict[str, Any]) -> bool:
+    """The exact allowlist runtime.py's ``_wrap_dispatch_for_delete_confirmation`` gates --
+    shared by ``_deny_mcp_delete_confirmation`` (forces ``confirmed`` False) and ``_call_tool``
+    (decides whether a resulting ``confirmation_required`` response needs the MCP-specific
+    note below, since the exact same predicate decides both)."""
+    return name in _DELETE_CONFIRMATION_TOOLS or (
+        name in _DELETE_CONFIRMATION_OPERATION_TOOLS and arguments.get("operation") == "delete"
+    )
+
+
 def _deny_mcp_delete_confirmation(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """MCP has no equivalent of runtime.py's ``_wrap_dispatch_for_delete_confirmation``
     floor (a real human's own literal chat turn being exactly "YES") -- there is no chat
@@ -103,10 +113,19 @@ def _deny_mcp_delete_confirmation(name: str, arguments: dict[str, Any]) -> dict[
     chat path -- importing these two constants is a read-only reference to runtime.py's
     own allowlist, kept in sync with it on purpose, with zero edits to runtime.py or its
     wiring."""
-    is_delete_attempt = name in _DELETE_CONFIRMATION_TOOLS or (
-        name in _DELETE_CONFIRMATION_OPERATION_TOOLS and arguments.get("operation") == "delete"
-    )
+    is_delete_attempt = _is_delete_confirmation_attempt(name, arguments)
     return {**arguments, "confirmed": False} if is_delete_attempt else arguments
+
+
+_MCP_DELETE_CONFIRMATION_NOTE = (
+    "mcp_note: this MCP connection has no equivalent of a customer's own next chat turn, "
+    "which is what 'confirmed' above is actually checking for -- so that YES can never be "
+    "honored here, no matter how many times this call is retried with confirmed: true. This "
+    "is always preview-only over MCP, by design, not a transient failure. Tell the customer "
+    "to delete this from the eisy's own UI directly, or use a non-destructive alternative "
+    "(e.g. disable) if that meets the need -- do not retry this call expecting a different "
+    "result."
+)
 
 
 def _load_tool_specs(merged_handlers: dict[str, Any]) -> list[Any]:
@@ -299,20 +318,53 @@ def build_mcp_protocol_server(
         elif name not in merged_handlers:
             raise ValueError(f"unknown tool '{name}'")
         else:
+            original_arguments = arguments
             arguments = _deny_mcp_delete_confirmation(name, arguments)
             result = await plugin_authoring.dispatch.execute_tool(
                 name, arguments, nucore_interface=nucore_interface, tool_handlers=merged_handlers
             )
+            # The handler's own confirmation_required message promises that the
+            # customer's very next reply being exactly "YES" will get this through --
+            # true on the chat path, a dead end here (confirmed is always forced back
+            # to False above, no matter how many times this is retried). Confirmed
+            # directly: a real client retried after getting a real "YES" from the
+            # customer, got the exact same preview back, and had no way to tell this
+            # apart from a transient failure. Make the MCP-specific truth explicit
+            # rather than let the handler's chat-path wording mislead the model here.
+            if (
+                isinstance(result, dict)
+                and result.get("confirmation_required") is True
+                and _is_delete_confirmation_attempt(name, original_arguments)
+            ):
+                result = {**result, "mcp_note": _MCP_DELETE_CONFIRMATION_NOTE}
         if isinstance(result, dict) and "error" in result:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=json.dumps(result))],
                 structuredContent=result,
                 isError=True,
             )
-        # A plain dict result is auto-wrapped by the SDK's call_tool decorator
-        # as both structuredContent and a JSON TextContent (isError=False) --
-        # see mcp.server.lowlevel.server.Server.call_tool's own source.
-        return result
+        if isinstance(result, dict):
+            # A plain dict result is auto-wrapped by the SDK's call_tool decorator
+            # as both structuredContent and a JSON TextContent (isError=False) --
+            # see mcp.server.lowlevel.server.Server.call_tool's own source.
+            return result
+        # Anything else -- confirmed in practice: get_routine_details' own
+        # documented shape is "a list, one entry per id". The SDK's own
+        # auto-wrap only handles two shapes well, a dict or an iterable
+        # already made of real MCP content blocks -- fed a plain list of
+        # business-data dicts, it silently assumes the latter and tries to
+        # build CallToolResult.content straight from them, which fails
+        # pydantic validation with a wall of "Field required" errors. A real
+        # client saw that as an opaque "response-format error" with no way
+        # to tell it was this server's bug, not theirs. structuredContent
+        # must itself be a dict (confirmed against the installed SDK's own
+        # type annotation) -- wrap non-dict results ourselves instead of
+        # leaning on that heuristic for every shape a handler might return.
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=json.dumps(result, indent=2))],
+            structuredContent={"result": result},
+            isError=False,
+        )
 
     return server
 
