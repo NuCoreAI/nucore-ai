@@ -304,15 +304,20 @@ class OpenAIAdapter(LLMAdapter):
         - Every property must appear in the ``required`` list.
         - Properties not originally required are made nullable (type becomes
           ``[original_type, "null"]``) so the model can still omit them.
-        - Array nodes must declare ``items`` -- a node whose ``type`` includes
-          ``"array"`` but omits ``items`` entirely (valid, unconstrained plain
-          JSON Schema) is rejected outright by OpenAI with a 400 (live bug:
-          ``tool_plugin_configure.json``'s ``config`` property, typed
-          ``["object", "array"]`` with no ``items`` key). Default to an
-          unconstrained ``{}`` items schema when missing, rather than
-          requiring every tool author to add one by hand.
         - Array ``items`` and combiner keywords (anyOf/oneOf/allOf) are
           normalised recursively.
+
+        A node whose ``type`` includes ``"array"`` but omits ``items``
+        entirely is valid, unconstrained plain JSON Schema, but OpenAI's
+        strict mode rejects it -- and rejects a default ``items: {}`` just
+        as hard (confirmed directly against a live 400: "schema must have a
+        'type' key", because ``{}`` itself has no ``type``). There is no
+        default that satisfies strict mode for a genuinely untyped item, so
+        this is deliberately NOT patched here -- a tool whose array truly
+        has no fixed item type needs ``"strict": false`` on the tool file
+        itself instead (the same escape hatch ``tool_plugin_call.json`` uses
+        for its free-form ``additionalProperties: true`` object), not a
+        silent runtime rewrite. See ``tool_plugin_configure.json``.
         """
         if not isinstance(node, dict):
             return
@@ -342,12 +347,6 @@ class OpenAIAdapter(LLMAdapter):
                         required_set.add(key)
 
                 node["required"] = current_required
-
-        # OpenAI strict mode rejects an array-typed node that omits "items"
-        # entirely, even though plain JSON Schema allows it (unconstrained
-        # item type) -- default to {} rather than leaving it ill-formed.
-        if "array" in type_list and "items" not in node:
-            node["items"] = {}
 
         # Recurse into array item schemas.
         items = node.get("items")

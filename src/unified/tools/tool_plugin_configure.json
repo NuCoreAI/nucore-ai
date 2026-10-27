@@ -1,6 +1,7 @@
 {
   "name": "configure_plugin",
   "description": "Write an installed plugin's custom-config record -- use this to set/change the values a plugin's own custom-config form exposes (API keys, polling interval, device-specific settings, etc.). Call list_installed_plugins first to get the real plugin_id. Call get_plugin_config first to read the current values (and, for key='customtypeddata', the matching 'customtypedparams' schema) rather than constructing a payload from scratch -- send back the same shape you read, modified. For a plugin generated with OAuth support, pass key='oauth' to update its real client_id/client_secret/scope after generation (the generated server_entry.json only ever contains placeholders there, never real secrets). This only applies to plugin-backed capabilities -- never call it for a native Insteon/Z-Wave/Zigbee/Matter device.",
+  "strict": false,
   "input_schema": {
     "type": "object",
     "required": ["plugin_id", "config"],

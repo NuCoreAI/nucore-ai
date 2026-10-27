@@ -89,16 +89,21 @@ def test_plugin_call_tool_file_is_strict_false():
 
 def test_all_free_form_params_tool_files_declare_strict_false():
     # Guard against a future tool file reintroducing additionalProperties:
-    # true without also opting out of strict mode.
-    for name in ("tool_plugin_call.json",):
+    # true, or an array typed with no fixed item type, without also opting
+    # out of strict mode.
+    for name in ("tool_plugin_call.json", "tool_plugin_configure.json"):
         data = json.loads((_TOOLS_DIR / name).read_text())
         assert data.get("strict") is False, name
 
 
-def test_array_type_missing_items_gets_default_empty_items_schema():
-    # Live bug: a property typed ["object", "array"] with no "items" key at
-    # all (valid, unconstrained plain JSON Schema) is rejected outright by
-    # OpenAI's strict mode with a 400 -- "array schema missing items".
+def test_array_type_missing_items_is_left_unnormalized_under_strict_mode():
+    # Regression guard for a live bug in the other direction: an earlier fix
+    # attempt defaulted a missing "items" to {} under strict mode, which
+    # OpenAI rejects just as hard ("schema must have a 'type' key" -- {}
+    # itself has no type). There is no default that satisfies strict mode
+    # for a genuinely untyped item, so _normalize_schema_node must NOT touch
+    # an array missing items at all -- the fix belongs on the tool file
+    # (declare "strict": false) instead, not here.
     spec = ToolSpec(
         name="t",
         description="d",
@@ -109,13 +114,13 @@ def test_array_type_missing_items_gets_default_empty_items_schema():
     )
     tools = _adapter().export_tools([spec])
     config_schema = tools[0]["function"]["parameters"]["properties"]["config"]
-    assert config_schema["items"] == {}
+    assert "items" not in config_schema
 
 
-def test_array_with_existing_items_is_left_unchanged():
-    # Regression guard: an array that already specifies items (the already-
-    # correct shape tool_device_get_history.json/tool_device_send_command.json
-    # use) must not be touched.
+def test_array_with_existing_items_is_still_normalized():
+    # An array that already specifies a real items schema (the shape
+    # tool_device_get_history.json/tool_device_send_command.json use) is
+    # unaffected and still recursed into normally.
     spec = ToolSpec(
         name="t",
         description="d",
@@ -129,16 +134,25 @@ def test_array_with_existing_items_is_left_unchanged():
     assert tags_schema["items"] == {"type": "string"}
 
 
-def test_configure_plugin_tool_file_now_passes_openai_strict_validation():
-    # End-to-end regression coverage for the exact production bug: loading
-    # the real tool file and exporting it must no longer produce a "config"
-    # schema missing "items".
+def test_configure_plugin_tool_file_is_strict_false():
+    # End-to-end regression coverage for the real production bug:
+    # "config"'s type union (["object", "array"]) has no fixed item type for
+    # its array branch -- genuinely unconstrained, the same category of
+    # problem as call_plugin's free-form "args" -- so the tool file opts out
+    # of strict mode entirely rather than being silently (and incorrectly)
+    # patched at export time.
     spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_plugin_configure.json")
-    assert spec.strict is True
+    assert spec.strict is False
 
     tools = _adapter().export_tools([spec])
+    # Unnormalized -- authored exactly as written, no "items"/
+    # "additionalProperties" injected.
     config_schema = tools[0]["function"]["parameters"]["properties"]["config"]
-    assert config_schema["items"] == {}
+    assert config_schema == {
+        "type": ["object", "array"],
+        "description": config_schema["description"],
+    }
+    assert tools[0]["function"]["strict"] is False
 
 
 @pytest.mark.asyncio
