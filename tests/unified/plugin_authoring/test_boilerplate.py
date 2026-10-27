@@ -1,7 +1,12 @@
 """regenerate_plugin_boilerplate -- reads back generation_inputs.json
-(written by generate_plugin_scaffold itself) and re-renders only
+(written by generate_plugin_scaffold itself) and re-renders
 plugin.py/main.py/version.py/install.sh with today's template code,
 without the caller re-supplying override_bodies/authorize/ai_enabled/etc.
+Only a file whose re-rendered content actually differs from what's on disk
+gets written -- immediately after generate_plugin_scaffold, with no
+template change in between, a refresh is therefore a full no-op on all
+four files; most tests here hand-edit generation_inputs.json first to
+force a genuine diff, the same way a real template/tooling change would.
 Builds real fixture plugins via the actual generate_plugin_scaffold
 pipeline first (so generation_inputs.json genuinely exists), same posture
 as test_scaffold.py -- no mocking, local-disk-only.
@@ -145,7 +150,11 @@ async def test_regenerates_boilerplate_files_only(tmp_path):
 
     assert result == {
         "location": "acme_pool",
-        "regenerated": ["plugin.py", "main.py", "version.py", "install.sh"],
+        # Only version.py's content actually depends on the hand-edited stored version --
+        # plugin.py/main.py/install.sh are byte-identical to what generate_plugin_scaffold
+        # already wrote, so they're left alone.
+        "regenerated": ["version.py"],
+        "unchanged": ["plugin.py", "main.py", "install.sh"],
     }
     assert 'ud_plugin_version = "9.9.9"' in (plugin_dir / "version.py").read_text()
     plugin_py = (plugin_dir / "plugin.py").read_text()
@@ -170,14 +179,10 @@ async def test_version_override_updates_version_py_and_generation_inputs(tmp_pat
     )
 
     assert "error" not in result
-    assert set(result["regenerated"]) == {
-        "plugin.py",
-        "main.py",
-        "version.py",
-        "install.sh",
-        "generation_inputs.json",
-        "context.md",
-    }
+    # Only version.py and the two bookkeeping files actually change on a pure version bump --
+    # plugin.py/main.py/install.sh don't depend on the version number at all.
+    assert set(result["regenerated"]) == {"version.py", "generation_inputs.json", "context.md"}
+    assert set(result["unchanged"]) == {"plugin.py", "main.py", "install.sh"}
     assert 'ud_plugin_version = "1.0.3"' in (plugin_dir / "version.py").read_text()
     inputs_after = json.loads((plugin_dir / "generation_inputs.json").read_text())
     assert inputs_after["version"] == "1.0.3"
@@ -225,7 +230,9 @@ async def test_same_version_override_is_a_no_op(tmp_path):
     result = await regenerate_plugin_boilerplate(
         _FakeNuCoreInterface(), {"location": "acme_pool", "version": "1.0.2"}, plugin_output_root=str(tmp_path)
     )
-    assert result["regenerated"] == ["plugin.py", "main.py", "version.py", "install.sh"]
+    # A resupplied-but-identical version changes nothing anywhere -- not even version.py.
+    assert result["regenerated"] == []
+    assert result["unchanged"] == ["plugin.py", "main.py", "version.py", "install.sh"]
     assert (plugin_dir / "context.md").read_text() == context_before
 
 
@@ -240,9 +247,32 @@ async def test_omitted_version_keeps_existing_behavior_unchanged(tmp_path):
     result = await regenerate_plugin_boilerplate(
         _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
     )
-    assert result["regenerated"] == ["plugin.py", "main.py", "version.py", "install.sh"]
+    # Nothing to pick up -- no template drift happened between generate and this call, and
+    # omitting version entirely means no version change either.
+    assert result["regenerated"] == []
+    assert result["unchanged"] == ["plugin.py", "main.py", "version.py", "install.sh"]
     assert (plugin_dir / "generation_inputs.json").read_text() == inputs_before
     assert (plugin_dir / "context.md").read_text() == context_before
+
+
+@pytest.mark.asyncio
+async def test_no_op_refresh_skips_permissions_and_notify_calls_entirely(tmp_path):
+    gen_result = await _generate(tmp_path, _base_args())
+    assert "error" not in gen_result
+
+    class _AssertNeverCalled(_FakeNuCoreInterface):
+        async def refresh_eisy_ai_permissions(self):
+            raise AssertionError("refresh_eisy_ai_permissions should not be called when nothing changed")
+
+        async def notify_plugin_files_changed(self, paths):
+            raise AssertionError("notify_plugin_files_changed should not be called when nothing changed")
+
+    result = await regenerate_plugin_boilerplate(
+        _AssertNeverCalled(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+    assert result["regenerated"] == []
+    assert "permissions_refresh_error" not in result
+    assert "files_changed_notify_error" not in result
 
 
 @pytest.mark.asyncio
@@ -278,10 +308,12 @@ async def test_files_changed_notify_failure_does_not_block_write(tmp_path):
         async def notify_plugin_files_changed(self, paths):
             return {"error": "boom"}
 
+    # A no-op refresh never calls notify_files_changed at all (nothing written to notify about)
+    # -- force a genuine change via a version bump so this test actually exercises the failure path.
     result = await regenerate_plugin_boilerplate(
-        _FailingNotify(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+        _FailingNotify(), {"location": "acme_pool", "version": "9.9.9"}, plugin_output_root=str(tmp_path)
     )
-    assert result["regenerated"] == ["plugin.py", "main.py", "version.py", "install.sh"]
+    assert set(result["regenerated"]) == {"version.py", "generation_inputs.json", "context.md"}
     assert result["files_changed_notify_error"] == "boom"
 
 

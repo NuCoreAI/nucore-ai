@@ -95,6 +95,52 @@ def test_all_free_form_params_tool_files_declare_strict_false():
         assert data.get("strict") is False, name
 
 
+def test_array_type_missing_items_gets_default_empty_items_schema():
+    # Live bug: a property typed ["object", "array"] with no "items" key at
+    # all (valid, unconstrained plain JSON Schema) is rejected outright by
+    # OpenAI's strict mode with a 400 -- "array schema missing items".
+    spec = ToolSpec(
+        name="t",
+        description="d",
+        json_schema={
+            "type": "object",
+            "properties": {"config": {"type": ["object", "array"]}},
+        },
+    )
+    tools = _adapter().export_tools([spec])
+    config_schema = tools[0]["function"]["parameters"]["properties"]["config"]
+    assert config_schema["items"] == {}
+
+
+def test_array_with_existing_items_is_left_unchanged():
+    # Regression guard: an array that already specifies items (the already-
+    # correct shape tool_device_get_history.json/tool_device_send_command.json
+    # use) must not be touched.
+    spec = ToolSpec(
+        name="t",
+        description="d",
+        json_schema={
+            "type": "object",
+            "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
+        },
+    )
+    tools = _adapter().export_tools([spec])
+    tags_schema = tools[0]["function"]["parameters"]["properties"]["tags"]
+    assert tags_schema["items"] == {"type": "string"}
+
+
+def test_configure_plugin_tool_file_now_passes_openai_strict_validation():
+    # End-to-end regression coverage for the exact production bug: loading
+    # the real tool file and exporting it must no longer produce a "config"
+    # schema missing "items".
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_plugin_configure.json")
+    assert spec.strict is True
+
+    tools = _adapter().export_tools([spec])
+    config_schema = tools[0]["function"]["parameters"]["properties"]["config"]
+    assert config_schema["items"] == {}
+
+
 @pytest.mark.asyncio
 async def test_reasoning_effort_forwarded_when_configured():
     # Live bug: a reasoning-tier model rejected function tools on

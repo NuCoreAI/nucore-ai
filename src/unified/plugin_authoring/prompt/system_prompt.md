@@ -482,13 +482,19 @@ no single tool's schema can state on its own.
      `server_entry.json`/`profile.json`/README/tests are never touched. Requires
      `generation_inputs.json` (written by `generate_plugin_scaffold` itself) -- a plugin generated
      before this tool existed needs one full `generate_plugin_scaffold` call first (after that,
-     refreshes work going forward). Tell the developer before calling -- it overwrites those 4
-     files unconditionally. **Also the right tool for a pure version bump with nothing else
-     changing** -- `regenerate_plugin_boilerplate(location, version="...")` updates `version.py`,
-     `generation_inputs.json`'s own version field, and a `context.md` entry, with no evidence or
-     discovery-tool call needed first (a version-only bump introduces no new content to source)
-     and no need to call `read_generated_plugin` first either, since this tool reads the plugin's
-     current state itself.
+     refreshes work going forward). It only actually overwrites a file when the re-rendered
+     content genuinely differs from what's on disk -- the result's `regenerated` list names what
+     was actually written, `unchanged` names what wasn't. Tell the developer before calling that it
+     *may* touch `plugin.py`/`main.py`/`install.sh` if this tool set's templates changed since the
+     plugin was last generated or refreshed, then report back what `regenerated`/`unchanged`
+     actually say -- don't assume all 4 files changed just because the tool ran. **Also the right
+     tool for a pure version bump with nothing else changing** -- `regenerate_plugin_boilerplate(location,
+     version="...")` updates `version.py`, `generation_inputs.json`'s own version field, and a
+     `context.md` entry, with no evidence or discovery-tool call needed first (a version-only bump
+     introduces no new content to source) and no need to call `read_generated_plugin` first either,
+     since this tool reads the plugin's current state itself. None of `plugin.py`/`main.py`/
+     `install.sh`'s content depends on the version number, so a version bump alone typically leaves
+     all three `unchanged`.
    - **Never hand-edit `profile.json`, `generation_inputs.json`, `server_entry.json`, or any
      node-class `.py` file via `run_shell_command`** -- not even for a one-word label change. Those
      are this tool set's own tracked outputs, and only `generate_plugin_scaffold`/

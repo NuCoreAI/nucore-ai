@@ -14,6 +14,17 @@ installed -- see ``handlers/install.py``), ``profile.json``/``README.md``/
 tests/node-class files (LLM-authored or evidence-derived content, not
 template output that a code change here would ever affect).
 
+Re-rendering has to happen unconditionally -- it's the only way to find out
+whether ``plugin_skeleton.py``'s templates drifted since this plugin was
+last generated. *Writing* the result does not: each of the four files is
+compared against what's already on disk, and only a file whose rendered
+content actually differs gets written (and listed in ``regenerated`` below)
+-- the rest are reported as ``unchanged``. This matters most for the
+version-bump case, where none of ``plugin.py``/``main.py``/``install.sh``'s
+inputs depend on the version number at all, so a pure version bump that
+hasn't also coincided with a template change leaves all three untouched on
+disk (and un-notified -- see ``notify_files_changed`` below).
+
 An optional ``version`` argument, when given and different from what's
 already stored, additionally updates ``generation_inputs.json``'s own
 ``version`` field and appends a ``context.md`` entry -- the only two files
@@ -190,41 +201,50 @@ async def regenerate_plugin_boilerplate(
             f"{sorted(missing_methods)} -- generation_inputs.json may be stale or corrupt"
         }
 
-    (plugin_dir / _PLUGIN_FILENAME).write_text(plugin_py, encoding="utf-8")
-    (plugin_dir / _MAIN_FILENAME).write_text(main_py, encoding="utf-8")
-    (plugin_dir / _VERSION_FILENAME).write_text(version_py, encoding="utf-8")
-    (plugin_dir / _INSTALL_FILENAME).write_text(_INSTALL_SCRIPT_CONTENT, encoding="utf-8")
+    rendered_by_filename = {
+        _PLUGIN_FILENAME: plugin_py,
+        _MAIN_FILENAME: main_py,
+        _VERSION_FILENAME: version_py,
+        _INSTALL_FILENAME: _INSTALL_SCRIPT_CONTENT,
+    }
 
-    regenerated = [_PLUGIN_FILENAME, _MAIN_FILENAME, _VERSION_FILENAME, _INSTALL_FILENAME]
-    extra_notify_paths: list[str] = []
+    regenerated: list[str] = []
+    unchanged: list[str] = []
+    for filename, rendered in rendered_by_filename.items():
+        file_path = plugin_dir / filename
+        try:
+            current = file_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            current = None
+        if current == rendered:
+            unchanged.append(filename)
+            continue
+        file_path.write_text(rendered, encoding="utf-8")
+        regenerated.append(filename)
+
     if version_changed:
         generation_inputs["version"] = version
         inputs_path.write_text(json.dumps(generation_inputs, indent=2) + "\n", encoding="utf-8")
         regenerated.append(_GENERATION_INPUTS_FILENAME)
-        extra_notify_paths.append(str(inputs_path))
 
         context_path = plugin_dir / _CONTEXT_FILENAME
         note = iteration_note.strip() if iteration_note and iteration_note.strip() else f"Version bumped {stored_version} -> {version}."
         with context_path.open("a", encoding="utf-8") as fh:
             fh.write(_context_entry(iteration_note=note))
         regenerated.append(_CONTEXT_FILENAME)
-        extra_notify_paths.append(str(context_path))
 
-    permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
-    files_changed_notify_error = await notify_files_changed(
-        nucore_interface,
-        [
-            str(plugin_dir / _PLUGIN_FILENAME),
-            str(plugin_dir / _MAIN_FILENAME),
-            str(plugin_dir / _VERSION_FILENAME),
-            str(plugin_dir / _INSTALL_FILENAME),
-            *extra_notify_paths,
-        ],
-    )
+    permissions_refresh_error = None
+    files_changed_notify_error = None
+    if regenerated:
+        permissions_refresh_error = await refresh_permissions_after_write(nucore_interface)
+        files_changed_notify_error = await notify_files_changed(
+            nucore_interface, [str(plugin_dir / filename) for filename in regenerated]
+        )
 
     result = {
         "location": location,
         "regenerated": regenerated,
+        "unchanged": unchanged,
     }
     if permissions_refresh_error is not None:
         result["permissions_refresh_error"] = permissions_refresh_error
