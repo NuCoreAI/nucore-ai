@@ -30,7 +30,7 @@ from typing import Any
 
 import uvicorn
 
-from utils import configure_logging, get_logger
+from utils import configure_logging, get_logger, register_secret
 
 from .mcp.server import build_mcp_server
 from .run_unified_runtime import _BACKEND_API_JSON_OUTPUT, _load_backend_api
@@ -137,12 +137,16 @@ def main(args: Any = None, poly: Any = None) -> None:
         raise ValueError("Backend API failed to load. Please check your parameters and try again.")
     nucore_interface.preferences_dir = args.preferences_dir
 
+    secret_values = [v for v in (args.backend_api_password, args.search_engine_api_key) if v]
+    for secret in secret_values:
+        register_secret(secret)
+
     app = build_mcp_server(
         nucore_interface=nucore_interface,
         plugin_output_root=args.plugin_output_root,
         search_engine=args.search_engine,
         search_engine_api_key=args.search_engine_api_key,
-        secret_values=[v for v in (args.backend_api_password, args.search_engine_api_key) if v],
+        secret_values=secret_values,
         public_base_url=args.public_base_url,
     )
 

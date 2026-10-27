@@ -440,6 +440,63 @@ async def test_call_tool_get_system_prompt_uses_public_base_url_when_given():
     assert "https://eisy.local:8260/system-prompt/unified" in text_block.text
 
 
+class _FakeAuthedRequest:
+    """Just enough of Starlette's Request surface for this test --
+    .headers.get(...). Real callers get the real Request via
+    request_context.request (see server.py's own docstring on why)."""
+
+    def __init__(self, headers: dict[str, str]) -> None:
+        self.headers = headers
+
+
+@pytest.mark.asyncio
+async def test_call_tool_get_system_prompt_includes_auth_header_in_curl_hint_when_present(server):
+    """get_system_prompt's curl fallback is a *separate* HTTP request from
+    this tool call -- over an authenticated proxy (design/mcp-server.md's
+    Phase 2), the model has no other way to know its own session's bearer
+    token, so this call's own Authorization header must be lifted into the
+    returned instructions verbatim."""
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+
+    _, call_tool = _get_handlers(server)
+    token = request_ctx.set(
+        RequestContext(
+            request_id="1",
+            meta=None,
+            session=None,
+            lifespan_context=None,
+            request=_FakeAuthedRequest({"authorization": "Bearer live-token-abc"}),
+        )
+    )
+    try:
+        req = types.CallToolRequest(
+            params=types.CallToolRequestParams(name=_GET_SYSTEM_PROMPT_TOOL_NAME, arguments={"tool_set": "unified"})
+        )
+        result = await call_tool(req)
+    finally:
+        request_ctx.reset(token)
+
+    text_block = next(b for b in result.root.content if b.type == "text")
+    assert 'curl -H "Authorization: Bearer live-token-abc"' in text_block.text
+    assert "never repeat its value back" in text_block.text
+
+
+@pytest.mark.asyncio
+async def test_call_tool_get_system_prompt_omits_auth_header_when_none_present(server):
+    """No request_context at all (e.g. a bare local/dev invocation with no
+    proxy auth) -- the curl hint falls back to its original, header-free
+    form, same as before this fix."""
+    _, call_tool = _get_handlers(server)
+    req = types.CallToolRequest(
+        params=types.CallToolRequestParams(name=_GET_SYSTEM_PROMPT_TOOL_NAME, arguments={"tool_set": "unified"})
+    )
+    result = await call_tool(req)
+    text_block = next(b for b in result.root.content if b.type == "text")
+    assert "-H " not in text_block.text
+    assert "curl " in text_block.text
+
+
 @pytest.mark.asyncio
 async def test_call_tool_get_system_prompt_invalid_tool_set_is_error(server):
     """The MCP SDK itself rejects an invalid enum value against the

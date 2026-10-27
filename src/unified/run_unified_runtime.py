@@ -27,7 +27,7 @@ from unified.dispatch_builder import build_default_dispatch_adapter
 from unified.stream_handler import StreamHandler
 from unified.tool_set_switch import disabled_target_message, switched_message
 from nucore import NuCoreInterface, PromptFormatTypes
-from utils import configure_logging, configure_prompt_logging, get_logger
+from utils import configure_logging, configure_prompt_logging, get_logger, register_secret
 
 
 logger = get_logger(__name__)
@@ -1161,6 +1161,8 @@ def main(args:Any=None, poly=None) -> None:
         )
         if v
     ]
+    for secret in secret_values:
+        register_secret(secret)
 
     global nucore_interface
     nucore_interface = _load_backend_api(

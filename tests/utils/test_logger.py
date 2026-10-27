@@ -17,19 +17,24 @@ from pathlib import Path
 import pytest
 
 from utils import logger as logger_module
-from utils.logger import configure_logging, reapply_logging_config
+from utils import secret_redaction
+from utils.logger import RedactingFilter, configure_logging, reapply_logging_config
 
 
 @pytest.fixture(autouse=True)
 def _restore_root_logging_state():
     """configure_logging()/reapply_logging_config() mutate the real,
     process-wide root logger plus module-level globals -- save and restore
-    both so this file's tests never leak logging state into other tests."""
+    both so this file's tests never leak logging state into other tests.
+    Filters (``root.filters``) are a separate list from handlers and need
+    their own save/restore, same reasoning."""
     root = logging.getLogger()
     saved_handlers = list(root.handlers)
+    saved_filters = list(root.filters)
     saved_level = root.level
     saved_root_configured = logger_module._ROOT_CONFIGURED
     saved_last_config = logger_module._LAST_CONFIG
+    saved_secrets = set(secret_redaction._secrets)
     try:
         yield
     finally:
@@ -37,9 +42,15 @@ def _restore_root_logging_state():
             root.removeHandler(handler)
         for handler in saved_handlers:
             root.addHandler(handler)
+        for filt in list(root.filters):
+            root.removeFilter(filt)
+        for filt in saved_filters:
+            root.addFilter(filt)
         root.setLevel(saved_level)
         logger_module._ROOT_CONFIGURED = saved_root_configured
         logger_module._LAST_CONFIG = saved_last_config
+        secret_redaction._secrets.clear()
+        secret_redaction._secrets.update(saved_secrets)
 
 
 def _plain_stream_handlers(root):
@@ -99,3 +110,50 @@ def test_get_logger_output_reaches_reapplied_file_handler(tmp_path):
         handler.flush()
 
     assert "hello from the reapplied handler" in log_file.read_text()
+
+
+def test_configure_logging_installs_redacting_filter_on_every_handler(tmp_path):
+    configure_logging(level="DEBUG", log_file=str(tmp_path / "a.log"), console=True, force=True)
+    root = logging.getLogger()
+    assert root.handlers  # sanity: handlers actually exist
+    for handler in root.handlers:
+        assert any(isinstance(f, RedactingFilter) for f in handler.filters)
+
+
+def test_registered_secret_is_redacted_from_plain_text_log(tmp_path):
+    log_file = tmp_path / "nucore.log"
+    configure_logging(level="DEBUG", log_file=str(log_file), console=False, json_output=False, force=True)
+    secret_redaction.register_secret("sk-live-super-secret")
+
+    logging.getLogger("test.redaction").info("token=%s", "sk-live-super-secret")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    contents = log_file.read_text()
+    assert "sk-live-super-secret" not in contents
+    assert "[REDACTED]" in contents
+
+
+def test_registered_secret_is_redacted_from_json_log(tmp_path):
+    log_file = tmp_path / "nucore.log"
+    configure_logging(level="DEBUG", log_file=str(log_file), console=False, json_output=True, force=True)
+    secret_redaction.register_secret("hunter2-the-password")
+
+    logging.getLogger("test.redaction").info("logging in with hunter2-the-password")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    contents = log_file.read_text()
+    assert "hunter2-the-password" not in contents
+    assert "[REDACTED]" in contents
+
+
+def test_unregistered_text_passes_through_untouched(tmp_path):
+    log_file = tmp_path / "nucore.log"
+    configure_logging(level="DEBUG", log_file=str(log_file), console=False, force=True)
+
+    logging.getLogger("test.redaction").info("nothing secret here")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    assert "nothing secret here" in log_file.read_text()

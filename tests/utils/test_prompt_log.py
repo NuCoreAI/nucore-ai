@@ -18,7 +18,20 @@ import json
 
 import pytest
 
+from utils import secret_redaction
 from utils.prompt_log import PromptLogManager, configure_prompt_logging
+
+
+@pytest.fixture(autouse=True)
+def _restore_secret_registry():
+    """secret_redaction's registry is process-wide -- isolate this file's
+    tests from each other and from any other test module."""
+    saved = set(secret_redaction._secrets)
+    try:
+        yield
+    finally:
+        secret_redaction._secrets.clear()
+        secret_redaction._secrets.update(saved)
 
 
 def _lines(path):
@@ -316,3 +329,51 @@ def test_configure_prompt_logging_creates_missing_parent_directories(tmp_path):
     configure_prompt_logging(str(log_file))
 
     assert log_file.parent.is_dir()
+
+
+# --- secret redaction: a registered secret never reaches disk, anywhere in
+# a line's own JSON, including nested inside a tool_result's own content ---
+
+
+@pytest.mark.asyncio
+async def test_registered_secret_redacted_from_a_plain_message(tmp_path):
+    secret_redaction.register_secret("sk-live-super-secret")
+    manager = PromptLogManager(tmp_path)
+    await manager.write("intent", [{"role": "user", "content": "my key is sk-live-super-secret"}])
+
+    raw = manager.path.read_text()
+    assert "sk-live-super-secret" not in raw
+    assert "[REDACTED]" in raw
+
+
+@pytest.mark.asyncio
+async def test_registered_secret_redacted_from_nested_tool_result_content(tmp_path):
+    secret_redaction.register_secret("hunter2-the-password")
+    manager = PromptLogManager(tmp_path)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": '{"client_secret": "hunter2-the-password"}',
+                }
+            ],
+        }
+    ]
+    await manager.write("intent", messages)
+
+    raw = manager.path.read_text()
+    assert "hunter2-the-password" not in raw
+    assert "[REDACTED]" in raw
+
+
+@pytest.mark.asyncio
+async def test_unregistered_text_is_unaffected(tmp_path):
+    manager = PromptLogManager(tmp_path)
+    await manager.write("intent", [{"role": "user", "content": "nothing secret here"}])
+
+    raw = manager.path.read_text()
+    assert "nothing secret here" in raw
+    assert "[REDACTED]" not in raw

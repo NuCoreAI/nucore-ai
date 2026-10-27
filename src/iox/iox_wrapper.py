@@ -1884,9 +1884,92 @@ class IoXWrapper(NuCoreInterface):
         return result
 
     # ------------------------------------------------------------------
-    # Plugin management  
+    # Hub login/JWT auth (design/mcp-server.md Phase 2; see
+    # design/iox_apis/authentication.md for the full hub-side API)
     # ------------------------------------------------------------------
-    
+    async def verify_bearer_token(self, access_token: str) -> bool | None:
+        """
+        Replay *access_token* as a Bearer credential against GET /rest/time
+        -- unaffected by /api/login's "local access only" restriction
+        (/rest routes accept traffic over the same relay self.get() already
+        uses), so this reuses the existing shared client via self.get()'s
+        own machinery rather than building a one-off direct connection.
+        self.get() hardcodes Basic Auth (auth=(self.username, self.password))
+        though, the wrong credential here, so this builds its own request
+        via self._get_client() directly instead of calling self.get().
+
+        API:
+        GET /rest/time
+        Authorization: Bearer <access_token>
+        """
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                f"{self.base_url}/rest/time", headers={"Authorization": f"Bearer {access_token}"}
+            )
+            return response.status_code == 200
+        except Exception as ex:
+            logger.error(f"Error verifying bearer token: {ex}")
+            return None
+
+    async def _hub_auth_post(self, base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any] | None:
+        """Shared by login_with_credentials/refresh_access_token/logout --
+        all three are plain JSON POSTs to *base_url* (a genuinely direct
+        connection to the device, resolved by the caller -- see those
+        methods' own docstrings for why self.base_url/self._get_client()
+        cannot be reused here), none of them take Basic Auth (the
+        credential is in the JSON body itself), and none of them should
+        share self._get_client()'s persistent UDS-transport client, which
+        is wired to the PG3 relay these calls must bypass. verify=False:
+        same self-signed-hub-cert tolerance self._get_client() already
+        applies elsewhere in this file."""
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+                response = await client.post(f"{base_url.rstrip('/')}{path}", json=body)
+            try:
+                parsed_body = response.json()
+            except Exception:
+                parsed_body = None
+            return {"status_code": response.status_code, "body": parsed_body}
+        except Exception as ex:
+            logger.error(f"Error calling {path}: {ex}")
+            return None
+
+    async def login_with_credentials(self, username: str, password: str, base_url: str) -> dict[str, Any] | None:
+        """See NuCoreInterface.login_with_credentials.
+
+        API:
+        POST /api/login
+        {"username": <username>, "password": <password>, "local": true}
+        """
+        return await self._hub_auth_post(
+            base_url, "/api/login", {"username": username, "password": password, "local": True}
+        )
+
+    async def refresh_access_token(self, refresh_token: str, base_url: str) -> dict[str, Any] | None:
+        """See NuCoreInterface.refresh_access_token.
+
+        API:
+        POST /api/jwt/refresh
+        {"refreshToken": <refresh_token>}
+        """
+        return await self._hub_auth_post(base_url, "/api/jwt/refresh", {"refreshToken": refresh_token})
+
+    async def logout(self, refresh_token: str, base_url: str, access_token: str | None = None) -> dict[str, Any] | None:
+        """See NuCoreInterface.logout.
+
+        API:
+        POST /api/jwt/logout
+        {"refreshToken": <refresh_token>, "accessToken": <access_token>}
+        """
+        return await self._hub_auth_post(
+            base_url, "/api/jwt/logout", {"refreshToken": refresh_token, "accessToken": access_token}
+        )
+
+    # ------------------------------------------------------------------
+    # Plugin management
+    # ------------------------------------------------------------------
+
     async def get_active_plugins(self) -> dict[str, str]:
         """
         Get a list of active plugins that can be installed on the device. 

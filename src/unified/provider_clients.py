@@ -10,6 +10,7 @@ from .adapters import (
     LlamaCppAdapter,
     OpenAIAdapter,
 )
+from utils import register_secret
 
 
 def resolve_env_placeholder(value: str | None, env_map: dict[str, str]) -> str | None:
@@ -82,31 +83,39 @@ def build_provider_clients_from_runtime_config(
         if provider == "openai":
             key = api_key or env_map.get("OPENAI_API_KEY")
             if key:
+                register_secret(key)
                 adapter = OpenAIAdapter(api_key=key, base_url=base_url)
                 clients[profile_key] = adapter
                 clients.setdefault("openai", adapter)
         elif provider in {"claude", "anthropic"}:
             key = api_key or env_map.get("ANTHROPIC_API_KEY")
             if key:
+                register_secret(key)
                 adapter = ClaudeAdapter(api_key=key, base_url=base_url)
                 clients[profile_key] = adapter
                 clients.setdefault("claude", adapter)
         elif provider in {"grok", "xai", "x.ai"}:
             key = api_key or env_map.get("XAI_API_KEY") or env_map.get("GROK_API_KEY")
             if key:
+                register_secret(key)
                 adapter = GrokAdapter(api_key=key, base_url=base_url)
                 clients[profile_key] = adapter
                 clients.setdefault("grok", adapter)
         elif provider in {"llama.cpp", "llamacpp", "llama_cpp"}:
             # llama.cpp servers typically run without authentication; fall back
             # to a sentinel value so the adapter can still be constructed.
+            # Not registered as a secret -- "no-key" is a literal placeholder,
+            # not a real credential, and redacting it would just be noise.
             key = api_key or env_map.get("LLAMACPP_API_KEY") or "no-key"
+            if key != "no-key":
+                register_secret(key)
             adapter = LlamaCppAdapter(api_key=key, base_url=base_url)
             clients[profile_key] = adapter
             clients.setdefault("llama.cpp", adapter)
         elif provider in {"gemini", "google"}:
             key = api_key or env_map.get("GEMINI_API_KEY")
             if key:
+                register_secret(key)
                 adapter = GeminiAdapter(api_key=key, base_url=base_url)
                 clients[profile_key] = adapter
                 clients.setdefault("gemini", adapter)

@@ -481,7 +481,96 @@ class NuCoreInterface(ABC):
         raise NotImplementedError("Subclasses must implement the get_timespecs method.")
 
     # ------------------------------------------------------------------
-    # Plugin management  
+    # Hub login/JWT auth (design/mcp-server.md Phase 2; see
+    # design/iox_apis/authentication.md for the full hub-side API this
+    # wraps)
+    # ------------------------------------------------------------------
+    async def verify_bearer_token(self, access_token: str) -> bool | None:
+        """
+        Confirm an access-token JWT is currently valid, by replaying it as
+        a Bearer credential against a cheap, side-effect-free authenticated
+        endpoint (``GET /rest/time``) -- the hub's own documented "primary
+        method" of authenticating ``/rest``/``/services`` routes. No local
+        JWT signature verification is attempted; the hub is the source of
+        truth.
+
+        :return: ``True`` if the hub returned ``200`` (token accepted).
+            ``False`` if the hub returned any other clean HTTP response
+            (token rejected). ``None`` if the hub could not be reached at
+            all (connection error) -- callers must not treat this the same
+            as a confirmed-bad token.
+
+        API:
+        GET /rest/time
+        Authorization: Bearer <access_token>
+        """
+        raise NotImplementedError("Subclasses must implement the verify_bearer_token method.")
+
+    async def login_with_credentials(self, username: str, password: str, base_url: str) -> dict[str, Any] | None:
+        """
+        Log in with the hub's real portal/admin credentials, local-login
+        mode (no portal/cloud connectivity required). ``/api/login`` is
+        documented as "local access only" -- requests routed through the
+        portal proxy or the internal Unix socket PG3 relays other REST
+        calls over are silently ignored, so this call requires a genuinely
+        direct HTTP(S) connection to the device. *base_url* (e.g.
+        ``"https://<isy_ip>:<isy_port>"``) must be resolved by the caller
+        (e.g. via Polyglot's ``ISY`` info event/``getIsyInfo``) -- this
+        method does not and cannot resolve it itself.
+
+        :return: ``{"status_code": int, "body": dict | None}`` on any
+            clean HTTP response -- the real
+            ``{"successful": true, "data": {"accessToken", "refreshToken",
+            ...}}`` or ``{"successful": false, ...}`` shape, verbatim, with
+            the real status code (``400``/``403``/``503`` are documented
+            failure codes). Does not interpret ``successful``/``data``
+            itself. ``None`` only on connection failure.
+
+        API:
+        POST /api/login
+        {"username": <username>, "password": <password>, "local": true}
+        """
+        raise NotImplementedError("Subclasses must implement the login_with_credentials method.")
+
+    async def refresh_access_token(self, refresh_token: str, base_url: str) -> dict[str, Any] | None:
+        """
+        Exchange a refresh-token JWT for a new access-token + refresh-token
+        pair. Same "local access only" restriction and *base_url*
+        requirement as :meth:`login_with_credentials`. The hub invalidates
+        *refresh_token* the instant this call succeeds (one-time use) --
+        callers must persist the *new* refresh token immediately and never
+        retry this exact call after a successful response.
+
+        :return: Same ``{"status_code", "body"}`` envelope as
+            :meth:`login_with_credentials`. ``None`` only on connection
+            failure.
+
+        API:
+        POST /api/jwt/refresh
+        {"refreshToken": <refresh_token>}
+        """
+        raise NotImplementedError("Subclasses must implement the refresh_access_token method.")
+
+    async def logout(self, refresh_token: str, base_url: str, access_token: str | None = None) -> dict[str, Any] | None:
+        """
+        Invalidate *refresh_token* early (before its 30-day expiry), so it
+        can no longer be used to mint new access tokens. Same "local access
+        only" restriction and *base_url* requirement as
+        :meth:`login_with_credentials`. The access token itself is not
+        invalidated server-side (it expires naturally after 1 hour).
+
+        :return: Same ``{"status_code", "body"}`` envelope as
+            :meth:`login_with_credentials`. ``None`` only on connection
+            failure.
+
+        API:
+        POST /api/jwt/logout
+        {"refreshToken": <refresh_token>, "accessToken": <access_token>}
+        """
+        raise NotImplementedError("Subclasses must implement the logout method.")
+
+    # ------------------------------------------------------------------
+    # Plugin management
     # ------------------------------------------------------------------
     
     async def get_active_plugins(self) -> dict[str, str]:

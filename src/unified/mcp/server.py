@@ -34,7 +34,7 @@ from starlette.responses import Response
 from starlette.routing import Route
 
 from nucore import NuCoreInterface
-from utils import get_logger
+from utils import get_logger, register_secret
 
 from .. import dispatch as customer_dispatch
 from .. import plugin_authoring
@@ -282,6 +282,39 @@ def build_mcp_protocol_server(
                 # use it to give an absolute URL when it's known.
                 http_url = f"{public_base_url.rstrip('/')}{http_path}" if public_base_url else http_path
                 size = len(text.encode("utf-8"))
+                # This plain-HTTP fetch is a *separate* request from this
+                # tool call -- over an authenticated proxy (design/
+                # mcp-server.md's Phase 2), that means it needs its own
+                # Authorization header, which the model has no way to know
+                # unless told explicitly: it never sees its own session's
+                # raw HTTP headers otherwise. Lifting the exact Authorization
+                # value this very call arrived with isn't a new exposure --
+                # the model (and whoever is driving it) already holds and is
+                # actively using this same credential; surfacing it back
+                # just makes something already implicitly true explicit, so
+                # the curl command this text recommends actually works
+                # instead of 401ing. request_context.request is the mcp
+                # SDK's own, officially supported way to reach the raw
+                # Starlette Request a tool call arrived on (confirmed
+                # directly against the installed SDK: ServerMessageMetadata.
+                # request_context is set to it for every Streamable HTTP
+                # request); None under transports with no such concept
+                # (e.g. stdio) or when no proxy requires auth at all.
+                auth_header: str | None = None
+                try:
+                    request = server.request_context.request
+                except LookupError:
+                    request = None
+                if request is not None:
+                    auth_header = request.headers.get("authorization")
+                if auth_header:
+                    # Defensive: this path doesn't log anywhere today
+                    # (confirmed directly), but register it anyway so the
+                    # registry stays authoritative regardless of whether
+                    # logging is ever added here later.
+                    register_secret(auth_header)
+                    register_secret(auth_header.partition(" ")[2] or None)
+                curl_hint = f'curl -H "Authorization: {auth_header}" {http_url}' if auth_header else f"curl {http_url}"
                 return types.CallToolResult(
                     content=[
                         types.TextContent(
@@ -295,14 +328,18 @@ def build_mcp_protocol_server(
                                 "property, command, or rule -- resolving a customer's phrase to "
                                 "the right device/property requires seeing the complete content "
                                 "at once. It is also available as plain text via a GET request to "
-                                f"{http_url} -- fetch it with curl (or any HTTP client reachable on "
-                                "this network) and save it to a local file. Do not guess a different "
-                                "host/port for this (e.g. the hub's own web UI or REST API ports) -- "
-                                f"use exactly {http_url}. Or, if this session supports MCP resources, "
-                                f"read {uri} directly. Either way, read the ENTIRE file/resource into "
-                                "your context before answering any question about devices, "
-                                "properties, commands, or routines. Do not attempt to read only part "
-                                "of it, or search/grep within a partial copy."
+                                f"{http_url} -- fetch it with `{curl_hint}` (or any HTTP client "
+                                "reachable on this network, sending the exact same header) and save "
+                                "it to a local file. That header is this session's own credential -- "
+                                "use it in the fetch, but never repeat its value back in your own "
+                                "reply to the customer. Do not guess a different host/port for this (e.g. "
+                                "the hub's own web UI or REST API ports) -- use exactly "
+                                f"{http_url}. Or, if this session supports MCP resources, read {uri} "
+                                "directly (no extra header needed there -- it's served over this same "
+                                "already-authenticated MCP connection). Either way, read the ENTIRE "
+                                "file/resource into your context before answering any question about "
+                                "devices, properties, commands, or routines. Do not attempt to read "
+                                "only part of it, or search/grep within a partial copy."
                             ),
                         ),
                         types.ResourceLink(

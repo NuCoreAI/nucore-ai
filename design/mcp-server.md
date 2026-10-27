@@ -1,16 +1,19 @@
-# MCP SERVER (Phase 1: plumbing, no real auth yet -- both halves implemented 2026-10-25)
+# MCP SERVER (Phase 2: real authentication and authorization, implemented 2026-10-26)
 
-> **Both halves are now implemented and tested.** nucore-ai: `src/unified/mcp/server.py`,
-> `src/unified/run_mcp_server.py` (the `nucore-mcp-server` console script), and
-> `tests/unified/mcp/test_server.py`. eisy-ai (the consumer repo): `mcp_proxy/` (`auth.py`,
-> `proxy.py`, `run_proxy.py`) and `tests/mcp_proxy/`, wired into `start_eisyai.py` behind the
-> `mcp_server: true` runtime-config flag described under "Phase 1 -- consumer repo" below, which is
-> no longer a future plan -- it's what that section now describes. **Still not safe for anything but
-> a controlled test box**: Phase 1's `AllowAllAuthHook` is real, working, and exactly as
-> unauthenticated as this document always said it would be -- see "Known issues found and fixed
-> after initial implementation" below for what *has* been hardened since, and the real `AuthHook`
-> remains the one genuinely unbuilt piece. This document still captures the full original design so
-> the research and decisions aren't lost. It supersedes all earlier versions of this file.
+> **Both Phase 1 and Phase 2 are now implemented and tested.** nucore-ai: `src/unified/mcp/server.py`,
+> `src/unified/run_mcp_server.py` (the `nucore-mcp-server` console script),
+> `src/nucore/nucore_interface.py`/`src/iox/iox_wrapper.py` (the four new hub-auth methods, Phase 2),
+> and `tests/unified/mcp/test_server.py`/`tests/iox/test_hub_auth.py`. eisy-ai (the consumer repo):
+> `mcp_proxy/` (`auth.py`, `proxy.py`, `run_proxy.py`, `oauth.py`, `oauth_store.py`,
+> `isy_direct_address.py`, all Phase 2 except `proxy.py`'s relay logic) and `tests/mcp_proxy/`, wired
+> into `start_eisyai.py` behind the `mcp_server: true` runtime-config flag described under "Phase 1
+> -- consumer repo" below. **`AllowAllAuthHook` is retired from production use** -- see "Phase 2 --
+> real authentication and authorization" below for what replaced it, and that section's own "Threat
+> model" subsection for what this does and does not protect against (it closes the "anyone on the
+> LAN, zero credential" gap; it does not, and cannot, defend against code already executing inside
+> eisy-ai's own process -- a pre-existing ceiling, not something this phase could have changed). This
+> document still captures the full original Phase 1 design so the research and decisions aren't
+> lost. It supersedes all earlier versions of this file.
 
 ## How this design got here
 
@@ -35,12 +38,12 @@ existed only to contain a weak standalone credential that no longer exists in th
 MCP server now trusts anything that reaches its Unix socket completely, exactly like the
 chat/websocket path already does today.
 
-**Phase 1 (this document's main subject) ships zero authentication on the one real network port in
-this design, by deliberate choice.** Its job is to prove the plumbing end-to-end (client -> TCP
-proxy -> Unix socket -> nucore's real tool dispatch) with an authentication hook that is a
-structural no-op stub. A later phase implements the real hook; the hard requirement carried into
-that phase is that it must be a drop-in swap of that one hook -- no rework of the proxy or of
-nucore-ai.
+**Phase 1 shipped zero authentication on the one real network port in this design, by deliberate
+choice.** Its job was to prove the plumbing end-to-end (client -> TCP proxy -> Unix socket ->
+nucore's real tool dispatch) with an authentication hook that was a structural no-op stub. Phase 2
+(see that section below) implements the real hook -- mostly as a drop-in swap of that one hook, as
+originally planned, plus a handful of narrow, explicitly-flagged exceptions where reality needed
+slightly more than a single-method swap.
 
 Verified directly against the real installed packages (not assumed): `uvicorn.run()` supports a
 `uds=` parameter, `httpx.AsyncHTTPTransport` supports `uds=` (httpx 0.28.1), and `starlette` is
@@ -62,10 +65,13 @@ authentication/transport model and where the code lives.
 ## Architecture
 
 ```
-MCP client (LAN, no credentials in Phase 1)
+MCP client (LAN, must complete an OAuth 2.1 login against the hub's own real credentials -- Phase 2)
    --HTTP over TLS (consumer's own cert)-->
-consumer repo (e.g. eisy-ai) :8260 -- a pass-through proxy
-   - AuthHook.authenticate(request) -> bool   [Phase 1: AllowAllAuthHook, always True]
+consumer repo (e.g. eisy-ai) :8260 -- a pass-through proxy + OAuth 2.1 wrapper (Phase 2)
+   - oauth.py: /.well-known/*, /register, /authorize, /token, /revoke -- wraps the hub's own
+     /api/login, /api/jwt/refresh, /api/jwt/logout (design/iox_apis/authentication.md)
+   - AuthHook.authenticate(request) -> bool   [Phase 2: HubBearerAuthHook, replays the
+     presented bearer token against the hub's own GET /rest/time]
    - on True: forward request via httpx.AsyncClient(transport=AsyncHTTPTransport(uds=...)),
      stream the response back verbatim
    --Unix domain socket (new; peer-UID checked, same process's own uid)-->
@@ -292,7 +298,110 @@ modules, not one path patched to special-case the other.
 - If a future phase needs to carry per-caller identity/role into nucore's tool-dispatch decisions
   (e.g. different customers get different tool access), that would require widening `AuthHook`'s
   return type beyond a boolean and reintroducing a scope-tiering layer on nucore's side -- noted as
-  a possible later extension, not designed or built now.
+  a possible later extension, not designed or built now. Phase 2 (below) deliberately stays
+  all-or-nothing, consistent with this.
+
+## Phase 2 -- real authentication and authorization
+
+**Status: implemented.** Reuses what already existed rather than inventing a new identity system:
+the hub (the eisy device itself) already has a real login -- `POST /api/login` and
+`POST /api/jwt/refresh`/`POST /api/jwt/logout` (see `design/iox_apis/authentication.md`) -- the
+same thing that already gates "a logged-in session" today. Wrapped in a thin OAuth 2.1 façade
+because real MCP clients require it: Claude Desktop's remote-MCP connector performs full OAuth 2.1
+discovery + dynamic client registration + PKCE with **no fallback** to a static bearer header
+(confirmed via research), so a bare bearer-token scheme would have locked out the clients people
+actually use.
+
+1. **nucore-ai: four new `NuCoreInterface`/`IoXWrapper` methods** (`src/nucore/nucore_interface.py`,
+   `src/iox/iox_wrapper.py`), one more than the modularity contract above literally anticipated,
+   flagged here for that reason:
+   - `verify_bearer_token(access_token)`: replays the token as `Authorization: Bearer` against
+     `GET /rest/time` (unaffected by the relay restriction below -- `/rest` routes accept traffic
+     over the same PG3-relay Unix socket `IoXWrapper`'s other methods already use). Returns
+     `True`/`False`/`None` (hub-confirmed / hub-rejected / hub-unreachable -- callers must not
+     conflate the last two).
+   - `login_with_credentials(username, password, base_url)`, `refresh_access_token(refresh_token,
+     base_url)`, `logout(refresh_token, base_url, access_token=None)`: thin wrappers around
+     `/api/login` (Mode 3, `{"username", "password", "local": true}` -- local, offline-capable
+     login), `/api/jwt/refresh`, `/api/jwt/logout`. **Each takes an explicit `base_url`, deliberately
+     not `self.base_url`**: `design/iox_apis/authentication.md` documents `/api/login`/`/api/jwt/*`
+     as "local access only" -- requests routed through the PG3-relay Unix socket
+     (`/tmp/eisyui-listener`) that `IoXWrapper` is otherwise configured to use in eisy-ai's actual
+     deployment are silently ignored. Resolving a genuinely direct hub address is therefore the
+     caller's job (see eisy-ai's `isy_direct_address.py` below), not something these methods attempt
+     themselves.
+   - Tests: `tests/iox/test_hub_auth.py`, against a real local `http.server.HTTPServer` (same
+     precedent as `tests/iox/test_http_delete_with_body.py`), not a stubbed client.
+2. **eisy-ai: `mcp_proxy/isy_direct_address.py`** (new) -- `DirectHubAddressResolver`, resolving the
+   hub's real, non-relayed `isy_ip`/`isy_port`/`isy_https` by replicating the exact
+   `poly.subscribe(poly.ISY, ...)` + `poly.send({'getIsyInfo': {}}, 'system')` pattern already proven
+   correct in two other places (`udi_interface`'s own `ISY` class, and `IoXWrapper`'s own poly-mode
+   constructor branch) -- not a new mechanism, just invoked a second time from `start_eisyai.py`'s
+   own scope, using the real `polyglot` object `start_eisyai()` already receives as a parameter but
+   previously never used.
+3. **eisy-ai: OAuth 2.1 wrapper, `mcp_proxy/oauth.py` + `mcp_proxy/oauth_store.py`** (new) --
+   `GET /.well-known/oauth-authorization-server` (RFC 8414) and `GET /.well-known/oauth-protected-
+   resource` (RFC 9728, added beyond the original scope -- current MCP clients discover the
+   authorization server via this document, named in the 401 challenge below), `POST /register`
+   (RFC 7591 dynamic client registration, persisted to `persist/mcp_oauth_clients.json` so a
+   registered client survives a restart), `GET`/`POST /authorize` (exact-match `redirect_uri`
+   validation; the POST calls `login_with_credentials` and mints a single-use `AuthorizationCode`
+   on success, re-renders the login form with a distinct error for invalid credentials / hub still
+   starting up / hub unreachable otherwise -- never one generic "login failed"), `POST /token`
+   (`authorization_code` grant verifies PKCE S256 and repackages the code's already-obtained JWT
+   pair; `refresh_token` grant calls `refresh_access_token` directly), and `POST /revoke` (optional,
+   RFC 7009-shaped, maps to `logout`). `/authorize` renders its own minimal login form rather than
+   redirecting to an existing hub-hosted one -- no such page was found in either repo; worth a
+   direct check against the real hub if one does exist there.
+4. **eisy-ai: the real `AuthHook`, `mcp_proxy/auth.py`'s `HubBearerAuthHook`** -- extracts
+   `Authorization: Bearer <token>`, caches only confirmed-good results (keyed by a hash of the token
+   itself, TTL safely below the hub's documented 1-hour access-token lifetime) to avoid hitting the
+   hub on every single tool call within one session, and otherwise calls `verify_bearer_token`.
+   `AllowAllAuthHook` is retired from `start_eisyai.py`'s production wiring entirely -- it remains
+   only for this package's own unit tests and a bare local/dev invocation with no real
+   `NuCoreInterface` to authenticate against at all.
+5. **eisy-ai: one narrow, flagged exception to "zero changes to `proxy.py`'s relay logic."**
+   `_ProxyApp.__call__`'s deny branch changed from a bare `403` to a `401` with
+   `WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource"` --
+   needed because an OAuth-requiring client relies on exactly this challenge to know to start the
+   discovery flow at all; a bare 403 gives it nothing to act on.
+6. **Wiring, `start_eisyai.py`**: calls the same `_load_backend_api(...)` the other two threads
+   already call (byte-identical `backend_api_*` args), synchronously, in the main thread, to get a
+   reference to the same cached `NuCoreInterface` singleton (`functools.lru_cache` is thread-safe,
+   so it doesn't matter which of the three call sites populates the cache first) -- no new
+   nucore-ai plumbing needed for this. Constructs `DirectHubAddressResolver(polyglot)` once, and
+   passes both `nucore_interface` and the resolver's `.get` method into the proxy thread's
+   `run_proxy.main(...)` call as new keyword arguments. **No new user-facing config key**:
+   `mcp_server: true` always means the real `HubBearerAuthHook` from here on -- keeping an
+   easily-reachable insecure fallback in the documented config surface would have recreated the
+   exact footgun this phase exists to close.
+7. **Delete policy: unchanged.** The 5 existing delete-gated tools/operations (item 3/5 under "Known
+   issues" above) stay permanently preview-only over MCP regardless of authentication. Auth gates
+   *access*, not that separate safety floor -- a deliberate decision, not an oversight.
+
+### Threat model: what Phase 2 does and doesn't protect against
+
+The right baseline is the system's own existing chatbox/websocket path, not an idealized "defend
+against all RCE everywhere" bar that nothing in this codebase already meets. `IoXWrapper` only ever
+obtains real hub credentials by being a PG3-registered, customer-approved plugin (via Polyglot's
+`GetISYInfo`) -- so code execution inside eisy-ai's own process already has full tool-dispatch and
+hub-credential access via the *existing* chat/websocket path, with or without MCP, with or without
+any `AuthHook`. That ceiling is pre-existing and out of scope here; no auth mechanism on the MCP
+proxy changes it, because it was never the threat an `AuthHook` addresses.
+
+What Phase 2 *does* close: before it, reaching nucore-ai's tool-dispatch over MCP required nothing
+at all (`AllowAllAuthHook`) -- "mere LAN reachability, zero skill, zero credential," a strictly
+larger and easier attack surface than the chatbox ever had (which always required either a
+legitimate customer hub login, or that same pre-existing RCE-level plugin compromise). The real
+OAuth 2.1 + JWT layer restores the "legitimate customer hub login" requirement for MCP, bringing its
+exposure back to the same ceiling the rest of the system already accepts. One honest, non-blocking
+asymmetry: the chatbox's Unix-socket mode gets a second, bonus layer (the `getpeereid()` UID check
+restricting callers to specifically eisy-ui) that MCP structurally can't replicate, since it's open
+to arbitrary external clients rather than one fixed first-party caller.
+
+Explicitly out of scope, left as a separate future hardening effort, not a blocker for this phase:
+process/jail-separating nucore-ai's MCP server from eisy-ai's own process, which is the only thing
+that would ever change the pre-existing in-process-RCE ceiling described above.
 
 ## Concurrency/safety (carried over, still applies)
 
@@ -308,24 +417,26 @@ remain explicitly out of scope for this phase, flagged so they aren't mistaken f
 
 ## Verification
 
-Automated: `pytest` in both repos for the new modules.
+Automated: `pytest` in both repos for the new/updated modules (`tests/unified/mcp/test_server.py`,
+`tests/iox/test_hub_auth.py`, `tests/mcp_proxy/test_oauth.py`, `test_auth.py`, `test_proxy.py`).
 
 Manual, end-to-end, with the config flag on in a test environment:
 1. Confirm the Unix socket exists with the expected permissions, and that a connection attempt from
    a different uid is rejected (peer-UID check working -- mirrors today's websocket behavior).
 2. Confirm the proxy is listening on `0.0.0.0:8260` over TLS.
-3. Connect an MCP client through the proxy **with no credentials at all** and confirm `tools/list`
-   returns the full 56/57-tool set, `resources/list` returns both system-prompt resources, and a
-   real tool call from each original tool set (e.g. `get_time_info` and `lookup_uom`) succeeds
-   end-to-end through the whole chain -- this *is* the point of this phase, proving the plumbing
-   before any auth exists.
+3. Confirm `GET /.well-known/oauth-authorization-server` and `-protected-resource` resolve; confirm
+   `POST /register` -> `GET /authorize` (exact-match `redirect_uri` enforced) -> a real hub login ->
+   `POST /token` yields a bearer token that a direct MCP `tools/list` call accepts, returning the
+   full tool set and both system-prompt resources. Confirm a missing/garbage/expired bearer token
+   gets a `401` with the `WWW-Authenticate` challenge, not a bare `403`.
 4. Confirm a `node_op` (or any of the other 4 gated tools/operations) call with `confirmed: true`
    still comes back as a preview over MCP, never a real delete, and that the preview's
    `structuredContent` carries an `mcp_note` explaining this is permanent and not worth
-   retrying -- see "Known issues found and fixed" above.
-5. Explicit, loud reminder (a runbook note, not just this doc): this configuration must only run on
-   a controlled test box, never a real customer-facing unit, until the real `AuthHook`
-   implementation replaces `AllowAllAuthHook`.
+   retrying -- see "Known issues found and fixed" above. Unchanged by Phase 2 by design.
+5. Attempt a real connection from Claude Desktop against a test hub, since its OAuth dynamic-
+   client-registration behavior was the reason the OAuth wrapper exists at all -- confirm it
+   completes the full discovery/registration/authorize/token flow and can call tools, not just that
+   unit tests pass.
 
 ## Open questions
 
@@ -345,6 +456,8 @@ Resolved, against the real installed packages, during nucore-ai-side implementat
   embeds this library); revisit only if more than one distinct process ever embeds it. See
   `run_mcp_server.py`'s module docstring for the full reasoning.
 
-Still open: the real `AuthHook` implementation (Phase 1's own `AllowAllAuthHook` is the only one
-that exists) -- everything else under "Phase 1 -- consumer repo (e.g. eisy-ai)" above is now built,
-see that section's own status line.
+The real `AuthHook` implementation is now built -- see "Phase 2 -- real authentication and
+authorization" above. Still open, deliberately out of scope for Phase 2 (see that section's own
+"Threat model" subsection): process/jail-separating nucore-ai's MCP server from eisy-ai's own
+process, the only thing that would change the pre-existing in-process-RCE ceiling neither phase
+ever addressed.

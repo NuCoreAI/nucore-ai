@@ -10,6 +10,29 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from .secret_redaction import redact
+
+
+class RedactingFilter(logging.Filter):
+    """Redacts every registered secret (see secret_redaction.py) out of a
+    record's rendered message before any handler/formatter sees it --
+    installed on ``root`` itself (not per-handler) so it covers every
+    ``logger.info``/``logger.error`` call in the process uniformly,
+    including ones added after this filter was installed. Folds %-args
+    into the message first (``record.getMessage()``) and clears
+    ``record.args`` afterward so a secret passed as an arg (e.g.
+    ``logger.info("token=%s", token)``) is caught too, and the formatter
+    doesn't try to re-apply the now-stale args to the already-redacted
+    string."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.msg = record.getMessage()
+            record.args = ()
+        record.msg = redact(str(record.msg))
+        return True
+
+
 @dataclass(frozen=True)
 class LoggingConfig:
     level: str = "INFO"
@@ -183,15 +206,28 @@ def configure_logging(
 
     formatter = _build_formatter(config.json_output)
 
+    # Added per-handler, not on root as a logger-level filter: a logger's
+    # own .filters are only consulted for records logged directly on that
+    # logger (Logger.handle's self.filter(record) call) -- callHandlers()
+    # walks the ancestor chain and invokes each HANDLER's handle() (which
+    # checks that handler's own .filters), never re-running an ancestor
+    # LOGGER's .filter() along the way. Since get_logger(__name__) always
+    # returns a child of root, a root-logger-level filter would silently
+    # never run for virtually every real log call in this codebase -
+    # confirmed directly (this was tried first, and failed its own test).
+    # Every handler built below gets this instead.
+
     if config.console:
         stdout_handler = logging.StreamHandler(sys.stdout)
         stdout_handler.setFormatter(formatter)
         stdout_handler.addFilter(lambda record: record.levelno < logging.WARNING)
+        stdout_handler.addFilter(RedactingFilter())
         root.addHandler(stdout_handler)
 
         stderr_handler = logging.StreamHandler(sys.stderr)
         stderr_handler.setFormatter(formatter)
         stderr_handler.setLevel(logging.WARNING)
+        stderr_handler.addFilter(RedactingFilter())
         root.addHandler(stderr_handler)
 
     if config.log_file:
@@ -204,6 +240,7 @@ def configure_logging(
             encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(RedactingFilter())
         root.addHandler(file_handler)
 
     _ROOT_CONFIGURED = True

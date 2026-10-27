@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from .logger import get_logger
+from .secret_redaction import redact
 
 logger = get_logger(__name__)
 
@@ -209,7 +210,11 @@ class PromptLogManager:
     async def _write_lines(self, lines: list[dict[str, Any]]) -> None:
         if not lines:
             return
-        text = "".join(json.dumps(line, default=str) + "\n" for line in lines)
+        # redact() on the fully-serialized line, not per-field -- a secret
+        # could appear anywhere in a tool_result's own nested JSON (see
+        # secret_redaction.py's own docstring); this is the one place
+        # every line this manager ever writes actually reaches disk.
+        text = "".join(redact(json.dumps(line, default=str)) + "\n" for line in lines)
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(text)
         await self._maybe_prune()

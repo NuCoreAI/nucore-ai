@@ -723,3 +723,22 @@ async def test_get_plugin_config_errors_on_backend_failure():
     assert "error" in result
 
 
+@pytest.mark.asyncio
+async def test_get_plugin_config_oauth_registers_client_secret_for_redaction():
+    from utils import secret_redaction
+
+    saved = set(secret_redaction._secrets)
+    try:
+        backend = FakeBackend()
+        backend.get_config_response = {
+            "successful": True,
+            "data": {"client_id": "real-client-id", "client_secret": "real-client-secret"},
+        }
+        await plugin_management.get_plugin_config(backend, {"plugin_id": "3", "key": "oauth"})
+        assert "real-client-secret" in secret_redaction._secrets
+        assert "real-client-id" in secret_redaction._secrets
+    finally:
+        secret_redaction._secrets.clear()
+        secret_redaction._secrets.update(saved)
+
+

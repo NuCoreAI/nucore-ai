@@ -43,6 +43,7 @@ from __future__ import annotations
 from typing import Any
 
 from nucore import NuCoreInterface
+from utils import register_secret
 
 
 def _data(response: Any) -> list[dict] | None:
@@ -376,4 +377,12 @@ async def get_plugin_config(nucore_interface: NuCoreInterface, args: dict[str, A
     # oauth, but possibly a list for customtypedparams/customtypeddata (see the shape note above).
     # Returned verbatim under "config" rather than spread into the result, since a list can't be
     # spread into a dict the way configure_plugin's confirmed-dict response is above.
-    return {"plugin_id": plugin_id, "key": key, "config": response.get("data")}
+    config = response.get("data")
+    if key == "oauth" and isinstance(config, dict):
+        # A real client_id/client_secret, once a plugin's OAuth has actually
+        # been configured post-install (configure_plugin(key="oauth")) --
+        # register it the moment it's read back, before it has any chance
+        # to reach a log line.
+        register_secret(config.get("client_secret"))
+        register_secret(config.get("client_id"))
+    return {"plugin_id": plugin_id, "key": key, "config": config}
