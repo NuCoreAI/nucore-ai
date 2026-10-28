@@ -177,6 +177,29 @@ _INSTALL_SCRIPT_CONTENT = (
 )
 
 
+def _coerce_json_object(value: Any) -> dict[str, Any] | None:
+    """A ``dict`` passes through unchanged; a ``str`` that ``json.loads``
+    parses into a ``dict`` is accepted the same way -- mirrors the exact
+    leniency ``OpenAIAdapter._coerce_json`` already applies to the whole
+    ``arguments`` blob (openai_adapter.py) one level deeper, for a single
+    nested field: once a tool opts out of OpenAI strict mode
+    (``"strict": false`` -- required for this tool's genuinely free-form
+    fields), nothing enforces that a nested object-typed argument actually
+    arrives as a native object rather than a double-encoded JSON string.
+    Anything else -- including a string that isn't valid JSON, or that
+    decodes to something other than a dict -- returns ``None`` so the
+    caller's own guard still fails cleanly."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
 def _ensure_controller_st_property(raw_profile: dict[str, Any]) -> None:
     """Unconditionally makes the controller's own nodedef (``id ==
     "controller"``) declare a property
@@ -814,9 +837,10 @@ async def generate_plugin_scaffold(
         return {"error": f"no evidence gathered this session -- {hint} must find something before a scaffold can be generated"}
 
     # Guard 4
-    raw_profile = args.get("profile")
-    if not isinstance(raw_profile, dict):
-        return {"error": "profile must be a JSON object"}
+    raw_profile = _coerce_json_object(args.get("profile"))
+    if raw_profile is None:
+        received = args.get("profile")
+        return {"error": f"profile must be a JSON object (received {type(received).__name__}: {repr(received)[:200]})"}
     # Deep-copied before any mutation below (_ensure_controller_st_property) --
     # never mutate the caller's own profile dict in place (args is the caller's, not ours to
     # modify).
@@ -853,9 +877,12 @@ async def generate_plugin_scaffold(
         name for name in controller_command_dispatch.values() if name not in plugin_skeleton.BASE_OVERRIDE_METHODS
     }
 
-    server_entry_input = args.get("server_entry")
-    if not isinstance(server_entry_input, dict):
-        return {"error": "server_entry must be a JSON object"}
+    server_entry_input = _coerce_json_object(args.get("server_entry"))
+    if server_entry_input is None:
+        received = args.get("server_entry")
+        return {
+            "error": f"server_entry must be a JSON object (received {type(received).__name__}: {repr(received)[:200]})"
+        }
     # Validated again, more fully, by _build_server_entry below -- needed this early too, since
     # the Controller's own display name (never the bare word "Controller" -- must include the
     # project's own name) is built from it before that later call ever runs.
@@ -870,15 +897,24 @@ async def generate_plugin_scaffold(
     if not isinstance(iteration_note, str) or not iteration_note.strip():
         return {"error": "iteration_note is required"}
 
-    override_bodies = args.get("override_bodies") or {}
-    if not isinstance(override_bodies, dict):
-        return {"error": "override_bodies must be a JSON object"}
-    node_classes = args.get("node_classes") or {}
-    if not isinstance(node_classes, dict):
-        return {"error": "node_classes must be a JSON object"}
-    tests = args.get("tests") or {}
-    if not isinstance(tests, dict):
-        return {"error": "tests must be a JSON object"}
+    raw_override_bodies = args.get("override_bodies")
+    override_bodies = {} if not raw_override_bodies else _coerce_json_object(raw_override_bodies)
+    if override_bodies is None:
+        return {
+            "error": f"override_bodies must be a JSON object (received {type(raw_override_bodies).__name__}: "
+                     f"{repr(raw_override_bodies)[:200]})"
+        }
+    raw_node_classes = args.get("node_classes")
+    node_classes = {} if not raw_node_classes else _coerce_json_object(raw_node_classes)
+    if node_classes is None:
+        return {
+            "error": f"node_classes must be a JSON object (received {type(raw_node_classes).__name__}: "
+                     f"{repr(raw_node_classes)[:200]})"
+        }
+    raw_tests = args.get("tests")
+    tests = {} if not raw_tests else _coerce_json_object(raw_tests)
+    if tests is None:
+        return {"error": f"tests must be a JSON object (received {type(raw_tests).__name__}: {repr(raw_tests)[:200]})"}
     extra_requirements = server_entry_input.get("extra_requirements") or []
     if not isinstance(extra_requirements, list) or not all(
         isinstance(req, str) and req.strip() for req in extra_requirements

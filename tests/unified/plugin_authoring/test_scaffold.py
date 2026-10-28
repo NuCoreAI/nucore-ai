@@ -886,6 +886,44 @@ async def test_server_entry_missing_name_is_rejected(tmp_path):
     assert not (tmp_path / "acme_pool").exists()
 
 
+@pytest.mark.asyncio
+async def test_server_entry_as_json_encoded_string_is_accepted(tmp_path):
+    # Some non-strict-mode tool-calling responses (OpenAI family, once
+    # "strict": false removes OpenAI's own type enforcement -- see
+    # OpenAIAdapter._coerce_json, which already applies the same leniency
+    # one level up, to the whole `arguments` blob) can double-encode a
+    # nested object field as a JSON string instead of a native object.
+    # generate_plugin_scaffold must recover from that exactly as if the
+    # value had arrived as a real dict.
+    args = _base_args(server_entry=json.dumps({"name": "AcmePool", "desc": "Acme pool controller"}))
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["name"] == "AcmePool"
+
+
+@pytest.mark.asyncio
+async def test_server_entry_wrong_type_names_the_received_type_in_the_error(tmp_path):
+    args = _base_args(server_entry=None)
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert "NoneType" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_profile_as_json_encoded_string_is_accepted(tmp_path):
+    args = _base_args(profile=json.dumps(WIRE_PROFILE))
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_profile_wrong_type_names_the_received_type_in_the_error(tmp_path):
+    result = await _generate(tmp_path, _base_args(profile=42))
+    assert "error" in result
+    assert "int" in result["error"]
+
+
 # --- controller node display name must include the project's own name ---
 
 

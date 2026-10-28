@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -23,6 +24,7 @@ from unified.adapters.base_adapter import LLMAdapter, ToolSpec
 from unified.adapters.openai_adapter import OpenAIAdapter
 
 _TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "tools"
+_PLUGIN_AUTHORING_TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "plugin_authoring" / "tools"
 
 
 def _adapter() -> OpenAIAdapter:
@@ -87,13 +89,67 @@ def test_plugin_call_tool_file_is_strict_false():
     assert tools[0]["function"]["strict"] is False
 
 
-def test_all_free_form_params_tool_files_declare_strict_false():
+def _find_unconstrained_schema_nodes(node: Any, path: list[str]) -> list[tuple[str, list[str]]]:
+    """Walk a tool's input_schema looking for the three shapes OpenAI strict
+    mode can never satisfy, no matter what _normalize_schema_node does:
+    ``additionalProperties: true`` (a genuinely free-form object), an
+    array-typed node with no ``items`` at all (a genuinely untyped item),
+    and an object-typed node with neither ``properties`` nor
+    ``additionalProperties`` declared at all -- in plain JSON Schema this
+    means "any shape accepted," functionally identical to
+    ``additionalProperties: true`` even though the keyword itself is
+    absent (live bug: validate_profile's `profile` field -- genuinely
+    polymorphic by design, "either the wire shape... or the catalog
+    shape," so there's no fixed property set to declare). All three are
+    valid, legal plain JSON Schema -- strict mode simply cannot represent
+    any of them, at any nesting depth, which is exactly why this needs its
+    own real scan rather than trusting the normalizer to paper over it
+    (see the three live 400s this file guards against)."""
+    if not isinstance(node, dict):
+        return []
+    findings: list[tuple[str, list[str]]] = []
+    if node.get("additionalProperties") is True:
+        findings.append(("additionalProperties: true", path))
+    node_type = node.get("type")
+    type_list = node_type if isinstance(node_type, list) else [node_type]
+    if "array" in type_list and "items" not in node:
+        findings.append(("array missing items", path))
+    if "object" in type_list and "properties" not in node and "additionalProperties" not in node:
+        findings.append(("object with no properties or additionalProperties", path))
+    items = node.get("items")
+    if isinstance(items, dict):
+        findings.extend(_find_unconstrained_schema_nodes(items, path + ["items"]))
+    elif isinstance(items, list):
+        for index, item in enumerate(items):
+            findings.extend(_find_unconstrained_schema_nodes(item, path + [f"items[{index}]"]))
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        for key, value in properties.items():
+            findings.extend(_find_unconstrained_schema_nodes(value, path + [key]))
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        variants = node.get(keyword)
+        if isinstance(variants, list):
+            for index, variant in enumerate(variants):
+                findings.extend(_find_unconstrained_schema_nodes(variant, path + [f"{keyword}[{index}]"]))
+    return findings
+
+
+def test_every_tool_file_with_an_unconstrained_schema_node_declares_strict_false():
     # Guard against a future tool file reintroducing additionalProperties:
-    # true, or an array typed with no fixed item type, without also opting
-    # out of strict mode.
-    for name in ("tool_plugin_call.json", "tool_plugin_configure.json"):
-        data = json.loads((_TOOLS_DIR / name).read_text())
-        assert data.get("strict") is False, name
+    # true, an array typed with no fixed item type, or an object typed with
+    # neither properties nor additionalProperties declared -- anywhere in
+    # its schema, at any nesting depth -- without also opting out of strict
+    # mode. Covers both tool directories, not just the files already known
+    # to need this -- deeply-nested cases like
+    # tool_generate_plugin_scaffold.json's aiTools[].params, or
+    # tool_device_send_command.json's commands[].values[].value, are
+    # exactly what a flat allowlist would miss.
+    tool_files = sorted(_TOOLS_DIR.glob("tool_*.json")) + sorted(_PLUGIN_AUTHORING_TOOLS_DIR.glob("tool_*.json"))
+    for path in tool_files:
+        data = json.loads(path.read_text())
+        findings = _find_unconstrained_schema_nodes(data.get("input_schema", {}), [])
+        if findings:
+            assert data.get("strict") is False, f"{path.name}: {findings}"
 
 
 def test_array_type_missing_items_is_left_unnormalized_under_strict_mode():
@@ -152,6 +208,79 @@ def test_configure_plugin_tool_file_is_strict_false():
         "type": ["object", "array"],
         "description": config_schema["description"],
     }
+    assert tools[0]["function"]["strict"] is False
+
+
+def test_generate_plugin_scaffold_tool_file_is_strict_false():
+    # End-to-end regression coverage for a second live production bug:
+    # server_entry.aiTools[].params is a verbatim-passthrough, caller-
+    # defined JSON-Schema-shaped spec -- additionalProperties: true at
+    # arbitrary nesting depth, not just a flat free-form object -- so this
+    # tool opts out of strict mode entirely too.
+    spec = LLMAdapter.tools_spec_from_file(_PLUGIN_AUTHORING_TOOLS_DIR / "tool_generate_plugin_scaffold.json")
+    assert spec.strict is False
+
+    tools = _adapter().export_tools([spec])
+    params_schema = (
+        tools[0]["function"]["parameters"]["properties"]["server_entry"]["properties"]["aiTools"]["items"][
+            "properties"
+        ]["params"]
+    )
+    # Unnormalized -- additionalProperties: true survives exactly as authored.
+    assert params_schema["additionalProperties"] is True
+    assert tools[0]["function"]["strict"] is False
+
+
+def test_validate_profile_tool_file_is_strict_false():
+    # End-to-end regression coverage for a third live production bug:
+    # "profile" is a genuinely polymorphic field (the wire shape or the
+    # catalog shape, per the tool's own description) with neither
+    # properties nor additionalProperties declared -- implicitly "any
+    # shape accepted" in plain JSON Schema, exactly as unrepresentable in
+    # strict mode as an explicit additionalProperties: true.
+    spec = LLMAdapter.tools_spec_from_file(_PLUGIN_AUTHORING_TOOLS_DIR / "tool_validate_profile.json")
+    assert spec.strict is False
+
+    tools = _adapter().export_tools([spec])
+    profile_schema = tools[0]["function"]["parameters"]["properties"]["profile"]
+    assert "properties" not in profile_schema
+    assert "additionalProperties" not in profile_schema
+    assert tools[0]["function"]["strict"] is False
+
+
+def test_device_send_command_tool_file_is_strict_false():
+    # End-to-end regression coverage for a fourth latent instance of the
+    # same pattern, caught by re-scanning rather than by its own live 400:
+    # commands[].values[].value (the nested multi-value variant) has no
+    # properties/additionalProperties for its object branch, unlike the
+    # sibling top-level commands[].value, which already declares real
+    # {on, off} properties and is unaffected.
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_device_send_command.json")
+    assert spec.strict is False
+
+    tools = _adapter().export_tools([spec])
+    value_schema = (
+        tools[0]["function"]["parameters"]["properties"]["commands"]["items"]["properties"]["values"]["items"][
+            "properties"
+        ]["value"]
+    )
+    assert "properties" not in value_schema
+    assert "additionalProperties" not in value_schema
+    assert tools[0]["function"]["strict"] is False
+
+
+def test_group_scene_op_tool_file_is_strict_false():
+    # End-to-end regression coverage for a fifth latent instance: "link"
+    # varies per link type ("the member's new link object, in the same
+    # exact shape as get_group_detail returns"), so it has no fixed
+    # property set either.
+    spec = LLMAdapter.tools_spec_from_file(_TOOLS_DIR / "tool_group_scene_op.json")
+    assert spec.strict is False
+
+    tools = _adapter().export_tools([spec])
+    link_schema = tools[0]["function"]["parameters"]["properties"]["link"]
+    assert "properties" not in link_schema
+    assert "additionalProperties" not in link_schema
     assert tools[0]["function"]["strict"] is False
 
 

@@ -1,6 +1,7 @@
 {
   "name": "send_command",
   "description": "Send one or more commands to devices in a single call. Turn a device on/off, set a value, change mode, run a query, etc. Put every command the customer wants sent this turn into this one call's `commands` list -- never split them across separate calls.",
+  "strict": false,
   "input_schema": {
     "type": "object",
     "required": ["commands"],

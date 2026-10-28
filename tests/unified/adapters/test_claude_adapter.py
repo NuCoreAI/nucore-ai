@@ -8,14 +8,18 @@ request to such a model.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from anthropic import BadRequestError
 
-from unified.adapters.base_adapter import ToolSpec
+from unified.adapters.base_adapter import LLMAdapter, ToolSpec
 from unified.adapters.claude_adapter import ClaudeAdapter
+
+_TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "tools"
+_PLUGIN_AUTHORING_TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "plugin_authoring" / "tools"
 
 
 def _adapter() -> ClaudeAdapter:
@@ -45,6 +49,20 @@ def test_export_tools_marks_only_the_last_tool_as_a_cache_breakpoint():
 
 def test_export_tools_handles_empty_spec_list():
     assert _adapter().export_tools([]) == []
+
+
+def test_all_tool_files_export_cleanly_for_claude_with_input_schema_untouched():
+    # ClaudeAdapter.export_tools does no schema sanitization/validation at
+    # all (unlike OpenAI's strict-mode normalizer or Gemini's proto
+    # sanitizer) -- this pins that "pure passthrough" contract explicitly,
+    # across both tool directories, instead of leaving it implicit and
+    # untested.
+    tool_files = sorted(_TOOLS_DIR.glob("*.json")) + sorted(_PLUGIN_AUTHORING_TOOLS_DIR.glob("*.json"))
+    adapter = _adapter()
+    for tool_file in tool_files:
+        spec = LLMAdapter.tools_spec_from_file(tool_file)
+        tools = adapter.export_tools([spec])
+        assert tools[0]["input_schema"] == spec.json_schema, tool_file.name
 
 
 # --- _sanitize_content_block: server_tool_use/web_search_tool_result (the

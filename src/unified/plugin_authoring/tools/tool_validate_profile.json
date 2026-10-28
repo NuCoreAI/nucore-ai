@@ -1,6 +1,7 @@
 {
   "name": "validate_profile",
   "description": "Validate a Dynamic Profiles JSON document by parsing it with nucore's own profile loader. Accepts either shape: the flat wire shape (editors/nodedefs/linkdefs at the top level -- the same document polyglot.getJsonProfile()/updateJsonProfile() use, and what generate_plugin_scaffold's own profile argument is) or the catalog shape (families -> instances -> nodedefs/editors/linkdefs). Returns any structural problems found (missing ids, dangling editor references, malformed properties/commands, a nodedef missing its links object or name, an editor with a misplaced names mapping or non-string uom, a links.ctl/links.rsp reference to an undefined linkdef, or a cmd:true linkdef that also specifies parameters) so they can be fixed before installing the plugin. Does not touch the hub -- purely local validation. Call this any time a candidate profile is shared or generated, not just when something looks wrong.",
+  "strict": false,
   "input_schema": {
     "type": "object",
     "required": ["profile"],

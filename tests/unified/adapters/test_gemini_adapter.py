@@ -24,6 +24,7 @@ from unified.adapters import gemini_adapter as gemini_adapter_module
 from unified.adapters.gemini_adapter import GeminiAdapter
 
 _TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "tools"
+_PLUGIN_AUTHORING_TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "plugin_authoring" / "tools"
 
 
 class _FakeResponse:
@@ -466,7 +467,7 @@ def test_all_tool_files_export_cleanly_for_gemini_with_no_leftover_type_lists():
     # Guard against a future tool file reintroducing a "type" list, a
     # non-string enum, or an object/array-only key stranded on a
     # differently-typed node -- any of which would 400 the whole Gemini
-    # request again.
+    # request again. Covers both tool directories.
     def _assert_no_type_lists_or_bad_enums(node: Any) -> None:
         if isinstance(node, dict):
             assert not isinstance(node.get("type"), list), node
@@ -495,7 +496,8 @@ def test_all_tool_files_export_cleanly_for_gemini_with_no_leftover_type_lists():
                 _assert_no_type_lists_or_bad_enums(item)
 
     adapter = GeminiAdapter()
-    for tool_file in sorted(_TOOLS_DIR.glob("*.json")):
+    tool_files = sorted(_TOOLS_DIR.glob("*.json")) + sorted(_PLUGIN_AUTHORING_TOOLS_DIR.glob("*.json"))
+    for tool_file in tool_files:
         spec = LLMAdapter.tools_spec_from_file(tool_file)
         tools = adapter.export_tools([spec])
         _assert_no_type_lists_or_bad_enums(tools[0]["functionDeclarations"][0]["parameters"])
