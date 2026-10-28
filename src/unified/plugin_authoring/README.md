@@ -70,6 +70,13 @@ mid-response. For any other provider with no engine configured, there is no web 
 at all and the flow falls through to asking the customer for URLs. See `runtime_config.py`'s
 `search_engine` handling for the exact precedence.
 
+(The `unified` tool set has an analogous native fallback for the `openai-responses` provider --
+OpenAI's own `web_search` tool, wired in `runtime.py`'s `UnifiedRuntime.__init__` rather than
+here, since it's specific to `unified`'s own hardcoded default bundle. It doesn't extend to
+`plugin_authoring`: an `openai-responses` profile here still gets no web search at all unless
+`search_engine`/`search_engine_api_key` are set. See
+`design/migration-to-openai-response-api.md`.)
+
 ## Layout
 
 | File/dir | Purpose |

@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, Iterable, NamedTuple
 
 from .adapters import LLMAdapter
 from .models import ConversationTurn, IntentHandlerResult
+from .provider_dispatch_adapter import ProviderDispatchLLMAdapter
 from .session_store import SessionStore
 from nucore import NuCoreInterface
 
@@ -24,6 +25,9 @@ from .history_compaction import maybe_compact_history
 from .loop import AgenticLoop, ToolDispatch, ToolSetSwitchRequested
 from .prompt_builder import build_system_prompt_sections
 from .stream_handler import StreamHandler
+from utils import get_logger
+
+logger = get_logger(__name__)
 
 _TOOLS_DIR = Path(__file__).parent / "tools"
 
@@ -109,6 +113,28 @@ def resolve_llm_profile(runtime_config: dict[str, Any], *, preferred_key: str = 
         return {}
     key = preferred_key if preferred_key in supported else next(iter(supported.keys()))
     return dict(supported.get(key, {}))
+
+
+async def _record_openai_responses_web_search_evidence(raw_response: Any) -> None:
+    """``AgenticLoop``'s ``on_raw_response`` hook for the ``unified`` tool
+    set's OpenAI-native web search path (see ``UnifiedRuntime.__init__``'s
+    ``unified_extra_tools``): a ``web_search_call`` output item never
+    becomes a ``ToolCall`` (``OpenAIResponsesAdapter.parse_tool_calls``'s
+    ``function_call``-only filter), so it never reaches ``dispatch`` --
+    this is the only place that ever sees it. Unlike plugin_authoring's
+    ``EvidenceLedger``-enriching equivalent (``run_unified_runtime.
+    _record_native_search_evidence``), the ``unified`` tool set has no
+    ledger to enrich into, so this just logs each completed search's
+    sources instead of letting them be silently discarded."""
+    output = raw_response.get("output") if isinstance(raw_response, dict) else None
+    for item in output or []:
+        if not isinstance(item, dict) or item.get("type") != "web_search_call" or item.get("status") != "completed":
+            continue
+        action = item.get("action") or {}
+        sources = action.get("sources") or []
+        urls = [s.get("url") for s in sources if isinstance(s, dict) and s.get("url")]
+        if urls:
+            logger.info("unified: native web_search sources: %s", urls)
 
 
 class DispatchBundle(NamedTuple):
@@ -259,9 +285,23 @@ class UnifiedRuntime:
         self.session_store = session_store or SessionStore()
         self._tool_sets: dict[str, ToolSetBundle] = dict(tool_sets or {})
         if "unified" not in self._tool_sets:
+            # OpenAI's native web_search tool, mirroring plugin_authoring's
+            # Claude-native equivalent (run_unified_runtime.py's
+            # _build_plugin_authoring_tool_set), but for the `unified` tool
+            # set itself -- only when its resolved provider is a Responses-
+            # endpoint profile (OpenAIResponsesAdapter has no chat.completions
+            # fallback story to protect; plain "openai" stays untouched).
+            unified_provider = resolve_llm_profile(runtime_config, preferred_key="unified").get("provider")
+            native_openai_search = ProviderDispatchLLMAdapter._normalize(unified_provider or "") == "openai_responses"
+            unified_extra_tools = [{"type": "web_search"}] if native_openai_search else None
+            unified_on_raw_response = _record_openai_responses_web_search_evidence if native_openai_search else None
             self._tool_sets["unified"] = ToolSetBundle(
                 tool_spec_paths=None,
-                dispatch_factory=lambda _ctx: DispatchBundle(dispatch=self._default_dispatch),
+                dispatch_factory=lambda _ctx: DispatchBundle(
+                    dispatch=self._default_dispatch,
+                    extra_tools=unified_extra_tools,
+                    on_raw_response=unified_on_raw_response,
+                ),
                 system_prompt_builder=build_system_prompt_sections,
             )
         self.default_tool_set = runtime_config.get("default_profile_name", "unified")

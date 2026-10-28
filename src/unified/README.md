@@ -18,21 +18,25 @@ backend.
 | `tools/` | One `tool_<category>_<function>.json` file per tool (e.g. `tool_plugin_buy.json`), auto-discovered via a `tool_*.json` glob by `run_unified_runtime.py` -- the category prefix is a filenames-only convention for browsing/sorting, unrelated to each tool's own `"name"` field. |
 | `handlers/` | One module per tool family, implementing the actual `NuCoreInterface`/`IoXWrapper` calls. |
 | `routine_compiler/` | The DSL compiler `create_or_update_routine` uses to turn `if`/`then`/`else` Python-like source into NuCore's `Trigger` schema. |
-| `adapters/` | Per-provider `LLMAdapter` implementations (Claude, OpenAI, Gemini, Grok, llama.cpp). |
+| `adapters/` | Per-provider `LLMAdapter` implementations (Claude, OpenAI `/v1/chat/completions`, OpenAI `/v1/responses` via `OpenAIResponsesAdapter`, Gemini, Grok, llama.cpp). |
 | `models.py` | `IntentHandlerResult` (the return type `handle_query` produces), `ConversationTurn`/`ConversationHistory`. |
 | `session_store.py` | In-memory `session_id → ConversationHistory` map, plus `lock(session_id)` (one `asyncio.Lock` per session id). Shared across every WebSocket connection by `run_unified_runtime._run_websocket_server` so a reconnect finds its history instead of starting empty; the lock is what keeps that sharing safe against two concurrent requests for the same session -- see "Session history across connections" below. |
 | `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port`/`--websocket-host` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
 | `dispatch_builder.py`, `provider_dispatch_adapter.py`, `provider_clients.py`, `runtime_config.py` | Runtime-profile JSON loading and per-provider `LLMAdapter` construction, shared by both process entrypoints. |
 | `history_compaction.py` | `maybe_compact_history` -- collapses the oldest half of a session's conversation history into one LLM-generated summary turn once its estimated token size exceeds `history_token_budget` (runtime config, default 20000); falls back to plain truncation if the summarization call itself fails. |
-| `runtime_config.example.json`, `runtime_config.openai.example.json`, `runtime_config.grok.example.json` | Example runtime profiles, one per provider (see below). |
+| `runtime_config.example.json`, `runtime_config.openai.example.json`, `runtime_config.openai-responses.example.json`, `runtime_config.grok.example.json` | Example runtime profiles, one per provider (see below). |
 
 ## Running it
 
 Create a runtime profile JSON first (see `runtime_config.example.json` for the format: a
 `nucore_runtime.default` block, optionally a `nucore_runtime.unified` block for a dedicated
 model/temperature just for this path). `runtime_config.openai.example.json`/
-`runtime_config.grok.example.json` are ready-to-copy alternatives for those providers -- see the
-top-level `README.md`'s "Supported Providers" section.
+`runtime_config.openai-responses.example.json`/`runtime_config.grok.example.json` are
+ready-to-copy alternatives for those providers -- see the top-level `README.md`'s "Supported
+Providers" section. The `openai-responses` variant is for reasoning-tier OpenAI models that
+reject function tools on `/v1/chat/completions` under every `reasoning_effort` setting (see
+`design/migration-to-openai-response-api.md`) -- same account/API key, just a different
+endpoint and a native `web_search` tool for the `unified` tool set.
 
 ```shell
 python -m unified.run_unified_runtime \

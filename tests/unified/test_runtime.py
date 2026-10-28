@@ -508,6 +508,104 @@ async def test_handle_query_defaults_extra_tools_and_on_raw_response_to_none():
     assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
 
 
+# --- default `unified` bundle's own native-web-search wiring (OpenAI's
+# web_search tool on /v1/responses, mirrors plugin_authoring's Claude-native
+# equivalent -- see runtime.py's UnifiedRuntime.__init__ and
+# _record_openai_responses_web_search_evidence) ---
+
+
+@pytest.mark.asyncio
+async def test_default_unified_bundle_gets_openai_web_search_tool_when_provider_resolves_to_openai_responses():
+    runtime_config = {"supported_llms": {"unified": {"provider": "openai-responses"}}}
+    await _runtime(runtime_config).handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] == [{"type": "web_search"}]
+    assert (
+        _FakeLoop.captured_init_kwargs["on_raw_response"]
+        is runtime_module._record_openai_responses_web_search_evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_unified_bundle_has_no_extra_tools_for_a_non_responses_provider():
+    runtime_config = {"supported_llms": {"unified": {"provider": "openai"}}}
+    await _runtime(runtime_config).handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] is None
+    assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
+
+
+@pytest.mark.asyncio
+async def test_handle_query_forwarding_passthrough_still_wins_over_the_default_unified_bundle():
+    # A caller-supplied tool_sets (e.g. plugin_authoring's own bundle, or a
+    # test double) replaces the default "unified" bundle entirely -- the
+    # provider-resolution wiring only ever applies to the hardcoded
+    # fallback built when the caller omits "unified" from tool_sets.
+    runtime_config = {"supported_llms": {"unified": {"provider": "openai-responses"}}}
+    runtime = _runtime(
+        runtime_config,
+        tool_sets={
+            "unified": ToolSetBundle(
+                tool_spec_paths=None,
+                dispatch_factory=lambda _ctx: DispatchBundle(dispatch=runtime_module.execute_tool),
+                system_prompt_builder=_fake_build_system_prompt_sections,
+            )
+        },
+    )
+    await runtime.handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] is None
+    assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
+
+
+class TestRecordOpenAIResponsesWebSearchEvidence:
+    """``_record_openai_responses_web_search_evidence`` -- the on_raw_response
+    hook itself, independent of how UnifiedRuntime wires it in."""
+
+    @pytest.mark.asyncio
+    async def test_logs_sources_from_a_completed_web_search_call_item(self, caplog):
+        raw_response = {
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "sources": [{"type": "url", "url": "https://example.com"}, {"type": "url", "url": "https://other.example"}],
+                    },
+                }
+            ]
+        }
+        with caplog.at_level("INFO"):
+            await runtime_module._record_openai_responses_web_search_evidence(raw_response)
+        assert "https://example.com" in caplog.text
+        assert "https://other.example" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ignores_a_web_search_call_that_has_not_completed_yet(self, caplog):
+        raw_response = {
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "status": "searching",
+                    "action": {"type": "search", "sources": [{"type": "url", "url": "https://example.com"}]},
+                }
+            ]
+        }
+        with caplog.at_level("INFO"):
+            await runtime_module._record_openai_responses_web_search_evidence(raw_response)
+        assert "https://example.com" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_web_search_output_items(self, caplog):
+        raw_response = {"output": [{"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"}]}
+        with caplog.at_level("INFO"):
+            await runtime_module._record_openai_responses_web_search_evidence(raw_response)
+        assert caplog.text == ""
+
+    @pytest.mark.asyncio
+    async def test_tolerates_a_raw_response_with_no_output_key(self):
+        await runtime_module._record_openai_responses_web_search_evidence({"content": "hi"})
+        await runtime_module._record_openai_responses_web_search_evidence("not a dict")
+
+
 # --- resolve_llm_profile (extracted from _resolve_llm_config so
 # run_unified_runtime.py can resolve the same provider before UnifiedRuntime
 # even exists -- see run_unified_runtime.py's native-vs-fallback search

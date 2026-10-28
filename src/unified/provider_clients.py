@@ -9,6 +9,7 @@ from .adapters import (
     GrokAdapter,
     LlamaCppAdapter,
     OpenAIAdapter,
+    OpenAIResponsesAdapter,
 )
 from utils import register_secret
 
@@ -87,6 +88,16 @@ def build_provider_clients_from_runtime_config(
                 adapter = OpenAIAdapter(api_key=key, base_url=base_url)
                 clients[profile_key] = adapter
                 clients.setdefault("openai", adapter)
+        elif provider in {"openai-responses", "openai_responses"}:
+            # Same API key as plain "openai" -- it's the same OpenAI account,
+            # just a profile opted into the /v1/responses endpoint (see
+            # OpenAIResponsesAdapter's docstring for why).
+            key = api_key or env_map.get("OPENAI_API_KEY")
+            if key:
+                register_secret(key)
+                adapter = OpenAIResponsesAdapter(api_key=key, base_url=base_url)
+                clients[profile_key] = adapter
+                clients.setdefault("openai_responses", adapter)
         elif provider in {"claude", "anthropic"}:
             key = api_key or env_map.get("ANTHROPIC_API_KEY")
             if key:

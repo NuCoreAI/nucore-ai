@@ -95,11 +95,12 @@ generated scaffolds, CLI-only -- never read from the config file) whenever it's 
 it while enabled raises an error at startup. A live backend via `--backend-api-classpath` is
 still required, same as for `unified`.
 
-The customer-facing flow's web search is Claude's own native `web_search` tool when the resolved
-LLM provider is Claude (no second API key) -- set runtime config's top-level `search_engine`
-(`"brave"` or `"tavily"`, with `SEARCH_ENGINE_API_KEY` set) to force that fallback instead, on any
-provider; it's also what any non-Claude provider needs, since only Claude offers a native option
-here.
+The customer-facing flow's web search uses a native `web_search` tool with no second API key
+when the resolved LLM provider is Claude or `openai-responses` -- each provider's own native
+tool, invoked by the model itself. Set runtime config's top-level `search_engine` (`"brave"` or
+`"tavily"`, with `SEARCH_ENGINE_API_KEY` set) to force the Brave/Tavily fallback instead, on any
+provider; it's also what any *other* provider (plain `openai`, Gemini, Grok, llama.cpp) needs,
+since none of them offer a native web-search option here.
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -390,7 +391,8 @@ for manually exercising the real Unix socket end-to-end.
 | Provider | Alias | Env Var |
 |---|---|---|
 | Anthropic Claude | `claude`, `anthropic` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | `OPENAI_API_KEY` |
+| OpenAI (`/v1/chat/completions`) | `openai` | `OPENAI_API_KEY` |
+| OpenAI (`/v1/responses`) | `openai-responses` | `OPENAI_API_KEY` |
 | Google Gemini | `gemini`, `google` | `GEMINI_API_KEY` |
 | xAI Grok | `grok`, `xai` | `XAI_API_KEY` |
 | llama.cpp (local) | `llama.cpp`, `llamacpp` | `LLAMACPP_API_KEY` (optional) |
@@ -398,13 +400,18 @@ for manually exercising the real Unix socket end-to-end.
 Provider and model settings come from the runtime profile file passed to `--runtime-config`. Profiles use a `provider` field and do not rely on legacy `llm` aliases or `supported_llms` fallback behavior. API keys can be embedded in the profile, supplied via `--secrets-file`, or read from process environment variables.
 
 Ready-to-copy example profiles: `src/unified/runtime_config.example.json` (Claude, the default),
-`src/unified/runtime_config.openai.example.json`, `src/unified/runtime_config.grok.example.json`.
-Copy whichever one you want over your live `runtime_config.json` (or pass it directly via
-`--runtime-config`) and set that provider's env var.
+`src/unified/runtime_config.openai.example.json`, `src/unified/runtime_config.openai-responses.example.json`,
+`src/unified/runtime_config.grok.example.json`. Copy whichever one you want over your live
+`runtime_config.json` (or pass it directly via `--runtime-config`) and set that provider's env var.
 
 A profile can also set `"reasoning_effort"` (e.g. `"none"`/`"low"`/`"medium"`/`"high"`), forwarded
 to OpenAI-compatible providers only when present. Some reasoning-tier models reject function tools
-on `/v1/chat/completions` entirely unless this is explicitly set -- see the OpenAI example profile.
+on `/v1/chat/completions` entirely, under *every* `reasoning_effort` value including `"none"` and
+omitted -- for those models, use the `openai-responses` provider instead of `openai`, which routes
+the same profile to `/v1/responses` (where the restriction doesn't apply) with no other config
+changes needed. It also gets OpenAI's own native `web_search` tool automatically for the `unified`
+tool set (see `design/migration-to-openai-response-api.md`). See the OpenAI-Responses example
+profile, and `src/unified/runtime_config.md`'s `provider` field for the full picture.
 
 ## Using a Local (Edge) LLM with llama.cpp
 

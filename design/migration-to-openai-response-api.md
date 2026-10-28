@@ -1,4 +1,18 @@
-# OPENAI RESPONSES API SUPPORT (PROPOSAL, 2026-10-28)
+# OPENAI RESPONSES API SUPPORT (Implemented, 2026-10-28)
+
+> **The code described below is implemented and tested.** `src/unified/adapters/
+> openai_responses_adapter.py` (`OpenAIResponsesAdapter`), wired through
+> `src/unified/adapters/__init__.py`, `src/unified/provider_clients.py`, and
+> `src/unified/provider_dispatch_adapter.py`'s `_normalize()`; the `unified` tool set's native
+> `web_search` wiring in `src/unified/runtime.py`'s `UnifiedRuntime.__init__` (see "Web search
+> tool" below); tests in `tests/unified/adapters/test_openai_responses_adapter.py`,
+> `tests/unified/test_provider_clients.py`, `tests/unified/test_provider_dispatch_adapter.py`,
+> and `tests/unified/test_runtime.py`. Full `tests/unified` suite passes (1162 tests). See
+> `README.md`'s "Supported Providers" table, `src/unified/runtime_config.md`'s `provider` field,
+> and `src/unified/runtime_config.openai-responses.example.json` for the user-facing side of
+> this. **Not yet done:** the actual production flip for the `gpt-6.1-sol` profile (its
+> deployment-specific `runtime_config.json`, outside both repos, still says `"provider":
+> "openai"` as of this writing) and the live-API verification in "Open questions" below.
 
 ## Why this doc exists
 
@@ -40,9 +54,11 @@ today needs them):
   round regardless of provider — the new adapter follows that same stateless-per-call
   contract, exactly like every existing adapter. Adopting server-side state would be a
   separate, `AgenticLoop`-level change affecting every provider, not an OpenAI-specific one.
-- Any of the Responses API's other first-party tool types (web search, code interpreter,
-  computer use, MCP, image generation, shell). Only `function` tools are in scope — the only
-  kind `export_tools()` has ever produced.
+- Any of the Responses API's other first-party tool types *besides* web search (code
+  interpreter, computer use, MCP, image generation, shell). Web search is in scope — see
+  "Web search tool" below — because it's the one native tool this codebase already has a
+  working precedent for (Claude's `web_search_20250305`) and the one most likely to matter for
+  a customer-facing `unified` conversation.
 - `background: true` (async/polling responses). Nothing in this codebase's synchronous
   request/response or streaming model has a slot for it.
 - Retrofitting every other OpenAI-family model onto Responses. Only the specific profile(s)
@@ -212,6 +228,87 @@ every other provider).
 for that one profile. Every other OpenAI profile is untouched. Rollback is the same one-line
 edit in reverse.
 
+## Web search tool
+
+### Current state: `unified` has no web search today, for any provider
+
+The `unified` tool set — the one `gpt-6.1-sol` actually runs under (production logs: `"unified:
+turn failed"`) — has **zero web search capability today, regardless of provider**.
+`UnifiedRuntime.__init__`'s default bundle for it is hardcoded
+(`src/unified/runtime.py:261-266`):
+```python
+self._tool_sets["unified"] = ToolSetBundle(
+    tool_spec_paths=None,
+    dispatch_factory=lambda _ctx: DispatchBundle(dispatch=self._default_dispatch),
+    system_prompt_builder=build_system_prompt_sections,
+)
+```
+No `extra_tools`, ever. `AgenticLoop.__init__`'s own docstring (`loop.py:92-95`) says so
+explicitly: `extra_tools` is "unset by every other caller, including the customer tool set,
+which never touches either." Web search exists only for `plugin_authoring`, gated in
+`_build_plugin_authoring_tool_set` (`run_unified_runtime.py:803-895`), two mutually exclusive
+ways:
+- A plain function tool (`plugin_authoring/tools/tool_search_web.json`) dispatched to Brave or
+  Tavily (`plugin_authoring/handlers/discovery.py:142,160,176`) whenever `search_engine` +
+  `search_engine_api_key` are configured — provider-agnostic, already works for any adapter.
+- Claude's native server-side tool, `extra_tools=[{"type": "web_search_20250305", ...}]`
+  (`:843-889`), injected only when the resolved provider is `"claude"` and no explicit
+  `search_engine` override is set — bypasses `ToolSpec`/dispatch entirely; results harvested
+  via `on_raw_response` → `_record_native_search_evidence` (`:776-800`), never becoming a
+  `ToolCall`.
+
+### Decision: OpenAI's native `web_search` tool, wired into `unified` for Responses profiles
+
+The Responses API has its own direct analog to Claude's native tool — confirmed in the
+installed SDK (`openai/types/responses/web_search_tool_param.py`, `WebSearchToolParam`): a flat
+```json
+{"type": "web_search", "filters": {"allowed_domains": [...]}, "user_location": {...}}
+```
+dict (both `filters`/`user_location` optional — `{"type": "web_search"}` alone is valid).
+Results come back as an `output` item of type `"web_search_call"`
+(`openai/types/responses/response_function_web_search.py`): `id`, `status`
+(`in_progress`/`searching`/`completed`/`failed`), and `action` — a discriminated union of
+`search` (`query`/`queries`, `sources`: list of `{"type":"url","url":...}`), `open_page`
+(`url`), or `find_in_page` (`pattern`, `url`). This is never a `function_call` item, so it's
+already naturally skipped by `parse_tool_calls()`'s `type == "function_call"` filter — no risk
+of it being mistaken for a dispatchable tool call.
+
+Mirroring Claude's existing pattern but wired for `unified` (since that's where this model
+lives, not `plugin_authoring`): generalize `UnifiedRuntime.__init__`'s hardcoded `unified`
+bundle (`runtime.py:261-266`) to resolve `unified`'s provider via the same helper
+`run_unified_runtime.py` already uses for `plugin_authoring`'s equivalent decision
+(`resolve_llm_profile(runtime_config, preferred_key="unified")`, `runtime.py:99-111`) and, when
+it normalizes to `"openai_responses"`, add `extra_tools=[{"type": "web_search"}]` to that
+`DispatchBundle`:
+```python
+unified_provider = resolve_llm_profile(runtime_config, preferred_key="unified").get("provider")
+unified_extra_tools = (
+    [{"type": "web_search"}]
+    if ProviderDispatchLLMAdapter._normalize(unified_provider or "") == "openai_responses"
+    else None
+)
+self._tool_sets["unified"] = ToolSetBundle(
+    tool_spec_paths=None,
+    dispatch_factory=lambda _ctx: DispatchBundle(
+        dispatch=self._default_dispatch, extra_tools=unified_extra_tools
+    ),
+    system_prompt_builder=build_system_prompt_sections,
+)
+```
+No dispatch handler needed for `web_search_call` — same as Claude's, it's informational only.
+A small evidence-harvester (own helper, not shared with plugin_authoring's
+`_record_native_search_evidence` — the item shape differs enough that forcing a shared
+function would just mean branching inside it) passed as `on_raw_response` so the sources
+OpenAI's search actually used are visible/loggable instead of silently discarded, matching the
+intent of the existing Claude precedent even though the concrete shape differs.
+
+### Explicitly out of scope for this pass
+
+Extending the Brave/Tavily generic fallback tool into `unified` for providers *other than*
+`openai_responses`/Claude. That gap is real (`unified` has no web search for Grok, Gemini,
+llama.cpp, or plain-`chat.completions` OpenAI either) but it's independent of "migrate this one
+model to `/v1/responses`" — a separate follow-up if wanted, not bundled into this change.
+
 ## Testing plan
 
 New `tests/unified/adapters/test_openai_responses_adapter.py`, mirroring
@@ -235,6 +332,12 @@ fake_create` monkeypatching, `_fake_*_response()` `SimpleNamespace` builders):
   appear in `input`.
 - A live-shaped `BadRequestError` (unrelated to reasoning_effort) propagates unchanged — no
   adapter should ever swallow an error it doesn't specifically recognize.
+- `UnifiedRuntime.__init__`'s `unified` bundle gets `extra_tools=[{"type": "web_search"}]` when
+  `unified`'s resolved provider normalizes to `"openai_responses"`, and `None` for every other
+  provider (regression check: existing non-Responses profiles must see no behavior change).
+- A `"web_search_call"` output item is never surfaced as a `ToolCall`/dispatched, and the
+  evidence-harvester extracts `action.sources` correctly from a fake `response.completed`
+  event carrying one.
 
 Also run the full `pytest tests/unified -q` suite afterward — this is purely additive (new
 file, three mechanical wiring edits elsewhere); nothing about `OpenAIAdapter`'s own behavior
@@ -242,10 +345,19 @@ changes, so the existing 1142 tests should be unaffected.
 
 ## Open questions for whoever picks this up
 
+Both of the items below need a real call against a live key/endpoint for this model — there's
+no way to answer them from code reading or mocked tests, and that live access isn't available
+yet. **Deferred, not a blocker for landing the code** — the implementation and its unit tests
+can proceed entirely against mocked `responses.create()` calls; these just need checking
+before (or immediately after) the production config is actually flipped for `gpt-6.1-sol`:
+
 - Does `gpt-6.1-sol` (or whatever real model this profile ends up naming) actually support
   *parallel* tool calls on Responses the same way `chat.completions` does? `parallel_tool_calls`
-  is a real Responses param; worth a real-API smoke test once a key is available, not just
-  unit tests against mocked responses.
-- Confirm empirically (one real call against a live key, not guessed) that this model's
-  `reasoning` + `tools` combination that failed three ways on `chat.completions` actually
-  succeeds on `/v1/responses` as OpenAI's error claimed, before flipping the production config.
+  is a real Responses param; worth a real-API smoke test once a key is available.
+- Does this model's `reasoning` + `tools` combination — which failed three ways on
+  `chat.completions` — actually succeed on `/v1/responses`, as OpenAI's own error claimed?
+  This is the entire premise of this doc; it's extremely likely true (it's OpenAI's own stated
+  fix), but hasn't been, and can't yet be, confirmed against the real API.
+- Does the native `web_search` tool actually work for this model on `/v1/responses` the same
+  way it does for other reasoning models? Not every model supports every first-party tool;
+  worth confirming alongside the above once live access exists.

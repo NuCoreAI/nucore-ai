@@ -7,6 +7,7 @@ through, so this is the only place that registration needs to happen.
 from __future__ import annotations
 
 from utils import secret_redaction
+from unified.adapters import OpenAIResponsesAdapter
 from unified.provider_clients import build_provider_clients_from_runtime_config
 
 import pytest
@@ -47,3 +48,11 @@ def test_llamacpp_sentinel_no_key_is_not_registered():
     runtime_config = {"nucore_runtime": {"unified": {"provider": "llamacpp"}}}
     build_provider_clients_from_runtime_config(runtime_config, env={})
     assert "no-key" not in secret_redaction._secrets
+
+
+def test_openai_responses_provider_builds_an_openai_responses_adapter_and_registers_its_key():
+    runtime_config = {"nucore_runtime": {"unified": {"provider": "openai-responses"}}}
+    clients = build_provider_clients_from_runtime_config(runtime_config, env={"OPENAI_API_KEY": "sk-resp-secret"})
+    assert isinstance(clients["unified"], OpenAIResponsesAdapter)
+    assert isinstance(clients["openai_responses"], OpenAIResponsesAdapter)
+    assert "sk-resp-secret" in secret_redaction._secrets

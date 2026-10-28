@@ -234,6 +234,8 @@ class ProviderDispatchLLMAdapter(LLMAdapter):
         | ``llamacpp``,            | ``llama.cpp``|
         | ``llama_cpp``            |             |
         +--------------------------+-------------+
+        | ``openai-responses``     | ``openai_responses``|
+        +--------------------------+-------------+
 
         Any value not in the alias map is returned lowercased and stripped.
         """
@@ -248,4 +250,6 @@ class ProviderDispatchLLMAdapter(LLMAdapter):
             return "gemini"
         if p in {"llamacpp", "llama_cpp"}:
             return "llama.cpp"
+        if p in {"openai-responses"}:
+            return "openai_responses"
         return p

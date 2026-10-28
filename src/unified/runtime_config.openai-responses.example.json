@@ -1,0 +1,34 @@
+{
+  "_notes": "For reasoning-tier OpenAI models that reject function tools on /v1/chat/completions under every reasoning_effort value (configured, 'none', and omitted) -- see design/migration-to-openai-response-api.md. Same OPENAI_API_KEY as the plain 'openai' provider; only the endpoint and request shape differ. The 'unified' tool set also gets OpenAI's own native web_search tool automatically with this provider (no search_engine config needed) -- see runtime.py's UnifiedRuntime.__init__. preferences_dir/prompt_log_file/plugin_output_root are CLI-only now (--preferences-dir/--prompt-log-file/--plugin-output-root) -- never read from this file even if present here. See design/developers/merged-toolsets.md.",
+  "max_tool_set_switches_per_turn": 1,
+  "nucore_runtime": {
+    "unified": {
+      "enabled": true,
+      "provider": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "api_key": "${OPENAI_API_KEY}",
+      "stream": true,
+      "url": null,
+      "max_turns": 20,
+      "max_iterations": 20,
+      "history_token_budget": 20000,
+      "fabrication_guard_mode": "block",
+      "max_fabrication_retries": 1
+    },
+    "plugin_authoring": {
+      "enabled": true,
+      "provider": "openai-responses",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "api_key": "${OPENAI_API_KEY}",
+      "stream": true,
+      "url": null,
+      "max_turns": 20,
+      "max_iterations": 50,
+      "history_token_budget": 20000,
+      "fabrication_guard_mode": "block",
+      "max_fabrication_retries": 1
+    }
+  }
+}
