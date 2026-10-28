@@ -18,7 +18,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from openai import BadRequestError
 
 from unified.adapters.base_adapter import LLMAdapter, ToolSpec
 from unified.adapters.openai_adapter import OpenAIAdapter
@@ -35,6 +37,54 @@ def _fake_completion_response(usage: dict | None = None):
     message = SimpleNamespace(content="hi", tool_calls=None)
     usage_obj = SimpleNamespace(model_dump=lambda: usage) if usage is not None else None
     return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage_obj, model_dump=lambda: {})
+
+
+def _reasoning_effort_tools_error(model: str = "gpt-6.1-sol") -> BadRequestError:
+    # The wire response is {"error": {...}} (what httpx.Response carries),
+    # but OpenAI's own SDK (_client.py:_make_status_error) unwraps the
+    # "error" key before setting it as the exception's `body` -- so `body=`
+    # here must be the *inner* dict to match what exc.body actually is in
+    # production. See _is_reasoning_effort_tools_error's comment.
+    inner = {
+        "message": (
+            f"Function tools with reasoning_effort are not supported for {model} in "
+            "/v1/chat/completions. To use function tools, use /v1/responses or set "
+            "reasoning_effort to 'none'."
+        ),
+        "type": "invalid_request_error",
+        "param": "reasoning_effort",
+        "code": None,
+    }
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(400, request=request, json={"error": inner})
+    return BadRequestError("bad request", response=response, body=inner)
+
+
+def _reasoning_effort_none_unsupported_error() -> BadRequestError:
+    # The second-tier error: this model accepts reasoning_effort, but never
+    # accepts "none" -- no way to disable reasoning at all.
+    inner = {
+        "message": (
+            "Unsupported value: 'reasoning_effort' does not support 'none' with this "
+            "model. Supported values are: 'low', 'medium', 'high', and 'xhigh'."
+        ),
+        "type": "invalid_request_error",
+        "param": "reasoning_effort",
+        "code": "unsupported_value",
+    }
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(400, request=request, json={"error": inner})
+    return BadRequestError("bad request", response=response, body=inner)
+
+
+def _unrelated_bad_request_error() -> BadRequestError:
+    inner = {"message": "max_tokens is too large.", "type": "invalid_request_error", "param": "max_tokens", "code": None}
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(400, request=request, json={"error": inner})
+    return BadRequestError("bad request", response=response, body=inner)
+
+
+_SIMPLE_TOOLS = [{"type": "function", "function": {"name": "t", "description": "d", "parameters": {}}}]
 
 
 def test_strict_true_by_default_forces_additional_properties_false():
@@ -428,3 +478,190 @@ async def test_streaming_generate_surfaces_usage_from_final_chunk():
     )
 
     assert result["usage"] == usage
+
+
+@pytest.mark.asyncio
+async def test_retries_with_reasoning_effort_none_when_tools_reject_it():
+    # Live bug: gpt-6.1-sol rejects function tools + a non-"none"
+    # reasoning_effort outright on chat.completions. The adapter should
+    # retry once, downgrading to "none" per the API's own suggested fix.
+    adapter = _adapter()
+    calls = []
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _reasoning_effort_tools_error()
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+        tools=_SIMPLE_TOOLS,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["reasoning_effort"] == "low"
+    assert calls[1]["reasoning_effort"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_second_call_preempts_reasoning_effort_to_none_for_known_model():
+    adapter = _adapter()
+    calls = []
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _reasoning_effort_tools_error()
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    config = {"model": "gpt-6.1-sol", "reasoning_effort": "low"}
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config=config, tools=_SIMPLE_TOOLS)
+    assert len(calls) == 2  # first call discovers the quirk and retries
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config=config, tools=_SIMPLE_TOOLS)
+    assert len(calls) == 3  # second generate() call: no failing round-trip
+    assert calls[2]["reasoning_effort"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_unrelated_bad_request_error_is_not_retried():
+    adapter = _adapter()
+    calls = []
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs)
+        raise _unrelated_bad_request_error()
+
+    adapter._client.chat.completions.create = fake_create
+
+    with pytest.raises(BadRequestError):
+        await adapter.generate(
+            messages=[{"role": "user", "content": "hi"}],
+            config={"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+            tools=_SIMPLE_TOOLS,
+        )
+
+    assert len(calls) == 1  # not retried -- this isn't the reasoning_effort/tools case
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_not_downgraded_without_tools():
+    adapter = _adapter()
+    # Seed the adapter as if a prior call with tools already discovered the
+    # quirk for this model.
+    adapter._reasoning_effort_tools_override["gpt-6.1-sol"] = "none"
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+    )
+
+    # No tools on this call -- the originally configured value is sent as-is.
+    assert captured["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_streaming_retries_with_reasoning_effort_none_when_tools_reject_it():
+    adapter = _adapter()
+    calls = []
+
+    def _chunk(content=None):
+        delta = SimpleNamespace(content=content, tool_calls=None)
+        choice = SimpleNamespace(delta=delta)
+        return SimpleNamespace(choices=[choice], usage=None)
+
+    async def fake_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _reasoning_effort_tools_error()
+
+        async def _gen():
+            yield _chunk(content="hi")
+
+        return _gen()
+
+    adapter._client.chat.completions.create = fake_stream
+
+    async def handler(text, is_end=False):
+        pass
+
+    result = await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"model": "gpt-6.1-sol", "reasoning_effort": "low", "stream": True, "stream_handler": handler},
+        tools=_SIMPLE_TOOLS,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["reasoning_effort"] == "low"
+    assert calls[1]["reasoning_effort"] == "none"
+    assert result["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_omitting_reasoning_effort_when_none_also_unsupported():
+    # Second live bug: a different reasoning-tier model rejects tools +
+    # reasoning_effort like gpt-6.1-sol, but *also* rejects "none" as a
+    # reasoning_effort value outright (its reasoning can't be disabled --
+    # only low/medium/high/xhigh are accepted). The adapter must fall back
+    # further and omit the field entirely rather than looping forever.
+    adapter = _adapter()
+    calls = []
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _reasoning_effort_tools_error()
+        if len(calls) == 2:
+            raise _reasoning_effort_none_unsupported_error()
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+        tools=_SIMPLE_TOOLS,
+    )
+
+    assert len(calls) == 3
+    assert calls[0]["reasoning_effort"] == "low"
+    assert calls[1]["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in calls[2]
+    assert adapter._reasoning_effort_tools_override["gpt-6.1-sol"] is None
+
+
+@pytest.mark.asyncio
+async def test_next_call_preempts_to_omitted_reasoning_effort_for_known_model():
+    adapter = _adapter()
+    calls = []
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _reasoning_effort_tools_error()
+        if len(calls) == 2:
+            raise _reasoning_effort_none_unsupported_error()
+        return _fake_completion_response()
+
+    adapter._client.chat.completions.create = fake_create
+
+    config = {"model": "gpt-6.1-sol", "reasoning_effort": "low"}
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config=config, tools=_SIMPLE_TOOLS)
+    assert len(calls) == 3  # first generate() call discovers the full cascade
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config=config, tools=_SIMPLE_TOOLS)
+    assert len(calls) == 4  # second generate() call: no failing round-trips at all
+    assert "reasoning_effort" not in calls[3]

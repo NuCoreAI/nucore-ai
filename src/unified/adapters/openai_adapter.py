@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
 
@@ -50,6 +50,17 @@ class OpenAIAdapter(LLMAdapter):
             base_url: Optional endpoint override (used by :class:`OpenAICompatibleAdapter`).
         """
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # Models discovered (via a live 400) to reject function tools when
+        # combined with the configured reasoning_effort on chat.completions
+        # -- see _create_chat_completion()'s retry cascade. Keyed by model,
+        # value is what to send instead when tools are present: "none" for a
+        # model that accepts that value, or None to omit the field entirely
+        # for a model that doesn't support "none" either (its reasoning_effort
+        # only accepts e.g. low/medium/high/xhigh). Persists for this adapter
+        # instance's lifetime so only the first call(s) to a given such model
+        # ever pay for the failing round-trip(s); later calls apply the
+        # remembered override up front.
+        self._reasoning_effort_tools_override: dict[str, str | None] = {}
 
     def _extra_headers(self, cfg: dict[str, Any]) -> dict[str, str] | None:
         """Hook for a subclass to attach extra HTTP headers to the
@@ -95,8 +106,16 @@ class OpenAIAdapter(LLMAdapter):
         if cfg.get("reasoning_effort"):
             # Opt-in only -- not every model accepts this field, but some
             # reasoning-tier models reject function tools on chat.completions
-            # unless it's explicitly set (e.g. to "none").
-            kwargs["reasoning_effort"] = cfg["reasoning_effort"]
+            # unless it's explicitly set (e.g. to "none"). The opposite quirk
+            # also exists (see _create_chat_completion()'s retry cascade): a
+            # model already caught rejecting tools + the configured effort
+            # gets the remembered override applied up front, skipping the
+            # failing round-trip(s).
+            effort = cfg["reasoning_effort"]
+            if tools and model in self._reasoning_effort_tools_override:
+                effort = self._reasoning_effort_tools_override[model]
+            if effort:
+                kwargs["reasoning_effort"] = effort
         if expect_json and self._supports_response_format:
             # Ask the model to guarantee JSON output (no extra prose).
             kwargs["response_format"] = {"type": "json_object"}
@@ -120,8 +139,8 @@ class OpenAIAdapter(LLMAdapter):
                 # rides along on the one response object.
                 stream_kwargs["stream_options"] = {"include_usage": True}
 
-            stream_response = await self._client.chat.completions.create(
-                stream=True, extra_headers=extra_headers, **stream_kwargs
+            stream_response = await self._create_chat_completion(
+                stream_kwargs, extra_headers, model=model, tools=tools, stream=True
             )
             async for chunk in stream_response:
                 chunk_usage = getattr(chunk, "usage", None)
@@ -189,7 +208,9 @@ class OpenAIAdapter(LLMAdapter):
             }
 
         # Non-streaming path: single request, parse tool calls from the message.
-        response = await self._client.chat.completions.create(extra_headers=extra_headers, **kwargs)
+        response = await self._create_chat_completion(
+            kwargs, extra_headers, model=model, tools=tools, stream=False
+        )
         message = response.choices[0].message
         raw_tool_calls = [
             {
@@ -219,6 +240,51 @@ class OpenAIAdapter(LLMAdapter):
             "usage": _usage_dict(getattr(response, "usage", None)),
             "raw": response.model_dump(),
         }
+
+    async def _create_chat_completion(
+        self,
+        kwargs: dict[str, Any],
+        extra_headers: dict[str, str] | None,
+        *,
+        model: str,
+        tools: list[dict[str, Any]] | None,
+        stream: bool,
+    ) -> Any:
+        """Issue ``chat.completions.create()``, retrying with a
+        progressively more conservative ``reasoning_effort`` when this model
+        rejects the combination of tools + the configured value.
+
+        Two tiers, matching the two live 400s seen in production for
+        different reasoning-tier models: first downgrade to ``"none"``
+        (``_is_reasoning_effort_tools_error``); if the model doesn't support
+        ``"none"`` either (``_is_reasoning_effort_none_unsupported_error``),
+        drop the field entirely and let the server use its own default.
+        Mutates ``kwargs`` in place so the caller's copy reflects whatever
+        ultimately succeeded, and remembers the working override on
+        ``self._reasoning_effort_tools_override[model]`` so later calls to
+        this model skip the failing round-trip(s) (see the preemptive check
+        in :meth:`generate`).
+        """
+        while True:
+            try:
+                if stream:
+                    return await self._client.chat.completions.create(
+                        stream=True, extra_headers=extra_headers, **kwargs
+                    )
+                return await self._client.chat.completions.create(extra_headers=extra_headers, **kwargs)
+            except BadRequestError as exc:
+                if not tools:
+                    raise
+                effort = kwargs.get("reasoning_effort")
+                if effort and effort != "none" and self._is_reasoning_effort_tools_error(exc):
+                    kwargs["reasoning_effort"] = "none"
+                    self._reasoning_effort_tools_override[model] = "none"
+                    continue
+                if effort == "none" and self._is_reasoning_effort_none_unsupported_error(exc):
+                    del kwargs["reasoning_effort"]
+                    self._reasoning_effort_tools_override[model] = None
+                    continue
+                raise
 
     def _normalize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Ensure every message's ``content`` is a plain string.
@@ -487,3 +553,41 @@ class OpenAIAdapter(LLMAdapter):
             except Exception:
                 return {}
         return {}
+
+    @staticmethod
+    def _is_reasoning_effort_tools_error(exc: BadRequestError) -> bool:
+        """Detect the live 400 some reasoning-tier models return when both
+        function tools and a non-"none" ``reasoning_effort`` are present on
+        chat.completions (e.g. "Function tools with reasoning_effort are not
+        supported for <model> ... set reasoning_effort to 'none'.").
+
+        Keyed off the structured ``param``/``message`` fields rather than a
+        bare "reasoning_effort" substring -- a sibling error (see
+        ``_is_reasoning_effort_none_unsupported_error``) also mentions
+        "reasoning_effort" and shares the same ``param``, so the distinct
+        "function tool" wording is what actually separates the two.
+        """
+        # Unlike Anthropic's SDK (which leaves `body` as the full response
+        # JSON), OpenAI's `_make_status_error` unwraps the "error" key itself
+        # before constructing the exception -- `exc.body` here is already
+        # the inner {"message": ..., "param": ..., ...} dict, not
+        # {"error": {...}}. Confirmed directly against the installed SDK.
+        body = getattr(exc, "body", None)
+        if not isinstance(body, dict) or body.get("param") != "reasoning_effort":
+            return False
+        return "function tool" in str(body.get("message", "")).lower()
+
+    @staticmethod
+    def _is_reasoning_effort_none_unsupported_error(exc: BadRequestError) -> bool:
+        """Detect "Unsupported value: 'reasoning_effort' does not support
+        'none' with this model" -- some models accept reasoning_effort but
+        never accept "none" (no way to disable reasoning at all), in which
+        case the field must be omitted entirely rather than forced to
+        "none". Keyed off the structured ``code`` field (OpenAI's own
+        machine-readable signal for this exact case), not message text."""
+        body = getattr(exc, "body", None)
+        return (
+            isinstance(body, dict)
+            and body.get("param") == "reasoning_effort"
+            and body.get("code") == "unsupported_value"
+        )
