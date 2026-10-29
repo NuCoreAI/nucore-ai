@@ -1,12 +1,19 @@
 """EisyUIContext must be per-connection state, not a shared/global object --
 concurrent websocket connections used to clobber a single module-level
-instance's context/message. Also covers the combined client_id+user_id
-identity (sourced from the context payload) winning over the per-connection
-uuid4 fallback as _run_once's effective session_id -- combined, not user_id
-alone, so the same logged-in user_id on a different browser/machine lands
-in a different session -- and, via a shared SessionStore, how UI context
-itself survives a reconnect (a brand-new, empty EisyUIContext) even though
-the object holding it does not.
+instance's context/message. Also covers user_id (sourced from the context
+payload) winning over the per-connection uuid4 fallback as _run_once's
+effective session_id, and, via a shared SessionStore, how UI context itself
+survives a reconnect (a brand-new, empty EisyUIContext) even though the
+object holding it does not.
+
+Identity is keyed by user_id *alone* -- an earlier version combined it with
+client_id specifically so the same logged-in user_id on two different
+browsers/machines wouldn't share a session. That was reversed after
+confirming client_id is regenerated on every browser refresh, which meant a
+plain page reload already lost history; see
+test_a_browser_refresh_with_a_new_client_id_keeps_the_same_session and
+test_run_once_gives_the_same_user_id_the_same_session_regardless_of_client_id
+below for the replacement coverage.
 """
 
 from __future__ import annotations
@@ -59,29 +66,15 @@ def test_two_contexts_do_not_share_state():
     assert b.get_client_id() is None
 
 
-def test_get_identity_key_combines_client_id_and_user_id():
+def test_client_id_alone_does_not_establish_a_session_identity():
+    # client_id is parsed and exposed (get_client_id) but never used as a
+    # key -- it's too volatile (regenerates on every browser refresh). With
+    # no user_id seen, there is still nothing durable to key a session by.
     ctx = EisyUIContext()
-    ctx.process_message(
-        json.dumps({"type": "context", "context": {"clientId": "client-1", "user": {"username": "a@example.com"}}})
-    )
+    ctx.process_message(json.dumps({"type": "context", "context": {"clientId": "client-1"}}))
 
-    assert ctx.get_identity_key() == "client-1::a@example.com"
-
-
-def test_get_identity_key_is_none_with_no_identity_seen_yet():
-    ctx = EisyUIContext()
-
-    assert ctx.get_identity_key() is None
-
-
-def test_get_identity_key_degrades_gracefully_with_only_one_field():
-    client_only = EisyUIContext()
-    client_only.process_message(json.dumps({"type": "context", "context": {"clientId": "client-1"}}))
-    user_only = EisyUIContext()
-    user_only.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
-
-    assert client_only.get_identity_key() == "client-1::-"
-    assert user_only.get_identity_key() == "-::a@example.com"
+    assert ctx.get_client_id() == "client-1"
+    assert ctx.get_user_id() is None
 
 
 def test_reconnect_recovers_ui_context_from_the_shared_session_store():
@@ -140,7 +133,6 @@ def test_a_new_connection_before_any_context_message_reads_through_the_shared_st
     # over by whatever establishes the connection) without having received
     # a context message of its own yet -- get_context() must still recover
     # the shared last-known value rather than report "unknown".
-    second_connection.client_id = "client-1"
     second_connection.user_id = "a@example.com"
 
     assert second_connection.get_context() == {
@@ -305,12 +297,15 @@ def test_preferences_dir_and_prompt_log_file_flags_parse():
             "/var/log/nucore/prompt.jsonl",
             "--plugin-output-root",
             "/etc/nucore/plugins",
+            "--session-persist-dir",
+            "/etc/nucore/sessions",
         ]
     )
 
     assert args.preferences_dir == "/etc/nucore/prefs"
     assert args.prompt_log_file == "/var/log/nucore/prompt.jsonl"
     assert args.plugin_output_root == "/etc/nucore/plugins"
+    assert args.session_persist_dir == "/etc/nucore/sessions"
 
 
 def test_preferences_dir_and_prompt_log_file_default_to_none():
@@ -319,6 +314,7 @@ def test_preferences_dir_and_prompt_log_file_default_to_none():
     assert args.preferences_dir is None
     assert args.prompt_log_file is None
     assert args.plugin_output_root is None
+    assert args.session_persist_dir is None
 
 
 def test_removed_cli_flags_are_rejected():
@@ -389,11 +385,31 @@ def test_main_accepts_an_in_process_dict_in_place_of_a_runtime_config_path(monke
     main(args)  # must not raise -- REPL loop exits immediately on EOFError
 
 
+def test_session_persist_dir_is_threaded_into_the_websocket_server(monkeypatch):
+    captured = {}
+
+    async def _fake_run_websocket_server(*_args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(run_unified_runtime, "_load_backend_api", lambda **_kwargs: SimpleNamespace(shutdown=lambda: None))
+    monkeypatch.setattr(run_unified_runtime, "_run_websocket_server", _fake_run_websocket_server)
+
+    args = _build_parser().parse_args(["--websocket-port", "8765", "--session-persist-dir", "/tmp/sessions-test"])
+    args.runtime_config = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m"}}}
+
+    main(args)
+
+    assert captured["session_persist_dir"] == "/tmp/sessions-test"
+
+
 class _FakeRuntime:
-    def __init__(self, text: str = "ok"):
+    def __init__(self, text: str = "ok", *, session_store: SessionStore | None = None, default_tool_set: str = "unified"):
         self._text = text
         self.stream_handler = None
         self.calls: list[dict] = []
+        self.session_store = session_store if session_store is not None else SessionStore()
+        self.default_tool_set = default_tool_set
 
     async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         self.calls.append({"query": query, "framework_context": framework_context, "session_id": session_id})
@@ -402,9 +418,12 @@ class _FakeRuntime:
     def is_tool_set_enabled(self, tool_set_name: str) -> bool:
         return True
 
+    def profile_max_turns(self, tool_set_name: str) -> int:
+        return 20
+
 
 @pytest.mark.asyncio
-async def test_run_once_prefers_the_combined_identity_over_the_fallback_session_id():
+async def test_run_once_prefers_the_user_id_over_the_fallback_session_id():
     runtime = _FakeRuntime()
     ctx = EisyUIContext()
     ctx.process_message(
@@ -413,16 +432,18 @@ async def test_run_once_prefers_the_combined_identity_over_the_fallback_session_
 
     await _run_once(runtime, "hello", ctx, session_id="fallback-uuid")
 
-    assert runtime.calls[0]["session_id"] == "client-1::a@example.com"
+    assert runtime.calls[0]["session_id"] == "a@example.com"
 
 
 @pytest.mark.asyncio
-async def test_run_once_gives_the_same_user_id_on_a_different_client_a_different_session():
-    """Regression guard: session_id used to be user_id alone, so the same
-    logged-in customer on two different browsers/machines landed in the
-    *same* conversation history/UI context -- wrong, since they're
-    different physical sessions. client_id (not just user_id) must be part
-    of the identity so they land in different sessions."""
+async def test_run_once_gives_the_same_user_id_the_same_session_regardless_of_client_id():
+    """This reverses a prior regression guard: session_id used to combine
+    client_id+user_id specifically so the same logged-in customer on two
+    different browsers/machines would land in different sessions. That was
+    reversed after confirming client_id is regenerated on every browser
+    refresh -- keying by it meant a plain page reload already looked like a
+    brand-new customer and lost history on every reload. Sharing a session
+    across a user's devices is now the accepted tradeoff."""
     runtime = _FakeRuntime()
     ctx_a = EisyUIContext()
     ctx_a.process_message(
@@ -436,7 +457,29 @@ async def test_run_once_gives_the_same_user_id_on_a_different_client_a_different
     await _run_once(runtime, "hello from laptop", ctx_a, session_id="fallback-a")
     await _run_once(runtime, "hello from phone", ctx_b, session_id="fallback-b")
 
-    assert runtime.calls[0]["session_id"] != runtime.calls[1]["session_id"]
+    assert runtime.calls[0]["session_id"] == runtime.calls[1]["session_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_browser_refresh_with_a_new_client_id_keeps_the_same_session():
+    """The concrete bug this reversal fixes: a browser refresh regenerates
+    client_id but not user_id -- the session must survive that."""
+    runtime = _FakeRuntime()
+    ctx = EisyUIContext()
+    ctx.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "c-1", "user": {"username": "a@example.com"}}})
+    )
+    await _run_once(runtime, "before refresh", ctx, session_id="fallback-a")
+
+    # Simulate a refresh: a brand-new EisyUIContext (same as a real
+    # reconnect), same user_id, but a different client_id.
+    ctx_after_refresh = EisyUIContext()
+    ctx_after_refresh.process_message(
+        json.dumps({"type": "context", "context": {"clientId": "c-2", "user": {"username": "a@example.com"}}})
+    )
+    await _run_once(runtime, "after refresh", ctx_after_refresh, session_id="fallback-b")
+
+    assert runtime.calls[0]["session_id"] == runtime.calls[1]["session_id"] == "a@example.com"
 
 
 @pytest.mark.asyncio
@@ -472,6 +515,267 @@ async def test_run_once_does_not_dispatch_a_context_only_message():
     )
 
     assert runtime.calls == []  # context alone never reaches handle_query
+
+
+# --- Mode persistence (customer/developer remembered per user) ---
+
+
+async def test_mode_is_restored_from_a_shared_store_on_the_next_connection(tmp_path):
+    # Mode persistence requires a configured persist_dir, same as session
+    # history -- a bare in-memory SessionStore has nowhere durable to save
+    # it (unlike UI context, which is always in-memory-available).
+    store = SessionStore(persist_dir=tmp_path)
+    first = EisyUIContext(session_store=store)
+    first.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+    first.process_message(json.dumps({"type": "message", "message": "/developer"}))
+    await first.flush_active_tool_set()
+
+    second = EisyUIContext(session_store=store)
+    second.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+    await second.restore_persisted_mode()
+
+    assert second.get_active_tool_set() == "plugin_authoring"
+
+
+async def test_an_explicit_switch_this_connection_wins_over_a_saved_mode(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.save_active_tool_set("a@example.com", "plugin_authoring")
+
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "message", "message": "/customer"}))  # before user_id is even known
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+    await ctx.restore_persisted_mode()
+
+    assert ctx.get_active_tool_set() == "unified"
+
+
+async def test_a_saved_but_now_disabled_target_mode_is_ignored(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.save_active_tool_set("a@example.com", "plugin_authoring")
+
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+    await ctx.restore_persisted_mode(is_target_enabled=lambda target: target != "plugin_authoring")
+
+    assert ctx.get_active_tool_set() is None  # falls back to the runtime default, not silently applied
+
+
+async def test_restore_persisted_mode_only_runs_once_per_user_id_per_connection(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.save_active_tool_set("a@example.com", "plugin_authoring")
+
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+    await ctx.restore_persisted_mode()
+    ctx.process_message(json.dumps({"type": "message", "message": "/customer"}))  # explicit switch after restore
+    await ctx.restore_persisted_mode()  # a second context message must not re-apply the saved value
+
+    assert ctx.get_active_tool_set() == "unified"
+
+
+async def test_flush_active_tool_set_is_a_no_op_without_a_store_or_user_id(tmp_path):
+    bare = EisyUIContext()  # no session_store
+    bare.active_tool_set = "plugin_authoring"
+    await bare.flush_active_tool_set()  # must not raise
+
+    no_user = EisyUIContext(session_store=SessionStore(persist_dir=tmp_path))
+    no_user.active_tool_set = "plugin_authoring"
+    await no_user.flush_active_tool_set()  # no user_id yet -- nothing to key the save by
+
+    assert await SessionStore(persist_dir=tmp_path).load_active_tool_set("a@example.com") is None
+
+
+@pytest.mark.asyncio
+async def test_run_once_persists_a_model_driven_mode_switch(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    class _SwitchingRuntime(_FakeRuntime):
+        async def handle_query(self, query, **kwargs):
+            self.calls.append({"query": query})
+            return IntentHandlerResult(intent="unified", output={"text": "ok", "active_tool_set": "plugin_authoring"})
+
+    switching_runtime = _SwitchingRuntime(session_store=store)
+    await _run_once(switching_runtime, "hello", ctx, session_id="fallback")
+
+    assert ctx.get_active_tool_set() == "plugin_authoring"
+    assert await store.load_active_tool_set("a@example.com") == "plugin_authoring"
+
+
+# --- Session-management commands: /new-session, /sessions, /load-session,
+# /rename-session, /delete-session (both input paths: websocket JSON and
+# plain REPL string) ---
+
+
+async def test_new_session_command_recognized_from_both_a_websocket_message_and_a_plain_repl_string():
+    ctx_ws = EisyUIContext()
+    forward, direct_reply = ctx_ws.process_message(json.dumps({"type": "message", "message": "/new-session"}))
+    assert forward is None
+    assert direct_reply is None
+    assert ctx_ws.pop_local_command() == ("/new-session", "")
+
+    ctx_repl = EisyUIContext()
+    forward, direct_reply = ctx_repl.process_message("/new-session")
+    assert forward is None
+    assert direct_reply is None
+    assert ctx_repl.pop_local_command() == ("/new-session", "")
+
+
+async def test_load_session_command_parses_its_argument():
+    ctx = EisyUIContext()
+    ctx.process_message(json.dumps({"type": "message", "message": "/load-session 3"}))
+
+    assert ctx.pop_local_command() == ("/load-session", "3")
+
+
+async def test_rename_session_command_keeps_the_rest_of_the_line_as_the_name():
+    ctx = EisyUIContext()
+    ctx.process_message("/rename-session 2 Kitchen lighting setup")
+
+    assert ctx.pop_local_command() == ("/rename-session", "2 Kitchen lighting setup")
+
+
+async def test_pop_local_command_is_none_for_an_ordinary_message():
+    ctx = EisyUIContext()
+    ctx.process_message(json.dumps({"type": "message", "message": "turn on the light"}))
+
+    assert ctx.pop_local_command() is None
+
+
+@pytest.mark.asyncio
+async def test_session_commands_reply_not_signed_in_without_a_user_id(capsys):
+    runtime = _FakeRuntime(session_store=SessionStore(persist_dir="/tmp/unused-session-persist-dir"))
+    ctx = EisyUIContext(session_store=runtime.session_store)
+
+    await _run_once(runtime, "/sessions", ctx, session_id="fallback")
+
+    assert "signed in" in capsys.readouterr().out
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_session_commands_reply_not_enabled_without_persistence_configured(capsys):
+    runtime = _FakeRuntime(session_store=SessionStore())  # no persist_dir
+    ctx = EisyUIContext(session_store=runtime.session_store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/sessions", ctx, session_id="fallback")
+
+    assert "isn't enabled on this installation" in capsys.readouterr().out
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_new_session_then_sessions_shows_two_entries_with_the_new_one_current(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/new-session", ctx, session_id="fallback")
+    assert "Started a new session" in capsys.readouterr().out
+
+    await _run_once(runtime, "/sessions", ctx, session_id="fallback")
+    output = capsys.readouterr().out
+
+    assert "Session 1" in output
+    assert "Session 2" in output
+    current_row = next(line for line in output.splitlines() if "Session 2" in line)
+    assert "(current)" in current_row
+
+
+@pytest.mark.asyncio
+async def test_load_session_switches_and_shows_the_loaded_historys_turns(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    session_num = await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    seeded = await store.get_or_load("a@example.com", "unified", session_num, durable=True)
+    seeded.append("what's the weather", "sunny")
+    await store.persist("a@example.com", "unified", session_num, durable=True)
+    await store.start_new_session("a@example.com", "unified")  # now on session 2
+
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/load-session 1", ctx, session_id="fallback")
+    output = capsys.readouterr().out
+
+    assert "Switched to session" in output
+    assert "what's the weather" in output
+    assert "sunny" in output
+    assert await store.resolve_current_session_id("a@example.com", "unified", durable=True) == 1
+
+
+@pytest.mark.asyncio
+async def test_load_session_rejects_an_unknown_id(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/load-session 999", ctx, session_id="fallback")
+
+    assert "No session with id 999" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_load_session_without_an_id_shows_usage(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/load-session", ctx, session_id="fallback")
+
+    assert "Usage: /load-session" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_rename_session_command_end_to_end(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/rename-session 1 Kitchen lighting setup", ctx, session_id="fallback")
+
+    assert "Kitchen lighting setup" in capsys.readouterr().out
+    entries = await store.list_sessions("a@example.com", "unified")
+    assert entries[0]["name"] == "Kitchen lighting setup"
+
+
+@pytest.mark.asyncio
+async def test_delete_session_command_auto_creates_a_replacement_for_the_current_session(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/delete-session 1", ctx, session_id="fallback")
+    output = capsys.readouterr().out
+
+    assert 'Deleted session 1 ("Session 1")' in output
+    assert "a new one" in output
+    current = await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    assert current != 1
+
+
+@pytest.mark.asyncio
+async def test_delete_session_command_rejects_an_unknown_id(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/delete-session 999", ctx, session_id="fallback")
+
+    assert "No session with id 999" in capsys.readouterr().out
 
 
 # --- _build_plugin_authoring_tool_set: dispatch factory shape ---

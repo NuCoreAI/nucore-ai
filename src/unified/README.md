@@ -20,7 +20,8 @@ backend.
 | `routine_compiler/` | The DSL compiler `create_or_update_routine` uses to turn `if`/`then`/`else` Python-like source into NuCore's `Trigger` schema. |
 | `adapters/` | Per-provider `LLMAdapter` implementations (Claude, OpenAI `/v1/chat/completions`, OpenAI `/v1/responses` via `OpenAIResponsesAdapter`, Gemini, Grok, llama.cpp). |
 | `models.py` | `IntentHandlerResult` (the return type `handle_query` produces), `ConversationTurn`/`ConversationHistory`. |
-| `session_store.py` | In-memory `session_id → ConversationHistory` map, plus `lock(session_id)` (one `asyncio.Lock` per session id). Shared across every WebSocket connection by `run_unified_runtime._run_websocket_server` so a reconnect finds its history instead of starting empty; the lock is what keeps that sharing safe against two concurrent requests for the same session -- see "Session history across connections" below. |
+| `session_store.py` | In-memory `session_id → ConversationHistory` map, plus `lock(session_id)` (one `asyncio.Lock` per session id). Shared across every WebSocket connection by `run_unified_runtime._run_websocket_server` so a reconnect finds its history instead of starting empty; the lock is what keeps that sharing safe against two concurrent requests for the same session -- see "Session history across connections" below. Optional `persist_dir` adds disk persistence and multi-session management per user -- see "Persisted sessions" below. |
+| `session_persistence.py` | `SessionPersistence` -- the synchronous, on-disk half of persisted sessions (one directory per user, named by a hash of `user_id`; atomic writes; secret redaction before write). Called by `session_store.py` via `asyncio.to_thread`. |
 | `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port`/`--websocket-host` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
 | `dispatch_builder.py`, `provider_dispatch_adapter.py`, `provider_clients.py`, `runtime_config.py` | Runtime-profile JSON loading and per-provider `LLMAdapter` construction, shared by both process entrypoints. |
 | `history_compaction.py` | `maybe_compact_history` -- collapses the oldest half of a session's conversation history into one LLM-generated summary turn once its estimated token size exceeds `history_token_budget` (runtime config, default 20000); falls back to plain truncation if the summarization call itself fails. |
@@ -113,22 +114,25 @@ untouched -- `force_tool_choice` is computed but never set to `True` off a non-C
 `run_unified_runtime.py`'s `--websocket-port`/`--websocket-host` server mode shares one
 `SessionStore` across every accepted connection (built once in `_run_websocket_server`, passed
 into each connection's `UnifiedRuntime(session_store=...)`), keyed by the durable session id
-`EisyUIContext.get_identity_key()` establishes per logical client -- `client_id` and `user_id`
-combined (`f"{client_id}::{user_id}"`), not `user_id` alone: the same logged-in user_id on a
-different browser/machine must land in a *different* session, which `client_id` is what
-distinguishes. This is what lets a reconnect (network blip, page reload, the bridge process
-itself reconnecting) find its prior conversation history instead of starting over empty --
-previously each connection got its own private, empty `SessionStore`, so a reconnect silently
-lost everything despite the session id staying stable across it.
+`EisyUIContext.get_user_id()` establishes per logical client -- `user_id` **alone**. An earlier
+version combined it with `client_id` specifically so the same logged-in user on two different
+browsers/machines would land in different sessions; that was reversed after confirming (by direct
+testing) that `client_id` is regenerated on every browser refresh, so keying by it meant a plain
+page reload already lost history -- worse than the device-merging tradeoff it was meant to avoid.
+This is what lets a reconnect (network blip, page reload, the bridge process itself reconnecting)
+find its prior conversation history instead of starting over empty -- previously each connection
+got its own private, empty `SessionStore`, so a reconnect silently lost everything despite the
+session id staying stable across it.
 
 The same shared `SessionStore` also holds each identity's last-known **UI context** (the
-customer's current screen, via `get_ui_context`/`set_ui_context`), keyed by identity alone --
-deliberately *not* suffixed by tool set, since the customer's screen doesn't change just because
-the chatbot switched between `unified`/`plugin_authoring`. `EisyUIContext.get_context()` reads
+customer's current screen, via `get_ui_context`/`set_ui_context`), keyed by identity (`user_id`)
+alone -- deliberately *not* suffixed by tool set, since the customer's screen doesn't change just
+because the chatbot switched between `unified`/`plugin_authoring`. `EisyUIContext.get_context()` reads
 through to this shared slot whenever *this* connection hasn't received a context message of its
 own yet, so a brand-new connection (a reconnect -- see `EisyUIContext`'s own docstring on why it's
 per-connection, not global, and why that's still correct) doesn't look like the customer's screen
-has become unknown just because the object holding it was.
+has become unknown just because the object holding it was. UI context is never persisted to disk
+(see "Persisted sessions" below) -- it's volatile, connection-local screen state.
 
 Sharing one store safely requires serializing same-session access: `UnifiedRuntime.handle_query`
 holds `session_store.lock(session_id)` for its entire read-history -> generate -> append-history
@@ -139,3 +143,24 @@ cooperative scheduling, so there's nothing a lock would protect there. Every oth
 (REPL mode, and any test constructing `UnifiedRuntime` without a `session_store` kwarg) is
 unaffected -- it defaults to a private, unshared store, so the lock is uncontended and a no-op in
 practice.
+
+## Persisted sessions
+
+`SessionStore(persist_dir=...)` (`--session-persist-dir`) adds disk persistence on top of
+everything above: a user's conversation history and last-active mode survive a full process
+restart, not just an in-process reconnect. `None` (the default) is a complete no-op -- zero new
+disk I/O, identical behavior to before this existed.
+
+Within each mode, a user can hold multiple named sessions (not just one continuously-growing
+history), managed by five chat commands recognized the same way `/developer`/`/customer` are
+(`EisyUIContext._apply_switch_command_or_return`, both the websocket-JSON and plain-REPL-string
+input paths): `/new-session`, `/sessions`, `/load-session <id>`, `/rename-session <id> <name>`,
+`/delete-session <id>`. Unlike the two mode-switch commands, these are answered asynchronously
+from `_run_once` (`_handle_session_command`) rather than at recognition time, since a session
+lookup/mutation is async disk I/O.
+
+See `session_persistence.py` (the synchronous, on-disk half -- one directory per user named by a
+hash of `user_id`, atomic writes, secret redaction before write) and `session_store.py` (the
+async, in-memory-cached half that makes concurrent session-management commands for the same user
+safe) for the implementation, and `design/developers/merged-toolsets.md`'s "Persisted,
+multi-session history" section for the full design.

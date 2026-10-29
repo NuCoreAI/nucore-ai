@@ -11,18 +11,24 @@ import pytest
 
 from unified.models import IntentHandlerResult
 from unified.run_unified_runtime import EisyUIContext, _handle_turn_exception, _run_once
+from unified.session_store import SessionStore
 
 
 class FakeRuntime:
-    def __init__(self, text: str):
+    def __init__(self, text: str, *, session_store: SessionStore | None = None, default_tool_set: str = "unified"):
         self._text = text
         self.stream_handler = None
+        self.session_store = session_store if session_store is not None else SessionStore()
+        self.default_tool_set = default_tool_set
 
     async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         return IntentHandlerResult(intent="unified", output={"text": self._text})
 
     def is_tool_set_enabled(self, tool_set_name: str) -> bool:
         return True
+
+    def profile_max_turns(self, tool_set_name: str) -> int:
+        return 20
 
 
 class FakeStreamHandler:
@@ -109,3 +115,18 @@ async def test_turn_exception_never_raises_even_if_the_exception_carries_a_body(
     runtime = _RuntimeWithStreamHandler(stream_handler=None)
 
     await _handle_turn_exception(_FakeBadRequestError("400", {"error": {"message": "bad input"}}), runtime)
+
+
+@pytest.mark.asyncio
+async def test_repl_mode_session_command_replies_over_stdout_not_signed_in(capsys):
+    # REPL/--query input is a plain string, never JSON-wrapped -- the
+    # /sessions command must still be recognized via the non-JSON fallback
+    # path in EisyUIContext.process_message, and since REPL has no
+    # authenticated user_id, it must reply explaining that rather than
+    # crashing or silently doing nothing.
+    runtime = FakeRuntime("unused")
+
+    await _run_once(runtime, "/sessions", EisyUIContext(), session_id="default")
+
+    captured = capsys.readouterr()
+    assert "signed in" in captured.out

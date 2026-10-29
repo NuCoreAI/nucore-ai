@@ -127,7 +127,7 @@ the same `max_iterations`).
 this field. The literal secret value never appears in the file -- only the environment variable
 *name* does, same as today.
 
-### CLI-only, deliberately: `--preferences-dir`, `--prompt-log-file`, and `--plugin-output-root`
+### CLI-only, deliberately: `--preferences-dir`, `--prompt-log-file`, `--plugin-output-root`, and `--session-persist-dir`
 
 `preferences_dir` and the prompt log's location briefly lived in this file (both are
 installation-wide settings, the same shape as `search_engine` above) before moving back out to
@@ -138,17 +138,20 @@ directories as needed). `plugin_output_root` took the identical round trip, slig
 started as a required CLI flag (`--plugin-output-root`), moved into the `plugin_authoring`
 profile itself when this design first merged the two tool sets (reasoned at the time as "specific
 to that side, so it belongs with the rest of that profile's settings"), then moved back out to
-CLI-only for the same reason the other two did -- see below. None of the three is ever read from
-runtime config again, even if present there.
+CLI-only for the same reason the other two did -- see below. `--session-persist-dir` (see
+"Persisted, multi-session history" above) joined this group from the start, same reasoning:
+where a user's conversation history lives on disk is a deployment/host concern, not something a
+customer-supplied runtime config should redirect. None of the four is ever read from runtime
+config, even if present there.
 
 The distinction driving this: this config file holds *runtime* parameters a customer could
 reasonably supply themselves -- which model, what temperature, which tool sets are enabled.
-Where preferences or debug logs land on disk, and which root directory generated plugin
-scaffolds are confined to, are a different kind of setting entirely -- a deployment/host concern
-that whoever *launches* the process controls, not whoever *supplied* the config file. A
-customer-editable config should not be able to redirect any of these to an arbitrary path --
-`plugin_output_root` especially so, since it's a path-confinement security boundary
-(`path_confinement.confine_path`), not merely a convenience default.
+Where preferences, debug logs, or persisted session history land on disk, and which root
+directory generated plugin scaffolds are confined to, are a different kind of setting entirely --
+a deployment/host concern that whoever *launches* the process controls, not whoever *supplied*
+the config file. A customer-editable config should not be able to redirect any of these to an
+arbitrary path -- `plugin_output_root` especially so, since it's a path-confinement security
+boundary (`path_confinement.confine_path`), not merely a convenience default.
 
 Since JSON has no comment syntax, a fact worth recording *in* the config file for a future
 reader (e.g. "this model rejects `temperature`, see claude_adapter.py's auto-retry") has nowhere
@@ -321,15 +324,58 @@ Example verbiage (illustrative, not binding -- the model phrases the actual repl
 `SessionStore` (`session_store.py`) is keyed by an arbitrary string, with no notion of tool set.
 A composite key per active tool set (e.g. `f"{identity}::{active_tool_set}"`) keeps the two
 conversations from interleaving plain-text turns in one `ConversationHistory` when a connection
-switches back and forth. *identity* here is `EisyUIContext.get_identity_key()` --
-`client_id`+`user_id` combined, not `user_id` alone (a real-world-testing fix landed after the
-initial implementation -- see Status below): the same logged-in user_id on a different
-browser/machine must land in a different session, which only `client_id` distinguishes. The same
-`SessionStore` also
+switches back and forth. *identity* here is `EisyUIContext.get_user_id()` -- `user_id` **alone**.
+
+This reverses an earlier decision, worth recording both ways: the original implementation keyed
+by `user_id` alone; a real-world-testing fix then combined it with `client_id` specifically so
+the same logged-in user on two different browsers/machines would land in different sessions
+(`client_id` was the only thing that could distinguish them). That combination was itself
+reversed later after confirming, by direct testing, that `client_id` is regenerated on every
+browser refresh -- keying by it meant a plain page reload already looked like a brand-new
+customer and lost history on every reload, which is strictly worse than the device-merging
+tradeoff it was meant to prevent. `user_id` alone is back, and two of a user's devices now
+share one session on purpose.
+
+The same `SessionStore` also
 holds each identity's last-known UI context (`get_ui_context`/`set_ui_context`), keyed by
-identity alone -- never tool-set-suffixed, since the customer's screen doesn't depend on which
+identity (`user_id`) alone -- never tool-set-suffixed, since the customer's screen doesn't depend on which
 tool set is active -- so a reconnect's brand-new `EisyUIContext` (see that class's own docstring)
-can recover the customer's last known screen instead of looking like it vanished.
+can recover the customer's last known screen instead of looking like it vanished. UI context is
+deliberately never persisted to disk (see "Persisted, multi-session history" below) -- it's
+volatile, connection-local screen state, not conversation content.
+
+### Persisted, multi-session history
+
+`SessionStore(persist_dir=...)` (`--session-persist-dir`, the fourth CLI-only flag -- see "CLI-only,
+deliberately" below) adds real disk persistence on top of the in-memory behavior above: a user's
+conversation history and last-active mode survive a full process restart, not just an in-process
+reconnect. `None` (the default) keeps everything exactly as in-memory-only as before this existed
+-- every existing caller and test is unaffected.
+
+Within a mode (`unified`/`plugin_authoring`, each kept independent, same as the in-memory
+composite key), a user can hold more than one named session, not just one continuously-growing
+history: `/new-session` starts a fresh one (the old one stays saved under its own id -- nothing
+is ever "archived" as a separate step, since every session write-through-persists to its own file
+continuously); `/sessions` lists them; `/load-session <id>` switches which one is live going
+forward; `/rename-session <id> <name>` and `/delete-session <id>` manage them (deleting the
+current/only session auto-creates a fresh replacement, so a user always has at least one live
+session). All five are recognized at the same `EisyUIContext._apply_switch_command_or_return`
+chokepoint `/developer`/`/customer` already use (both the websocket JSON and plain REPL-string
+paths), but -- unlike those two -- answered asynchronously from `_run_once`
+(`_handle_session_command`), since a session lookup/mutation is async disk I/O the synchronous
+chokepoint has no access to.
+
+The active mode (customer/developer) is also persisted per user (`SessionStore.load_active_tool_set`/
+`save_active_tool_set`, read on a connection's first context message via
+`EisyUIContext.restore_persisted_mode`, written via `flush_active_tool_set` after every turn) --
+an explicit `/developer`/`/customer` typed on a given connection always wins over a restored
+value, and a restored value that names a now-disabled tool set is ignored (the same backstop
+`UnifiedRuntime.handle_query` already applies independently).
+
+See `src/unified/session_persistence.py` for the on-disk layout (one directory per user, named by
+a hash of `user_id` -- never the plaintext, since `user_id` arrives unvalidated from an inbound
+JSON payload) and `src/unified/session_store.py` for the in-memory caching/locking that makes
+concurrent session-management commands for the same user safe.
 
 ### Shared state is unaffected, which is why this is safe
 
@@ -381,7 +427,8 @@ has also been removed, on the "config file is the only source of truth for runti
 principle this design is built on. `--preferences-dir`, `--prompt-log-dir`/`--no-prompt-log`, and
 `--plugin-output-root` briefly followed the same path into the config file, then each moved back
 *out* to CLI-only (the prompt-log pair collapsed into one `--prompt-log-file` flag) -- see
-"CLI-only, deliberately" above for why these three are the exception.
+"CLI-only, deliberately" above for why these are the exception. `--session-persist-dir` joined
+this group outright (see "Persisted, multi-session history" above).
 
 Six real-world-testing fixes landed after the initial implementation, all covered above:
 the `handoff_summary` argument on both switch tools ("Handoff summary" above), making
@@ -399,3 +446,11 @@ the same testing round: a provider error (e.g. an Anthropic 400) used to crash t
 REPL/WebSocket-connection process with no visibility into the actual error body -- `_run_loop`/the
 WebSocket handler's per-message loop now catch it, log the provider's own error body, and let the
 session continue.
+
+An eighth, later fix reverses the sixth one above: `client_id` turned out to regenerate on every
+browser refresh (confirmed by direct testing), so keying by `client_id`+`user_id` meant a plain
+page reload already lost history -- worse than the device-merging problem that combination was
+meant to solve. Session identity is `user_id` alone again, and real disk persistence
+(`--session-persist-dir`), multi-session management per mode (`/new-session`/`/sessions`/
+`/load-session`/`/rename-session`/`/delete-session`), and persisted active-mode memory were added
+alongside it -- see "Persisted, multi-session history" above for the full design.
