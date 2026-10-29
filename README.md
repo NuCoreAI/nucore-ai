@@ -58,10 +58,13 @@ Pass `--websocket-port` to run as a standalone WebSocket server instead of the i
 REPL -- no HTTP framework involved (uses the `websockets` package, already
 a project dependency). Every received message is treated as a query, and the response
 streams back over the same connection. Conversation history is shared across connections
-and keyed by session id, so a reconnect (network blip, page reload, a restarted client)
-finds its prior history instead of starting over empty; concurrent requests for the same
-session id are serialized rather than racing each other. See `src/unified/README.md`'s
-"Session history across connections" section for the mechanism.
+and keyed by the authenticated user's id, so a reconnect (network blip, page reload, a
+restarted client) finds its prior history instead of starting over empty; concurrent requests
+for the same session are serialized rather than racing each other. See `src/unified/README.md`'s
+"Session history across connections" section for the mechanism. Add `--session-persist-dir`
+to also survive a full process restart and manage multiple named sessions per user
+(`/new-session`, `/sessions`, `/load-session`, `/rename-session`, `/delete-session`) -- see
+that file's "Persisted sessions" section.
 
 ```shell
 python -m unified.run_unified_runtime \
@@ -335,15 +338,17 @@ python -m unified.run_unified_runtime \
 | `--preferences-dir` | Directory for this installation's customer preferences (aliases/events). No default, no runtime-config fallback -- preferences are unavailable unless this is set |
 | `--prompt-log-file` | Exact file path for the debug prompt/tool-call log; parent directories are created as needed. No default, no runtime-config fallback -- the log is off unless this is set |
 | `--plugin-output-root` | Allowed root directory for generated plugin scaffolds (the `plugin_authoring` tool set). No default, no runtime-config fallback. Required when `nucore_runtime.plugin_authoring.enabled` is `true`; ignored otherwise |
+| `--session-persist-dir` | Directory to persist per-user conversation history (customer/developer modes kept separate, each supporting multiple named sessions) and last-active mode in. No default, no runtime-config fallback -- everything is in-memory-only for the process's lifetime unless this is set. Only meaningful in `--websocket-port`/`--websocket-host` server mode |
 
 Everything else -- which tool set(s) are enabled, `search_engine`/`search_engine_api_key`,
 per-profile `stream`/`max_iterations` -- lives in the runtime config file only (see
 `runtime_config.example.json` and `design/developers/merged-toolsets.md`); there is no CLI
-override for any of it. `--preferences-dir`/`--prompt-log-file`/`--plugin-output-root` are the
-deliberate opposite: CLI-only, never read from the config file even if present there -- the
-config file holds settings a customer could reasonably supply (model, temperature, which tool
-sets are enabled, ...), while where preferences/logs land on disk, and which root directory
-generated plugin scaffolds are confined to, are deployment/host concerns the system controls.
+override for any of it. `--preferences-dir`/`--prompt-log-file`/`--plugin-output-root`/
+`--session-persist-dir` are the deliberate opposite: CLI-only, never read from the config file
+even if present there -- the config file holds settings a customer could reasonably supply
+(model, temperature, which tool sets are enabled, ...), while where preferences/logs/session
+history land on disk, and which root directory generated plugin scaffolds are confined to, are
+deployment/host concerns the system controls.
 
 ## Running the MCP Server
 

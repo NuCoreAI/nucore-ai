@@ -322,8 +322,10 @@ actually use.
      conflate the last two).
    - `login_with_credentials(username, password, base_url)`, `refresh_access_token(refresh_token,
      base_url)`, `logout(refresh_token, base_url, access_token=None)`: thin wrappers around
-     `/api/login` (Mode 3, `{"username", "password", "local": true}` -- local, offline-capable
-     login), `/api/jwt/refresh`, `/api/jwt/logout`. **Each takes an explicit `base_url`, deliberately
+     `/api/login` (Mode 1, `{"username", "password"}` -- cloud login against the portal API;
+     deliberately not Mode 3's `"local": true`, which authenticates against locally cached
+     credentials and invalidates the user's existing JWTs issued by the main OAuth/portal
+     server), `/api/jwt/refresh`, `/api/jwt/logout`. **Each takes an explicit `base_url`, deliberately
      not `self.base_url`**: `design/iox_apis/authentication.md` documents `/api/login`/`/api/jwt/*`
      as "local access only" -- requests routed through the PG3-relay Unix socket
      (`/tmp/eisyui-listener`) that `IoXWrapper` is otherwise configured to use in eisy-ai's actual

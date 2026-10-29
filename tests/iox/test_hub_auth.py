@@ -109,7 +109,7 @@ async def test_verify_bearer_token_unreachable_is_none():
 
 
 @pytest.mark.asyncio
-async def test_login_with_credentials_sends_local_mode_body():
+async def test_login_with_credentials_sends_cloud_mode_body_without_local_flag():
     _RecordingHandler.response_status = 200
     _RecordingHandler.response_body = json.dumps(
         {"successful": True, "data": {"accessToken": "AT", "refreshToken": "RT"}}
@@ -126,7 +126,9 @@ async def test_login_with_credentials_sends_local_mode_body():
         assert _RecordingHandler.last_method == "POST"
         assert _RecordingHandler.last_path == "/api/login"
         sent = json.loads(_RecordingHandler.last_body)
-        assert sent == {"username": "alice", "password": "secret", "local": True}
+        # No "local": true -- that mode invalidates the user's existing
+        # JWTs issued by the main OAuth/portal server.
+        assert sent == {"username": "alice", "password": "secret"}
     finally:
         await _teardown(server, wrapper)
 

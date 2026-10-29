@@ -65,13 +65,25 @@ class EisyUIContext:
     customer changed. *session_store*, when given, is the fix: the same
     shared :class:`~session_store.SessionStore` instance already used for
     conversation history (see ``_run_websocket_server``'s
-    ``shared_session_store``), used here only for its ``get_ui_context``/
-    ``set_ui_context`` slot, keyed by :meth:`get_identity_key`
-    (client_id+user_id, not just this connection) so the customer's last
-    known screen survives the reconnect instead of resetting to unknown.
-    ``None`` (the default -- REPL mode, tests, or any caller with nothing to
-    share) just disables the read-through/write-through below; behavior
-    then is exactly what it was before this existed.
+    ``shared_session_store``), used here for its ``get_ui_context``/
+    ``set_ui_context`` slot (keyed by :meth:`get_user_id` -- see below) and
+    for persisted mode/session state (sections "Mode persistence" and
+    ``_SESSION_COMMANDS`` below). ``None`` (the default -- REPL mode, tests,
+    or any caller with nothing to share) just disables all of the
+    read-through/write-through below; behavior then is exactly what it was
+    before any of this existed.
+
+    Identity is keyed by :meth:`get_user_id` **alone** -- not combined with
+    ``client_id`` the way an earlier version of this class did. That
+    combination was added after a real-world-testing round specifically to
+    stop the same logged-in user_id on two different browsers/machines from
+    sharing one session; it was reversed after confirming (by direct
+    testing) that ``client_id`` is regenerated on every browser refresh --
+    keying by it meant a plain page reload already looked like a brand-new
+    customer, losing history on every reload. Sharing a session across a
+    user's devices is the accepted tradeoff. ``client_id`` is still parsed
+    and exposed (:meth:`get_client_id`) for callers that need the live
+    value (e.g. ``pair_device``) -- it's just never used as a key anymore.
     """
     def __init__(self, session_store: "SessionStore | None" = None):
         self.context:dict = None
@@ -88,8 +100,29 @@ class EisyUIContext:
         # design/developers/merged-toolsets.md.
         self.active_tool_set: str | None = None
         self._session_store = session_store
+        # Which user_id the persisted active tool set has already been
+        # restored for this connection -- see restore_persisted_mode. None
+        # until the first successful restore attempt.
+        self._mode_restored_for: str | None = None
+        # What disk is known to currently hold for this user_id's active
+        # tool set -- lets flush_active_tool_set skip a redundant write.
+        self._persisted_tool_set: str | None = None
+        # A recognized /new-session, /sessions, /load-session,
+        # /rename-session, or /delete-session command, recorded by
+        # _apply_switch_command_or_return and consumed by _run_once via
+        # pop_local_command -- see that method's docstring for why the
+        # reply can't be produced synchronously at recognition time.
+        self._pending_local_command: tuple[str, str] | None = None
 
     _SWITCH_COMMANDS = {"/developer": "plugin_authoring", "/customer": "unified"}
+    # Session-management commands -- recognized at the same chokepoint as
+    # _SWITCH_COMMANDS (both input paths), but they don't map to a tool set
+    # the way /developer//customer do, and answering them needs async disk
+    # access the synchronous chokepoint doesn't have -- see
+    # pop_local_command/_run_once's _handle_session_command.
+    _SESSION_COMMANDS = frozenset(
+        {"/new-session", "/sessions", "/load-session", "/rename-session", "/delete-session"}
+    )
 
     def process_message(
         self, message_data: str, is_target_enabled: Callable[[str], bool] | None = None
@@ -134,11 +167,9 @@ class EisyUIContext:
                 # Write through to the shared store (if any) so the *next*
                 # connection for this same identity -- a reconnect -- can
                 # read this back even if it never resends its own context
-                # before its first message. See get_identity_key/get_context.
-                if self._session_store is not None:
-                    identity_key = self.get_identity_key()
-                    if identity_key is not None:
-                        self._session_store.set_ui_context(identity_key, self.context)
+                # before its first message. See get_user_id/get_context.
+                if self._session_store is not None and self.user_id is not None:
+                    self._session_store.set_ui_context(self.user_id, self.context)
                 return None, None
             if type == "message":
                 self.message = message.get("message", None)
@@ -177,7 +208,22 @@ class EisyUIContext:
           the exact wording the model-driven switch tool itself returns, so
           this command "succeed[s], or get[s] back the same kind of error"
           per merged-toolsets.md, never a silent no-op.
+
+        A ``/new-session``/``/sessions``/``/load-session``/
+        ``/rename-session``/``/delete-session`` command (with or without a
+        trailing argument) is recognized here too, before the no-argument
+        switch-command lookup, but is never answered synchronously: this
+        method has no access to the runtime or to disk, both of which the
+        reply needs (a session lookup/mutation is async I/O). Instead it's
+        recorded on :attr:`_pending_local_command` and this returns
+        ``(None, None)`` -- the same "don't forward to the runtime" shape a
+        switch command uses -- for ``_run_once`` to pick up via
+        :meth:`pop_local_command` and answer asynchronously.
         """
+        command, _, rest = (text or "").partition(" ")
+        if command in self._SESSION_COMMANDS:
+            self._pending_local_command = (command, rest.strip())
+            return None, None
         target = self._SWITCH_COMMANDS.get(text)
         if target is None:
             return text, None
@@ -186,42 +232,67 @@ class EisyUIContext:
         self.active_tool_set = target
         return None, switched_message(target)
 
+    def pop_local_command(self) -> tuple[str, str] | None:
+        """Return and clear the session-management command (if any) recorded
+        by :meth:`_apply_switch_command_or_return` this turn -- ``(command,
+        arg_text)``, e.g. ``("/load-session", "3")``, or ``None`` if the
+        last processed message wasn't one of :attr:`_SESSION_COMMANDS`."""
+        pending = self._pending_local_command
+        self._pending_local_command = None
+        return pending
+
     def get_context(self)->dict:
         """Get the current context stored in the UI context object.
 
         Falls back to this identity's last known context in the shared
-        session store (see :meth:`get_identity_key`/
-        ``SessionStore.get_ui_context``) when *this* connection hasn't
-        received a context message of its own yet -- the gap right after a
-        reconnect, before the client resends one -- so a brand-new
-        connection doesn't look like the customer's screen is unknown when
-        a prior connection for the same customer already recorded one.
+        session store (see :meth:`get_user_id`/``SessionStore.get_ui_context``)
+        when *this* connection hasn't received a context message of its own
+        yet -- the gap right after a reconnect, before the client resends
+        one -- so a brand-new connection doesn't look like the customer's
+        screen is unknown when a prior connection for the same customer
+        already recorded one.
         """
         if self.context is not None:
             return self.context
-        if self._session_store is not None:
-            identity_key = self.get_identity_key()
-            if identity_key is not None:
-                return self._session_store.get_ui_context(identity_key)
+        if self._session_store is not None and self.user_id is not None:
+            return self._session_store.get_ui_context(self.user_id)
         return None
 
-    def get_identity_key(self) -> str | None:
-        """Stable per-customer identity -- client_id and user_id combined --
-        used both as the shared UI-context store's key (see get_context)
-        and, by the caller, as the session_id conversation history is keyed
-        by (see _run_once). Combining both, rather than user_id alone,
-        matters for one concrete case: the same logged-in user_id on two
-        different browsers/machines must land in two different sessions,
-        never share one conversation history or UI context between them --
-        user_id alone can't distinguish those, client_id can.
+    async def restore_persisted_mode(self, is_target_enabled: Callable[[str], bool] | None = None) -> None:
+        """Adopt this user's last saved active tool set, once, the first
+        time a user_id becomes known on this connection.
 
-        None until at least one of client_id/user_id has been seen on this
-        connection -- nothing stable to key by yet, so the caller falls back
-        to a fresh, non-persistent per-connection id instead.
+        No-ops without a shared session store, without a user_id yet, or
+        once already attempted for this connection's current user_id (a
+        later context message that doesn't change ``user_id`` must not
+        re-run this and clobber an explicit ``/developer``/``/customer``
+        typed in between). The saved value only applies when
+        ``active_tool_set`` is still ``None`` -- an explicit switch this
+        connection always wins -- and only when the target is currently
+        enabled (a saved ``plugin_authoring`` on an install that has since
+        disabled it is ignored quietly; ``UnifiedRuntime.handle_query``'s
+        own backstop also covers this independently).
         """
-        if not self.client_id and not self.user_id:
-            return None
-        return f"{self.client_id or '-'}::{self.user_id or '-'}"
+        if self._session_store is None or self.user_id is None or self._mode_restored_for == self.user_id:
+            return
+        self._mode_restored_for = self.user_id
+        saved = await self._session_store.load_active_tool_set(self.user_id)
+        self._persisted_tool_set = saved
+        if saved and self.active_tool_set is None and (is_target_enabled is None or is_target_enabled(saved)):
+            self.active_tool_set = saved
+
+    async def flush_active_tool_set(self) -> None:
+        """Persist the current :attr:`active_tool_set`, if it's changed
+        since the last flush (or the last restore). No-ops without a shared
+        session store, without a user_id, or without an active tool set to
+        save (``None`` means "using the runtime default," nothing to
+        remember)."""
+        if self._session_store is None or self.user_id is None or self.active_tool_set is None:
+            return
+        if self.active_tool_set == self._persisted_tool_set:
+            return
+        await self._session_store.save_active_tool_set(self.user_id, self.active_tool_set)
+        self._persisted_tool_set = self.active_tool_set
 
     def get_message(self)->str:
         """Get the last user message stored in the UI context object."""
@@ -401,6 +472,21 @@ def _build_parser() -> argparse.ArgumentParser:
             "should be able to redirect (see design/developers/merged-toolsets.md)."
         ),
     )
+    parser.add_argument(
+        "--session-persist-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory to persist per-user conversation history (customer and developer modes "
+            "kept separately, each supporting multiple named sessions -- /new-session, "
+            "/sessions, /load-session, /rename-session, /delete-session) and last-active mode "
+            "in. There is no default and no runtime-config fallback: persistence is off, and "
+            "every connection is in-memory-only for the process's lifetime, unless this is set. "
+            "CLI-only, deliberately, same reasoning as --preferences-dir. Only meaningful in "
+            "--websocket-port/--websocket-host server mode -- REPL mode has no authenticated "
+            "user_id to persist anything under."
+        ),
+    )
     return parser
 
 
@@ -518,6 +604,113 @@ def _load_backend_api_cached(
         raise ValueError(f"Failed to load backend API from {classpath}: {e}")
 
 
+_TOOL_SET_LABELS = {"unified": "customer", "plugin_authoring": "developer"}
+
+
+async def _deliver_direct_reply(runtime: UnifiedRuntime, text: str) -> None:
+    """Send *text* straight back to the user over whatever channel this
+    connection uses, without dispatching anything to the runtime. Shared by
+    every direct-reply case in ``_run_once``: a ``/developer``/``/customer``
+    confirmation, and a session-management command's reply."""
+    if runtime.stream_handler is not None:
+        await runtime.stream_handler.send_chunk(text, True)
+    else:
+        print(text)
+
+
+def _parse_session_id(text: str) -> int | None:
+    """A session id is always a small non-negative integer typed by a
+    person -- ``str.isdigit()`` rejects empty text, whitespace, a leading
+    ``-``, and anything non-numeric in one check."""
+    text = text.strip()
+    return int(text) if text.isdigit() else None
+
+
+async def _handle_session_command(
+    runtime: UnifiedRuntime, eisy_ui_context: EisyUIContext, command: str, arg_text: str
+) -> str:
+    """Compute the reply for one of :attr:`EisyUIContext._SESSION_COMMANDS`
+    (``/new-session``, ``/sessions``, ``/load-session``, ``/rename-session``,
+    ``/delete-session``). Called from ``_run_once`` after popping the
+    command off ``eisy_ui_context`` -- this needs the runtime's
+    ``session_store`` and async disk access, neither of which the
+    synchronous recognition chokepoint
+    (``EisyUIContext._apply_switch_command_or_return``) has.
+
+    Every command replies the same way when there's nothing durable to act
+    on: no ``user_id`` yet (not signed in -- a session is nothing without
+    one), or persistence not configured on this installation at all.
+    """
+    user_id = eisy_ui_context.get_user_id()
+    tool_set = eisy_ui_context.get_active_tool_set() or runtime.default_tool_set
+    mode_label = _TOOL_SET_LABELS.get(tool_set, tool_set)
+    store = runtime.session_store
+
+    if user_id is None:
+        return "Session management isn't available until you're signed in."
+    if not store.persistence_enabled:
+        return "Session management isn't enabled on this installation."
+
+    if command == "/new-session":
+        previous, new_entry = await store.start_new_session(user_id, tool_set)
+        if previous is None:
+            return f'Started a new session ("{new_entry["name"]}").'
+        return (
+            f'Started a new session ("{new_entry["name"]}"). Your previous session '
+            f'("{previous.get("name")}", {previous.get("turn_count", 0)} turn(s)) is saved -- '
+            "use /sessions to see all your saved sessions."
+        )
+
+    if command == "/sessions":
+        entries = await store.list_sessions(user_id, tool_set)
+        current_id = await store.resolve_current_session_id(user_id, tool_set, durable=True)
+        table = SessionStore.format_sessions_table(entries, current_id=current_id)
+        return f"Saved sessions ({mode_label} mode):\n\n{table}"
+
+    if command == "/load-session":
+        session_id = _parse_session_id(arg_text)
+        if session_id is None:
+            return "Usage: /load-session <id> -- see /sessions for ids."
+        entry = await store.load_session(user_id, tool_set, session_id)
+        if entry is None:
+            return f"No session with id {arg_text} in {mode_label} mode. Use /sessions to see your saved sessions."
+        history = await store.get_or_load(
+            user_id, tool_set, session_id, max_turns=runtime.profile_max_turns(tool_set), durable=True
+        )
+        header = f'Switched to session "{entry.get("name")}" ({mode_label} mode).'
+        display = SessionStore.format_history_for_display(history, mode_label=mode_label)
+        return f"{header}\n\n{display}" if display else f"{header} (No messages saved in it yet.)"
+
+    if command == "/rename-session":
+        session_id_text, _, new_name = arg_text.partition(" ")
+        session_id = _parse_session_id(session_id_text)
+        new_name = new_name.strip()
+        if session_id is None or not new_name:
+            return "Usage: /rename-session <id> <name>"
+        ok = await store.rename_session(user_id, tool_set, session_id, new_name)
+        if not ok:
+            return (
+                f"No session with id {session_id_text} in {mode_label} mode. "
+                "Use /sessions to see your saved sessions."
+            )
+        return f'Renamed session {session_id} to "{new_name}".'
+
+    if command == "/delete-session":
+        session_id = _parse_session_id(arg_text)
+        if session_id is None:
+            return "Usage: /delete-session <id> -- see /sessions for ids."
+        result = await store.delete_session(user_id, tool_set, session_id)
+        if result is None:
+            return f"No session with id {arg_text} in {mode_label} mode. Use /sessions to see your saved sessions."
+        deleted, replacement = result
+        reply = f'Deleted session {session_id} ("{deleted.get("name")}").'
+        if replacement is not None:
+            reply += f' That was your current session, so a new one ("{replacement["name"]}") has been started.'
+        return reply
+
+    raise AssertionError(f"Unreachable: {command!r} is not in EisyUIContext._SESSION_COMMANDS")
+
+
 async def _run_once(
     runtime: UnifiedRuntime,
     query: str,
@@ -559,56 +752,74 @@ async def _run_once(
         # "not enabled" error -- delivered immediately, without dispatching
         # anything to the runtime this turn (see
         # EisyUIContext._apply_switch_command_or_return).
-        if runtime.stream_handler is not None:
-            await runtime.stream_handler.send_chunk(direct_reply, True)
-        else:
-            print(direct_reply)
-    if not query:
-        return
-    # Prefer the durable client_id+user_id identity over the per-connection
-    # fallback -- this is what lets identity (and therefore conversation
-    # history *and* UI context -- see get_identity_key/get_context) survive
-    # a reconnect instead of resetting to a fresh uuid4 every time. Combined
-    # identity, not user_id alone: the same logged-in user_id on a different
-    # browser/machine must not land in the same session as the first one.
-    session_id = eisy_ui_context.get_identity_key() or session_id or "default"
-    results = await runtime.handle_query(
-        query,
-        framework_context=eisy_ui_context.get_context(),
-        session_id=session_id,
-        active_tool_set=eisy_ui_context.get_active_tool_set(),
-        connection_context=eisy_ui_context,
-    )
-    if not results:
-        return
-    if not isinstance(results, list):
-        results = [results]
-    for result in results:
-        if result is None:
-            continue
-        # Sticky either way a switch happens -- see merged-toolsets.md. The
-        # *next* turn on this connection starts wherever this one ended up,
-        # whether that came from /developer, /customer, or a mid-round
-        # model-driven switch_to_*_mode tool call.
-        if isinstance(result, IntentHandlerResult) and isinstance(result.output, dict):
-            final_tool_set = result.output.get("active_tool_set")
-            if final_tool_set:
-                eisy_ui_context.set_active_tool_set(final_tool_set)
-        text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
-        if runtime.stream_handler is not None:
-            if runtime.stream_handler.get_stream_chunk_count() > 0:
-                # Already streamed live during generation -- just close the stream.
-                await runtime.stream_handler.send_chunk("", True)
+        await _deliver_direct_reply(runtime, direct_reply)
+
+    # Adopt this user's last saved mode, once per connection, before
+    # anything below reads get_active_tool_set() -- a session command
+    # (e.g. /sessions) must see the restored mode too, not just a turn
+    # that reaches handle_query.
+    await eisy_ui_context.restore_persisted_mode(runtime.is_tool_set_enabled)
+
+    try:
+        pending = eisy_ui_context.pop_local_command()
+        if pending is not None:
+            command, arg_text = pending
+            reply = await _handle_session_command(runtime, eisy_ui_context, command, arg_text)
+            await _deliver_direct_reply(runtime, reply)
+            return
+        if not query:
+            return
+        # Prefer the durable user_id over the per-connection fallback --
+        # this is what lets identity (and therefore conversation history
+        # and UI context -- see get_user_id/get_context) survive a
+        # reconnect instead of resetting to a fresh uuid4 every time.
+        # client_id is deliberately not part of this anymore -- see
+        # EisyUIContext's own docstring for why.
+        user_id = eisy_ui_context.get_user_id()
+        session_id = user_id or session_id or "default"
+        results = await runtime.handle_query(
+            query,
+            framework_context=eisy_ui_context.get_context(),
+            session_id=session_id,
+            active_tool_set=eisy_ui_context.get_active_tool_set(),
+            connection_context=eisy_ui_context,
+            durable_session=bool(user_id),
+        )
+        if not results:
+            return
+        if not isinstance(results, list):
+            results = [results]
+        for result in results:
+            if result is None:
+                continue
+            # Sticky either way a switch happens -- see merged-toolsets.md. The
+            # *next* turn on this connection starts wherever this one ended up,
+            # whether that came from /developer, /customer, or a mid-round
+            # model-driven switch_to_*_mode tool call.
+            if isinstance(result, IntentHandlerResult) and isinstance(result.output, dict):
+                final_tool_set = result.output.get("active_tool_set")
+                if final_tool_set:
+                    eisy_ui_context.set_active_tool_set(final_tool_set)
+            text_output = result.get_text_output() if isinstance(result, IntentHandlerResult) else (str(result) if result else "Unknown results from the model")
+            if runtime.stream_handler is not None:
+                if runtime.stream_handler.get_stream_chunk_count() > 0:
+                    # Already streamed live during generation -- just close the stream.
+                    await runtime.stream_handler.send_chunk("", True)
+                else:
+                    await runtime.stream_handler.send_chunk(text_output, True)
             else:
-                await runtime.stream_handler.send_chunk(text_output, True)
-        else:
-            print(text_output)
+                print(text_output)
 
-        # History is now recorded inside UnifiedRuntime itself (handle_query),
-        # so every caller gets consistent multi-turn memory without having to
-        # replicate this bookkeeping.
+            # History is now recorded inside UnifiedRuntime itself (handle_query),
+            # so every caller gets consistent multi-turn memory without having to
+            # replicate this bookkeeping.
 
-    return
+        return
+    finally:
+        # Persist a mode change (explicit /developer//customer, or a
+        # mid-turn model-driven switch just applied above) regardless of
+        # which exit path was taken.
+        await eisy_ui_context.flush_active_tool_set()
 
 
 async def _handle_turn_exception(exc: Exception, runtime: UnifiedRuntime) -> None:
@@ -905,6 +1116,7 @@ async def _run_websocket_server(
     client_uid: int | None = None,
     ssl_context: ssl.SSLContext | None = None,
     tool_sets: dict[str, ToolSetBundle] | None = None,
+    session_persist_dir: str | None = None,
 ) -> None:
     """Serve WebSocket connections directly, no HTTP framework involved.
 
@@ -967,11 +1179,20 @@ async def _run_websocket_server(
     says are on) to its own :class:`~unified.runtime.ToolSetBundle` -- see
     ``main()``'s ``_build_plugin_authoring_tool_set`` call and
     ``UnifiedRuntime``'s own docstring for what each one needs.
+
+    *session_persist_dir*, when given (``main()``'s ``--session-persist-dir``),
+    makes the shared ``SessionStore`` durable: a user's conversation history
+    (and last-active mode) survives a full process restart, not just an
+    in-process reconnect, and a user can keep multiple named sessions per
+    tool set (``/new-session``/``/sessions``/``/load-session``/
+    ``/rename-session``/``/delete-session`` -- see ``_handle_session_command``).
+    ``None`` (the default) keeps everything exactly as in-memory-only as it
+    was before this existed.
     """
     # Shared across every connection -- see this function's own docstring
     # and SessionStore.lock for why (a reconnect must find its history, not
     # start over empty; the lock is what keeps that sharing safe).
-    shared_session_store = SessionStore()
+    shared_session_store = SessionStore(persist_dir=session_persist_dir)
 
     async def handler(websocket) -> None:
         if client_uid is not None:
@@ -1239,6 +1460,7 @@ def main(args:Any=None, poly=None) -> None:
                 client_uid=args.websocket_client_id if websocket_is_unix else None,
                 ssl_context=ssl_context,
                 tool_sets=tool_sets,
+                session_persist_dir=args.session_persist_dir,
             ))
         except KeyboardInterrupt:
             logger.warning("\nInterrupted. Exiting.")

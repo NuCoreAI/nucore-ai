@@ -335,6 +335,14 @@ class UnifiedRuntime:
     def _profile_config(self, tool_set_name: str) -> dict[str, Any]:
         return self.runtime_config.get("nucore_runtime", {}).get(tool_set_name, {})
 
+    def profile_max_turns(self, tool_set_name: str) -> int:
+        """Public wrapper around this tool set's configured ``max_turns``
+        -- used by ``run_unified_runtime.py``'s session-management command
+        handlers (``/load-session`` etc.), which need the same value
+        :meth:`handle_query` uses without reaching into the private
+        ``_profile_config``."""
+        return int(self._profile_config(tool_set_name).get("max_turns", 20))
+
     def _resolve_llm_config(self, tool_set_name: str) -> dict[str, Any]:
         return resolve_llm_profile(self.runtime_config, preferred_key=tool_set_name)
 
@@ -410,6 +418,7 @@ class UnifiedRuntime:
         framework_context: dict[str, Any] | None = None,
         active_tool_set: str | None = None,
         connection_context: Any = None,
+        durable_session: bool = False,
     ) -> IntentHandlerResult:
         """Run one turn, starting in *active_tool_set* (defaulting to this
         runtime's `default_profile_name`). If the model (or the explicit
@@ -423,6 +432,14 @@ class UnifiedRuntime:
         is instead stamped onto the returned result's ``output`` dict as
         ``"active_tool_set"``, for the caller to persist back onto its own
         per-connection sticky state (e.g. `EisyUIContext`).
+
+        *durable_session*: True when *session_id* is a durable, authenticated
+        identity (a user_id) rather than the per-connection uuid4/``"default"``
+        fallback -- history may then be loaded from and saved to disk, and
+        may be one of several named sessions, if ``self.session_store`` has
+        persistence configured (``SessionStore.persistence_enabled``).
+        False, the default -- what every existing caller gets -- is today's
+        in-memory-only behavior, unchanged.
         """
         session_id = session_id or "default"
         current_tool_set = active_tool_set or self.default_tool_set
@@ -438,13 +455,24 @@ class UnifiedRuntime:
             current_tool_set = self.default_tool_set
         # Composite key -- see merged-toolsets.md's "Session history": two
         # tool sets' conversations on one connection must not interleave
-        # plain-text turns in one ConversationHistory.
-        composite_session_id = f"{session_id}::{current_tool_set}"
+        # plain-text turns in one ConversationHistory. current_session_num
+        # is None for a non-durable session_id (the per-connection
+        # uuid4/"default" fallback -- no stable identity to scope multiple
+        # named sessions under), in which case composite_key degrades to
+        # today's exact f"{session_id}::{tool_set}" shape.
+        current_session_num = await self.session_store.resolve_current_session_id(
+            session_id, current_tool_set, durable=durable_session
+        )
+        composite_session_id = SessionStore.composite_key(session_id, current_tool_set, current_session_num)
 
         async with self.session_store.lock(composite_session_id):
             profile_cfg = self._profile_config(current_tool_set)
-            history = self.session_store.get(
-                composite_session_id, max_turns=int(profile_cfg.get("max_turns", 20))
+            history = await self.session_store.get_or_load(
+                session_id,
+                current_tool_set,
+                current_session_num,
+                max_turns=int(profile_cfg.get("max_turns", 20)),
+                durable=durable_session,
             )
             await maybe_compact_history(
                 history,
@@ -489,11 +517,21 @@ class UnifiedRuntime:
                         handoff_notes.append(switch.handoff_summary)
                     # Re-key history to the new tool set's own composite id --
                     # the chained loop's turn gets recorded under whichever
-                    # tool set actually produced the final answer.
-                    composite_session_id = f"{session_id}::{current_tool_set}"
-                    history = self.session_store.get(
-                        composite_session_id,
+                    # tool set actually produced the final answer. Re-resolve
+                    # the current session number too: a durable session's
+                    # "current session" is scoped per tool set, so the tool
+                    # set just switched into may have a different one
+                    # current than the one this turn started in.
+                    current_session_num = await self.session_store.resolve_current_session_id(
+                        session_id, current_tool_set, durable=durable_session
+                    )
+                    composite_session_id = SessionStore.composite_key(session_id, current_tool_set, current_session_num)
+                    history = await self.session_store.get_or_load(
+                        session_id,
+                        current_tool_set,
+                        current_session_num,
                         max_turns=int(self._profile_config(current_tool_set).get("max_turns", 20)),
+                        durable=durable_session,
                     )
                     current_provider = self._resolve_llm_config(current_tool_set).get("provider")
                     history_messages = _build_history_messages(history.turns, current_provider=current_provider)
@@ -515,6 +553,9 @@ class UnifiedRuntime:
             # at the end of its own user_message regardless, so an older
             # wrapped snapshot sitting earlier in history is harmless.
             history.append(query, final_text, new_messages, provider=current_provider)
+            # Write-through, still inside the lock so a concurrent request
+            # for this same key can't observe a partially-saved turn.
+            await self.session_store.persist(session_id, current_tool_set, current_session_num, durable=durable_session)
 
         return IntentHandlerResult(
             intent="unified", output={"text": final_text, "active_tool_set": current_tool_set}

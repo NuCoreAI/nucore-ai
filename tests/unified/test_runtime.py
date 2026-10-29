@@ -751,3 +751,114 @@ async def test_handoff_summary_is_prepended_to_the_new_tool_sets_user_message():
         assert result.output["text"] == "answered-in-plugin_authoring"
     finally:
         rm.AgenticLoop = original_loop
+
+
+# --- durable_session / disk persistence (persistent-sessions feature) ---
+
+
+@pytest.mark.asyncio
+async def test_handle_query_persists_a_durable_sessions_history_to_disk(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    runtime = _runtime(session_store=store)
+
+    await runtime.handle_query("hi", session_id="a@example.com", durable_session=True)
+
+    session_num = await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    history = await store.get_or_load("a@example.com", "unified", session_num, durable=True)
+    assert [t.query for t in history.turns] == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_runtime_and_store_at_the_same_directory_recovers_the_prior_turn(tmp_path):
+    first_store = SessionStore(persist_dir=tmp_path)
+    first_runtime = _runtime(session_store=first_store)
+    await first_runtime.handle_query("first turn", session_id="a@example.com", durable_session=True)
+
+    # A brand-new SessionStore/UnifiedRuntime pair at the same directory --
+    # simulates a full process restart, not just an in-process reconnect.
+    fresh_store = SessionStore(persist_dir=tmp_path)
+    fresh_runtime = _runtime(session_store=fresh_store)
+    await fresh_runtime.handle_query("second turn", session_id="a@example.com", durable_session=True)
+
+    session_num = await fresh_store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    history = await fresh_store.get_or_load("a@example.com", "unified", session_num, durable=True)
+    assert [t.query for t in history.turns] == ["first turn", "second turn"]
+
+
+@pytest.mark.asyncio
+async def test_handle_query_without_durable_session_writes_nothing_to_disk(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    runtime = _runtime(session_store=store)
+
+    await runtime.handle_query("hi", session_id="a@example.com")  # durable_session defaults to False
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_mid_turn_switch_persists_into_the_switched_to_tool_sets_own_saved_session(tmp_path):
+    """Regression target: the mid-turn-switch branch re-keys history to the
+    *new* tool set's composite id -- it must also resolve and load *that*
+    tool set's own current session from disk, or a switch right after a
+    restart starts the new tool set's history from empty and the very next
+    append overwrites the saved file with a single turn instead of adding
+    to it."""
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    # Seed plugin_authoring's current session with one turn via a
+    # throwaway store at the same directory -- simulates a turn saved
+    # before a restart.
+    seed_store = SessionStore(persist_dir=tmp_path)
+    seed_num = await seed_store.resolve_current_session_id("a@example.com", "plugin_authoring", durable=True)
+    seeded_history = await seed_store.get_or_load("a@example.com", "plugin_authoring", seed_num, durable=True)
+    seeded_history.append("seeded before restart", "ack")
+    await seed_store.persist("a@example.com", "plugin_authoring", seed_num, durable=True)
+
+    class _SwitchOnceLoop:
+        calls = 0
+
+        def __init__(self, **kwargs):
+            self._dispatch = kwargs["dispatch"]
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            _SwitchOnceLoop.calls += 1
+            if _SwitchOnceLoop.calls == 1:
+                result = await self._dispatch("switch_to_developer_mode", {})
+                if isinstance(result, dict) and SWITCH_TOOL_SET_KEY in result:
+                    raise ToolSetSwitchRequested(result[SWITCH_TOOL_SET_KEY])
+            return "answered", []
+
+    import unified.runtime as rm
+
+    original_loop = rm.AgenticLoop
+    rm.AgenticLoop = _SwitchOnceLoop
+    _SwitchOnceLoop.calls = 0
+    try:
+        runtime_config = {
+            "enabled_profiles": ["unified", "plugin_authoring"],
+            "default_profile_name": "unified",
+            "max_tool_set_switches_per_turn": 1,
+            "nucore_runtime": {"unified": {}, "plugin_authoring": {}},
+        }
+        # A fresh store -- simulates the process having restarted since the
+        # seed above.
+        fresh_store = SessionStore(persist_dir=tmp_path)
+        runtime = _runtime(
+            runtime_config,
+            session_store=fresh_store,
+            tool_sets={
+                "plugin_authoring": ToolSetBundle(
+                    tool_spec_paths=None,
+                    dispatch_factory=lambda _ctx: DispatchBundle(dispatch=rm.execute_tool),
+                    system_prompt_builder=_fake_build_system_prompt_sections,
+                )
+            },
+        )
+        await runtime.handle_query("switch please", session_id="a@example.com", durable_session=True)
+    finally:
+        rm.AgenticLoop = original_loop
+
+    verify_store = SessionStore(persist_dir=tmp_path)
+    verify_num = await verify_store.resolve_current_session_id("a@example.com", "plugin_authoring", durable=True)
+    history = await verify_store.get_or_load("a@example.com", "plugin_authoring", verify_num, durable=True)
+    assert [t.query for t in history.turns] == ["seeded before restart", "switch please"]
