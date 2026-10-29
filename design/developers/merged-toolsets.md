@@ -127,7 +127,7 @@ the same `max_iterations`).
 this field. The literal secret value never appears in the file -- only the environment variable
 *name* does, same as today.
 
-### CLI-only, deliberately: `--preferences-dir`, `--prompt-log-file`, `--plugin-output-root`, and `--session-persist-dir`
+### CLI-only, deliberately: `--preferences-dir`, `--prompt-log-file`, `--plugin-output-root`, `--old-plugin-output-root`, and `--session-persist-dir`
 
 `preferences_dir` and the prompt log's location briefly lived in this file (both are
 installation-wide settings, the same shape as `search_engine` above) before moving back out to
@@ -141,7 +141,15 @@ to that side, so it belongs with the rest of that profile's settings"), then mov
 CLI-only for the same reason the other two did -- see below. `--session-persist-dir` (see
 "Persisted, multi-session history" above) joined this group from the start, same reasoning:
 where a user's conversation history lives on disk is a deployment/host concern, not something a
-customer-supplied runtime config should redirect. None of the four is ever read from runtime
+customer-supplied runtime config should redirect. `--old-plugin-output-root` (see
+`src/unified/plugin_output_root_migration.py`) joined for the identical reason, scoped even
+narrower than the others: it drives a one-time, fully automatic relocation of
+`--plugin-output-root`'s contents (filesystem copy, `server_entry.json` path correction, and --
+for any previously-installed plugin -- a real uninstall/reinstall into its original slot so its
+rc.d service file regenerates at the new path, with its exact pre-migration run state restored)
+on startup, with no prompts; a path that no longer exists means a prior migration already
+completed (it renames `old_root` to `old_root.old` as its own completion marker), and a partial
+failure is simply retried on the next restart. None of these five is ever read from runtime
 config, even if present there.
 
 The distinction driving this: this config file holds *runtime* parameters a customer could

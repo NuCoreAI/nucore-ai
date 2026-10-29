@@ -22,6 +22,7 @@ from unified.provider_dispatch_adapter import ProviderDispatchLLMAdapter
 from unified.runtime import DispatchBundle, ToolSetBundle, UnifiedRuntime, resolve_llm_profile
 from unified.runtime_config import _load_runtime_config
 from unified.provider_clients import resolve_env_placeholder
+from unified.plugin_output_root_migration import log_migration_result, migrate_plugin_output_root
 from unified.session_store import SessionStore
 from unified.dispatch_builder import build_default_dispatch_adapter
 from unified.stream_handler import StreamHandler
@@ -470,6 +471,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "deliberately, same reasoning as --preferences-dir: this is a deployment/host "
             "concern the system controls, not something a customer-supplied runtime config "
             "should be able to redirect (see design/developers/merged-toolsets.md)."
+        ),
+    )
+    parser.add_argument(
+        "--old-plugin-output-root",
+        type=str,
+        default=None,
+        help=(
+            "Previous --plugin-output-root location to migrate from, automatically, on this "
+            "startup. If the path doesn't exist (e.g. a prior successful migration already "
+            "renamed it to '<path>.old'), this is a no-op -- no prompts, no dry-run, migration "
+            "runs immediately when needed and startup continues regardless of outcome. A "
+            "partial failure leaves this path in place untouched, so the next restart retries "
+            "automatically and resumes from whatever already copied over successfully. See "
+            "plugin_output_root_migration.py for exactly what 'success' requires."
         ),
     )
     parser.add_argument(
@@ -1423,6 +1438,13 @@ def main(args:Any=None, poly=None) -> None:
                 "--plugin-output-root is required when nucore_runtime.plugin_authoring.enabled "
                 "is true -- the tool set refuses to start without an allowed output root"
             )
+        if args.old_plugin_output_root:
+            old_plugin_output_root = Path(args.old_plugin_output_root)
+            if old_plugin_output_root.exists():
+                migration_result = asyncio.run(migrate_plugin_output_root(
+                    nucore_interface, old_plugin_output_root, Path(args.plugin_output_root)
+                ))
+                log_migration_result(migration_result)
         tool_sets["plugin_authoring"] = _build_plugin_authoring_tool_set(
             nucore_interface=nucore_interface,
             plugin_output_root=args.plugin_output_root,

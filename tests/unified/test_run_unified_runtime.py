@@ -27,6 +27,7 @@ import pytest
 
 from unified.models import IntentHandlerResult
 from unified.plugin_authoring.handlers import discovery
+from unified.plugin_output_root_migration import MigrationResult
 from unified.session_store import SessionStore
 from unified import run_unified_runtime
 from unified.run_unified_runtime import (
@@ -401,6 +402,66 @@ def test_session_persist_dir_is_threaded_into_the_websocket_server(monkeypatch):
     main(args)
 
     assert captured["session_persist_dir"] == "/tmp/sessions-test"
+
+
+def _run_main_with_plugin_authoring_enabled(monkeypatch, tmp_path, *, old_plugin_output_root=None):
+    """Shared setup for the --old-plugin-output-root wiring tests below:
+    plugin_authoring enabled via an in-process dict config (same shape as
+    test_main_accepts_an_in_process_dict_in_place_of_a_runtime_config_path),
+    REPL mode (input faked to raise EOFError so the loop exits immediately),
+    and _build_plugin_authoring_tool_set faked out since these tests only
+    care about whether migrate_plugin_output_root gets called, not whether
+    the rest of the plugin_authoring pipeline works against a fake backend."""
+
+    def _raise_eof(*_args, **_kwargs):
+        raise EOFError
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(run_unified_runtime, "_load_backend_api", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(run_unified_runtime, "_build_plugin_authoring_tool_set", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr("builtins.input", _raise_eof)
+
+    args = _build_parser().parse_args(
+        ["--plugin-output-root", str(tmp_path / "new")]
+        + (["--old-plugin-output-root", str(old_plugin_output_root)] if old_plugin_output_root else [])
+    )
+    args.runtime_config = {
+        "nucore_runtime": {
+            "unified": {"provider": "claude", "model": "m"},
+            "plugin_authoring": {"provider": "claude", "model": "m", "enabled": True},
+        }
+    }
+    main(args)
+
+
+def test_old_plugin_output_root_pointing_at_a_missing_path_never_calls_migration(monkeypatch, tmp_path):
+    calls = []
+
+    async def _fake_migrate(*_args, **_kwargs):
+        calls.append((_args, _kwargs))
+        return MigrationResult(old_root=tmp_path / "old", new_root=tmp_path / "new")
+
+    monkeypatch.setattr(run_unified_runtime, "migrate_plugin_output_root", _fake_migrate)
+
+    _run_main_with_plugin_authoring_enabled(monkeypatch, tmp_path, old_plugin_output_root=tmp_path / "does-not-exist")
+
+    assert calls == []
+
+
+def test_old_plugin_output_root_pointing_at_a_real_path_triggers_exactly_one_migration_call(monkeypatch, tmp_path):
+    old_root = tmp_path / "old"
+    old_root.mkdir()
+    calls = []
+
+    async def _fake_migrate(nucore_interface, old, new, **_kwargs):
+        calls.append((old, new))
+        return MigrationResult(old_root=old, new_root=new)
+
+    monkeypatch.setattr(run_unified_runtime, "migrate_plugin_output_root", _fake_migrate)
+
+    _run_main_with_plugin_authoring_enabled(monkeypatch, tmp_path, old_plugin_output_root=old_root)
+
+    assert calls == [(old_root, tmp_path / "new")]
 
 
 class _FakeRuntime:
