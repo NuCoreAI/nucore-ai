@@ -581,11 +581,18 @@ class SessionStore:
     @staticmethod
     def format_sessions_table(entries: list[dict[str, Any]], *, current_id: int | None) -> str:
         """Render *entries* (as returned by :meth:`list_sessions`) as a
-        plain-text table for the ``/sessions`` command: ``id`` / ``name`` /
-        ``description`` columns, a header separator, and a horizontal rule
-        between every row so each session is visually distinct in a plain
-        chat bubble or terminal (no markdown table rendering assumed)."""
-        headers = ("id", "name", "description")
+        GitHub-flavored-Markdown pipe table for the ``/sessions`` command:
+        ``id`` / ``name`` / ``description`` columns. A markdown renderer
+        draws its own borders between every row, so no manual separator
+        lines are added here -- just the one header-separator row the
+        pipe-table syntax requires."""
+
+        def _escape(cell: str) -> str:
+            # A literal "|" would terminate the cell early, and an embedded
+            # newline would break the row onto the next line -- both make
+            # the output invalid as a single markdown table row.
+            return cell.replace("|", "\\|").replace("\n", " ")
+
         rows: list[tuple[str, str, str]] = []
         for entry in entries:
             name = entry.get("name") or _DEFAULT_SESSION_NAME_TEMPLATE.format(id=entry.get("id"))
@@ -594,21 +601,8 @@ class SessionStore:
             description = f"{turns} turn(s), last used {updated}"
             if entry.get("id") == current_id:
                 description += " (current)"
-            rows.append((str(entry.get("id")), name, description))
+            rows.append((str(entry.get("id")), _escape(str(name)), _escape(description)))
 
-        widths = [
-            max(len(headers[i]), *(len(row[i]) for row in rows)) if rows else len(headers[i])
-            for i in range(3)
-        ]
-
-        def _fmt_row(row: tuple[str, str, str]) -> str:
-            padded = [cell.ljust(width) for cell, width in zip(row[:-1], widths[:-1])]
-            padded.append(row[-1])
-            return " | ".join(padded)
-
-        separator = "-+-".join("-" * width for width in widths)
-        lines = [_fmt_row(headers), separator]
-        for row in rows:
-            lines.append(_fmt_row(row))
-            lines.append(separator)
+        lines = ["| id | name | description |", "| --- | --- | --- |"]
+        lines.extend(f"| {row[0]} | {row[1]} | {row[2]} |" for row in rows)
         return "\n".join(lines)

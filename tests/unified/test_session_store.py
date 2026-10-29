@@ -329,17 +329,27 @@ def test_format_sessions_table_marks_the_current_entry():
 
     assert "id" in table and "name" in table and "description" in table
     lines = table.splitlines()
-    assert lines[0] == "id | name      | description"
-    assert all(set(line) <= {"-", "+"} for line in lines[1::2])
+    assert lines[0] == "| id | name | description |"
+    assert lines[1] == "| --- | --- | --- |"
     assert "3 turn(s)" in table and "(current)" in table
     assert "Session 2" in table
-    current_row = next(line for line in lines if line.startswith("1 "))
-    other_row = next(line for line in lines if line.startswith("2 "))
+    current_row = next(line for line in lines if line.startswith("| 1 "))
+    other_row = next(line for line in lines if line.startswith("| 2 "))
     assert "(current)" in current_row
     assert "(current)" not in other_row
+
+
+def test_format_sessions_table_escapes_pipes_and_newlines_in_cell_content():
+    entries = [{"id": 1, "name": "a | b\nc", "turn_count": 0, "updated_at": "unknown"}]
+
+    table = SessionStore.format_sessions_table(entries, current_id=None)
+
+    rows = table.splitlines()[2:]
+    assert len(rows) == 1
+    assert rows[0] == r"| 1 | a \| b c | 0 turn(s), last used unknown |"
 
 
 def test_format_sessions_table_handles_no_sessions():
     table = SessionStore.format_sessions_table([], current_id=None)
 
-    assert table.splitlines()[0] == "id | name | description"
+    assert table.splitlines() == ["| id | name | description |", "| --- | --- | --- |"]
