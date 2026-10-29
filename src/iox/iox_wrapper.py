@@ -1938,13 +1938,18 @@ class IoXWrapper(NuCoreInterface):
     async def login_with_credentials(self, username: str, password: str, base_url: str) -> dict[str, Any] | None:
         """See NuCoreInterface.login_with_credentials.
 
+        Deliberately omits ``"local": true`` (mode 3, "local login" in
+        design/iox_apis/authentication.md) -- that mode authenticates
+        against locally cached credentials only, and doing so invalidates
+        the user's existing JWTs issued by the main OAuth/portal server.
+        Mode 1 (plain username/password, no ``local`` flag) is a cloud
+        login against the portal API and does not have that side effect.
+
         API:
         POST /api/login
-        {"username": <username>, "password": <password>, "local": true}
+        {"username": <username>, "password": <password>}
         """
-        return await self._hub_auth_post(
-            base_url, "/api/login", {"username": username, "password": password, "local": True}
-        )
+        return await self._hub_auth_post(base_url, "/api/login", {"username": username, "password": password})
 
     async def refresh_access_token(self, refresh_token: str, base_url: str) -> dict[str, Any] | None:
         """See NuCoreInterface.refresh_access_token.

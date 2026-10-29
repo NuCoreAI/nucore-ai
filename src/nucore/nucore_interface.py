@@ -508,9 +508,13 @@ class NuCoreInterface(ABC):
 
     async def login_with_credentials(self, username: str, password: str, base_url: str) -> dict[str, Any] | None:
         """
-        Log in with the hub's real portal/admin credentials, local-login
-        mode (no portal/cloud connectivity required). ``/api/login`` is
-        documented as "local access only" -- requests routed through the
+        Log in with the hub's real portal/admin credentials, cloud login
+        mode (mode 1 in design/iox_apis/authentication.md -- plain
+        username/password, no ``"local": true``). Deliberately not local-
+        login mode: that mode authenticates against locally cached
+        credentials and invalidates the user's existing JWTs issued by the
+        main OAuth/portal server, which this call must not do. ``/api/login``
+        is documented as "local access only" -- requests routed through the
         portal proxy or the internal Unix socket PG3 relays other REST
         calls over are silently ignored, so this call requires a genuinely
         direct HTTP(S) connection to the device. *base_url* (e.g.
@@ -528,7 +532,7 @@ class NuCoreInterface(ABC):
 
         API:
         POST /api/login
-        {"username": <username>, "password": <password>, "local": true}
+        {"username": <username>, "password": <password>}
         """
         raise NotImplementedError("Subclasses must implement the login_with_credentials method.")
 
