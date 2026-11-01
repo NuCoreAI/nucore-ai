@@ -144,8 +144,26 @@ operate on, not a general persistence location. Don't write ordinary runtime sta
 just because it happens to exist — use `persist/` for that even when `fileUpload` is also true.
 
 **Other plugin → host/mobile notification APIs** (unrelated to the `Custom` class above):
-`polyglot.udm_alert(title, body)` pushes a notification to UD Mobile — for an event a customer
-should be alerted to outside the app UI (e.g. a plugin detecting a critical condition).
+`polyglot.udm_alert(title, body, group=None, sound=None)` pushes a notification to UD Mobile — for
+an event a customer should be alerted to outside the app UI (e.g. a plugin detecting a critical
+condition). `group=`/`sound=` are optional:
+
+- `group=` — a push-group id. Not known at generation time: a plugin offering it calls
+  `polyglot.getPushGroups()` (**eisy-ui only**) at runtime, which replies asynchronously as a
+  `polyglot.PUSHGROUPS` event carrying an array of `{id: string, name: string}` objects. The plugin
+  subscribes to that event and, from the handler, rewrites the relevant editor's `names` map via
+  `polyglot.updateJsonProfile(...)` — the exact same resend-by-`id`, live-list-into-editor
+  mechanism `customTypedDataHandler` already uses for a customer-entered list (see the
+  `customtypedparams`/`customtypeddata` paragraph below), just triggered by a host-pushed event
+  instead of customer-entered data.
+- `sound=` — today a static enum, not runtime-discovered: an ordinary `Editor` with one
+  `EditorSubsetRange`, e.g. `{"id": "udmAlertSound", "ranges": [{"uom": "25",
+  "subset": "0,1,2,3,4,5,6,7,8,9", "names": {"0": "default", "1": "Clock Radio Alarm",
+  "2": "SMS Notification", "3": "Dog Bark", "4": "Small Resonant Alarm",
+  "5": "Software Start Positive", "6": "UI Notification", "7": "Alarm Burglar",
+  "8": "Rooster Crowing", "9": "Hawk"}}]}` (see `domain_and_plugin_models.md`'s `Editor`/
+  `EditorSubsetRange` section for the schema) — authored at generation time like any other enum
+  editor, no event subscription needed.
 
 **What `plugin_authoring` actually generates today**: `customparams` (the schema half — see
 [Design decisions](plugin_authoring_design.md)) and `oauth`/`devd` placeholders are wired into
@@ -159,7 +177,9 @@ registration payload): when given, `generate_plugin_scaffold` constructs
 generated skeleton subscribes to `CUSTOMDATA` but its handler only logs — it doesn't read or write
 anything. `notices`/`nsdata` are real, SDK-level, PG3-rendered mechanisms, but nothing in this tool
 set generates or seeds them yet — hand-write them into the generated `plugin.py` when a spec
-genuinely calls for them. Don't reach for `nsdata` as a destination for anything a customer edits
+genuinely calls for them. Same tier for `udm_alert`'s `group=`/`sound=` above (the `PUSHGROUPS`
+subscription and the static sounds editor alike) — neither is scaffolded automatically either.
+Don't reach for `nsdata` as a destination for anything a customer edits
 or anything secret — that's `customparams`'/`customtypedparams`'/`oauth`'s job; `nsdata` is for a
 one-time developer-authored seed value, not an editable setting.
 

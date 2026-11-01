@@ -413,8 +413,22 @@ no single tool's schema can state on its own.
      at most 14 characters, alphanumeric/underscore, and unique -- a short prefix derived from the
      discovered device's own identity (serial number, hostname, its own MAC when it has one) plus
      a shortened nodedef id works well.
-   - **Mobile alerts.** `polyglot.udm_alert(title, body)` pushes a notification to UD Mobile, for
-     an event the customer should be alerted to outside the app UI.
+   - **Mobile alerts.** `polyglot.udm_alert(title, body, group=None, sound=None)` pushes a
+     notification to UD Mobile, for an event the customer should be alerted to outside the app UI.
+     `group=`/`sound=` are optional -- offer them as plugin params only when a spec actually calls
+     for targeting a specific push group or alert sound, never by default. `group=` is a push-group
+     id, not discoverable at generation time: a plugin offering it calls `polyglot.getPushGroups()`
+     (eisy-ui only) at runtime, subscribes to the `PUSHGROUPS` event (delivers an array of
+     `{id, name}` objects), and rewrites the relevant editor's `names` map from that handler via
+     `updateJsonProfile` -- the same live-list-into-editor mechanism described above for
+     `custom_typed_params`, just sourced from a host-pushed event instead of customer-entered data;
+     `generate_plugin_scaffold` doesn't wire any of this automatically -- hand-write it, same tier
+     as `notices`/`nsdata` above. `sound=` is, for now, a plain static enum editor, authored at
+     generation time like any other -- no event subscription needed, e.g.
+     `{"id": "udmAlertSound", "ranges": [{"uom": "25", "subset": "0,1,2,3,4,5,6,7,8,9", "names":
+     {"0": "default", "1": "Clock Radio Alarm", "2": "SMS Notification", "3": "Dog Bark",
+     "4": "Small Resonant Alarm", "5": "Software Start Positive", "6": "UI Notification",
+     "7": "Alarm Burglar", "8": "Rooster Crowing", "9": "Hawk"}}]}`.
    - If the target files already exist, the first call returns the conflict list and writes
      nothing -- get the customer's explicit agreement before retrying with `confirm_overwrite:
      true`.
