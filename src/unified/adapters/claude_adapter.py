@@ -32,6 +32,11 @@ class ClaudeAdapter(LLMAdapter):
         # so only the first call to a given such model ever pays for the
         # failing round-trip; every call after that skips `extra_body` up front.
         self._no_temperature_models: set[str] = set()
+        # Models discovered (via a live 400) not to accept the
+        # `thinking.block_binding` beta param -- see the retry logic in
+        # generate(). Same persistence/amortization reasoning as
+        # `_no_temperature_models` above.
+        self._no_thinking_block_binding_models: set[str] = set()
 
     async def generate(
         self,
@@ -162,6 +167,29 @@ class ClaudeAdapter(LLMAdapter):
             # hatch for API params it no longer exposes directly.
             kwargs["extra_body"] = {"temperature": cfg["temperature"]}
 
+        if model not in self._no_thinking_block_binding_models:
+            # claude-*-5-5 models emit extended-thinking content blocks by
+            # default (unprompted -- `unified` never sets `thinking` itself),
+            # and a thinking block's `signature` is bound to the exact
+            # `system`/message prefix that produced it. `_replay_turn`
+            # (runtime.py) resends a prior turn's raw assistant content --
+            # thinking block included -- as history; if DEVICE DATABASE/
+            # ROUTINES DATABASE (prompt_builder.py) changed in between
+            # (e.g. a tool call like a plugin install/edit), the signature
+            # no longer matches and the API rejects the *entire* request
+            # with a 400 ("Invalid signature in thinking block... system
+            # prompt differs from the one this block was created with").
+            # `prefix_mismatch_behavior: "drop_block"` (beta) makes the API
+            # silently drop just the stale block instead, so the request
+            # still succeeds. Only available via the `betas` opt-in below
+            # plus the beta client surface (see _stream_once) -- sending
+            # `block_binding` to the stable surface 400s outright.
+            kwargs["thinking"] = {
+                "type": "adaptive",
+                "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+            }
+            kwargs["betas"] = ["thinking-binding-controls-2026-08-01"]
+
         stream_handler = cfg.get("stream_handler")
         callback = stream_handler if callable(stream_handler) else None
 
@@ -170,19 +198,32 @@ class ClaudeAdapter(LLMAdapter):
         try:
             final_message = await self._stream_once(kwargs, callback)
         except BadRequestError as exc:
-            if "extra_body" not in kwargs or not self._is_temperature_deprecated_error(exc):
+            if "thinking" in kwargs and self._is_thinking_unsupported_error(exc):
+                # Some models (e.g. older/smaller tiers than the `-5-5`
+                # family generate() targets above) reject the
+                # `thinking.block_binding` beta param outright -- retry once
+                # without `thinking`/`betas` rather than hard-failing every
+                # request to such a model. No fixed model-id list to
+                # maintain: this reacts to whatever the API itself says is
+                # unsupported, model by model. Remembered on the instance so
+                # this model never pays for the failing round-trip again.
+                self._no_thinking_block_binding_models.add(model)
+                kwargs = {k: v for k, v in kwargs.items() if k not in ("thinking", "betas")}
+                final_message = await self._stream_once(kwargs, callback)
+            elif "extra_body" in kwargs and self._is_temperature_deprecated_error(exc):
+                # Some newer models reject a caller-supplied temperature outright
+                # (400 "`temperature` is deprecated for this model"), unlike older
+                # ones where it's just an optional sampling knob -- retry once
+                # without it rather than hard-failing every request to such a
+                # model. No fixed model-id list to maintain: this reacts to
+                # whatever the API itself says is unsupported, model by model.
+                # Remembered on the instance so this model never pays for the
+                # failing round-trip again.
+                self._no_temperature_models.add(model)
+                kwargs = {k: v for k, v in kwargs.items() if k != "extra_body"}
+                final_message = await self._stream_once(kwargs, callback)
+            else:
                 raise
-            # Some newer models reject a caller-supplied temperature outright
-            # (400 "`temperature` is deprecated for this model"), unlike older
-            # ones where it's just an optional sampling knob -- retry once
-            # without it rather than hard-failing every request to such a
-            # model. No fixed model-id list to maintain: this reacts to
-            # whatever the API itself says is unsupported, model by model.
-            # Remembered on the instance so this model never pays for the
-            # failing round-trip again.
-            self._no_temperature_models.add(model)
-            kwargs = {k: v for k, v in kwargs.items() if k != "extra_body"}
-            final_message = await self._stream_once(kwargs, callback)
 
         content = final_message.content
         text_parts = [block.text for block in content if getattr(block, "type", "") == "text"]
@@ -203,7 +244,13 @@ class ClaudeAdapter(LLMAdapter):
         }
 
     async def _stream_once(self, kwargs: dict[str, Any], callback: Any) -> Any:
-        async with self._client.messages.stream(**kwargs) as response_stream:
+        # The beta surface is a strict superset of the stable one for every
+        # kwarg generate() builds -- used unconditionally (not just when
+        # `thinking`/`betas` are present) so this one path always matches
+        # whatever kwargs were actually built. `block_binding` (see
+        # generate()'s thinking-block comment) only exists on this surface;
+        # sending it to the stable `messages.stream` 400s outright.
+        async with self._client.beta.messages.stream(**kwargs) as response_stream:
             if callback is not None:
                 async for text_chunk in response_stream.text_stream:
                     await callback(text_chunk)
@@ -215,6 +262,18 @@ class ClaudeAdapter(LLMAdapter):
         message = str(body.get("error", {}).get("message", "")) if isinstance(body, dict) else ""
         message = message.lower()
         return "temperature" in message and "deprecated" in message
+
+    @staticmethod
+    def _is_thinking_unsupported_error(exc: BadRequestError) -> bool:
+        # Unverified against a live 400 from an actually-incompatible model
+        # (none was available during the investigation that added this) --
+        # broad substring match on the two terms the beta param itself uses,
+        # so it catches both "thinking: ..." and "block_binding: ..." style
+        # rejections. Narrow this once a real error body is seen in the wild.
+        body = getattr(exc, "body", None)
+        message = str(body.get("error", {}).get("message", "")) if isinstance(body, dict) else ""
+        message = message.lower()
+        return "thinking" in message or "block_binding" in message
 
     @staticmethod
     def _cache_control(ttl: str | None) -> dict[str, Any]:

@@ -221,7 +221,7 @@ async def test_retries_without_temperature_on_deprecated_error():
             raise _temperature_deprecated_error()
         return _FakeStream(_fake_final_message("ok"))
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     result = await adapter.generate(
         messages=[{"role": "user", "content": "hi"}],
@@ -248,7 +248,7 @@ async def test_does_not_retry_an_unrelated_bad_request_error():
         })
         raise BadRequestError("bad request", response=response, body=response.json())
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     with pytest.raises(BadRequestError):
         await adapter.generate(
@@ -268,7 +268,7 @@ async def test_no_retry_needed_when_temperature_not_configured():
         calls.append(kwargs)
         return _FakeStream(_fake_final_message("ok"))
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
@@ -291,7 +291,7 @@ async def test_second_call_to_same_model_skips_the_failing_round_trip():
             raise _temperature_deprecated_error()
         return _FakeStream(_fake_final_message("ok"))
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     await adapter.generate(
         messages=[{"role": "user", "content": "hi"}],
@@ -319,11 +319,93 @@ async def test_temperature_key_present_but_none_is_not_forwarded():
         calls.append(kwargs)
         return _FakeStream(_fake_final_message("ok"))
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={"temperature": None})
 
     assert "extra_body" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_generate_opts_into_thinking_block_binding():
+    # Guards against a real production bug: claude-*-5-5 models emit
+    # extended-thinking blocks by default, and a stale one's signature
+    # 400s the *entire* request once the system prompt has moved on (see
+    # this module's other docstring and runtime.py's _replay_turn). The
+    # beta opt-in lets the API drop just the stale block instead.
+    adapter = _adapter()
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs)
+        return _FakeStream(_fake_final_message("ok"))
+
+    adapter._client.beta.messages.stream = fake_stream
+
+    await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert calls[0]["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+    }
+    assert calls[0]["betas"] == ["thinking-binding-controls-2026-08-01"]
+
+
+def _thinking_unsupported_error() -> BadRequestError:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request, json={
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "thinking.block_binding: Extra inputs are not permitted"},
+    })
+    return BadRequestError("bad request", response=response, body=response.json())
+
+
+@pytest.mark.asyncio
+async def test_retries_without_thinking_block_binding_on_unsupported_model():
+    adapter = _adapter()
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _thinking_unsupported_error()
+        return _FakeStream(_fake_final_message("ok"))
+
+    adapter._client.beta.messages.stream = fake_stream
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert len(calls) == 2
+    assert "thinking" in calls[0] and "betas" in calls[0]
+    assert "thinking" not in calls[1] and "betas" not in calls[1]
+    assert result["text"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_second_call_to_thinking_unsupported_model_skips_the_failing_round_trip():
+    adapter = _adapter()
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise _thinking_unsupported_error()
+        return _FakeStream(_fake_final_message("ok"))
+
+    adapter._client.beta.messages.stream = fake_stream
+
+    await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"model": "claude-old-model"},
+    )
+    assert len(calls) == 2  # first call: fails then retries
+
+    await adapter.generate(
+        messages=[{"role": "user", "content": "hi again"}],
+        config={"model": "claude-old-model"},
+    )
+    assert len(calls) == 3  # second call: goes straight through, no retry
+    assert "thinking" not in calls[2] and "betas" not in calls[2]
 
 
 def _capture_stream(calls: list):
@@ -349,7 +431,7 @@ async def test_each_system_message_becomes_its_own_cached_block(config):
     # breakpoint; 5m (the default) emits no ttl key at all.
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
 
     await adapter.generate(messages=_TWO_SECTION_MESSAGES, config=config)
 
@@ -367,7 +449,7 @@ async def test_cache_ttl_applies_to_tools_and_static_blocks_but_not_the_volatile
     # shared across rounds and must not be mutated in place.
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
     tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
 
     await adapter.generate(messages=_TWO_SECTION_MESSAGES, config={"cache_ttl": "1h"}, tools=tools)
@@ -383,7 +465,7 @@ async def test_only_the_last_three_system_blocks_carry_a_breakpoint():
     # 4 breakpoints max per request, one of which is the tools list.
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
     messages = [{"role": "system", "content": f"s{i}"} for i in range(5)] + [{"role": "user", "content": "hi"}]
 
     await adapter.generate(messages=messages, config={})
@@ -402,7 +484,7 @@ async def test_only_the_last_three_system_blocks_carry_a_breakpoint():
 async def test_cache_messages_marks_last_text_message_when_budget_allows():
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
     tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
     messages = [{"role": "system", "content": "static"}, {"role": "user", "content": "hi"}]
 
@@ -422,7 +504,7 @@ async def test_cache_messages_marks_last_block_of_list_content():
     # turn -- content is already a list of blocks, not a plain string.
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
     messages = [
         {"role": "user", "content": "hi"},
         {
@@ -455,7 +537,7 @@ async def test_cache_messages_is_noop_once_breakpoint_budget_is_exhausted():
     # left to spend on the conversation itself.
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
     tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
     messages = [{"role": "system", "content": f"s{i}"} for i in range(5)] + [{"role": "user", "content": "hi"}]
 
@@ -468,7 +550,7 @@ async def test_cache_messages_is_noop_once_breakpoint_budget_is_exhausted():
 async def test_cache_messages_not_applied_when_not_requested():
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
 
     await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
@@ -492,7 +574,7 @@ async def test_generate_surfaces_usage_including_cache_fields():
     def fake_stream(**kwargs):
         return _FakeStream(_fake_final_message("ok", usage=usage))
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
@@ -507,7 +589,7 @@ async def test_generate_usage_defaults_to_empty_dict_when_absent():
     def fake_stream(**kwargs):
         return _FakeStream(_fake_final_message("ok"))  # no usage= passed
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
@@ -523,7 +605,7 @@ async def test_generate_surfaces_stop_reason():
     def fake_stream(**kwargs):
         return _FakeStream(_fake_final_message("ok", stop_reason="max_tokens"))
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
@@ -538,7 +620,7 @@ async def test_generate_stop_reason_defaults_to_none_when_absent():
     def fake_stream(**kwargs):
         return _FakeStream(_fake_final_message("ok"))  # no stop_reason= passed
 
-    adapter._client.messages.stream = fake_stream
+    adapter._client.beta.messages.stream = fake_stream
 
     result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
@@ -549,7 +631,7 @@ async def test_generate_stop_reason_defaults_to_none_when_absent():
 async def test_generate_forwards_tool_choice_when_configured():
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
 
     await adapter.generate(
         messages=[{"role": "user", "content": "hi"}],
@@ -563,7 +645,7 @@ async def test_generate_forwards_tool_choice_when_configured():
 async def test_generate_does_not_forward_tool_choice_when_absent():
     adapter = _adapter()
     calls: list = []
-    adapter._client.messages.stream = _capture_stream(calls)
+    adapter._client.beta.messages.stream = _capture_stream(calls)
 
     await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 

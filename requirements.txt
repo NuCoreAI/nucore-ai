@@ -2,7 +2,7 @@
 # For development/test dependencies, see requirements-dev.txt.
 
 openai
-anthropic>=1.2.0
+anthropic>=1.15.0
 httpx
 udi_interface
 websockets
