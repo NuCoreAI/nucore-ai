@@ -155,6 +155,220 @@ async def test_create_routine_compiles_and_resolves_id_by_name():
     assert backend.refresh_calls == 1
 
 
+FOLDER_CODE = 'if device("25 80 3C 1").status("ST", uom=17, precision=1) > 72:\n    pass'
+
+
+@pytest.mark.asyncio
+async def test_create_folder_sets_isfolder_with_no_then_else_and_resolves_condition():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "code": FOLDER_CODE, "is_folder": True},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 99, "status": "saved"}
+    assert backend.created_trigger["isFolder"] is True
+    assert "then" not in backend.created_trigger and "else" not in backend.created_trigger
+    # Condition resolution still ran over `if` for a folder, same as a routine.
+    assert backend.created_trigger["if"][0]["type"] == "status"
+    assert backend.created_trigger["if"][0]["id"] == "ST"
+
+
+@pytest.mark.asyncio
+async def test_is_folder_is_ignored_on_update():
+    """Folder-ness is only settable on create -- an update must never be able
+    to turn an existing routine into a folder (or vice versa) via a stray
+    is_folder argument, the same "never let an unrelated edit change
+    placement/identity metadata" reasoning as the existing parent force-fetch."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE, "is_folder": True},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert "isFolder" not in backend.updated_trigger
+    assert "then" in backend.updated_trigger and "else" in backend.updated_trigger
+
+
+@pytest.mark.asyncio
+async def test_create_routine_inside_a_folder_sets_parent_from_folder_id():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "code": CODE, "folder_id": 5},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 99, "status": "saved"}
+    assert backend.created_trigger["parent"] == 5
+
+
+@pytest.mark.asyncio
+async def test_create_routine_without_folder_id_is_unchanged_root_creation():
+    backend = FakeBackend()
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "code": CODE}, nucore_interface=backend
+    )
+
+    assert result == {"name": "Evening Routine", "id": 99, "status": "saved"}
+    assert "parent" not in backend.created_trigger
+
+
+@pytest.mark.asyncio
+async def test_folder_id_combined_with_existing_id_is_rejected():
+    """Ambiguous with the (not yet implemented) move mechanism -- folder_id
+    only ever places a brand-new routine, never repositions an existing one."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE, "folder_id": 5},
+        nucore_interface=backend,
+    )
+
+    assert "error" in result
+    assert backend.created_trigger is None and backend.updated_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_update_with_move_to_folder_id_overrides_the_existing_parent():
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE  # parent: 5
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE, "move_to_folder_id": 12},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert backend.updated_trigger["parent"] == 12
+
+
+@pytest.mark.asyncio
+async def test_update_without_move_to_folder_id_key_preserves_existing_parent():
+    """The key regression test: an ordinary content edit that never
+    mentions move_to_folder_id at all must leave `parent` exactly as
+    force-fetched -- proves this doesn't reopen the accidental-detachment
+    footgun the force-fetch exists to prevent."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE  # parent: 5
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert backend.updated_trigger["parent"] == 5
+
+
+@pytest.mark.asyncio
+async def test_update_with_explicit_falsy_move_to_folder_id_is_still_honored():
+    """A falsy-but-explicit folder id (0) is a real, meaningful destination --
+    must be distinguished from "key not supplied", not treated as absent.
+    (The real root folder is id 1, "My Programs", not 0 -- this test only
+    confirms the presence-vs-truthiness code path, it isn't claiming 0 means
+    root; see tool_routine_create_or_update.json's own note on this.)"""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE  # parent: 5
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE, "move_to_folder_id": 0},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert backend.updated_trigger["parent"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_with_move_to_folder_id_one_moves_to_my_programs_root():
+    """The real root folder is id 1 ("My Programs"), confirmed against a
+    live hub -- this is the id the model is actually told to use for root,
+    not 0."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE  # parent: 5
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE, "move_to_folder_id": 1},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert backend.updated_trigger["parent"] == 1
+
+
+@pytest.mark.asyncio
+async def test_move_only_with_no_code_leaves_logic_byte_for_byte_unchanged():
+    """The actual bug report this fixes: a move was previously indistinguishable
+    from a full content rewrite, since `code` was unconditionally required --
+    forcing the caller to reconstruct (and risk altering) if/then/else just to
+    relocate a routine. move_to_folder_id alone, with code omitted entirely,
+    must resubmit the routine's own existing content verbatim with only
+    `parent` changed."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE  # parent: 5
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "move_to_folder_id": 12},
+        nucore_interface=backend,
+    )
+
+    assert result == {"name": "Evening Routine", "id": 29, "status": "saved"}
+    assert backend.created_trigger is None
+    assert backend.updated_trigger == {**EXISTING_ROUTINE, "parent": 12}
+
+
+@pytest.mark.asyncio
+async def test_move_only_marks_routines_changed_for_the_next_refresh():
+    """The actual bug report: without this, condensed_routines/ROUTINES
+    DATABASE kept showing a routine's old folder/content until the hub's own
+    _1 websocket event happened to arrive and get processed first -- a move
+    (or any other update) has no self-healing fallback the way CREATE does."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    backend.routines_changed = False
+    await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "move_to_folder_id": 12},
+        nucore_interface=backend,
+    )
+
+    assert backend.routines_changed is True
+
+
+@pytest.mark.asyncio
+async def test_move_only_fails_cleanly_when_existing_routine_cant_be_fetched():
+    backend = FakeBackend()
+    backend.routine_detail = None  # get_routine will return a 404 FakeResp
+    result = await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "move_to_folder_id": 12},
+        nucore_interface=backend,
+    )
+
+    assert "error" in result
+    assert backend.updated_trigger is None
+
+
+@pytest.mark.asyncio
+async def test_no_code_and_no_move_to_folder_id_still_requires_code():
+    """Omitting code is ONLY valid for a pure move -- an ordinary update or
+    create call without code must still be rejected, same as before."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    result = await execute_tool(
+        "create_or_update_routine", {"name": "Evening Routine", "id": 29}, nucore_interface=backend
+    )
+
+    assert "error" in result
+    assert backend.updated_trigger is None
+
+
 @pytest.mark.asyncio
 async def test_command_and_property_display_names_resolve_to_real_ids():
     """The DSL now takes get_device_detail's display name for .status(...)/
@@ -405,6 +619,24 @@ async def test_update_routine_calls_update_not_create_and_carries_the_given_id()
     assert backend.updated_trigger["id"] == 29
     assert backend.updated_trigger["name"] == "Evening Routine"
     assert backend.refresh_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ordinary_content_edit_update_marks_routines_changed_for_the_next_refresh():
+    """Same bug as the move-only case, for a plain content edit: an UPDATE
+    has no self-healing fallback the way CREATE's _wait_for_routine_id_by_name
+    does, so without this, a content edit's effect stays invisible to
+    condensed_routines/ROUTINES DATABASE until the hub's own _1 event."""
+    backend = FakeBackend()
+    backend.routine_detail = EXISTING_ROUTINE
+    backend.routines_changed = False
+    await execute_tool(
+        "create_or_update_routine",
+        {"name": "Evening Routine", "id": 29, "code": CODE},
+        nucore_interface=backend,
+    )
+
+    assert backend.routines_changed is True
 
 
 @pytest.mark.asyncio

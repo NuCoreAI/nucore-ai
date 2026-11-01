@@ -210,7 +210,7 @@ def _wrap_dispatch_for_switching(
 
 
 # Single-purpose delete tools -- every call is a delete attempt.
-_DELETE_CONFIRMATION_TOOLS = {"delete_plugin", "delete_registered_plugin"}
+_DELETE_CONFIRMATION_TOOLS = {"delete_plugin", "delete_registered_plugin", "delete_folder"}
 # Multi-operation tools -- only a "delete" operation call is a delete attempt;
 # every other operation (rename, create, etc.) passes through untouched.
 _DELETE_CONFIRMATION_OPERATION_TOOLS = {"node_op", "routine_status_op", "variable_op"}

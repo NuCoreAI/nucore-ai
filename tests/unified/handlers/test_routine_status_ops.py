@@ -40,10 +40,31 @@ async def test_enable_succeeds_without_any_confirm_step():
 
 
 @pytest.mark.asyncio
+async def test_successful_non_delete_operation_marks_routines_changed():
+    """Bug fix: this handler previously never touched routines_changed at
+    all, relying entirely on the hub's own _1 websocket event to keep
+    condensed_routines/ROUTINES DATABASE honest -- enable/disable change a
+    field ROUTINES DATABASE renders directly (and this is set unconditionally
+    for any successful operation, matching variable_op's own convention)."""
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    backend.routines_changed = False
+    await routine_status_op(backend, {"id": 42, "operation": "enable"})
+    assert backend.routines_changed is True
+
+
+@pytest.mark.asyncio
 async def test_backend_failure_surfaces_as_error():
     backend = _FakeBackend("routine not found")
     result = await routine_status_op(backend, {"id": 42, "operation": "stop"})
     assert result == {"error": "'stop' failed for routine 42: routine not found"}
+
+
+@pytest.mark.asyncio
+async def test_backend_failure_does_not_mark_routines_changed():
+    backend = _FakeBackend("routine not found")
+    backend.routines_changed = False
+    await routine_status_op(backend, {"id": 42, "operation": "stop"})
+    assert backend.routines_changed is False
 
 
 @pytest.mark.asyncio
@@ -71,6 +92,26 @@ async def test_delete_confirmed_true_performs_the_delete():
     result = await routine_status_op(backend, {"id": 42, "operation": "delete", "confirmed": True})
     assert result == {"id": 42, "operation": "delete", "status": "ok"}
     assert backend.calls == [(42, "delete")]
+
+
+@pytest.mark.asyncio
+async def test_delete_confirmed_true_marks_routines_changed():
+    """The most likely real-world cause of the stale-ROUTINES-DATABASE bug
+    report: a deleted routine's row lingered in condensed_routines until the
+    hub's own _1 event happened to arrive, making its freed id look like it
+    was reused by something else rather than the routine simply being gone."""
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    backend.routines_changed = False
+    await routine_status_op(backend, {"id": 42, "operation": "delete", "confirmed": True})
+    assert backend.routines_changed is True
+
+
+@pytest.mark.asyncio
+async def test_delete_preview_does_not_mark_routines_changed():
+    backend = _FakeBackend(SimpleNamespace(status_code=200))
+    backend.routines_changed = False
+    await routine_status_op(backend, {"id": 42, "operation": "delete"})
+    assert backend.routines_changed is False
 
 
 @pytest.mark.asyncio

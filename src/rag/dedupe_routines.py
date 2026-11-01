@@ -24,7 +24,7 @@ class DedupeRoutines:
         "#   can't run as authored\" explanations, shared across many routines.\n"
         "#\n"
         "# ROUTINES: list of (id, name, comment, device_names, variable_names, invalid,\n"
-        "#   invalid_reason, folder, enabled, run_at_startup) tuples, one per\n"
+        "#   invalid_reason, folder, enabled, run_at_startup, parent) tuples, one per\n"
         "#   routine/folder.\n"
         "#     id: routine/folder id (int).\n"
         "#     name: routine/folder name.\n"
@@ -42,6 +42,8 @@ class DedupeRoutines:
         "#     enabled: False means this entry is never evaluated.\n"
         "#     run_at_startup: True if its `then` actions run once right after\n"
         "#       hub reboot.\n"
+        "#     parent: this entry's containing folder's id, or 0 for the top\n"
+        "#       level/root. None when unknown.\n"
         "#   Any field above is None when the hub's runtime summary didn't report it.\n"
         "#   Live runtime state -- whether it's running right now, its if-condition's\n"
         "#   current evaluation, and when it last/next ran -- is NOT here; it's a live\n"
@@ -83,7 +85,7 @@ class DedupeRoutines:
                 f"{comment!r}, {device_names!r}, {variable_names!r}, "
                 f"{routine.get('invalid', False)!r}, {reason_ref!r}, "
                 + ", ".join(repr(value) for value in runtime)
-                + "),"
+                + f", {routine.get('parent')!r}),"
             )
         lines.append("]")
 

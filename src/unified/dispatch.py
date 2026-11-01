@@ -10,6 +10,7 @@ from utils import get_logger
 from .handlers import (
     command_control_status,
     diagnostics,
+    folder_ops,
     group_scene_ops,
     history,
     node_ops,
@@ -40,6 +41,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_device_detail": routine_automation.get_device_detail,
     "get_device_history": history.get_device_history,
     "get_routine_details": routine_automation.get_routine_details,
+    "delete_folder": folder_ops.delete_folder,
     "variable_op": variable_ops.variable_op,
     "list_variables": variable_ops.list_variables,
     "list_store_plugins": plugin_management.list_store_plugins,

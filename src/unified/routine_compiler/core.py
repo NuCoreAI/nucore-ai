@@ -472,6 +472,49 @@ def compile_actions(stmts: list[ast.stmt]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+#: The hub-facing dict key this compiler writes for a folder row. Confirmed
+#: against a live hub (2026-11-01, see design/iox_apis/routines_folders_mgmt.md):
+#: PUT /api/trigger with `isFolder: true` round-trips correctly through both
+#: GET /api/triggers (isFolder/parent intact) and GET /api/programs
+#: (folder: true). The *read*-side runtime summary endpoint (/api/programs)
+#: reports folder-ness via a different, already-correct, already-tested
+#: field, `folder` (boolean) -- deliberately untouched here. Still isolated
+#: to this one constant on principle, not because it's expected to change.
+_FOLDER_FLAG_KEY = "isFolder"
+
+
+def _compile_folder_body(body: list[ast.stmt]) -> list[dict[str, Any]]:
+    """Compile a folder's *body* (already confirmed non-empty) into its `if`
+    condition list. A folder's code is exactly one top-level statement:
+    either `if <condition>: pass` (a gated folder) or a bare `pass` (an
+    always-active organizational folder with no gating condition) -- never
+    actions, never `else`. See compile_trigger_source's is_folder branch.
+    """
+    if len(body) == 1 and isinstance(body[0], ast.Pass):
+        return []
+
+    if len(body) == 1 and isinstance(body[0], ast.If):
+        if_node = body[0]
+        if len(if_node.orelse) == 1 and isinstance(if_node.orelse[0], ast.If):
+            raise TriggerCompileError("`elif` is not supported. Use a single `if`/`else` only.")
+        if if_node.orelse:
+            raise TriggerCompileError(
+                "Folders do not support `else` -- a folder's `if` only gates whether the routines "
+                "inside it get evaluated; it cannot run a separate action branch. Remove the `else:` block."
+            )
+        if not (len(if_node.body) == 1 and isinstance(if_node.body[0], ast.Pass)):
+            raise TriggerCompileError(
+                "Folders do not support actions -- a folder's `if` body must be exactly `pass`; "
+                "folders can only gate evaluation of the routines inside them, never run actions themselves."
+            )
+        return _compile_bool_expr(if_node.test)
+
+    raise TriggerCompileError(
+        "A folder's code must be exactly one statement: either `if <condition>: pass` (a gated folder) "
+        "or just `pass` (an always-active folder with no gating condition) -- folders never contain actions."
+    )
+
+
 def compile_trigger_source(
     *,
     name: str,
@@ -479,6 +522,7 @@ def compile_trigger_source(
     comment: str | None,
     source: str,
     parent: int | None = None,
+    is_folder: bool = False,
 ) -> dict[str, Any]:
     """Compile one routine's DSL *source* into a ``NewTrigger``/``UpdatedTrigger``-
     shaped dict.
@@ -489,6 +533,11 @@ def compile_trigger_source(
     misbehaves. The caller (``create_or_update_routine``) is responsible for
     fetching the routine's current ``parent`` before calling this for an
     update -- never omitted or guessed here.
+
+    *is_folder* compiles *source* as a folder instead of a routine (see
+    :func:`_compile_folder_body`) -- only meaningful on create; a caller
+    updating an existing routine/folder should never pass this (folder-ness
+    is not changeable through this function).
 
     Raises:
         TriggerCompileError: On any syntax/shape the DSL does not recognize.
@@ -506,7 +555,11 @@ def compile_trigger_source(
     if not body:
         raise TriggerCompileError("Routine 'code' has no statements.")
 
-    if len(body) == 1 and isinstance(body[0], ast.If):
+    if is_folder:
+        condition = _compile_folder_body(body)
+        then_actions = None
+        else_actions = None
+    elif len(body) == 1 and isinstance(body[0], ast.If):
         if_node = body[0]
         if len(if_node.orelse) == 1 and isinstance(if_node.orelse[0], ast.If):
             raise TriggerCompileError("`elif` is not supported. Use a single `if`/`else` only.")
@@ -531,6 +584,9 @@ def compile_trigger_source(
     if comment:
         out["comment"] = comment
     out["if"] = condition
-    out["then"] = then_actions
-    out["else"] = else_actions
+    if is_folder:
+        out[_FOLDER_FLAG_KEY] = True
+    else:
+        out["then"] = then_actions
+        out["else"] = else_actions
     return out

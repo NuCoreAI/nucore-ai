@@ -1,0 +1,28 @@
+{
+  "name": "delete_folder",
+  "description": "Permanently delete a routine folder (a ROUTINES DATABASE row with folder: true, created via create_or_update_routine's is_folder). If the folder contains any routines/folders, you must first get the customer's decision about them: delete everything inside along with the folder, or move everything inside into a different folder first. This is a two-step flow BEFORE the usual delete confirmation: (1) call with just folder_id -- if it has contents, the response lists them and asks you to get the customer's choice, with no side effects yet; (2) call again with contents_action set to 'delete' or 'move' (plus move_to_folder_id for 'move') -- this previews what will happen, still no side effects; (3) call again with the same contents_action (and move_to_folder_id if 'move') plus confirmed: true, only after the customer has explicitly agreed to THIS specific plan, never speculatively. An empty folder skips straight to the ordinary single-item confirm (preview, then confirmed: true). The system independently verifies the customer's literal next reply was exactly the word YES (all caps) before honoring confirmed: true, regardless of what this call's own confirmed argument says. A nested folder that itself still has contents is refused rather than cascaded into -- resolve it directly first, then retry. One folder per call.",
+  "input_schema": {
+    "type": "object",
+    "required": ["folder_id"],
+    "properties": {
+      "folder_id": {
+        "type": "integer",
+        "description": "The folder's real id, exactly as shown in ROUTINES DATABASE (a row with folder: true) -- never guessed."
+      },
+      "contents_action": {
+        "type": ["string", "null"],
+        "enum": ["delete", "move"],
+        "description": "Required once you're told the folder has 1+ items inside it (omit on the very first call for a folder whose contents you haven't asked about yet). 'delete' removes every item inside along with the folder. 'move' relocates every item inside into move_to_folder_id first, then deletes the now-empty folder."
+      },
+      "move_to_folder_id": {
+        "type": ["integer", "null"],
+        "description": "Required when contents_action is 'move' -- the real id of a DIFFERENT folder (never the same as folder_id) to relocate every item in folder_id into before folder_id itself is deleted. The root folder is \"My Programs\", real id 1 -- use 1 to move them to the top level/root, never 0 (0 is not the root folder's real id)."
+      },
+      "confirmed": {
+        "type": "boolean",
+        "description": "Leave unset (or false) until the customer has explicitly agreed to the specific plan this call describes (including which contents_action, if any) -- every earlier call only previews, with no side effects. Set to true only on that follow-up call. The system independently verifies the customer's literal next reply was exactly the word YES (all caps) before honoring this, regardless of what this call's own confirmed argument says.",
+        "default": false
+      }
+    }
+  }
+}

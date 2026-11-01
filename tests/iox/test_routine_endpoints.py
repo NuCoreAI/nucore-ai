@@ -363,9 +363,11 @@ async def test_load_routines_parses_new_unwrapped_shape():
     assert good["name"] == "Bedtime" and good["comment"] == "test"
     assert "invalid" not in good
     assert set(good["device_names"]) == {"Left Hallway", "Right Hallway"}
+    assert good["parent"] == 0
 
     bad = next(r for r in wrapper.condensed_routines if r["id"] == 43)
     assert bad["invalid"] is True and bad["invalid_reason"] == "bad xml"
+    assert bad["parent"] == 0
 
 
 @pytest.mark.asyncio
@@ -402,6 +404,7 @@ async def test_load_routines_merges_runtime_summary_by_id():
     assert routine["lastRunTime"] == "2026-07-19T05:00:00"
     assert routine["lastFinishTime"] == "2026-07-19T05:00:01"
     assert routine["nextScheduledRunTime"] == "2026-07-20T05:00:00"
+    assert routine["parent"] == 0
 
 
 @pytest.mark.asyncio
@@ -429,6 +432,9 @@ async def test_load_routines_includes_folder_only_summary_entries():
     assert folder["comment"] == "" and folder["device_names"] == []
     assert folder["folder"] is True
     assert folder["status"] is False
+    # /api/programs' summary fixtures never carry `parent` -- None here means
+    # "unknown", not "root" (see _load_routines' folder-only branch comment).
+    assert folder["parent"] is None
 
 
 @pytest.mark.asyncio

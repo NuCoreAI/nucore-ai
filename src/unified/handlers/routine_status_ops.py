@@ -55,4 +55,17 @@ async def routine_status_op(nucore_interface: NuCoreInterface, args: dict[str, A
     result = await nucore_interface.routine_ops(routine_id, operation)
     if not _op_ok(result):
         return {"error": f"'{operation}' failed for routine {routine_id}: {_op_error(result)}"}
+
+    # Same convention as variable_op's post-mutation flag-set -- this
+    # handler previously relied entirely on the hub's own `_1` websocket
+    # event to keep condensed_routines/ROUTINES DATABASE honest, with no
+    # self-healing fallback the way create_or_update_routine's CREATE path
+    # has. `delete` removes the row outright; enable/disable/
+    # enableRunAtStartup/disableRunAtStartup change fields ROUTINES DATABASE
+    # renders directly; run*/stop only change running/status, which aren't
+    # rendered there (always live-fetched via get_routine_details instead)
+    # -- set unconditionally anyway, matching variable_op's blanket "any
+    # successful mutation" rule rather than special-casing which operations
+    # "count" today.
+    nucore_interface.routines_changed = True
     return {"id": routine_id, "operation": operation, "status": "ok"}

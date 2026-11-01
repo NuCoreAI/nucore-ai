@@ -3112,6 +3112,7 @@ class IoXWrapper(NuCoreInterface):
                     "comment": routine.get("comment"),
                     "device_names": self._get_device_name_list_from_routine(routine),
                     "variable_names": self._get_variable_name_list_from_routine(routine),
+                    "parent": routine.get("parent"),
                 }
 
                 if routine.get("invalid"):
@@ -3130,6 +3131,10 @@ class IoXWrapper(NuCoreInterface):
                     "comment": "",
                     "device_names": [],
                     "variable_names": [],
+                    # Folder-only rows come solely from /api/programs, which
+                    # (unlike /api/triggers) has not been confirmed to carry
+                    # `parent` at all -- None here means "unknown", not "root".
+                    "parent": summary.get("parent"),
                 }
                 self._merge_routine_runtime_summary(condensed_routine, summary)
                 self.condensed_routines.append(condensed_routine)

@@ -535,10 +535,38 @@ async def create_or_update_routine(nucore_interface: NuCoreInterface, args: dict
     routine_id = args.get("id")
     comment = args.get("comment")
     code = args.get("code")
-    if not name or not code:
+
+    folder_id = args.get("folder_id")
+    if folder_id is not None and routine_id:
+        # Ambiguous with move_to_folder_id (below) -- folder_id only ever
+        # places a brand-new routine, never repositions an existing one.
+        return {"error": "folder_id only applies when creating a new routine (id omitted)."}
+
+    # Presence, not truthiness: the root folder's real id is 1 ("My
+    # Programs"), not 0 -- but this code attaches no special meaning to any
+    # particular number, so a falsy-but-explicit id must still be
+    # distinguished from "key not supplied" regardless of which id means
+    # root (see tool_routine_create_or_update.json's own note on this).
+    has_move_arg = "move_to_folder_id" in args and args["move_to_folder_id"] is not None
+    # A pure move -- relocate an existing routine with no `code` given at
+    # all. This must NOT require resubmitting (and risking altering) the
+    # routine's current if/then/else logic just to change where it lives --
+    # that's the exact bug this branch fixes: without it, moving a routine
+    # was indistinguishable from a full content rewrite, which correctly
+    # made the model refuse to move anything it couldn't perfectly
+    # reconstruct the DSL for.
+    move_only = bool(routine_id) and has_move_arg and not code
+
+    if not move_only and (not name or not code):
         return {"error": "name and code are both required"}
 
-    parent = None
+    # Folder-ness is only settable on create -- an update always derives it
+    # from the existing routine (same reasoning as `parent` below: never let
+    # a stray argument on an unrelated content edit change what this row is).
+    is_folder = bool(args.get("is_folder")) and not routine_id
+
+    parent = folder_id
+    existing = None
     if routine_id:
         # Confirmed: an update must carry the routine's existing `parent`,
         # or the update fails/misbehaves. `parent` is placement metadata,
@@ -555,9 +583,32 @@ async def create_or_update_routine(nucore_interface: NuCoreInterface, args: dict
             return {"error": f"failed to fetch existing routine '{routine_id}' before update: {_op_error(existing)}"}
         parent = existing.get("parent")
 
+        # An intentional, separately-named override -- never a side effect of
+        # an ordinary content edit.
+        if has_move_arg:
+            parent = args["move_to_folder_id"]
+
+    if move_only:
+        # Resubmit the routine's own already-fetched dict with only `parent`
+        # replaced -- a server-side field mutation, not a DSL recompile, so
+        # the routine's logic is guaranteed byte-for-byte unchanged.
+        moved = {**existing, "parent": parent}
+        try:
+            result = await nucore_interface.update_routine(moved)
+        except Exception as exc:
+            return {"error": f"failed to save routine: {exc}"}
+        if not _op_ok(result):
+            return {"error": f"failed to move routine '{existing.get('name', routine_id)}': {_op_error(result)}"}
+        # Same convention as variable_op's post-mutation flag-set -- without
+        # this, condensed_routines/ROUTINES DATABASE keeps showing the old
+        # `parent` until the hub's own `_1` websocket event happens to arrive
+        # and get processed first.
+        nucore_interface.routines_changed = True
+        return {"name": existing.get("name"), "id": routine_id, "status": "saved"}
+
     try:
         compiled = compile_trigger_source(
-            name=name, trigger_id=routine_id, comment=comment, source=code, parent=parent
+            name=name, trigger_id=routine_id, comment=comment, source=code, parent=parent, is_folder=is_folder
         )
     except TriggerCompileError as exc:
         return {"error": str(exc)}
@@ -586,6 +637,14 @@ async def create_or_update_routine(nucore_interface: NuCoreInterface, args: dict
 
     if not _op_ok(result):
         return {"error": f"failed to save routine '{name}': {_op_error(result)}"}
+
+    # Same convention as variable_op's post-mutation flag-set -- CREATE
+    # already gets this for free via _wait_for_routine_id_by_name below, but
+    # an UPDATE (content edit) has no analogous self-healing step and would
+    # otherwise leave condensed_routines/ROUTINES DATABASE showing the old
+    # content until the hub's own `_1` websocket event happens to arrive and
+    # get processed first.
+    nucore_interface.routines_changed = True
 
     if not routine_id:
         routine_id = await _wait_for_routine_id_by_name(nucore_interface, name)

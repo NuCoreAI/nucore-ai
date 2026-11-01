@@ -183,7 +183,7 @@ async def test_delete_confirmation_gate_ignores_tool_names_outside_the_gated_set
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("gated_tool", ["delete_plugin", "delete_registered_plugin"])
+@pytest.mark.parametrize("gated_tool", ["delete_plugin", "delete_registered_plugin", "delete_folder"])
 async def test_delete_confirmation_gate_covers_single_purpose_delete_tools(gated_tool):
     args = await _dispatch_through_delete_confirmation_gate(
         "not yes", gated_tool, {"location": "acme_pool", "confirmed": True}
