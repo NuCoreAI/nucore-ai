@@ -188,6 +188,33 @@ class LLMAdapter(ABC):
             f"{self.provider_name} adapter does not support the agentic tool round trip yet"
         )
 
+    def build_text_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        text: str,
+    ) -> list[dict[str, Any]]:
+        """Return the message(s) to append to history for a round that
+        produced no *dispatchable* tool call -- the no-tool-calls
+        counterpart to :meth:`build_tool_round_trip_messages`.
+
+        Default: a single plain ``{"role": "assistant", "content": text}``
+        message, i.e. today's behavior -- correct for any adapter with no
+        server-executed tool that can run in such a round.
+
+        Override when *raw_response* can carry richer provenance than the
+        flattened *text* alone (e.g. a native web-search call, which never
+        becomes a dispatchable :class:`ToolCall` and so never reaches
+        :meth:`build_tool_round_trip_messages` either). Without the
+        override, that provenance is silently lost from conversation
+        history the moment the round it happened in produces no other tool
+        call: a *later* round then has no way to tell whether a past round
+        actually searched versus answered from memory, and has to guess
+        from that round's wording alone -- which is exactly the failure
+        this method exists to prevent.
+        """
+        return [{"role": "assistant", "content": text}]
+
     # ------------------------------------------------------------------
     # Tool spec helpers
     # ------------------------------------------------------------------

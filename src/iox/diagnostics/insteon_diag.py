@@ -83,7 +83,7 @@ from urllib.parse import quote
 
 from nucore import DeviceEventListener, Group, Folder
 
-from ..iox_definitions import IoXSOAPAction
+from ..iox_definitions import DEVICE_FAMILY_INSTEON, IoXSOAPAction
 from ..iox_wrapper import IoXWrapper
 
 if TYPE_CHECKING:
@@ -202,8 +202,46 @@ _KNOWN_ROLES = frozenset(_FLAG_ROLES.values())
 # a real mismatch.
 _ROLES_EXCLUDED_FROM_COMPARISON = frozenset({"deleted", "end_of_table", "high_water_mark"})
 
-# See _quick_plm_sanity_check.
-_PLM_SANITY_CHECK_TOLERANCE_PCT = 20
+
+def _is_insteon_family_value(family: Any) -> bool:
+    """True when *family* (a Node's or GroupMember's own ``.family`` int,
+    or anything coercible to one) is Insteon. Takes the family value
+    directly rather than an address (contrast
+    ``IoXWrapper._is_insteon_family(device_id)``, which looks an address up
+    in ``self.nodes`` internally -- always False for a group/scene address,
+    and a redundant second lookup when the caller already has the Node/
+    GroupMember object in hand, as ``_quick_plm_sanity_check`` does)."""
+    return str(family).strip() == DEVICE_FAMILY_INSTEON
+
+
+def _is_primary_insteon_node(node: Any) -> bool:
+    """True when *node* is a device's primary Insteon node: either
+    ``NodeBase.node_is_device_primary()`` (the hub's flag-bit signal) says
+    so, or it has no distinct ``pnode`` (``Node.pnode`` is "Primary node
+    address (if this is a non-primary node)" -- None/self-referential means
+    this node has no separate primary, i.e. it IS the primary).
+
+    Deliberately NOT based on ``node.parent``/``node.parent_type``/
+    ``node_parent_is_node()`` -- those reflect where the hub placed the
+    node in the UI tree (e.g. a folder), which is independent of Insteon's
+    own primary/sub-address addressing. Confirmed wrong by reproducing a
+    real miscount against a logged DEVICE DATABASE: 22 genuine Insteon
+    sub-nodes (RemoteLinc2/EZRAIN_Output-style sub-buttons/relays, address
+    suffix != 1) were organized into a UI folder rather than nested under
+    their own primary node, so ``node_parent_is_node()`` wrongly called
+    them primary. See _quick_plm_sanity_check."""
+    if node.node_is_device_primary():
+        return True
+    pnode = getattr(node, "pnode", None)
+    return pnode is None or pnode == getattr(node, "address", None)
+
+
+# See _quick_plm_sanity_check. A primary Insteon node's own link to the PLM
+# is a controller/responder pair -- 2 link records; a non-primary (sub-
+# button/sub-instance) node, and each Insteon node's membership in a
+# group/scene, contribute 1 record each. 10% tolerance because this is a
+# real structural count, not a loose proxy.
+_PLM_SANITY_CHECK_TOLERANCE_PCT = 10
 
 # See _get_all_plm_links's cache check -- a full PLM link scan is a slow,
 # real hardware operation, so a recent result is reused by default rather
@@ -704,9 +742,36 @@ class INSTEONDiagnostics:
     async def _quick_plm_sanity_check(self, **kwargs) -> dict[str, Any]:
         """Fast, system-wide first pass for "none of my devices report status
         back to the PLM" -- compares the PLM's actual link record count
-        against a rough expected count derived from NuCore's own node/group
-        database (nodes + groups + group memberships), instead of checking
-        every device's own links one at a time.
+        against an expected count derived from NuCore's own node/group
+        database, instead of checking every device's own links one at a
+        time.
+
+        The PLM only ever stores links for Insteon devices/scenes, so nodes
+        are filtered to Insteon family first (``_is_insteon_family_value``)
+        -- an unfiltered count would be inflated on any mixed-protocol
+        system (Insteon plus Z-Wave/Zigbee/Matter/Plugin/virtual node-server
+        devices) by devices the PLM has no reason to know about at all. The
+        expected count has four parts:
+
+        - 2 records per primary Insteon node (``_is_primary_insteon_node``)
+          -- a controller/responder pair for its own direct link to the PLM.
+        - 1 record per non-primary Insteon node (a multi-button/multi-
+          instance device's sub-node, whose ``pnode`` names another node as
+          its primary) -- it shares its parent's direct PLM link, so it
+          only contributes one record of its own. This is deliberately
+          ``pnode``-based, not ``node.parent``/``parent_type``/
+          ``node_parent_is_node()`` -- the latter reflect UI folder
+          placement, not Insteon sub-addressing, and using them double-
+          counted sub-nodes that happen to live in a UI folder rather than
+          nested under their own primary node (confirmed against a real
+          logged DEVICE DATABASE).
+        - 1 record per group/scene, counted flatly regardless of the
+          group's own family or what it contains (unlike nodes, this one
+          is deliberately *not* family-filtered).
+        - 1 record per Insteon-family ``GroupMember`` across every group
+          (``insteon_group_membership_count``) -- a member's family can
+          differ from its containing group's own family, so this is
+          checked per-member.
 
         Not a replacement for get_all_plm_links/compare_device_links once you
         suspect a specific device -- this just tells "PLM's link database
@@ -721,9 +786,9 @@ class INSTEONDiagnostics:
 
         :return: ``{"passed": bool | None, "plm_connected": bool, "report": str}``
             -- ``passed`` is ``None`` when the check couldn't run at all (PLM
-            link fetch failed, or 0 nodes/groups to compare against); the
-            plain-language ``report`` is unchanged from what this used to
-            return bare, callers that just want to relay it still can.
+            link fetch failed, or expected count is 0); the plain-language
+            ``report`` is unchanged from what this used to return bare,
+            callers that just want to relay it still can.
         """
         plm_result = await self._get_all_plm_links()
         # _get_all_plm_links already ran _get_plm_info as part of fetching --
@@ -739,13 +804,20 @@ class INSTEONDiagnostics:
 
         nodes = self._iox_wrapper.nodes
         groups = self._iox_wrapper.groups
-        num_members = sum(len(g.members) for g in groups.values())
-        expected = len(nodes) + len(groups) + num_members
+        insteon_nodes = [n for n in nodes.values() if _is_insteon_family_value(getattr(n, "family", None))]
+        primary_count = sum(1 for n in insteon_nodes if _is_primary_insteon_node(n))
+        non_primary_count = len(insteon_nodes) - primary_count
+        node_link_count = 2 * primary_count + non_primary_count
+        insteon_group_membership_count = sum(
+            sum(1 for m in g.members.values() if _is_insteon_family_value(getattr(m, "family", None)))
+            for g in groups.values()
+        )
+        expected = node_link_count + len(groups) + insteon_group_membership_count
 
         if expected == 0:
             lines.append(
-                f"Cannot run the record-count check -- NuCore reports 0 nodes/groups, nothing to "
-                f"compare the PLM's {actual} link record(s) against."
+                f"Cannot run the record-count check -- NuCore reports 0 Insteon nodes/groups/group "
+                f"memberships, nothing to compare the PLM's {actual} link record(s) against."
             )
             return {"passed": None, "plm_connected": plm_connected, "report": "\n".join(lines)}
 
@@ -754,8 +826,9 @@ class INSTEONDiagnostics:
 
         lines += [
             f"PLM link records (excluding deleted/end_of_table): {actual}",
-            f"Expected from NuCore's database (nodes={len(nodes)} + groups={len(groups)} "
-            f"+ group memberships={num_members}): {expected}",
+            f"Expected = 2 x primary Insteon nodes ({primary_count}) + 1 x non-primary Insteon "
+            f"nodes ({non_primary_count}) + 1 x groups ({len(groups)}) + 1 x Insteon node group "
+            f"memberships ({insteon_group_membership_count}): {expected}",
             f"Difference: {diff_pct:.1f}% "
             f"({'within' if within_tolerance else 'OUTSIDE'} the {_PLM_SANITY_CHECK_TOLERANCE_PCT:.0f}% tolerance)",
         ]

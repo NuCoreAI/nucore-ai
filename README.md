@@ -98,12 +98,13 @@ generated scaffolds, CLI-only -- never read from the config file) whenever it's 
 it while enabled raises an error at startup. A live backend via `--backend-api-classpath` is
 still required, same as for `unified`.
 
-The customer-facing flow's web search uses a native `web_search` tool with no second API key
-when the resolved LLM provider is Claude or `openai-responses` -- each provider's own native
-tool, invoked by the model itself. Set runtime config's top-level `search_engine` (`"brave"` or
-`"tavily"`, with `SEARCH_ENGINE_API_KEY` set) to force the Brave/Tavily fallback instead, on any
-provider; it's also what any *other* provider (plain `openai`, Gemini, Grok, llama.cpp) needs,
-since none of them offer a native web-search option here.
+The customer-facing (`unified`) flow's web search uses a native `web_search` tool with no second
+API key when the resolved LLM provider is Claude or `openai-responses` -- each provider's own
+native tool, invoked by the model itself, unconditional on the top-level `search_engine` setting
+below. For any *other* provider (plain `openai`, Gemini, Grok, llama.cpp), the customer-facing
+flow has no web search capability at all -- `search_engine`/`SEARCH_ENGINE_API_KEY` only
+configure developer mode's (`plugin_authoring`'s) own, separate Brave/Tavily fallback tool, which
+`unified` has no equivalent of.
 
 ```shell
 python -m unified.run_unified_runtime \

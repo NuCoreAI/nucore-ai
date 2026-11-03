@@ -232,6 +232,11 @@ class AgenticLoop:
                 text = raw_response.get("text") or raw_response.get("content") or ""
                 if not isinstance(text, str):
                     text = str(text)
+                # Set when `text` below stops being this round's own
+                # original model output (the fabrication guard substituted
+                # a hardcoded fallback) -- see the round-trip-message choice
+                # after the guard block.
+                fallback_substituted = False
 
                 if not any_tool_dispatched and self.fabrication_guard_mode != "off":
                     claim = detect_completion_claim(text)
@@ -285,11 +290,30 @@ class AgenticLoop:
                                 conversation_id=conversation_id,
                             )
                             text = _FABRICATION_FALLBACK_TEXT
+                            fallback_substituted = True
 
                 text = pending_notice + text
-                assistant_message = {"role": "assistant", "content": text}
-                messages.append(assistant_message)
-                new_messages.append(assistant_message)
+                # Preserve this round's full provenance (e.g. a native
+                # web-search call's content blocks/output items) in history
+                # instead of flattening to plain text -- otherwise a later
+                # round has no way to tell whether this round actually
+                # searched versus answered from memory, and has to guess
+                # from this text alone (see adapters' own
+                # build_text_round_trip_messages docstring). Skipped
+                # whenever `text` isn't this round's own untouched model
+                # output -- a retry notice was prepended, or the
+                # fabrication guard substituted a hardcoded fallback --
+                # since the original content wouldn't match what's being
+                # stored anyway; also skipped for an `llm_client` that
+                # doesn't define the hook (e.g. a test double), which keeps
+                # today's exact behavior.
+                build_text_round_trip = getattr(self.llm_client, "build_text_round_trip_messages", None)
+                if pending_notice or fallback_substituted or build_text_round_trip is None:
+                    round_trip_messages = [{"role": "assistant", "content": text}]
+                else:
+                    round_trip_messages = build_text_round_trip(raw_response=raw_response, text=text)
+                messages.extend(round_trip_messages)
+                new_messages.extend(round_trip_messages)
                 # Log the actual final answer within its own turn -- write()
                 # is otherwise only ever called before a generate() call, so
                 # without this, a turn's final reply was never captured live;

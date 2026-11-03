@@ -167,6 +167,61 @@ def test_build_tool_round_trip_messages_preserves_web_search_blocks_verbatim():
     assert assistant_message["content"][2]["content"][0]["encrypted_content"] == "abc123"
 
 
+# --- build_text_round_trip_messages: the no-dispatchable-tool-call
+# counterpart to build_tool_round_trip_messages above. A round whose only
+# action is the native web_search server tool never produces a `tool_use`
+# block, so AgenticLoop's no-tool-calls branch is the one that handles it --
+# this is what stops that branch from flattening away the record that a
+# search (or extended thinking) happened, which is what let the model later
+# guess wrong about whether it had searched in a past turn.
+# ---------------------------------------------------------------------------
+
+
+def test_build_text_round_trip_messages_preserves_search_blocks_when_present():
+    raw_response = {
+        "content": [
+            {"type": "thinking", "thinking": "let me check", "signature": "sig123"},
+            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "x"}},
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com",
+                        "title": "Example",
+                        "encrypted_content": "abc123",
+                        "page_age": None,
+                    }
+                ],
+            },
+            {"type": "text", "text": "Yes, I searched -- here's what it found."},
+        ]
+    }
+    messages = _adapter().build_text_round_trip_messages(raw_response=raw_response, text="Yes, I searched.")
+
+    assert len(messages) == 1
+    content = messages[0]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "thinking", "thinking": "let me check", "signature": "sig123"}
+    assert content[1] == {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01",
+        "name": "web_search",
+        "input": {"query": "x"},
+    }
+    assert content[2]["content"][0]["encrypted_content"] == "abc123"
+
+
+def test_build_text_round_trip_messages_falls_back_to_plain_text_when_no_search_happened():
+    # The common case -- an ordinary text-only reply -- must store exactly
+    # what it stores today, not a wrapped single-text-block list.
+    raw_response = {"content": [{"type": "text", "text": "Sure, done."}]}
+    messages = _adapter().build_text_round_trip_messages(raw_response=raw_response, text="Sure, done.")
+
+    assert messages == [{"role": "assistant", "content": "Sure, done."}]
+
+
 def _fake_final_message(text: str = "hi", usage: dict | None = None, stop_reason: str | None = None):
     block = SimpleNamespace(type="text", text=text, model_dump=lambda: {"type": "text", "text": text})
     dump = {"content": [{"type": "text", "text": text}]}

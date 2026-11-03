@@ -31,6 +31,12 @@ logger = get_logger(__name__)
 
 _TOOLS_DIR = Path(__file__).parent / "tools"
 
+# Mirrors plugin_authoring's MAX_WEB_SEARCH_QUERIES (handlers/discovery.py) --
+# not imported from there since runtime.py has no other dependency on the
+# plugin_authoring subpackage; this is `unified`'s own hardcoded default
+# bundle's cap, independent of plugin_authoring's.
+_CLAUDE_NATIVE_WEB_SEARCH_MAX_USES = 10
+
 SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
 
@@ -133,6 +139,36 @@ async def _record_openai_responses_web_search_evidence(raw_response: Any) -> Non
         action = item.get("action") or {}
         sources = action.get("sources") or []
         urls = [s.get("url") for s in sources if isinstance(s, dict) and s.get("url")]
+        if urls:
+            logger.info("unified: native web_search sources: %s", urls)
+
+
+async def _record_claude_native_search_evidence(raw_response: Any) -> None:
+    """``AgenticLoop``'s ``on_raw_response`` hook for the ``unified`` tool
+    set's Claude-native web search path (see ``UnifiedRuntime.__init__``'s
+    ``unified_extra_tools``) -- the ``unified`` counterpart to
+    ``_record_openai_responses_web_search_evidence`` above, parsing Claude's
+    ``web_search_tool_result`` content blocks instead of a Responses-API
+    ``web_search_call`` output item. A ``web_search_tool_result`` block
+    never becomes a ``ToolCall`` (``ClaudeAdapter.parse_tool_calls``'s
+    ``tool_use``-only filter), so it never reaches ``dispatch`` -- this is
+    the only place that ever sees it. Unlike plugin_authoring's
+    ``EvidenceLedger``-enriching equivalent (``run_unified_runtime.
+    _record_native_search_evidence``), the ``unified`` tool set has no
+    ledger to enrich into, so this just logs each result's URL instead of
+    letting them be silently discarded."""
+    content = raw_response.get("content") if isinstance(raw_response, dict) else None
+    for block in content or []:
+        if not isinstance(block, dict) or block.get("type") != "web_search_tool_result":
+            continue
+        items = block.get("content")
+        if not isinstance(items, list):
+            continue  # error shape -- {"type": "web_search_tool_result_error", ...}
+        urls = [
+            item.get("url")
+            for item in items
+            if isinstance(item, dict) and item.get("type") == "web_search_result" and item.get("url")
+        ]
         if urls:
             logger.info("unified: native web_search sources: %s", urls)
 
@@ -285,16 +321,36 @@ class UnifiedRuntime:
         self.session_store = session_store or SessionStore()
         self._tool_sets: dict[str, ToolSetBundle] = dict(tool_sets or {})
         if "unified" not in self._tool_sets:
-            # OpenAI's native web_search tool, mirroring plugin_authoring's
-            # Claude-native equivalent (run_unified_runtime.py's
-            # _build_plugin_authoring_tool_set), but for the `unified` tool
-            # set itself -- only when its resolved provider is a Responses-
-            # endpoint profile (OpenAIResponsesAdapter has no chat.completions
-            # fallback story to protect; plain "openai" stays untouched).
+            # Native web-search server tools for the `unified` tool set
+            # itself, mirroring plugin_authoring's own native-search wiring
+            # (run_unified_runtime.py's _build_plugin_authoring_tool_set)
+            # one provider at a time -- OpenAI's `web_search` tool on a
+            # Responses-endpoint profile (OpenAIResponsesAdapter has no
+            # chat.completions fallback story to protect; plain "openai"
+            # stays untouched), or Claude's `web_search_20250305` tool.
+            # Unlike plugin_authoring's gate, neither branch here checks
+            # `search_engine`: `unified` has no Brave/Tavily fallback tool
+            # to switch to instead, so there's nothing for an explicit
+            # `search_engine` to override -- this mirrors the
+            # openai_responses branch's own precedent (unconditional on
+            # provider) rather than plugin_authoring's.
             unified_provider = resolve_llm_profile(runtime_config, preferred_key="unified").get("provider")
-            native_openai_search = ProviderDispatchLLMAdapter._normalize(unified_provider or "") == "openai_responses"
-            unified_extra_tools = [{"type": "web_search"}] if native_openai_search else None
-            unified_on_raw_response = _record_openai_responses_web_search_evidence if native_openai_search else None
+            normalized_unified_provider = ProviderDispatchLLMAdapter._normalize(unified_provider or "")
+            if normalized_unified_provider == "openai_responses":
+                unified_extra_tools = [{"type": "web_search"}]
+                unified_on_raw_response = _record_openai_responses_web_search_evidence
+            elif normalized_unified_provider == "claude":
+                unified_extra_tools = [
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": _CLAUDE_NATIVE_WEB_SEARCH_MAX_USES,
+                    }
+                ]
+                unified_on_raw_response = _record_claude_native_search_evidence
+            else:
+                unified_extra_tools = None
+                unified_on_raw_response = None
             self._tool_sets["unified"] = ToolSetBundle(
                 tool_spec_paths=None,
                 dispatch_factory=lambda _ctx: DispatchBundle(

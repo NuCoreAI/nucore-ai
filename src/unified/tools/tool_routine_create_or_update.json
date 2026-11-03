@@ -42,14 +42,14 @@
           "integer",
           "null"
         ],
-        "description": "When creating a new routine (id omitted), the real id of the folder (a ROUTINES DATABASE row with folder: true) to create it inside, exactly as shown in ROUTINES DATABASE. Omit for the top level/root (or pass 1, the real id of the root folder, \"My Programs\" -- never 0, which is not a real folder id). Only honored on create -- combining this with an existing id is rejected; to move an EXISTING routine into a folder, use move_to_folder_id instead."
+        "description": "When creating a new routine (id omitted), the real id of the folder (a ROUTINES DATABASE row with folder: true) to create it inside, exactly as shown in ROUTINES DATABASE. Omit this field entirely for the top level/root -- never pass a specific number for root, since the root folder's real id (\"My Programs\") varies by hub and is not reliably any particular numeral. Only honored on create -- combining this with an existing id is rejected; to move an EXISTING routine into a folder, use move_to_folder_id instead."
       },
       "move_to_folder_id": {
         "type": [
           "integer",
           "null"
         ],
-        "description": "Only include this when updating an EXISTING routine (id given) AND the customer explicitly asked to move/relocate it into a different folder (or back to the top level/root) -- omit it entirely for a normal content/logic edit, even if you already know its current folder; omitting it always preserves the routine's current folder automatically, exactly as any other update. The root folder is \"My Programs\", real id 1 -- use 1 for the top level/root, never 0 (0 is not the root folder's real id, even though the hub happens to tolerate it as an alias on create -- always use the real id here). For a move with nothing else changing, pass this ALONE with id and omit code entirely -- that performs the move as a pure placement change with the routine's existing logic guaranteed untouched; do not reconstruct code just to move something."
+        "description": "Only include this when updating an EXISTING routine (id given) AND the customer explicitly asked to move/relocate it into a different folder (or back to the top level/root) -- omit it entirely for a normal content/logic edit, even if you already know its current folder; omitting it always preserves the routine's current folder automatically, exactly as any other update. The root folder is \"My Programs\" -- to move something to the top level/root, omit this field entirely rather than passing any specific number; the root folder's real id varies by hub, so no particular numeral (not 0, not 1) can be assumed to mean root. For a move with nothing else changing, pass this ALONE with id and omit code entirely -- that performs the move as a pure placement change with the routine's existing logic guaranteed untouched; do not reconstruct code just to move something."
       }
     }
   }

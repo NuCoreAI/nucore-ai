@@ -471,3 +471,28 @@ class ClaudeAdapter(LLMAdapter):
         user_message = {"role": "user", "content": tool_result_blocks}
         return [assistant_message, user_message]
 
+    def build_text_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        text: str,
+    ) -> list[dict[str, Any]]:
+        """Preserve ``thinking``/``server_tool_use``/``web_search_tool_result``
+        blocks -- not just the flattened *text* -- for a round whose only
+        action was a native web search (or that emitted extended thinking),
+        i.e. one with no ``tool_use`` block for :meth:`parse_tool_calls` to
+        turn into a dispatchable call. Same sanitization
+        :meth:`build_tool_round_trip_messages` already applies via
+        :meth:`_sanitize_content_block`, just without a paired
+        ``tool_result`` turn, since there's nothing to dispatch.
+
+        Falls back to the plain string for the common case (only ``text``
+        blocks present) so an ordinary reply's stored history is unchanged.
+        """
+        blocks = raw_response.get("content") if isinstance(raw_response, dict) else None
+        if isinstance(blocks, list) and any(
+            isinstance(block, dict) and block.get("type") != "text" for block in blocks
+        ):
+            return [{"role": "assistant", "content": [self._sanitize_content_block(b) for b in blocks]}]
+        return [{"role": "assistant", "content": text}]
+

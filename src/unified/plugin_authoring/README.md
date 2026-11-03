@@ -70,12 +70,15 @@ mid-response. For any other provider with no engine configured, there is no web 
 at all and the flow falls through to asking the customer for URLs. See `runtime_config.py`'s
 `search_engine` handling for the exact precedence.
 
-(The `unified` tool set has an analogous native fallback for the `openai-responses` provider --
-OpenAI's own `web_search` tool, wired in `runtime.py`'s `UnifiedRuntime.__init__` rather than
-here, since it's specific to `unified`'s own hardcoded default bundle. It doesn't extend to
-`plugin_authoring`: an `openai-responses` profile here still gets no web search at all unless
-`search_engine`/`search_engine_api_key` are set. See
-`design/migration-to-openai-response-api.md`.)
+(The `unified` tool set has its own, separate native-search wiring for two providers -- Claude's
+`web_search_20250305` tool and OpenAI's `web_search` tool (for an `openai-responses` profile) --
+wired in `runtime.py`'s `UnifiedRuntime.__init__` rather than here, since it's specific to
+`unified`'s own hardcoded default bundle, and unconditional on `search_engine` since `unified`
+has no Brave/Tavily fallback tool to fall back to. None of this extends to `plugin_authoring`: an
+`openai-responses` profile here still gets no web search at all unless
+`search_engine`/`search_engine_api_key` are set -- only `plugin_authoring`'s own Claude-native
+gate above is shared between the two tool sets, and even that is evaluated independently per
+tool set's own resolved provider. See `design/migration-to-openai-response-api.md`.)
 
 ## Layout
 

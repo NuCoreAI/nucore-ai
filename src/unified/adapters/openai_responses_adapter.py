@@ -155,7 +155,11 @@ class OpenAIResponsesAdapter(OpenAIAdapter):
         for msg in messages or []:
             if not isinstance(msg, dict):
                 continue
-            if msg.get("type") in {"function_call", "function_call_output"}:
+            if msg.get("type") in {"function_call", "function_call_output", "web_search_call"}:
+                # web_search_call: see build_text_round_trip_messages below --
+                # echoed back from an earlier round's own output so a later
+                # round can see a search actually happened, rather than only
+                # the flattened text summary of it.
                 input_items.append(msg)
                 continue
 
@@ -238,3 +242,29 @@ class OpenAIResponsesAdapter(OpenAIAdapter):
                 }
             )
         return items
+
+    def build_text_round_trip_messages(
+        self,
+        *,
+        raw_response: Any,
+        text: str,
+    ) -> list[dict[str, Any]]:
+        """Preserve non-``message`` output items (e.g. a native
+        ``web_search_call``) -- not just the flattened *text* -- for a
+        round whose only action was a native web search, i.e. one with no
+        ``function_call`` item for :meth:`parse_tool_calls` to turn into a
+        dispatchable call. These round-trip back in via
+        :meth:`_split_messages_for_responses`'s pass-through branch
+        (widened to recognise ``web_search_call`` alongside
+        ``function_call``/``function_call_output``).
+
+        Falls back to the plain string for the common case (no such items)
+        so an ordinary reply's stored history is unchanged.
+        """
+        output_items = raw_response.get("output") if isinstance(raw_response, dict) else None
+        non_message_items = [
+            item for item in (output_items or []) if isinstance(item, dict) and item.get("type") != "message"
+        ]
+        if non_message_items:
+            return [*non_message_items, {"role": "assistant", "content": text}]
+        return [{"role": "assistant", "content": text}]

@@ -38,7 +38,9 @@ ready-to-copy alternatives for those providers -- see the top-level `README.md`'
 Providers" section. The `openai-responses` variant is for reasoning-tier OpenAI models that
 reject function tools on `/v1/chat/completions` under every `reasoning_effort` setting (see
 `design/migration-to-openai-response-api.md`) -- same account/API key, just a different
-endpoint and a native `web_search` tool for the `unified` tool set.
+endpoint and a native `web_search` tool for the `unified` tool set. The default
+`runtime_config.example.json` (Claude) profile already gets this same native search for
+`unified` with no extra config either -- see the top-level `README.md`'s web search paragraph.
 
 ```shell
 python -m unified.run_unified_runtime \

@@ -216,6 +216,44 @@ async def test_build_tool_round_trip_messages_round_trips_back_through_split_mes
     assert input_items == [{"type": "message", "role": "user", "content": "weather?"}, *round_trip]
 
 
+# --- build_text_round_trip_messages: the no-dispatchable-tool-call
+# counterpart to build_tool_round_trip_messages above. A round whose only
+# action is the native web_search tool never produces a `function_call`
+# item, so AgenticLoop's no-tool-calls branch is the one that handles it --
+# this is what stops that branch from flattening away the record that a
+# search happened, which is what let the model later guess wrong about
+# whether it had searched in a past turn.
+# ---------------------------------------------------------------------------
+
+
+def test_build_text_round_trip_messages_preserves_search_item_when_present():
+    adapter = _adapter()
+    search_item = {
+        "type": "web_search_call",
+        "id": "ws_1",
+        "status": "completed",
+        "action": {"type": "search", "query": "weather"},
+    }
+    raw_response = {"output": [search_item, {"type": "message", "role": "assistant", "content": "It's sunny."}]}
+
+    messages = adapter.build_text_round_trip_messages(raw_response=raw_response, text="It's sunny.")
+
+    assert messages == [search_item, {"role": "assistant", "content": "It's sunny."}]
+    # And it must round-trip back in as a valid input item, not get
+    # mis-wrapped into a garbage empty user message.
+    instructions, input_items = adapter._split_messages_for_responses(messages)
+    assert input_items == [search_item, {"type": "message", "role": "assistant", "content": "It's sunny."}]
+
+
+def test_build_text_round_trip_messages_falls_back_to_plain_text_when_no_search_happened():
+    adapter = _adapter()
+    raw_response = {"output": [{"type": "message", "role": "assistant", "content": "Sure, done."}]}
+
+    messages = adapter.build_text_round_trip_messages(raw_response=raw_response, text="Sure, done.")
+
+    assert messages == [{"role": "assistant", "content": "Sure, done."}]
+
+
 @pytest.mark.asyncio
 async def test_streaming_generate_forwards_text_deltas_and_captures_function_call():
     adapter = _adapter()

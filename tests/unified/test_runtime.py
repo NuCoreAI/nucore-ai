@@ -606,6 +606,90 @@ class TestRecordOpenAIResponsesWebSearchEvidence:
         await runtime_module._record_openai_responses_web_search_evidence("not a dict")
 
 
+# --- default `unified` bundle's own native-web-search wiring (Claude's
+# web_search_20250305 server tool, mirroring plugin_authoring's own
+# Claude-native equivalent -- see runtime.py's UnifiedRuntime.__init__ and
+# _record_claude_native_search_evidence) ---
+
+
+@pytest.mark.asyncio
+async def test_default_unified_bundle_gets_claude_web_search_tool_when_provider_resolves_to_claude():
+    runtime_config = {"supported_llms": {"unified": {"provider": "claude"}}}
+    await _runtime(runtime_config).handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] == [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 10}
+    ]
+    assert _FakeLoop.captured_init_kwargs["on_raw_response"] is runtime_module._record_claude_native_search_evidence
+
+
+@pytest.mark.asyncio
+async def test_default_unified_bundle_gets_claude_web_search_tool_for_the_anthropic_provider_alias():
+    runtime_config = {"supported_llms": {"unified": {"provider": "anthropic"}}}
+    await _runtime(runtime_config).handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] == [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 10}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_default_unified_bundle_has_no_extra_tools_for_a_provider_with_no_native_search():
+    runtime_config = {"supported_llms": {"unified": {"provider": "grok"}}}
+    await _runtime(runtime_config).handle_query("hi")
+    assert _FakeLoop.captured_init_kwargs["extra_tools"] is None
+    assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
+
+
+class TestRecordClaudeNativeSearchEvidence:
+    """``_record_claude_native_search_evidence`` -- the on_raw_response
+    hook itself, independent of how UnifiedRuntime wires it in."""
+
+    @pytest.mark.asyncio
+    async def test_logs_urls_from_a_web_search_tool_result_block(self, caplog):
+        raw_response = {
+            "content": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [
+                        {"type": "web_search_result", "url": "https://example.com", "title": "Example"},
+                        {"type": "web_search_result", "url": "https://other.example", "title": "Other"},
+                    ],
+                }
+            ]
+        }
+        with caplog.at_level("INFO"):
+            await runtime_module._record_claude_native_search_evidence(raw_response)
+        assert "https://example.com" in caplog.text
+        assert "https://other.example" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ignores_an_error_shaped_web_search_tool_result_block(self, caplog):
+        raw_response = {
+            "content": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": {"type": "web_search_tool_result_error", "error_code": "unavailable"},
+                }
+            ]
+        }
+        with caplog.at_level("INFO"):
+            await runtime_module._record_claude_native_search_evidence(raw_response)
+        assert caplog.text == ""
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_web_search_content_blocks(self, caplog):
+        raw_response = {"content": [{"type": "text", "text": "hi"}]}
+        with caplog.at_level("INFO"):
+            await runtime_module._record_claude_native_search_evidence(raw_response)
+        assert caplog.text == ""
+
+    @pytest.mark.asyncio
+    async def test_tolerates_a_raw_response_with_no_content_key(self):
+        await runtime_module._record_claude_native_search_evidence({"output": "hi"})
+        await runtime_module._record_claude_native_search_evidence("not a dict")
+
+
 # --- resolve_llm_profile (extracted from _resolve_llm_config so
 # run_unified_runtime.py can resolve the same provider before UnifiedRuntime
 # even exists -- see run_unified_runtime.py's native-vs-fallback search

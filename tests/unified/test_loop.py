@@ -331,6 +331,88 @@ async def test_fabrication_guard_block_mode_exhausts_retries_and_falls_back_safe
     assert any(f[1] == "fabrication_retry_exhausted" for f in manager.flags)
 
 
+class _SearchCapableAdapter(_FakeAdapter):
+    """Like _FakeAdapter, but also implements build_text_round_trip_messages
+    -- the real adapters' hook this module's no-tool-calls branch now calls
+    so a search-only round's provenance survives into later rounds' history
+    instead of collapsing to plain text. See the production-log investigation
+    behind this fix: a model that genuinely searched, with no record of that
+    left in history once the round produced no dispatchable tool_use, later
+    had no way to tell whether it had searched and guessed wrong."""
+
+    def build_text_round_trip_messages(self, *, raw_response, text):
+        search_evidence = raw_response.get("search_evidence")
+        if search_evidence is not None:
+            return [{"role": "assistant", "content": [search_evidence, {"type": "text", "text": text}]}]
+        return [{"role": "assistant", "content": text}]
+
+
+async def test_search_only_round_preserves_provenance_in_returned_new_messages(monkeypatch):
+    # new_messages is exactly what a caller (e.g. UnifiedRuntime.handle_query)
+    # persists as this turn's contribution to history, and feeds back in as
+    # `history_messages` on the *next* turn -- so this is the direct
+    # regression test for "a later round can see that a search happened,"
+    # without needing to actually run a second turn.
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    search_evidence = {"type": "server_tool_use", "name": "web_search", "input": {"query": "dst canada"}}
+    adapter = _SearchCapableAdapter(
+        [{"text": "Yes, several Canadian regions changed their rules.", "search_evidence": search_evidence}]
+    )
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+
+    final_text, new_messages = await loop.run(
+        system_prompt="sys", history_messages=[], user_message="did dst rules change?"
+    )
+
+    assert final_text == "Yes, several Canadian regions changed their rules."
+    assistant_message = new_messages[-1]
+    assert isinstance(assistant_message["content"], list)
+    assert search_evidence in assistant_message["content"]
+
+
+async def test_fallback_substituted_text_is_stored_as_plain_string_not_rich_blocks(monkeypatch):
+    # When the fabrication guard replaces `text` with its hardcoded
+    # fallback, the original raw_response's content (which may include the
+    # very claim being discarded) must not be what gets persisted instead.
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    class _AlwaysFabricatingSearchAdapter(_SearchCapableAdapter):
+        async def generate(self, *, messages, config, tools):
+            return {
+                "text": "Done! I've turned off the light.",
+                "search_evidence": {"type": "server_tool_use", "name": "web_search", "input": {}},
+            }
+
+    loop = AgenticLoop(
+        llm_client=_AlwaysFabricatingSearchAdapter([]),
+        tool_specs=[],
+        dispatch=lambda n, a: _ok(),
+        fabrication_guard_mode="block",
+        max_fabrication_retries=1,
+    )
+
+    final_text, new_messages = await loop.run(system_prompt="sys", history_messages=[], user_message="turn it off")
+
+    assert final_text == loop_module._FABRICATION_RETRY_NOTICE + loop_module._FABRICATION_FALLBACK_TEXT
+    assert new_messages[-1] == {"role": "assistant", "content": final_text}
+
+
+async def test_ordinary_reply_history_is_unchanged_when_adapter_has_no_search_hook():
+    # _FakeAdapter has no build_text_round_trip_messages at all -- the
+    # getattr(..., None) fallback in loop.py must keep producing exactly
+    # today's flat-string shape for any such adapter/test-double.
+    adapter = _FakeAdapter([{"text": "Sure, done."}])
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok())
+
+    final_text, new_messages = await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
+
+    assert final_text == "Sure, done."
+    assert new_messages[-1] == {"role": "assistant", "content": "Sure, done."}
+
+
 async def test_extra_tools_are_appended_after_exported_tools():
     # plugin_authoring's Claude-native web search path (run_unified_runtime.py)
     # injects a raw server-tool dict this way, bypassing export_tools()/
