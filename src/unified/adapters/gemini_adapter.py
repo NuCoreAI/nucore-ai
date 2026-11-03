@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import email.utils
 import json
 import os
+import random
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -9,6 +13,17 @@ from utils import get_logger
 from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
 logger = get_logger(__name__)
+
+# One budget for streamGenerateContent and a generateContent fallback together:
+# 1 initial try + 3 retries, sleeps 2s/4s/8s, cumulative sleep capped at 14s.
+_RETRY_STATUSES = frozenset({429, 500, 503})
+_MAX_RETRIES = 3
+_BACKOFF_DELAYS = (2.0, 4.0, 8.0)
+_MAX_CUMULATIVE_SLEEP = 14.0
+_ABORT_LOG = (
+    "Gemini API unreachable after max retries due to high demand. "
+    "Automation turn aborted."
+)
 
 
 async def _raise_for_status_with_body(response: httpx.Response) -> None:
@@ -32,6 +47,106 @@ async def _raise_for_status_with_body(response: httpx.Response) -> None:
             request=exc.request,
             response=exc.response,
         ) from None
+
+
+class _RetryBudget:
+    """Shared retry counter for one ``generate`` call.
+
+    ``retries_remaining`` is the number of sleeps still allowed (not the
+    number of HTTP tries). ``slept`` is the cumulative ``asyncio.sleep``
+    time so a later delay can be clamped to the 14s cap.
+    """
+
+    def __init__(self) -> None:
+        self.retries_remaining = _MAX_RETRIES
+        self.slept = 0.0
+
+
+def _retry_after_seconds(response: Any) -> float | None:
+    """Return a Retry-After delay in seconds, or None when the header is absent."""
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None or raw == "":
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(str(raw))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _next_delay(response: Any, budget: _RetryBudget) -> float | None:
+    """Seconds to wait before the next try, or None when the budget is spent.
+
+    Retry-After replaces the exponential delay. Jitter is ±20% of the base
+    delay. The result is clamped so cumulative sleep never exceeds 14s.
+    """
+    if budget.retries_remaining <= 0:
+        return None
+    remaining_cap = _MAX_CUMULATIVE_SLEEP - budget.slept
+    if remaining_cap <= 0:
+        return None
+    retry_after = _retry_after_seconds(response)
+    if retry_after is not None:
+        delay = retry_after
+    else:
+        base = _BACKOFF_DELAYS[_MAX_RETRIES - budget.retries_remaining]
+        delay = max(0.0, base + base * random.uniform(-0.2, 0.2))
+    return min(delay, remaining_cap)
+
+
+def _status_or_type(exc: BaseException) -> str:
+    """A log label that does not include the request URL or API key."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        return f"HTTP {status}"
+    return type(exc).__name__
+
+
+async def _retry_or_proceed(response: Any, budget: _RetryBudget) -> bool:
+    """Sleep and return True when *response* should be sent again.
+
+    429, 500, and 503 use the shared budget. When that budget is spent the
+    abort line is logged and ``HTTPStatusError`` is raised with
+    ``retries_exhausted`` set. Any other status returns False so the caller
+    can raise it or read a success body. The wait is ``asyncio.sleep``.
+    """
+    status = getattr(response, "status_code", None)
+    if status not in _RETRY_STATUSES:
+        return False
+    delay = _next_delay(response, budget)
+    if delay is None:
+        try:
+            await _raise_for_status_with_body(response)
+        except httpx.HTTPStatusError as exc:
+            setattr(exc, "retries_exhausted", True)
+            logger.error(_ABORT_LOG)
+            raise
+        return False
+    aread = getattr(response, "aread", None)
+    if aread is not None:
+        await aread()
+    attempt = _MAX_RETRIES - budget.retries_remaining + 1
+    logger.warning(
+        "Gemini HTTP %s, retry %s/%s in %.1fs",
+        status,
+        attempt,
+        _MAX_RETRIES,
+        delay,
+    )
+    budget.retries_remaining -= 1
+    budget.slept += delay
+    await asyncio.sleep(delay)
+    return True
 
 
 def _sanitize_schema_for_gemini(schema: Any) -> Any:
@@ -234,6 +349,7 @@ class GeminiAdapter(LLMAdapter):
             # Instruct Gemini to return a pure JSON response body.
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
+        budget = _RetryBudget()
         stream = bool(cfg.get("stream", False))
         stream_handler = cfg.get("stream_handler")
         if stream and callable(stream_handler):
@@ -243,20 +359,36 @@ class GeminiAdapter(LLMAdapter):
                     api_key=str(api_key),
                     payload=payload,
                     stream_handler=stream_handler,
+                    budget=budget,
+                )
+            except httpx.HTTPStatusError as exc:
+                # 429/500/503 already used the shared budget. Falling back would
+                # spend it again on the same outage.
+                if getattr(getattr(exc, "response", None), "status_code", None) in _RETRY_STATUSES:
+                    raise
+                logger.warning(
+                    "Gemini streamGenerateContent failed, falling back to generateContent: %s",
+                    _status_or_type(exc),
                 )
             except Exception as exc:
                 # Fall back to non-streaming request for compatibility with endpoints
-                # that don't expose streamGenerateContent. Logged (not silent) --
-                # a real cause here (bad model name, rejected schema field, ...)
-                # will fail generateContent too, and this is the only place that
-                # would otherwise ever surface it.
-                logger.warning(f"Gemini streamGenerateContent failed, falling back to generateContent: {exc}")
+                # that don't expose streamGenerateContent. The label is status or
+                # exception type only: str(exc) includes the request URL, and that
+                # URL carries the API key.
+                logger.warning(
+                    "Gemini streamGenerateContent failed, falling back to generateContent: %s",
+                    _status_or_type(exc),
+                )
 
         url = f"{self._base_url}/v1beta/models/{model}:generateContent?key={api_key}"
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(url, json=payload)
-            await _raise_for_status_with_body(response)
-            data = response.json()
+            while True:
+                response = await client.post(url, json=payload)
+                if await _retry_or_proceed(response, budget):
+                    continue
+                await _raise_for_status_with_body(response)
+                data = response.json()
+                break
 
         text_parts: list[str] = []
         for candidate in data.get("candidates", []) or []:
@@ -289,6 +421,7 @@ class GeminiAdapter(LLMAdapter):
         api_key: str,
         payload: dict[str, Any],
         stream_handler,
+        budget: _RetryBudget,
     ) -> Any:
         """Consume a Gemini SSE stream and forward text chunks to ``stream_handler``.
 
@@ -306,31 +439,37 @@ class GeminiAdapter(LLMAdapter):
         text_parts: list[str] = []
 
         async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", url, json=payload) as response:
-                await _raise_for_status_with_body(response)
-                async for line in response.aiter_lines():
-                    if not line:
+            while True:
+                async with client.stream("POST", url, json=payload) as response:
+                    # Status is checked before any chunk is forwarded, so a
+                    # retry cannot duplicate text already sent to the client.
+                    if await _retry_or_proceed(response, budget):
                         continue
-                    # SSE comment lines (keep-alive pings) start with ":".
-                    if line.startswith(":"):
-                        continue
-                    if not line.startswith("data:"):
-                        continue
+                    await _raise_for_status_with_body(response)
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        # SSE comment lines (keep-alive pings) start with ":".
+                        if line.startswith(":"):
+                            continue
+                        if not line.startswith("data:"):
+                            continue
 
-                    data_str = line[5:].strip()
-                    if not data_str or data_str == "[DONE]":
-                        continue
+                        data_str = line[5:].strip()
+                        if not data_str or data_str == "[DONE]":
+                            continue
 
-                    chunk_json = json.loads(data_str)
-                    chunks.append(chunk_json)
+                        chunk_json = json.loads(data_str)
+                        chunks.append(chunk_json)
 
-                    for candidate in chunk_json.get("candidates", []) or []:
-                        content = candidate.get("content", {})
-                        for part in content.get("parts", []) or []:
-                            text = part.get("text")
-                            if isinstance(text, str) and text:
-                                text_parts.append(text)
-                                await stream_handler(text)
+                        for candidate in chunk_json.get("candidates", []) or []:
+                            content = candidate.get("content", {})
+                            for part in content.get("parts", []) or []:
+                                text = part.get("text")
+                                if isinstance(text, str) and text:
+                                    text_parts.append(text)
+                                    await stream_handler(text)
+                break
 
         # Re-assemble a full response structure for the tools adapter to parse.
         # Each chunk is itself a full top-level response object (its own
