@@ -1,0 +1,8 @@
+{
+  "name": "list_chat_commands",
+  "description": "Call this whenever the customer/developer asks what chat commands exist, or how to switch modes or manage a conversation session, in their own words (\"what commands do you have\", \"list commands\", \"how do I start over\", \"can you clear my old sessions\", \"is there a shortcut to switch modes\"). No params. Returns two groups: mode-switch commands (a typed shortcut for something you can already do yourself via switch_to_developer_mode/switch_to_customer_mode when asked in plain language -- mention the typed form only as an FYI, don't tell the customer to type it instead of just asking you) and session-management commands (no tool exists for these -- only the customer actually typing one does anything; relay the result's wording, including the leading '/', and never say you've already started/switched/renamed/deleted/compacted a session yourself).",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

@@ -35,7 +35,7 @@ class SessionStore:
     see :meth:`resolve_current_session_id`'s ``durable`` flag) also survives
     a full process restart, and a user can keep more than one named session
     per tool set (``start_new_session``/``list_sessions``/``load_session``/
-    ``rename_session``/``delete_session``). *persist_dir* is ``None`` by
+    ``rename_session``/``delete_session``/``delete_all_sessions``). *persist_dir* is ``None`` by
     default, which keeps every one of those methods a pure in-memory no-op
     -- zero new disk I/O, zero behavior change -- for every caller that
     doesn't pass one (the REPL, and any test constructing a bare
@@ -397,7 +397,7 @@ class SessionStore:
 
     # ------------------------------------------------------------------
     # Session management -- /new-session, /sessions, /load-session,
-    # /rename-session, /delete-session
+    # /rename-session, /delete-session, /delete-all-sessions
     # ------------------------------------------------------------------
 
     async def list_sessions(self, user_id: str, tool_set: str) -> list[dict[str, Any]]:
@@ -506,6 +506,39 @@ class SessionStore:
 
             await self._save_index(user_id, tool_set, index)
         return entry, replacement
+
+    async def delete_all_sessions(
+        self, user_id: str, tool_set: str
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Delete every saved session for *user_id* in *tool_set* and start a
+        fresh one (a user always has at least one live session -- see
+        :meth:`delete_session`). Returns ``(deleted_entries, replacement_entry)``."""
+        async with self._write_lock(f"{user_id}::{tool_set}::index"):
+            index = await self._get_index(user_id, tool_set)
+            deleted = list(index.get("sessions", []))
+            for entry in deleted:
+                session_id = entry["id"]
+                try:
+                    await asyncio.to_thread(self._persistence.delete_session_file, user_id, tool_set, session_id)
+                except Exception:
+                    logger.warning("session_store: failed to delete a session file", exc_info=True)
+                self._sessions.pop(self.composite_key(user_id, tool_set, session_id), None)
+
+            new_id = int(index.get("next_session_id", 1))
+            now = _now_iso()
+            replacement = {
+                "id": new_id,
+                "name": _DEFAULT_SESSION_NAME_TEMPLATE.format(id=new_id),
+                "created_at": now,
+                "updated_at": now,
+                "turn_count": 0,
+            }
+            index["sessions"] = [replacement]
+            index["next_session_id"] = new_id + 1
+            index["current_session_id"] = new_id
+            await self._save_index(user_id, tool_set, index)
+        self._current_session_cache[f"{user_id}::{tool_set}"] = new_id
+        return deleted, replacement
 
     # ------------------------------------------------------------------
     # Formatting

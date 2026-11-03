@@ -37,6 +37,12 @@ _TOOLS_DIR = Path(__file__).parent / "tools"
 # bundle's cap, independent of plugin_authoring's.
 _CLAUDE_NATIVE_WEB_SEARCH_MAX_USES = 10
 
+# Sent once per AgenticLoop round (see _notify_round_start) while a turn is
+# still generating/dispatching tools -- italic Markdown, matching
+# run_unified_runtime._SESSION_CONTINUATION_NOTICE's styling convention for a
+# chatbox that renders every bot message as Markdown.
+_THINKING_NOTICE = "*Thinking...*"
+
 SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
 
@@ -399,6 +405,49 @@ class UnifiedRuntime:
         ``_profile_config``."""
         return int(self._profile_config(tool_set_name).get("max_turns", 20))
 
+    async def compact_session(self, user_id: str, tool_set: str) -> bool:
+        """Force-compact the current session's history for
+        ``(user_id, tool_set)``, regardless of whether it's actually over
+        its token budget -- the manual counterpart to :meth:`handle_query`'s
+        automatic per-turn check (see ``history_compaction.maybe_compact_history``'s
+        ``force`` parameter). Used by ``run_unified_runtime.py``'s
+        ``/compact-session`` command, which composes its own reply from the
+        boolean this returns, so ``notify`` is deliberately left unset here.
+
+        Takes the same per-``(user_id, tool_set)`` lock :meth:`handle_query`
+        holds for its own compaction check, so a `/compact-session` command
+        can't race a concurrent ordinary turn's own check against the same
+        history.
+
+        Returns:
+            False if there isn't enough history yet to meaningfully compact
+            (see ``history_compaction._MIN_TURNS_TO_COMPACT``) -- true
+            otherwise.
+        """
+        current_session_num = await self.session_store.resolve_current_session_id(
+            user_id, tool_set, durable=True
+        )
+        composite_session_id = SessionStore.composite_key(user_id, tool_set, current_session_num)
+        async with self.session_store.lock(composite_session_id):
+            profile_cfg = self._profile_config(tool_set)
+            history = await self.session_store.get_or_load(
+                user_id,
+                tool_set,
+                current_session_num,
+                max_turns=int(profile_cfg.get("max_turns", 20)),
+                durable=True,
+            )
+            compacted = await maybe_compact_history(
+                history,
+                llm_client=self.llm_client,
+                llm_config=self._resolve_llm_config(tool_set),
+                token_budget=int(profile_cfg.get("history_token_budget", 20000)),
+                force=True,
+            )
+            if compacted:
+                await self.session_store.persist(user_id, tool_set, current_session_num, durable=True)
+        return compacted
+
     def _resolve_llm_config(self, tool_set_name: str) -> dict[str, Any]:
         return resolve_llm_profile(self.runtime_config, preferred_key=tool_set_name)
 
@@ -426,6 +475,31 @@ class UnifiedRuntime:
         when no handler is attached."""
         if self.stream_handler is not None:
             self.stream_handler.reset_stream_state()
+
+    async def _notify_round_start(self, iteration: int) -> None:
+        """AgenticLoop's ``on_round_start`` hook -- sends `_THINKING_NOTICE`
+        at the start of every round (including the first), websocket
+        connections only. REPL mode (no websocket attached) stays silent --
+        StreamHandler.send_chunk's no-websocket fallback is a bare
+        ``print(chunk, end="")`` with no message-boundary framing, so
+        repeated standalone notices would print as garbage mixed into real
+        streamed text. Calls send_chunk directly, never handle_stream_chunk,
+        so this never counts as "real content streamed" for
+        run_unified_runtime._run_once's get_stream_chunk_count() check."""
+        if self.stream_handler is not None and self.stream_handler.websocket is not None:
+            await self.stream_handler.send_chunk(_THINKING_NOTICE, False)
+
+    async def _notify_history_budget(self, text: str) -> None:
+        """maybe_compact_history's ``notify`` hook -- budget-threshold and
+        auto-compaction notices. Unlike `_notify_round_start` (websocket-only
+        -- see its own docstring for why repeated per-round notices would
+        look like garbage in REPL's frame-less print fallback), these fire
+        at most once per decile crossing, so a plain REPL print is fine too;
+        `send_chunk` already handles both transports -- this only needs the
+        same no-stream_handler guard `_notify_round_start` has, without the
+        extra websocket-only restriction."""
+        if self.stream_handler is not None:
+            await self.stream_handler.send_chunk(text, True)
 
     def shutdown(self) -> None:
         """Best-effort cleanup."""
@@ -464,6 +538,7 @@ class UnifiedRuntime:
             max_fabrication_retries=int(profile_cfg.get("max_fabrication_retries", 1)),
             extra_tools=bundle.extra_tools,
             on_raw_response=bundle.on_raw_response,
+            on_round_start=self._notify_round_start,
         )
 
     async def handle_query(
@@ -535,6 +610,7 @@ class UnifiedRuntime:
                 llm_client=self.llm_client,
                 llm_config=self._resolve_llm_config(current_tool_set),
                 token_budget=int(profile_cfg.get("history_token_budget", 20000)),
+                notify=self._notify_history_budget,
             )
 
             current_provider = self._resolve_llm_config(current_tool_set).get("provider")

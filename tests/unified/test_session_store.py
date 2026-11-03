@@ -235,6 +235,32 @@ async def test_delete_session_rejects_an_unknown_id(tmp_path):
     assert await store.delete_session("a@example.com", "unified", 999) is None
 
 
+async def test_delete_all_sessions_removes_every_session_and_creates_one_replacement(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    await store.start_new_session("a@example.com", "unified")
+    await store.start_new_session("a@example.com", "unified")  # sessions 1, 2, 3 now exist
+
+    deleted, replacement = await store.delete_all_sessions("a@example.com", "unified")
+
+    assert sorted(e["id"] for e in deleted) == [1, 2, 3]
+    entries = await store.list_sessions("a@example.com", "unified")
+    assert [e["id"] for e in entries] == [replacement["id"]]
+    assert await store.resolve_current_session_id("a@example.com", "unified", durable=True) == replacement["id"]
+
+
+async def test_delete_all_sessions_on_an_untouched_user_still_returns_a_replacement(tmp_path):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)  # seeds bootstrap session 1
+
+    deleted, replacement = await store.delete_all_sessions("a@example.com", "unified")
+
+    assert [e["id"] for e in deleted] == [1]
+    assert replacement["id"] != 1
+    entries = await store.list_sessions("a@example.com", "unified")
+    assert [e["id"] for e in entries] == [replacement["id"]]
+
+
 async def test_persist_updates_the_index_turn_count_and_updated_at(tmp_path):
     store = SessionStore(persist_dir=tmp_path)
     session_num = await store.resolve_current_session_id("a@example.com", "unified", durable=True)

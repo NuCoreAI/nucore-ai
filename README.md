@@ -63,7 +63,8 @@ restarted client) finds its prior history instead of starting over empty; concur
 for the same session are serialized rather than racing each other. See `src/unified/README.md`'s
 "Session history across connections" section for the mechanism. Add `--session-persist-dir`
 to also survive a full process restart and manage multiple named sessions per user
-(`/new-session`, `/sessions`, `/load-session`, `/rename-session`, `/delete-session`) -- see
+(`/new-session`, `/sessions`, `/load-session`, `/rename-session`, `/delete-session`,
+`/delete-all-sessions`, `/compact-session`) -- see
 that file's "Persisted sessions" section.
 
 ```shell

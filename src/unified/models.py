@@ -203,6 +203,16 @@ class ConversationHistory:
         pending_turns:    Number of consecutive turns answered without
                           explicitly resolving or abandoning the pending
                           clarification. See :meth:`note_pending_still_unresolved`.
+        last_budget_notice_decile: Highest token-budget decile (5 == 50%, 9
+                          == 90%, ...) already notified about for this
+                          session -- see history_compaction.maybe_compact_history's
+                          ``notify`` parameter. Reset to 0 once compaction
+                          actually runs, so a later climb re-notifies.
+                          Deliberately transient: session_persistence.py's
+                          history_from_dict reconstructs ConversationHistory
+                          field-by-field and never restores this one, so a
+                          reload (process restart, session switch) always
+                          starts back at 0 regardless of what was serialized.
     """
 
     PENDING_TTL_TURNS: ClassVar[int] = 3
@@ -219,6 +229,7 @@ class ConversationHistory:
     pending_question: str | None = None
     pending_failed: bool = False
     pending_turns: int = 0
+    last_budget_notice_decile: int = 0
 
     def append(
         self,

@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 
 from unified.history_compaction import (
+    _budget_notice,
+    _COMPACTED_NOTICE,
     _COMPACTED_QUERY_LABEL,
     _MIN_TURNS_TO_COMPACT,
     _history_tokens,
@@ -241,3 +243,107 @@ async def test_summarization_prompt_ignores_rich_messages_and_uses_query_respons
     sent_prompt = llm.calls[0]["messages"][0]["content"]
     assert "giant" not in sent_prompt
     assert f"query 0 {_big_body(2000)}" in sent_prompt
+
+
+# --- `notify`/`force` -- budget-threshold progress notices and the manual
+# /compact-session path (UnifiedRuntime.compact_session) ---
+
+
+@pytest.mark.asyncio
+async def test_notify_fires_once_per_decile_and_is_capped_below_100_percent():
+    history = _history_with_turns(_MIN_TURNS_TO_COMPACT, body=_big_body(200))
+    total = _history_tokens(history.turns)
+    llm = _FakeLLMClient()
+    notices: list[str] = []
+
+    async def notify(text):
+        notices.append(text)
+
+    budget_55_percent = total * 100 // 55
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=budget_55_percent, notify=notify
+    )
+    assert compacted is False
+    assert notices == [_budget_notice(50)]
+    assert history.last_budget_notice_decile == 5
+
+    # Same ~55% bracket again -- must not repeat.
+    notices.clear()
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=budget_55_percent, notify=notify
+    )
+    assert compacted is False
+    assert notices == []
+
+    # Jump straight to ~95% -- decile 9 (90%), never a generic "100%" line.
+    notices.clear()
+    budget_95_percent = total * 100 // 95
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=budget_95_percent, notify=notify
+    )
+    assert compacted is False
+    assert notices == [_budget_notice(90)]
+    assert history.last_budget_notice_decile == 9
+
+
+@pytest.mark.asyncio
+async def test_notify_is_silent_below_50_percent():
+    history = _history_with_turns(_MIN_TURNS_TO_COMPACT, body="short")
+    notices: list[str] = []
+
+    async def notify(text):
+        notices.append(text)
+
+    compacted = await maybe_compact_history(history, llm_client=_FakeLLMClient(), llm_config={}, token_budget=10_000, notify=notify)
+
+    assert compacted is False
+    assert notices == []
+    assert history.last_budget_notice_decile == 0
+
+
+@pytest.mark.asyncio
+async def test_notify_gets_the_compacted_wording_when_compaction_actually_runs():
+    history = _history_with_turns(8, body=_big_body(2000))
+    history.last_budget_notice_decile = 9  # as if a prior turn already sent the 90% notice
+    llm = _FakeLLMClient(text="summary")
+    notices: list[str] = []
+
+    async def notify(text):
+        notices.append(text)
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100, notify=notify)
+
+    assert compacted is True
+    assert notices == [_COMPACTED_NOTICE]
+    assert history.last_budget_notice_decile == 0
+
+
+@pytest.mark.asyncio
+async def test_force_compacts_even_under_budget():
+    history = _history_with_turns(_MIN_TURNS_TO_COMPACT, body="short")
+    llm = _FakeLLMClient(text="forced summary")
+    notices: list[str] = []
+
+    async def notify(text):
+        notices.append(text)
+
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=10_000_000, force=True, notify=notify
+    )
+
+    assert compacted is True
+    assert history.turns[0].response == "forced summary"
+    assert notices == [_COMPACTED_NOTICE]
+
+
+@pytest.mark.asyncio
+async def test_force_still_requires_min_turns_to_compact():
+    history = _history_with_turns(_MIN_TURNS_TO_COMPACT - 1, body="short")
+    llm = _FakeLLMClient()
+
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=10_000_000, force=True
+    )
+
+    assert compacted is False
+    assert len(history.turns) == _MIN_TURNS_TO_COMPACT - 1

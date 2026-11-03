@@ -367,11 +367,22 @@ is ever "archived" as a separate step, since every session write-through-persist
 continuously); `/sessions` lists them; `/load-session <id>` switches which one is live going
 forward; `/rename-session <id> <name>` and `/delete-session <id>` manage them (deleting the
 current/only session auto-creates a fresh replacement, so a user always has at least one live
-session). All five are recognized at the same `EisyUIContext._apply_switch_command_or_return`
-chokepoint `/developer`/`/customer` already use (both the websocket JSON and plain REPL-string
-paths), but -- unlike those two -- answered asynchronously from `_run_once`
-(`_handle_session_command`), since a session lookup/mutation is async disk I/O the synchronous
-chokepoint has no access to.
+session); `/delete-all-sessions` deletes every saved session in the mode at once and starts one
+fresh replacement, same invariant; `/compact-session` forces `history_compaction.
+maybe_compact_history` to collapse the current session's older turns into a summary right away,
+even while under its token budget (`UnifiedRuntime.compact_session`'s `force=True`). All seven are
+recognized at the same `EisyUIContext._apply_switch_command_or_return` chokepoint
+`/developer`/`/customer` already use (both the websocket JSON and plain REPL-string paths), but --
+unlike those two -- answered asynchronously from `_run_once` (`_handle_session_command`), since a
+session lookup/mutation is async disk I/O the synchronous chokepoint has no access to.
+
+Separately, every ordinary turn's automatic compaction check (`handle_query`'s own
+`maybe_compact_history` call, not gated on `--session-persist-dir` at all -- it runs for every
+history, persisted or not) now also warns the customer as usage climbs: an italic Markdown notice
+at each 10%-of-budget decile from 50% up (tracked on `ConversationHistory.
+last_budget_notice_decile` so the same decile isn't repeated every turn), replaced by a distinct
+"history was compacted" notice for whichever turn actually crosses 100% and triggers real
+compaction. See `UnifiedRuntime._notify_history_budget`.
 
 The active mode (customer/developer) is also persisted per user (`SessionStore.load_active_tool_set`/
 `save_active_tool_set`, read on a connection's first context message via

@@ -18,12 +18,16 @@ below for the replacement coverage.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import websockets
+import websockets.protocol  # noqa: F401 -- populates websockets.protocol for _RawWebSocketAdapter
 
 from unified.models import IntentHandlerResult
 from unified.plugin_authoring.handlers import discovery
@@ -465,12 +469,21 @@ def test_old_plugin_output_root_pointing_at_a_real_path_triggers_exactly_one_mig
 
 
 class _FakeRuntime:
-    def __init__(self, text: str = "ok", *, session_store: SessionStore | None = None, default_tool_set: str = "unified"):
+    def __init__(
+        self,
+        text: str = "ok",
+        *,
+        session_store: SessionStore | None = None,
+        default_tool_set: str = "unified",
+        compact_session_result: bool = True,
+    ):
         self._text = text
         self.stream_handler = None
         self.calls: list[dict] = []
         self.session_store = session_store if session_store is not None else SessionStore()
         self.default_tool_set = default_tool_set
+        self._compact_session_result = compact_session_result
+        self.compact_session_calls: list[tuple[str, str]] = []
 
     async def handle_query(self, query, *, framework_context=None, session_id=None, **_kwargs):
         self.calls.append({"query": query, "framework_context": framework_context, "session_id": session_id})
@@ -481,6 +494,10 @@ class _FakeRuntime:
 
     def profile_max_turns(self, tool_set_name: str) -> int:
         return 20
+
+    async def compact_session(self, user_id: str, tool_set: str) -> bool:
+        self.compact_session_calls.append((user_id, tool_set))
+        return self._compact_session_result
 
 
 @pytest.mark.asyncio
@@ -665,8 +682,8 @@ async def test_run_once_persists_a_model_driven_mode_switch(tmp_path):
 
 
 # --- Session-management commands: /new-session, /sessions, /load-session,
-# /rename-session, /delete-session (both input paths: websocket JSON and
-# plain REPL string) ---
+# /rename-session, /delete-session, /delete-all-sessions, /compact-session
+# (both input paths: websocket JSON and plain REPL string) ---
 
 
 async def test_new_session_command_recognized_from_both_a_websocket_message_and_a_plain_repl_string():
@@ -839,6 +856,128 @@ async def test_delete_session_command_rejects_an_unknown_id(tmp_path, capsys):
     assert "No session with id 999" in capsys.readouterr().out
 
 
+@pytest.mark.asyncio
+async def test_delete_all_sessions_command_end_to_end(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    await store.start_new_session("a@example.com", "unified")  # sessions 1 and 2 now exist
+    runtime = _FakeRuntime(session_store=store)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/delete-all-sessions", ctx, session_id="fallback")
+    output = capsys.readouterr().out
+
+    assert "Deleted 2 session(s)" in output
+    assert "Started a new session" in output
+    entries = await store.list_sessions("a@example.com", "unified")
+    assert len(entries) == 1
+    assert entries[0]["id"] not in (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_compact_session_command_reports_success(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store, compact_session_result=True)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/compact-session", ctx, session_id="fallback")
+
+    assert "*Session history has been compacted.*" in capsys.readouterr().out
+    assert runtime.compact_session_calls == [("a@example.com", "unified")]
+
+
+@pytest.mark.asyncio
+async def test_compact_session_command_reports_not_enough_history(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store, compact_session_result=False)
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/compact-session", ctx, session_id="fallback")
+
+    assert "Not enough history yet to compact" in capsys.readouterr().out
+
+
+# --- WebSocket connect: session-continuation notice ---
+
+
+class _FakeServeContextManager:
+    """Stand-in for the awaitable context manager ``websockets.serve``/
+    ``unix_serve`` return -- ``_run_websocket_server`` only ever uses it as
+    ``async with server_cm:``, so entering/exiting it is all that's needed."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakeWebSocket:
+    """Minimal stand-in for a ``websockets`` connection: ``state`` (read by
+    ``_RawWebSocketAdapter.client_state``), ``send`` (collects frames), and
+    an empty async iterator (so ``handler``'s ``async for message in
+    websocket`` loop exits immediately -- this test only cares about what's
+    sent before that loop ever reads a message)."""
+
+    state = websockets.protocol.State.OPEN
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send(self, data: str) -> None:
+        self.sent.append(data)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+@pytest.mark.asyncio
+async def test_websocket_connect_sends_the_continuation_notice_before_any_message(monkeypatch):
+    captured_handler = {}
+
+    def _fake_serve(handler, host, port, ssl=None):
+        captured_handler["handler"] = handler
+        return _FakeServeContextManager()
+
+    monkeypatch.setattr(run_unified_runtime.websockets, "serve", _fake_serve)
+
+    server_task = asyncio.create_task(
+        run_unified_runtime._run_websocket_server(
+            SimpleNamespace(),
+            SimpleNamespace(),
+            {"nucore_runtime": {"unified": {"provider": "claude", "model": "m"}}},
+            "localhost",
+            0,
+            False,
+        )
+    )
+    try:
+        for _ in range(1000):
+            if "handler" in captured_handler:
+                break
+            await asyncio.sleep(0)
+        assert "handler" in captured_handler, "websockets.serve was never called"
+
+        fake_ws = _FakeWebSocket()
+        await captured_handler["handler"](fake_ws)
+
+        assert fake_ws.sent, "expected the continuation notice to be sent on connect"
+        first_frame = json.loads(fake_ws.sent[0])
+        assert first_frame["message"] == run_unified_runtime._SESSION_CONTINUATION_NOTICE
+    finally:
+        server_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
+
+
 # --- _build_plugin_authoring_tool_set: dispatch factory shape ---
 # (there is no more tool-set dispatcher -- "customer"/"unified" needs no
 # resolution at all. 'enabled' validation lives in runtime_config.py -- see
@@ -867,6 +1006,15 @@ def test_build_plugin_authoring_tool_set_returns_a_dispatch_factory_not_a_dispat
     assert callable(second_bundle.dispatch)
     assert first_bundle.extra_tools is None
     assert first_bundle.on_raw_response is None
+
+
+def test_build_plugin_authoring_tool_set_includes_list_chat_commands():
+    # Developers need to discover /customer and the session commands too --
+    # this customer tool is explicitly reused via
+    # _PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS.
+    tool_spec_paths, _, _ = _resolve_plugin_authoring()
+
+    assert "tool_list_chat_commands.json" in _tool_names(tool_spec_paths)
 
 
 @pytest.mark.asyncio

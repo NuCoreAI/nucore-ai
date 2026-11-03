@@ -8,6 +8,7 @@ from nucore import NuCoreInterface
 from utils import get_logger
 
 from .handlers import (
+    chat_commands,
     command_control_status,
     diagnostics,
     folder_ops,
@@ -66,6 +67,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "preference_op": preferences.preference_op,
     "run_shell_command": shell.run_shell_command,
     "get_time_info": time_info.get_time_info,
+    "list_chat_commands": chat_commands.list_chat_commands,
 }
 
 

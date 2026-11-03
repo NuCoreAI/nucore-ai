@@ -109,10 +109,11 @@ class EisyUIContext:
         # tool set -- lets flush_active_tool_set skip a redundant write.
         self._persisted_tool_set: str | None = None
         # A recognized /new-session, /sessions, /load-session,
-        # /rename-session, or /delete-session command, recorded by
-        # _apply_switch_command_or_return and consumed by _run_once via
-        # pop_local_command -- see that method's docstring for why the
-        # reply can't be produced synchronously at recognition time.
+        # /rename-session, /delete-session, /delete-all-sessions, or
+        # /compact-session command, recorded by
+        # _apply_switch_command_or_return and consumed by
+        # _run_once via pop_local_command -- see that method's docstring for
+        # why the reply can't be produced synchronously at recognition time.
         self._pending_local_command: tuple[str, str] | None = None
 
     _SWITCH_COMMANDS = {"/developer": "plugin_authoring", "/customer": "unified"}
@@ -122,7 +123,15 @@ class EisyUIContext:
     # access the synchronous chokepoint doesn't have -- see
     # pop_local_command/_run_once's _handle_session_command.
     _SESSION_COMMANDS = frozenset(
-        {"/new-session", "/sessions", "/load-session", "/rename-session", "/delete-session"}
+        {
+            "/new-session",
+            "/sessions",
+            "/load-session",
+            "/rename-session",
+            "/delete-session",
+            "/delete-all-sessions",
+            "/compact-session",
+        }
     )
 
     def process_message(
@@ -211,8 +220,9 @@ class EisyUIContext:
           per merged-toolsets.md, never a silent no-op.
 
         A ``/new-session``/``/sessions``/``/load-session``/
-        ``/rename-session``/``/delete-session`` command (with or without a
-        trailing argument) is recognized here too, before the no-argument
+        ``/rename-session``/``/delete-session``/``/delete-all-sessions``/
+        ``/compact-session``
+        command (with or without a trailing argument) is recognized here too, before the no-argument
         switch-command lookup, but is never answered synchronously: this
         method has no access to the runtime or to disk, both of which the
         reply needs (a session lookup/mutation is async I/O). Instead it's
@@ -494,7 +504,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Directory to persist per-user conversation history (customer and developer modes "
             "kept separately, each supporting multiple named sessions -- /new-session, "
-            "/sessions, /load-session, /rename-session, /delete-session) and last-active mode "
+            "/sessions, /load-session, /rename-session, /delete-session, /delete-all-sessions, "
+            "/compact-session) "
+            "and last-active mode "
             "in. There is no default and no runtime-config fallback: persistence is off, and "
             "every connection is in-memory-only for the process's lifetime, unless this is set. "
             "CLI-only, deliberately, same reasoning as --preferences-dir. Only meaningful in "
@@ -621,6 +633,17 @@ def _load_backend_api_cached(
 
 _TOOL_SET_LABELS = {"unified": "customer", "plugin_authoring": "developer"}
 
+# Sent once per WebSocket connection, immediately on connect (see
+# _run_websocket_server's handler) -- conversation history is shared across
+# reconnects by user_id, so every new connection is, by default, a
+# continuation of whatever the user was already talking about. Italicized
+# Markdown rather than raw HTML (e.g. <small>/<sub>) since the actual chatbox
+# renderer isn't in this repo and its HTML sanitizing can't be verified.
+_SESSION_CONTINUATION_NOTICE = (
+    "*This is the continuation of the previous session. If you want to start "
+    "a new session, type /new-session.*"
+)
+
 
 async def _deliver_direct_reply(runtime: UnifiedRuntime, text: str) -> None:
     """Send *text* straight back to the user over whatever channel this
@@ -646,7 +669,7 @@ async def _handle_session_command(
 ) -> str:
     """Compute the reply for one of :attr:`EisyUIContext._SESSION_COMMANDS`
     (``/new-session``, ``/sessions``, ``/load-session``, ``/rename-session``,
-    ``/delete-session``). Called from ``_run_once`` after popping the
+    ``/delete-session``, ``/delete-all-sessions``, ``/compact-session``). Called from ``_run_once`` after popping the
     command off ``eisy_ui_context`` -- this needs the runtime's
     ``session_store`` and async disk access, neither of which the
     synchronous recognition chokepoint
@@ -722,6 +745,21 @@ async def _handle_session_command(
         if replacement is not None:
             reply += f' That was your current session, so a new one ("{replacement["name"]}") has been started.'
         return reply
+
+    if command == "/delete-all-sessions":
+        deleted, replacement = await store.delete_all_sessions(user_id, tool_set)
+        if not deleted:
+            return f'No saved sessions to delete in {mode_label} mode. Still on "{replacement["name"]}".'
+        return (
+            f"Deleted {len(deleted)} session(s) in {mode_label} mode. "
+            f'Started a new session ("{replacement["name"]}").'
+        )
+
+    if command == "/compact-session":
+        compacted = await runtime.compact_session(user_id, tool_set)
+        if not compacted:
+            return "*Not enough history yet to compact -- keep chatting a bit more first.*"
+        return "*Session history has been compacted.*"
 
     raise AssertionError(f"Unreachable: {command!r} is not in EisyUIContext._SESSION_COMMANDS")
 
@@ -992,6 +1030,7 @@ _PLUGIN_AUTHORING_REUSED_CUSTOMER_TOOLS = (
     "tool_plugin_delete.json",
     "tool_plugin_configure.json",
     "tool_plugin_get_config.json",
+    "tool_list_chat_commands.json",
 )
 
 
@@ -1200,7 +1239,8 @@ async def _run_websocket_server(
     (and last-active mode) survives a full process restart, not just an
     in-process reconnect, and a user can keep multiple named sessions per
     tool set (``/new-session``/``/sessions``/``/load-session``/
-    ``/rename-session``/``/delete-session`` -- see ``_handle_session_command``).
+    ``/rename-session``/``/delete-session``/``/delete-all-sessions``/
+    ``/compact-session`` -- see ``_handle_session_command``).
     ``None`` (the default) keeps everything exactly as in-memory-only as it
     was before this existed.
     """
@@ -1246,6 +1286,7 @@ async def _run_websocket_server(
             tool_sets=tool_sets,
         )
         runtime.stream_handler = stream_handler
+        await stream_handler.send_chunk(_SESSION_CONTINUATION_NOTICE, True)
         try:
             async for message in websocket:
                 runtime.reset_stream_handler()

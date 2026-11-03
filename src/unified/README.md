@@ -155,15 +155,32 @@ restart, not just an in-process reconnect. `None` (the default) is a complete no
 disk I/O, identical behavior to before this existed.
 
 Within each mode, a user can hold multiple named sessions (not just one continuously-growing
-history), managed by five chat commands recognized the same way `/developer`/`/customer` are
+history), managed by seven chat commands recognized the same way `/developer`/`/customer` are
 (`EisyUIContext._apply_switch_command_or_return`, both the websocket-JSON and plain-REPL-string
 input paths): `/new-session`, `/sessions`, `/load-session <id>`, `/rename-session <id> <name>`,
-`/delete-session <id>`. Unlike the two mode-switch commands, these are answered asynchronously
-from `_run_once` (`_handle_session_command`) rather than at recognition time, since a session
-lookup/mutation is async disk I/O.
+`/delete-session <id>`, `/delete-all-sessions`, `/compact-session`. Unlike the two mode-switch
+commands, these are answered asynchronously from `_run_once` (`_handle_session_command`) rather
+than at recognition time, since a session lookup/mutation is async disk I/O.
 
 See `session_persistence.py` (the synchronous, on-disk half -- one directory per user named by a
 hash of `user_id`, atomic writes, secret redaction before write) and `session_store.py` (the
 async, in-memory-cached half that makes concurrent session-management commands for the same user
 safe) for the implementation, and `design/developers/merged-toolsets.md`'s "Persisted,
 multi-session history" section for the full design.
+
+## History-budget notices and manual compaction
+
+`history_compaction.maybe_compact_history` (called once per turn from `UnifiedRuntime.handle_query`)
+collapses the oldest half of a session's turns into one LLM-summarized pseudo-turn once estimated
+token size exceeds that tool set's `history_token_budget`. Its `notify` parameter -- wired to
+`UnifiedRuntime._notify_history_budget`, which sends over whichever channel is attached
+(websocket JSON frame or REPL stdout, unlike the websocket-only `_notify_round_start`) -- emits one
+italic Markdown status line the first time estimated usage crosses each 10%-of-budget decile at or
+above 50% (tracked on `ConversationHistory.last_budget_notice_decile`, deliberately never restored
+from disk -- see that field's own docstring), then a distinct "history was compacted" line for
+whichever turn actually crosses 100% and triggers real compaction, resetting the tracked decile
+back to 0.
+
+`/compact-session` is the manual counterpart (`UnifiedRuntime.compact_session`), forcing the same
+compaction early even while under budget (`maybe_compact_history`'s `force=True`), under the same
+per-`(user_id, tool_set)` lock `handle_query` holds for its own automatic check.

@@ -80,6 +80,7 @@ async def test_build_system_prompt_sections_splits_into_three_cache_sections():
 
     assert static.startswith("# NUCORE ASSISTANT")
     assert "# CRITICAL RULES" in static
+    assert "# CHAT COMMANDS" in static
     assert "# DEVICE DATABASE" in static
     assert "# ROUTINES DATABASE" not in static
     assert "# USER PREFERENCES" not in static and "# TIME & LOCATION" not in static

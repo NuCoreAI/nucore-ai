@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 import unified.runtime as runtime_module
+from unified.history_compaction import _MIN_TURNS_TO_COMPACT
 from unified.runtime import _TOOLS_DIR, DispatchBundle, ToolSetBundle, UnifiedRuntime, resolve_llm_profile
 from unified.session_store import SessionStore
 
@@ -506,6 +508,111 @@ async def test_handle_query_defaults_extra_tools_and_on_raw_response_to_none():
     await _runtime().handle_query("hi")
     assert _FakeLoop.captured_init_kwargs["extra_tools"] is None
     assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
+
+
+# --- on_round_start passthrough and _notify_round_start's own "Thinking..."
+# progress notice (sent while the agentic loop is still generating/
+# dispatching tools, websocket connections only) ---
+
+
+@pytest.mark.asyncio
+async def test_handle_query_forwards_on_round_start_to_agentic_loop():
+    runtime = _runtime()
+    await runtime.handle_query("hi")
+
+    # Bound methods from the same instance/function aren't `is`-identical
+    # across separate attribute accesses, but they do compare equal.
+    assert _FakeLoop.captured_init_kwargs["on_round_start"] == runtime._notify_round_start
+
+
+@pytest.mark.asyncio
+async def test_notify_round_start_sends_the_notice_over_a_websocket():
+    runtime = _runtime()
+    runtime.stream_handler = SimpleNamespace(websocket=object(), send_chunk=AsyncMock())
+
+    await runtime._notify_round_start(0)
+
+    runtime.stream_handler.send_chunk.assert_awaited_once_with(runtime_module._THINKING_NOTICE, False)
+
+
+@pytest.mark.asyncio
+async def test_notify_round_start_is_silent_without_a_websocket():
+    runtime = _runtime()
+    runtime.stream_handler = SimpleNamespace(websocket=None, send_chunk=AsyncMock())
+
+    await runtime._notify_round_start(0)
+
+    runtime.stream_handler.send_chunk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_notify_round_start_is_a_noop_without_a_stream_handler():
+    runtime = _runtime()
+    assert runtime.stream_handler is None
+
+    await runtime._notify_round_start(0)  # must not raise
+
+
+# --- history-budget notices (maybe_compact_history's `notify` hook) and the
+# manual /compact-session command's own UnifiedRuntime.compact_session ---
+
+
+@pytest.mark.asyncio
+async def test_handle_query_forwards_notify_hook_to_maybe_compact_history(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_maybe_compact_history(history, **kwargs):
+        captured.update(kwargs)
+        return False
+
+    monkeypatch.setattr(runtime_module, "maybe_compact_history", _fake_maybe_compact_history)
+    runtime = _runtime()
+
+    await runtime.handle_query("hi")
+
+    assert captured["notify"] == runtime._notify_history_budget
+
+
+@pytest.mark.asyncio
+async def test_notify_history_budget_sends_the_notice_regardless_of_websocket():
+    # Unlike _notify_round_start, this one isn't websocket-gated -- a
+    # one-shot-per-crossing notice is fine to print in the REPL too.
+    runtime = _runtime()
+    runtime.stream_handler = SimpleNamespace(websocket=None, send_chunk=AsyncMock())
+
+    await runtime._notify_history_budget("*hi*")
+
+    runtime.stream_handler.send_chunk.assert_awaited_once_with("*hi*", True)
+
+
+@pytest.mark.asyncio
+async def test_notify_history_budget_is_a_noop_without_a_stream_handler():
+    runtime = _runtime()
+    assert runtime.stream_handler is None
+
+    await runtime._notify_history_budget("*hi*")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_compact_session_compacts_an_eligible_session_and_reports_true():
+    runtime = _runtime()
+    session_num = await runtime.session_store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    history = await runtime.session_store.get_or_load("a@example.com", "unified", session_num, durable=True)
+    for i in range(_MIN_TURNS_TO_COMPACT):
+        history.append(f"query {i}", f"response {i}")
+
+    compacted = await runtime.compact_session("a@example.com", "unified")
+
+    assert compacted is True
+
+
+@pytest.mark.asyncio
+async def test_compact_session_reports_false_when_there_isnt_enough_history():
+    runtime = _runtime()
+
+    compacted = await runtime.compact_session("a@example.com", "unified")
+
+    assert compacted is False
 
 
 # --- default `unified` bundle's own native-web-search wiring (OpenAI's
