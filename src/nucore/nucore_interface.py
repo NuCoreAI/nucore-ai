@@ -1242,6 +1242,26 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the open_qr_scan method.")
 
+    async def notify_ai_busy(self, enabled: bool, message: str | None = None) -> Any:
+        """
+        Turn eisy-ui's "AI busy" animation on or off, broadcast to every
+        connected client. Fired once at the start of an LLM-processing turn
+        (``enabled=True``, with a status word) and once when that turn fully
+        finishes, success or failure (``enabled=False``). Not
+        ``@abstractmethod`` -- same reasoning as ``dismiss_discovery_dialogs``
+        above.
+
+        :param enabled: True to show the animation, False to clear it.
+        :param message: Status word to display (e.g. "Thinking"). Only
+            meaningful when enabled=True.
+        :return: response from the hub, or None/error info on failure.
+
+        API:
+        POST /api/ai/busy
+        Body: {"enabled": true|false, "message"?: "..."}  (message omitted when enabled=false)
+        """
+        raise NotImplementedError("Subclasses must implement the notify_ai_busy method.")
+
     def subscribe_events(self, on_message_callback, on_connect_callback=None, on_disconnect_callback=None):
         """
         Subscribe to device events using the nucore API.

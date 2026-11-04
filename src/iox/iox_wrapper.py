@@ -2652,6 +2652,15 @@ class IoXWrapper(NuCoreInterface):
     async def open_qr_scan(self, client_id: str, raw: str = None) -> bool:
         return await self._post_app_event("openQrScan", client_id=client_id, action_data={"raw": raw} if raw else None)
 
+    async def notify_ai_busy(self, enabled: bool, message: str = None) -> bool:
+        """POST api/ai/busy -- eisy-ui's "AI busy" animation channel, same
+        unix socket as _post_app_event."""
+        body = {"enabled": enabled}
+        if enabled and message:
+            body["message"] = message
+        response = await self.post("/api/ai/busy", json.dumps(body), {"Content-Type": "application/json"})
+        return response is not None and response.status_code == 200
+
     # ------------------------------------------------------------------
     # WebSocket event subscription
     # ------------------------------------------------------------------

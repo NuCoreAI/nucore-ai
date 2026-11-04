@@ -88,7 +88,6 @@ class AgenticLoop:
         max_fabrication_retries: int = 1,
         extra_tools: list[dict[str, Any]] | None = None,
         on_raw_response: Callable[[Any], Any] | None = None,
-        on_round_start: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         """*extra_tools*/*on_raw_response* exist for plugin_authoring's
         Claude-native web search path (run_unified_runtime.py's
@@ -107,15 +106,6 @@ class AgenticLoop:
         blocks, which never become a ``ToolCall`` and so never reach
         ``dispatch``. Best-effort: an exception here is logged and
         swallowed, never allowed to break the turn.
-
-        *on_round_start*, when given, is awaited once per round right
-        *before* ``generate()`` is called (unlike *on_raw_response*, which
-        fires after) -- this is how ``UnifiedRuntime`` sends a "Thinking..."
-        progress notice over a websocket while a round's generation/tool
-        execution is still in flight. The fabrication-guard retry path
-        (``continue`` below) re-enters this same loop, so a retried round
-        gets its own call too. Same best-effort swallow-exception contract
-        as *on_raw_response*.
         """
         self.llm_client = llm_client
         self.tool_specs = tool_specs
@@ -123,7 +113,6 @@ class AgenticLoop:
         self.dispatch = dispatch
         self.max_iterations = max_iterations
         self._on_raw_response = on_raw_response
-        self._on_round_start = on_round_start
         # "off": the guard never runs. "log": detect and write a
         # fabrication_flag log line, but never change what the customer
         # sees (default -- zero behavior risk). "block": also inject a
@@ -191,11 +180,6 @@ class AgenticLoop:
         pending_notice = ""
 
         for iteration in range(self.max_iterations):
-            if self._on_round_start is not None:
-                try:
-                    await self._on_round_start(iteration)
-                except Exception as exc:
-                    logger.error("unified: on_round_start hook failed: %s", exc)
             intent_name = f"unified (round {iteration + 1})"
             await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
             round_config = dict(llm_config or {})

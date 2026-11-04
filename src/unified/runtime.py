@@ -11,6 +11,7 @@ tools -- see ``design/developers/merged-toolsets.md`` for the full design.
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, NamedTuple
 
@@ -37,11 +38,15 @@ _TOOLS_DIR = Path(__file__).parent / "tools"
 # bundle's cap, independent of plugin_authoring's.
 _CLAUDE_NATIVE_WEB_SEARCH_MAX_USES = 10
 
-# Sent once per AgenticLoop round (see _notify_round_start) while a turn is
-# still generating/dispatching tools -- italic Markdown, matching
-# run_unified_runtime._SESSION_CONTINUATION_NOTICE's styling convention for a
-# chatbox that renders every bot message as Markdown.
-_THINKING_NOTICE = "*Thinking...*"
+# Status words for the turn-level "AI busy" UI animation driven by
+# nucore_interface.notify_ai_busy (see _notify_busy_start) -- one is chosen
+# at random at the start of every turn, purely cosmetic variety.
+_BUSY_STATUS_WORDS = (
+    "Thinking", "Pondering", "Calculating", "Processing", "Working", "Reasoning",
+    "Mulling", "Noodling", "Percolating", "Simmering", "Puzzling", "Deliberating",
+    "Crunching", "Cogitating", "Musing", "Brewing", "Ruminating", "Churning",
+    "Scheming", "Figuring", "Untangling", "Conjuring",
+)
 
 SystemPromptBuilder = Callable[[NuCoreInterface], Awaitable[list[str]]]
 
@@ -476,28 +481,33 @@ class UnifiedRuntime:
         if self.stream_handler is not None:
             self.stream_handler.reset_stream_state()
 
-    async def _notify_round_start(self, iteration: int) -> None:
-        """AgenticLoop's ``on_round_start`` hook -- sends `_THINKING_NOTICE`
-        at the start of every round (including the first), websocket
-        connections only. REPL mode (no websocket attached) stays silent --
-        StreamHandler.send_chunk's no-websocket fallback is a bare
-        ``print(chunk, end="")`` with no message-boundary framing, so
-        repeated standalone notices would print as garbage mixed into real
-        streamed text. Calls send_chunk directly, never handle_stream_chunk,
-        so this never counts as "real content streamed" for
-        run_unified_runtime._run_once's get_stream_chunk_count() check."""
-        if self.stream_handler is not None and self.stream_handler.websocket is not None:
-            await self.stream_handler.send_chunk(_THINKING_NOTICE, False)
+    async def _notify_busy_start(self) -> None:
+        """Fires once at the very start of every turn (see handle_query) --
+        turns on nucore_interface's "AI busy" UI animation with a randomly
+        chosen status word. Best-effort: a backend that hasn't implemented
+        notify_ai_busy (e.g. most test FakeBackends) must never break a turn
+        over a cosmetic animation."""
+        try:
+            await self.nucore_interface.notify_ai_busy(enabled=True, message=random.choice(_BUSY_STATUS_WORDS))
+        except Exception as exc:
+            logger.warning("unified: notify_ai_busy(enabled=True) failed: %s", exc)
+
+    async def _notify_busy_end(self) -> None:
+        """Counterpart to _notify_busy_start -- always awaited from
+        handle_query's finally block, exactly once per turn, so the UI
+        animation is cleared on every exit path (normal return or
+        exception)."""
+        try:
+            await self.nucore_interface.notify_ai_busy(enabled=False)
+        except Exception as exc:
+            logger.warning("unified: notify_ai_busy(enabled=False) failed: %s", exc)
 
     async def _notify_history_budget(self, text: str) -> None:
         """maybe_compact_history's ``notify`` hook -- budget-threshold and
-        auto-compaction notices. Unlike `_notify_round_start` (websocket-only
-        -- see its own docstring for why repeated per-round notices would
-        look like garbage in REPL's frame-less print fallback), these fire
-        at most once per decile crossing, so a plain REPL print is fine too;
-        `send_chunk` already handles both transports -- this only needs the
-        same no-stream_handler guard `_notify_round_start` has, without the
-        extra websocket-only restriction."""
+        auto-compaction notices. These fire at most once per decile
+        crossing, so a plain REPL print is fine too; `send_chunk` already
+        handles both transports -- this only needs a no-stream_handler
+        guard."""
         if self.stream_handler is not None:
             await self.stream_handler.send_chunk(text, True)
 
@@ -538,7 +548,6 @@ class UnifiedRuntime:
             max_fabrication_retries=int(profile_cfg.get("max_fabrication_retries", 1)),
             extra_tools=bundle.extra_tools,
             on_raw_response=bundle.on_raw_response,
-            on_round_start=self._notify_round_start,
         )
 
     async def handle_query(
@@ -572,123 +581,127 @@ class UnifiedRuntime:
         False, the default -- what every existing caller gets -- is today's
         in-memory-only behavior, unchanged.
         """
-        session_id = session_id or "default"
-        current_tool_set = active_tool_set or self.default_tool_set
-        # Backstop, not the primary guard -- the explicit /developer//customer
-        # command path (run_unified_runtime.py's EisyUIContext) already
-        # checks is_tool_set_enabled before ever setting active_tool_set, and
-        # the model-driven switch tool already checks is_target_enabled
-        # before raising ToolSetSwitchRequested. This only protects a caller
-        # that hands in a stale/invalid active_tool_set some other way (a
-        # sticky value from before a config reload, a direct test/CLI call)
-        # from a KeyError at self._tool_sets[current_tool_set] below.
-        if current_tool_set not in self._tool_sets:
-            current_tool_set = self.default_tool_set
-        # Composite key -- see merged-toolsets.md's "Session history": two
-        # tool sets' conversations on one connection must not interleave
-        # plain-text turns in one ConversationHistory. current_session_num
-        # is None for a non-durable session_id (the per-connection
-        # uuid4/"default" fallback -- no stable identity to scope multiple
-        # named sessions under), in which case composite_key degrades to
-        # today's exact f"{session_id}::{tool_set}" shape.
-        current_session_num = await self.session_store.resolve_current_session_id(
-            session_id, current_tool_set, durable=durable_session
-        )
-        composite_session_id = SessionStore.composite_key(session_id, current_tool_set, current_session_num)
-
-        async with self.session_store.lock(composite_session_id):
-            profile_cfg = self._profile_config(current_tool_set)
-            history = await self.session_store.get_or_load(
-                session_id,
-                current_tool_set,
-                current_session_num,
-                max_turns=int(profile_cfg.get("max_turns", 20)),
-                durable=durable_session,
+        await self._notify_busy_start()
+        try:
+            session_id = session_id or "default"
+            current_tool_set = active_tool_set or self.default_tool_set
+            # Backstop, not the primary guard -- the explicit /developer//customer
+            # command path (run_unified_runtime.py's EisyUIContext) already
+            # checks is_tool_set_enabled before ever setting active_tool_set, and
+            # the model-driven switch tool already checks is_target_enabled
+            # before raising ToolSetSwitchRequested. This only protects a caller
+            # that hands in a stale/invalid active_tool_set some other way (a
+            # sticky value from before a config reload, a direct test/CLI call)
+            # from a KeyError at self._tool_sets[current_tool_set] below.
+            if current_tool_set not in self._tool_sets:
+                current_tool_set = self.default_tool_set
+            # Composite key -- see merged-toolsets.md's "Session history": two
+            # tool sets' conversations on one connection must not interleave
+            # plain-text turns in one ConversationHistory. current_session_num
+            # is None for a non-durable session_id (the per-connection
+            # uuid4/"default" fallback -- no stable identity to scope multiple
+            # named sessions under), in which case composite_key degrades to
+            # today's exact f"{session_id}::{tool_set}" shape.
+            current_session_num = await self.session_store.resolve_current_session_id(
+                session_id, current_tool_set, durable=durable_session
             )
-            await maybe_compact_history(
-                history,
-                llm_client=self.llm_client,
-                llm_config=self._resolve_llm_config(current_tool_set),
-                token_budget=int(profile_cfg.get("history_token_budget", 20000)),
-                notify=self._notify_history_budget,
+            composite_session_id = SessionStore.composite_key(session_id, current_tool_set, current_session_num)
+
+            async with self.session_store.lock(composite_session_id):
+                profile_cfg = self._profile_config(current_tool_set)
+                history = await self.session_store.get_or_load(
+                    session_id,
+                    current_tool_set,
+                    current_session_num,
+                    max_turns=int(profile_cfg.get("max_turns", 20)),
+                    durable=durable_session,
+                )
+                await maybe_compact_history(
+                    history,
+                    llm_client=self.llm_client,
+                    llm_config=self._resolve_llm_config(current_tool_set),
+                    token_budget=int(profile_cfg.get("history_token_budget", 20000)),
+                    notify=self._notify_history_budget,
+                )
+
+                current_provider = self._resolve_llm_config(current_tool_set).get("provider")
+                history_messages: list[dict[str, Any]] = _build_history_messages(
+                    history.turns, current_provider=current_provider
+                )
+
+                handoff_notes: list[str] = []
+                user_message = _build_user_message(query, framework_context=framework_context, handoff_notes=handoff_notes)
+
+                self._current_switch_state = _SwitchState(
+                    enabled_tool_sets=self.enabled_tool_sets,
+                    max_switches=int(self.runtime_config.get("max_tool_set_switches_per_turn", 1)),
+                )
+
+                while True:
+                    system_prompt = await self._tool_sets[current_tool_set].system_prompt_builder(self.nucore_interface)
+                    loop = await self._build_loop(current_tool_set, connection_context, query)
+                    llm_config = self._resolve_llm_config(current_tool_set)
+                    # Grok's adapter reads this back out to set the x-grok-conv-id
+                    # header that keeps repeat calls in this conversation routed to
+                    # the same cache-warm server -- every other adapter ignores it.
+                    llm_config["session_id"] = composite_session_id
+                    try:
+                        final_text, new_messages = await loop.run(
+                            system_prompt=system_prompt,
+                            history_messages=history_messages,
+                            user_message=user_message,
+                            llm_config=llm_config,
+                        )
+                        break
+                    except ToolSetSwitchRequested as switch:
+                        self._current_switch_state.switches_used += 1
+                        current_tool_set = switch.target_tool_set
+                        if switch.handoff_summary:
+                            handoff_notes.append(switch.handoff_summary)
+                        # Re-key history to the new tool set's own composite id --
+                        # the chained loop's turn gets recorded under whichever
+                        # tool set actually produced the final answer. Re-resolve
+                        # the current session number too: a durable session's
+                        # "current session" is scoped per tool set, so the tool
+                        # set just switched into may have a different one
+                        # current than the one this turn started in.
+                        current_session_num = await self.session_store.resolve_current_session_id(
+                            session_id, current_tool_set, durable=durable_session
+                        )
+                        composite_session_id = SessionStore.composite_key(session_id, current_tool_set, current_session_num)
+                        history = await self.session_store.get_or_load(
+                            session_id,
+                            current_tool_set,
+                            current_session_num,
+                            max_turns=int(self._profile_config(current_tool_set).get("max_turns", 20)),
+                            durable=durable_session,
+                        )
+                        current_provider = self._resolve_llm_config(current_tool_set).get("provider")
+                        history_messages = _build_history_messages(history.turns, current_provider=current_provider)
+                        user_message = _build_user_message(
+                            query, framework_context=framework_context, handoff_notes=handoff_notes
+                        )
+                        continue
+
+                # new_messages is persisted verbatim, including its own
+                # ui_context-wrapped first element (see loop.py's
+                # new_messages = [{"role": "user", "content": user_message}])
+                # -- not swapped back to the clean `query` the way
+                # ConversationTurn.query itself is. That swap was tried and
+                # measured to defeat Anthropic's prompt caching: a replayed
+                # prefix must be byte-identical to what was actually sent (and
+                # cached) during this turn for the *next* turn to get a cache
+                # hit on it, and the wrapped text is exactly what was actually
+                # sent. A later turn's own ui_context is always appended fresh
+                # at the end of its own user_message regardless, so an older
+                # wrapped snapshot sitting earlier in history is harmless.
+                history.append(query, final_text, new_messages, provider=current_provider)
+                # Write-through, still inside the lock so a concurrent request
+                # for this same key can't observe a partially-saved turn.
+                await self.session_store.persist(session_id, current_tool_set, current_session_num, durable=durable_session)
+
+            return IntentHandlerResult(
+                intent="unified", output={"text": final_text, "active_tool_set": current_tool_set}
             )
-
-            current_provider = self._resolve_llm_config(current_tool_set).get("provider")
-            history_messages: list[dict[str, Any]] = _build_history_messages(
-                history.turns, current_provider=current_provider
-            )
-
-            handoff_notes: list[str] = []
-            user_message = _build_user_message(query, framework_context=framework_context, handoff_notes=handoff_notes)
-
-            self._current_switch_state = _SwitchState(
-                enabled_tool_sets=self.enabled_tool_sets,
-                max_switches=int(self.runtime_config.get("max_tool_set_switches_per_turn", 1)),
-            )
-
-            while True:
-                system_prompt = await self._tool_sets[current_tool_set].system_prompt_builder(self.nucore_interface)
-                loop = await self._build_loop(current_tool_set, connection_context, query)
-                llm_config = self._resolve_llm_config(current_tool_set)
-                # Grok's adapter reads this back out to set the x-grok-conv-id
-                # header that keeps repeat calls in this conversation routed to
-                # the same cache-warm server -- every other adapter ignores it.
-                llm_config["session_id"] = composite_session_id
-                try:
-                    final_text, new_messages = await loop.run(
-                        system_prompt=system_prompt,
-                        history_messages=history_messages,
-                        user_message=user_message,
-                        llm_config=llm_config,
-                    )
-                    break
-                except ToolSetSwitchRequested as switch:
-                    self._current_switch_state.switches_used += 1
-                    current_tool_set = switch.target_tool_set
-                    if switch.handoff_summary:
-                        handoff_notes.append(switch.handoff_summary)
-                    # Re-key history to the new tool set's own composite id --
-                    # the chained loop's turn gets recorded under whichever
-                    # tool set actually produced the final answer. Re-resolve
-                    # the current session number too: a durable session's
-                    # "current session" is scoped per tool set, so the tool
-                    # set just switched into may have a different one
-                    # current than the one this turn started in.
-                    current_session_num = await self.session_store.resolve_current_session_id(
-                        session_id, current_tool_set, durable=durable_session
-                    )
-                    composite_session_id = SessionStore.composite_key(session_id, current_tool_set, current_session_num)
-                    history = await self.session_store.get_or_load(
-                        session_id,
-                        current_tool_set,
-                        current_session_num,
-                        max_turns=int(self._profile_config(current_tool_set).get("max_turns", 20)),
-                        durable=durable_session,
-                    )
-                    current_provider = self._resolve_llm_config(current_tool_set).get("provider")
-                    history_messages = _build_history_messages(history.turns, current_provider=current_provider)
-                    user_message = _build_user_message(
-                        query, framework_context=framework_context, handoff_notes=handoff_notes
-                    )
-                    continue
-
-            # new_messages is persisted verbatim, including its own
-            # ui_context-wrapped first element (see loop.py's
-            # new_messages = [{"role": "user", "content": user_message}])
-            # -- not swapped back to the clean `query` the way
-            # ConversationTurn.query itself is. That swap was tried and
-            # measured to defeat Anthropic's prompt caching: a replayed
-            # prefix must be byte-identical to what was actually sent (and
-            # cached) during this turn for the *next* turn to get a cache
-            # hit on it, and the wrapped text is exactly what was actually
-            # sent. A later turn's own ui_context is always appended fresh
-            # at the end of its own user_message regardless, so an older
-            # wrapped snapshot sitting earlier in history is harmless.
-            history.append(query, final_text, new_messages, provider=current_provider)
-            # Write-through, still inside the lock so a concurrent request
-            # for this same key can't observe a partially-saved turn.
-            await self.session_store.persist(session_id, current_tool_set, current_session_num, durable=durable_session)
-
-        return IntentHandlerResult(
-            intent="unified", output={"text": final_text, "active_tool_set": current_tool_set}
-        )
+        finally:
+            await self._notify_busy_end()

@@ -510,47 +510,62 @@ async def test_handle_query_defaults_extra_tools_and_on_raw_response_to_none():
     assert _FakeLoop.captured_init_kwargs["on_raw_response"] is None
 
 
-# --- on_round_start passthrough and _notify_round_start's own "Thinking..."
-# progress notice (sent while the agentic loop is still generating/
-# dispatching tools, websocket connections only) ---
+# --- turn-level "AI busy" notify (nucore_interface.notify_ai_busy), fired
+# once at the start of handle_query and once (via finally) on every exit ---
 
 
 @pytest.mark.asyncio
-async def test_handle_query_forwards_on_round_start_to_agentic_loop():
+async def test_handle_query_notifies_busy_start_then_end_around_the_turn():
+    calls: list[tuple] = []
+
+    async def fake_notify(enabled, message=None):
+        calls.append((enabled, message))
+
     runtime = _runtime()
+    runtime.nucore_interface = SimpleNamespace(notify_ai_busy=fake_notify)
     await runtime.handle_query("hi")
 
-    # Bound methods from the same instance/function aren't `is`-identical
-    # across separate attribute accesses, but they do compare equal.
-    assert _FakeLoop.captured_init_kwargs["on_round_start"] == runtime._notify_round_start
+    assert len(calls) == 2
+    assert calls[0][0] is True
+    assert isinstance(calls[0][1], str) and calls[0][1]
+    assert calls[1] == (False, None)
 
 
 @pytest.mark.asyncio
-async def test_notify_round_start_sends_the_notice_over_a_websocket():
+async def test_handle_query_notifies_busy_end_exactly_once_even_on_exception(monkeypatch):
+    calls: list[bool] = []
+
+    async def fake_notify(enabled, message=None):
+        calls.append(enabled)
+
+    class _BoomLoop(_FakeLoop):
+        async def run(self, **kwargs):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _BoomLoop)
     runtime = _runtime()
-    runtime.stream_handler = SimpleNamespace(websocket=object(), send_chunk=AsyncMock())
+    runtime.nucore_interface = SimpleNamespace(notify_ai_busy=fake_notify)
 
-    await runtime._notify_round_start(0)
+    with pytest.raises(ValueError):
+        await runtime.handle_query("hi")
 
-    runtime.stream_handler.send_chunk.assert_awaited_once_with(runtime_module._THINKING_NOTICE, False)
+    assert calls == [True, False]
 
 
 @pytest.mark.asyncio
-async def test_notify_round_start_is_silent_without_a_websocket():
-    runtime = _runtime()
-    runtime.stream_handler = SimpleNamespace(websocket=None, send_chunk=AsyncMock())
-
-    await runtime._notify_round_start(0)
-
-    runtime.stream_handler.send_chunk.assert_not_awaited()
+async def test_notify_busy_start_is_best_effort_when_notify_ai_busy_is_missing():
+    runtime = _runtime()  # nucore_interface=SimpleNamespace() has no notify_ai_busy
+    await runtime._notify_busy_start()  # must not raise
 
 
 @pytest.mark.asyncio
-async def test_notify_round_start_is_a_noop_without_a_stream_handler():
-    runtime = _runtime()
-    assert runtime.stream_handler is None
+async def test_notify_busy_end_is_best_effort_when_notify_ai_busy_raises():
+    async def boom(enabled, message=None):
+        raise RuntimeError("socket down")
 
-    await runtime._notify_round_start(0)  # must not raise
+    runtime = _runtime()
+    runtime.nucore_interface = SimpleNamespace(notify_ai_busy=boom)
+    await runtime._notify_busy_end()  # must not raise
 
 
 # --- history-budget notices (maybe_compact_history's `notify` hook) and the
@@ -575,8 +590,8 @@ async def test_handle_query_forwards_notify_hook_to_maybe_compact_history(monkey
 
 @pytest.mark.asyncio
 async def test_notify_history_budget_sends_the_notice_regardless_of_websocket():
-    # Unlike _notify_round_start, this one isn't websocket-gated -- a
-    # one-shot-per-crossing notice is fine to print in the REPL too.
+    # Not websocket-gated -- a one-shot-per-crossing notice is fine to print
+    # in the REPL too.
     runtime = _runtime()
     runtime.stream_handler = SimpleNamespace(websocket=None, send_chunk=AsyncMock())
 

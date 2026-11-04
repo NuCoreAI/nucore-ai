@@ -467,46 +467,6 @@ async def test_on_raw_response_exception_is_swallowed_not_propagated():
     assert final_text == "done"
 
 
-async def test_on_round_start_is_awaited_once_per_round_before_generate():
-    events: list[tuple[str, int]] = []
-
-    async def notify(iteration):
-        events.append(("round_start", iteration))
-
-    class _CapturingAdapter(_FakeAdapter):
-        def __init__(self, responses):
-            super().__init__(responses)
-            self._round = 0
-
-        async def generate(self, *, messages, config, tools):
-            events.append(("generate", self._round))
-            self._round += 1
-            return await super().generate(messages=messages, config=config, tools=tools)
-
-    responses = [
-        {"tool_calls": [{"id": "1", "name": "noop", "input": {}}]},
-        {"text": "done"},
-    ]
-    adapter = _CapturingAdapter(responses)
-    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok(), on_round_start=notify)
-
-    await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
-
-    assert events == [("round_start", 0), ("generate", 0), ("round_start", 1), ("generate", 1)]
-
-
-async def test_on_round_start_exception_is_swallowed_not_propagated():
-    async def notify(iteration):
-        raise ValueError("boom")
-
-    adapter = _FakeAdapter([{"text": "done"}])
-    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda n, a: _ok(), on_round_start=notify)
-
-    final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
-
-    assert final_text == "done"
-
-
 async def _ok():
     return {"ok": True}
 

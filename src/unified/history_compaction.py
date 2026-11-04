@@ -132,7 +132,7 @@ async def maybe_compact_history(
     after compaction, so a later climb re-notifies from 50% again.
     Best-effort: an exception here is logged and swallowed, same contract
     as every other hook in this codebase (see AgenticLoop's
-    on_raw_response/on_round_start).
+    on_raw_response).
 
     *force*, when True, skips the token-budget gate entirely (still
     requires ``_MIN_TURNS_TO_COMPACT`` turns) -- the manual

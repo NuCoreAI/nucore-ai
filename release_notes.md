@@ -7,7 +7,7 @@
 - Preserve native web-search (and extended-thinking) provenance in conversation history instead of flattening it to plain text, so a later turn can tell whether a past turn actually searched rather than guessing from the reply's wording alone.
 - Add `/delete-all-sessions` to clear every saved session in the current mode at once, starting a fresh one in its place.
 - Let a customer know, right when a WebSocket connection opens, that they're continuing their previous session, and that `/new-session` starts a fresh one.
-- Stream a "Thinking..." notice over WebSocket connections while a turn's tool-calling rounds are still in flight, so a slower multi-step reply doesn't look stalled.
+- Drive eisy-ui's "AI busy" chatbox animation directly via a new `POST /api/ai/busy` call instead of a plain WebSocket text notice -- fires once (with a randomly chosen status word, e.g. "Thinking"/"Pondering"/"Calculating") at the start of a turn and clears once when the turn fully finishes, regardless of how many tool-calling rounds or tool-set switches happened inside it, instead of repeating a "Thinking..." text chunk once per round.
 - Warn as a session's conversation history climbs toward its token budget (every 10% from 50% up, then a distinct notice once it's actually compacted), and add `/compact-session` so a customer can compact it manually any time instead of waiting.
 
 ## 3.3.0 - 2026-11-01

@@ -174,7 +174,7 @@ multi-session history" section for the full design.
 collapses the oldest half of a session's turns into one LLM-summarized pseudo-turn once estimated
 token size exceeds that tool set's `history_token_budget`. Its `notify` parameter -- wired to
 `UnifiedRuntime._notify_history_budget`, which sends over whichever channel is attached
-(websocket JSON frame or REPL stdout, unlike the websocket-only `_notify_round_start`) -- emits one
+(websocket JSON frame or REPL stdout) -- emits one
 italic Markdown status line the first time estimated usage crosses each 10%-of-budget decile at or
 above 50% (tracked on `ConversationHistory.last_budget_notice_decile`, deliberately never restored
 from disk -- see that field's own docstring), then a distinct "history was compacted" line for
