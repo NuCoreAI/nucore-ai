@@ -12,6 +12,8 @@ got sent to Google as the actual key on every call.
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -340,6 +342,13 @@ async def test_a_400_response_body_is_included_in_the_raised_error(monkeypatch):
     # Live bug: response.raise_for_status() alone never surfaces Google's
     # actual error message (e.g. "model not found"), so every 400 looked
     # identical from the caller's side no matter the real cause.
+    # A 400 is not retried: one request, no sleep.
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr(gemini_adapter_module.asyncio, "sleep", _sleep)
     monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _FakeErroringAsyncClient)
     adapter = GeminiAdapter(api_key="real-resolved-key")
 
@@ -347,6 +356,8 @@ async def test_a_400_response_body_is_included_in_the_raised_error(monkeypatch):
         await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
 
     assert "gemini-3.1-flash is not found" in str(exc_info.value)
+    assert slept == []
+    assert not getattr(exc_info.value, "retries_exhausted", False)
 
 
 def test_export_tools_rewrites_a_nullable_type_union_to_a_plain_type_plus_nullable():
@@ -519,3 +530,201 @@ def test_export_tools_leaves_the_rest_of_the_schema_untouched():
     tools = GeminiAdapter().export_tools([spec])
 
     assert tools[0]["functionDeclarations"][0]["parameters"] == spec.json_schema
+
+
+_OVERLOADED = b'{"error": {"message": "The model is overloaded. Please try again later."}}'
+_SECRET_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key=super-secret"
+)
+
+
+class _SequencedResponse:
+    """One scripted HTTP response. The request URL embeds an API key so a log
+    of the raw httpx error fails the redaction assertions."""
+
+    def __init__(self, status_code: int, body: bytes = b"", data: dict[str, Any] | None = None, headers: dict[str, str] | None = None, lines: list[str] | None = None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._body = body
+        self._data = data or {}
+        self._lines = lines or []
+        request = httpx.Request("POST", _SECRET_URL)
+        self._real = httpx.Response(status_code, request=request, content=body, headers=self.headers)
+
+    def raise_for_status(self) -> None:
+        self._real.raise_for_status()
+
+    async def aread(self) -> bytes:
+        return self._body
+
+    def json(self) -> dict[str, Any]:
+        return self._data
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _SequencedContext:
+    def __init__(self, response: _SequencedResponse):
+        self._response = response
+
+    async def __aenter__(self) -> _SequencedResponse:
+        return self._response
+
+    async def __aexit__(self, *args) -> bool:
+        return False
+
+
+class _SequencedClient(_FakeAsyncClient):
+    script: list[_SequencedResponse] = []
+
+    async def post(self, url: str, json: Any = None) -> _SequencedResponse:
+        _FakeAsyncClient.captured_urls.append(url)
+        _FakeAsyncClient.captured_payloads.append(json)
+        return _SequencedClient.script.pop(0)
+
+    def stream(self, method: str, url: str, json: Any = None) -> _SequencedContext:
+        _FakeAsyncClient.captured_urls.append(url)
+        return _SequencedContext(_SequencedClient.script.pop(0))
+
+
+def _no_blocking_sleep(monkeypatch) -> list[float]:
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("time.sleep")
+
+    monkeypatch.setattr(gemini_adapter_module.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(gemini_adapter_module.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(time, "sleep", _forbidden)
+    return slept
+
+
+def _ok_response(text: str = "done") -> _SequencedResponse:
+    return _SequencedResponse(
+        200,
+        data={"candidates": [{"content": {"parts": [{"text": text}]}}]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_503_then_200_retries_once_and_returns_the_body(monkeypatch, caplog):
+    slept = _no_blocking_sleep(monkeypatch)
+    _SequencedClient.script = [_SequencedResponse(503, _OVERLOADED), _ok_response()]
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _SequencedClient)
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    with caplog.at_level(logging.WARNING):
+        result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["content"] == "done"
+    assert slept == [2.0]
+    assert len(_FakeAsyncClient.captured_urls) == 2
+    assert "super-secret" not in caplog.text
+    assert "key=" not in caplog.text
+    assert "real-resolved-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_four_503s_abort_after_three_sleeps(monkeypatch, caplog):
+    slept = _no_blocking_sleep(monkeypatch)
+    _SequencedClient.script = [_SequencedResponse(503, _OVERLOADED) for _ in range(4)]
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _SequencedClient)
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert slept == [2.0, 4.0, 8.0]
+    assert len(_FakeAsyncClient.captured_urls) == 4
+    assert getattr(exc_info.value, "retries_exhausted", False) is True
+    assert "Gemini API unreachable after max retries due to high demand. Automation turn aborted." in caplog.text
+    assert "super-secret" not in caplog.text
+    assert "key=" not in caplog.text
+    assert "real-resolved-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_retry_after_replaces_the_backoff_and_stays_inside_the_cap(monkeypatch):
+    slept = _no_blocking_sleep(monkeypatch)
+    _SequencedClient.script = [
+        _SequencedResponse(503, _OVERLOADED, headers={"Retry-After": "1"}),
+        _ok_response(),
+    ]
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _SequencedClient)
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    result = await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert result["content"] == "done"
+    assert slept == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_jitter_cannot_push_cumulative_sleep_past_14_seconds(monkeypatch):
+    slept = _no_blocking_sleep(monkeypatch)
+    monkeypatch.setattr(gemini_adapter_module.random, "uniform", lambda _a, _b: 0.2)
+    _SequencedClient.script = [_SequencedResponse(503, _OVERLOADED) for _ in range(4)]
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _SequencedClient)
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.generate(messages=[{"role": "user", "content": "hi"}], config={})
+
+    assert slept == pytest.approx([2.4, 4.8, 6.8])
+    assert sum(slept) == pytest.approx(14.0)
+
+
+@pytest.mark.asyncio
+async def test_stream_503_retries_the_stream_and_does_not_call_generate_content(monkeypatch):
+    slept = _no_blocking_sleep(monkeypatch)
+    lines = ['data: {"candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}}]}']
+    _SequencedClient.script = [
+        _SequencedResponse(503, _OVERLOADED),
+        _SequencedResponse(200, lines=lines),
+    ]
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _SequencedClient)
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    async def stream_handler(_text: str) -> None:
+        return None
+
+    result = await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"stream": True, "stream_handler": stream_handler},
+    )
+
+    assert result["content"] == "ok"
+    assert slept == [2.0]
+    assert _FakeAsyncClient.captured_urls
+    assert all("streamGenerateContent" in url for url in _FakeAsyncClient.captured_urls)
+    assert all(":generateContent?" not in url for url in _FakeAsyncClient.captured_urls)
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_stream_error_falls_back_to_generate_content_once(monkeypatch):
+    slept = _no_blocking_sleep(monkeypatch)
+    _SequencedClient.script = [
+        _SequencedResponse(400, b'{"error": {"message": "stream endpoint unsupported"}}'),
+        _ok_response("from-generate"),
+    ]
+    monkeypatch.setattr(gemini_adapter_module.httpx, "AsyncClient", _SequencedClient)
+    adapter = GeminiAdapter(api_key="real-resolved-key")
+
+    async def stream_handler(_text: str) -> None:
+        return None
+
+    result = await adapter.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        config={"stream": True, "stream_handler": stream_handler},
+    )
+
+    assert result["content"] == "from-generate"
+    assert slept == []
+    assert "streamGenerateContent" in _FakeAsyncClient.captured_urls[0]
+    assert ":generateContent?" in _FakeAsyncClient.captured_urls[1]

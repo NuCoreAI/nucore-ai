@@ -38,6 +38,7 @@ from unified.run_unified_runtime import (
     EisyUIContext,
     _build_parser,
     _build_plugin_authoring_tool_set,
+    _handle_turn_exception,
     _run_once,
     main,
 )
@@ -1215,3 +1216,54 @@ async def test_no_native_and_no_fallback_leaves_web_search_unavailable(monkeypat
     # (no native, no fallback engine), so can_ask_for_urls() is True
     # immediately and the mocked fetch itself succeeds.
     assert "error" not in result
+
+
+class _ChunkHandler:
+    def __init__(self) -> None:
+        self.chunks: list[tuple[str, bool]] = []
+
+    async def send_chunk(self, text: str, done: bool) -> None:
+        self.chunks.append((text, done))
+
+
+@pytest.mark.asyncio
+async def test_turn_exception_reports_retry_exhaustion_without_the_api_key():
+    request = httpx.Request(
+        "POST",
+        "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key=super-secret",
+    )
+    response = httpx.Response(
+        503,
+        request=request,
+        content=b'{"error": {"message": "The model is overloaded. Please try again later."}}',
+    )
+    exc = httpx.HTTPStatusError(
+        "Server error '503 Service Unavailable' for url "
+        "'https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key=super-secret'",
+        request=request,
+        response=response,
+    )
+    setattr(exc, "retries_exhausted", True)
+    handler = _ChunkHandler()
+
+    await _handle_turn_exception(exc, SimpleNamespace(stream_handler=handler))
+
+    notice, done = handler.chunks[0]
+    assert done is True
+    assert notice == (
+        "Gemini API unreachable after max retries due to high demand "
+        "(HTTP 503: The model is overloaded. Please try again later.)."
+    )
+    assert "super-secret" not in notice
+    assert "key=" not in notice
+    assert "generativelanguage" not in notice
+    assert "something went wrong" not in notice.lower()
+
+
+@pytest.mark.asyncio
+async def test_turn_exception_reports_a_non_http_error_type_and_message():
+    handler = _ChunkHandler()
+
+    await _handle_turn_exception(RuntimeError("disk full"), SimpleNamespace(stream_handler=handler))
+
+    assert handler.chunks == [("RuntimeError: disk full", True)]

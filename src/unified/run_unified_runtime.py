@@ -6,11 +6,13 @@ import ctypes
 import ctypes.util
 import functools, json
 import ipaddress
+import re
 import ssl
 import uuid
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
+import httpx
 import websockets
 from dotenv import load_dotenv
 
@@ -875,18 +877,75 @@ async def _run_once(
         await eisy_ui_context.flush_active_tool_set()
 
 
-async def _handle_turn_exception(exc: Exception, runtime: UnifiedRuntime) -> None:
-    """Log *exc* (including a provider error's own ``.body``, e.g.
-    Anthropic's ``BadRequestError``, when present) and deliver a short,
-    generic notice to the user over whatever channel ``_run_once`` would
-    have used -- so one failed turn surfaces its real cause in the log
-    instead of a bare "400 Bad Request" status line, and the REPL/WebSocket
-    session survives to the next turn instead of crashing outright and
-    losing the rest of the conversation.
+_URL_RE = re.compile(r"https?://\S+")
+_KEY_RE = re.compile(r"(?i)(key=)[^&\s\"']+")
+
+
+def _sanitize_user_text(text: str) -> str:
+    """Drop request URLs and ``key=`` values before a string is shown or logged."""
+    text = _URL_RE.sub("[url]", text)
+    return _KEY_RE.sub(r"\1[redacted]", text)
+
+
+def _provider_error_message(response: httpx.Response) -> str:
+    """Google-style ``error.message`` from a response body, sanitized."""
+    body = b""
+    try:
+        body = response.content or b""
+    except Exception:
+        body = b""
+    if body:
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeError, TypeError):
+            payload = None
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            message = error.get("message") if isinstance(error, dict) else None
+            if isinstance(message, str) and message.strip():
+                return _sanitize_user_text(message.strip())
+        snippet = body.decode(errors="replace").strip()
+        if snippet:
+            return _sanitize_user_text(snippet[:300])
+    return ""
+
+
+def _user_visible_turn_error(exc: Exception) -> str:
+    """Short reason for the chat, with no request URL and no API key.
+
+    Retry exhaustion keeps the adapter's abort sentence and appends the HTTP
+    status plus the provider message. Other HTTP errors are status plus that
+    message. Anything else is the exception type and its sanitized message.
     """
-    body = getattr(exc, "body", None)
-    logger.error("unified: turn failed: %s%s", exc, f" | body={body}" if body else "", exc_info=True)
-    notice = "Sorry, something went wrong processing that -- please try again."
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        message = _provider_error_message(exc.response)
+        detail = f"HTTP {status}: {message}" if message else f"HTTP {status}"
+        if getattr(exc, "retries_exhausted", False):
+            return (
+                "Gemini API unreachable after max retries due to high demand "
+                f"({detail})."
+            )
+        return detail
+    text = _sanitize_user_text(str(exc)).strip()
+    if text:
+        return f"{type(exc).__name__}: {text}"
+    return type(exc).__name__
+
+
+async def _handle_turn_exception(exc: Exception, runtime: UnifiedRuntime) -> None:
+    """Log a sanitized reason and deliver that same reason to the user.
+
+    The WebSocket session and REPL stay up after a failed turn. The notice
+    is the HTTP status and provider message, or the exception type and
+    message. It is not ``str(exc)`` for HTTP errors: httpx includes the
+    request URL, and that URL carries the API key.
+    """
+    notice = _user_visible_turn_error(exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        logger.error("unified: turn failed: %s", notice)
+    else:
+        logger.error("unified: turn failed: %s", notice, exc_info=True)
     if runtime.stream_handler is not None:
         try:
             await runtime.stream_handler.send_chunk(notice, True)
