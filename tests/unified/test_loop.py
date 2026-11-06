@@ -219,6 +219,59 @@ async def test_max_tokens_truncation_never_dispatches_a_cut_off_tool_call(monkey
     assert dispatched == []
 
 
+async def test_pause_turn_resends_paused_content_and_continues_instead_of_returning(monkeypatch):
+    # Regression test for the production incident: a web_search that hadn't
+    # finished when Anthropic paused the turn (stop_reason="pause_turn") used
+    # to fall through to the "no tool calls -> final answer" branch, which
+    # persisted the lone server_tool_use block (no matching
+    # web_search_tool_result) as a *final* assistant message -- corrupting
+    # all later history replays of this session. The fix must instead resend
+    # that same content and let the loop continue to a real next round.
+    manager = _FlagRecordingManager()
+    monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)
+
+    orphaned_search_block = {"type": "server_tool_use", "name": "web_search", "input": {"query": "..."}}
+    generate_calls: list[dict] = []
+
+    class _PausingThenDoneAdapter(_SearchCapableAdapter):
+        def __init__(self):
+            super().__init__([])
+            self._n = 0
+
+        async def generate(self, *, messages, config, tools):
+            generate_calls.append({"messages": list(messages)})
+            self._n += 1
+            if self._n == 1:
+                return {
+                    "stop_reason": "pause_turn",
+                    "content": [orphaned_search_block],
+                    "search_evidence": orphaned_search_block,
+                    "text": "",
+                }
+            return {"text": "Done searching."}
+
+    loop = AgenticLoop(llm_client=_PausingThenDoneAdapter(), tool_specs=[], dispatch=lambda n, a: _ok())
+
+    final_text, new_messages = await loop.run(system_prompt="sys", history_messages=[], user_message="search it")
+
+    assert final_text == "Done searching."
+    # The loop actually continued -- generate() was called a second time with
+    # the paused content folded back in, not returned as a final answer.
+    assert len(generate_calls) == 2
+    assert generate_calls[1]["messages"][-1] == {
+        "role": "assistant",
+        "content": [orphaned_search_block, {"type": "text", "text": ""}],
+    }
+    # The orphaned block only ever appears as a *mid-turn* message, always
+    # immediately followed by the real final answer -- never persisted as
+    # the last (and therefore replayed-as-final) message of the turn.
+    assert new_messages[-1] == {"role": "assistant", "content": "Done searching."}
+    assert not any(
+        isinstance(m.get("content"), list) and orphaned_search_block in m["content"]
+        for m in new_messages[-1:]
+    )
+
+
 async def test_fabrication_guard_flags_zero_tool_call_completion_claim(monkeypatch):
     manager = _FlagRecordingManager()
     monkeypatch.setattr(loop_module, "get_prompt_log_manager", lambda: manager)

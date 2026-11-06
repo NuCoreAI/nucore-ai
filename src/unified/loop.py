@@ -227,6 +227,27 @@ class AgenticLoop:
                 )
                 await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
                 return text, new_messages
+            if stop_reason == "pause_turn":
+                # Anthropic's continuation protocol for a long-running server
+                # tool (e.g. a web_search still in progress): resend the
+                # exact paused content back unmodified and let the next
+                # round continue it -- never treat this as a final answer.
+                # build_text_round_trip_messages already knows how to
+                # preserve non-text blocks (server_tool_use,
+                # web_search_tool_result, thinking) for a round with no
+                # client tool_use for parse_tool_calls to find -- reuse it
+                # here with an empty text fallback, since pause_turn always
+                # carries non-text blocks (that's why it paused). Checked
+                # before canonical_calls below so it takes priority over the
+                # "no tool calls -> final answer" branch.
+                build_text_round_trip = getattr(self.llm_client, "build_text_round_trip_messages", None)
+                if build_text_round_trip is not None:
+                    round_trip_messages = build_text_round_trip(raw_response=raw_response, text="")
+                else:
+                    round_trip_messages = [{"role": "assistant", "content": raw_response.get("content") or ""}]
+                messages.extend(round_trip_messages)
+                new_messages.extend(round_trip_messages)
+                continue
             canonical_calls = raw_response.get("tool_calls") or []
             if not canonical_calls:
                 text = raw_response.get("text") or raw_response.get("content") or ""

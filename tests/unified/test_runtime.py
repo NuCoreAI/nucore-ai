@@ -553,6 +553,77 @@ async def test_handle_query_notifies_busy_end_exactly_once_even_on_exception(mon
 
 
 @pytest.mark.asyncio
+async def test_handle_query_records_the_switched_to_tool_set_on_connection_context_even_when_the_turn_fails(
+    monkeypatch,
+):
+    # Regression test for the production incident where /new-session
+    # appeared to do nothing: a turn that mid-turn-switched tool sets (e.g.
+    # via switch_to_developer_mode) and THEN failed (e.g. a provider 400 from
+    # corrupted history) used to leave the connection's sticky
+    # active_tool_set on whatever it was *before* the switch -- so a later
+    # recovery command scoped to get_active_tool_set() reset the wrong
+    # (still-healthy) tool set's session while the actually-broken one was
+    # never touched. The switched-to tool set must be recorded on
+    # connection_context even on a failed turn.
+    from unified.loop import SWITCH_TOOL_SET_KEY, ToolSetSwitchRequested
+
+    class _SwitchThenBoomLoop:
+        calls = 0
+
+        def __init__(self, **kwargs):
+            self._dispatch = kwargs["dispatch"]
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            _SwitchThenBoomLoop.calls += 1
+            if _SwitchThenBoomLoop.calls == 1:
+                result = await self._dispatch("switch_to_developer_mode", {})
+                if isinstance(result, dict) and SWITCH_TOOL_SET_KEY in result:
+                    raise ToolSetSwitchRequested(result[SWITCH_TOOL_SET_KEY])
+            raise ValueError("simulated corrupted-history 400")
+
+    class _StubConnectionContext:
+        def __init__(self):
+            self.recorded: list[str] = []
+
+        def set_active_tool_set(self, tool_set_name: str) -> None:
+            self.recorded.append(tool_set_name)
+
+    import unified.runtime as rm
+
+    original_loop = rm.AgenticLoop
+    rm.AgenticLoop = _SwitchThenBoomLoop
+    _SwitchThenBoomLoop.calls = 0
+    try:
+        runtime_config = {
+            "enabled_profiles": ["unified", "plugin_authoring"],
+            "default_profile_name": "unified",
+            "max_tool_set_switches_per_turn": 1,
+            "nucore_runtime": {"unified": {}, "plugin_authoring": {}},
+        }
+        runtime = _runtime(
+            runtime_config,
+            tool_sets={
+                "plugin_authoring": ToolSetBundle(
+                    tool_spec_paths=None,
+                    dispatch_factory=lambda _ctx: DispatchBundle(dispatch=rm.execute_tool),
+                    system_prompt_builder=_fake_build_system_prompt_sections,
+                )
+            },
+        )
+        connection_context = _StubConnectionContext()
+        with pytest.raises(ValueError, match="simulated corrupted-history 400"):
+            await runtime.handle_query("hi", connection_context=connection_context)
+
+        assert _SwitchThenBoomLoop.calls == 2
+        # Must reflect plugin_authoring (what the turn actually died in), not
+        # unified (what it started in, and what get_active_tool_set() would
+        # have returned before this fix).
+        assert connection_context.recorded == ["plugin_authoring"]
+    finally:
+        rm.AgenticLoop = original_loop
+
+
+@pytest.mark.asyncio
 async def test_notify_busy_start_is_best_effort_when_notify_ai_busy_is_missing():
     runtime = _runtime()  # nucore_interface=SimpleNamespace() has no notify_ai_busy
     await runtime._notify_busy_start()  # must not raise

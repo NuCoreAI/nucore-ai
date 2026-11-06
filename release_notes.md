@@ -1,5 +1,10 @@
 # Release Notes
 
+## 3.3.2 - 2026-11-06
+
+- Handle Claude's `pause_turn` stop reason (a long-running server tool, e.g. web search, still in progress) by resending the paused content back unmodified and continuing the turn, instead of treating it as a final answer.
+- Fix `/new-session` and other recovery commands acting on the wrong tool set after a turn fails mid-way through a tool-set switch (e.g. via `switch_to_developer_mode`) -- the sticky active tool set now reflects the tool set the turn actually ended in, not the one it started in.
+
 ## 3.3.1 - 2026-11-02
 
 - Fix the PLM link-count sanity check (`quick_plm_sanity_check`) to compare against an Insteon-only expected count -- 2 links per primary Insteon node, 1 per non-primary (multi-button/multi-instance) Insteon node, 1 per group, 1 per Insteon group membership -- instead of a raw, unfiltered node/group count that was wildly inflated on any mixed-protocol (Insteon + Z-Wave/Zigbee/etc.) installation. Tolerance tightened from 20% to 10% now that the count reflects real link-table structure.

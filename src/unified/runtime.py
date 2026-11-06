@@ -682,6 +682,22 @@ class UnifiedRuntime:
                             query, framework_context=framework_context, handoff_notes=handoff_notes
                         )
                         continue
+                    except Exception:
+                        # Even a turn that fails may have already mid-turn
+                        # switched tool sets (e.g. via switch_to_developer_mode)
+                        # before the failure. The caller's sticky
+                        # active_tool_set (EisyUIContext) must reflect *that*
+                        # tool set, not whichever one the turn started in --
+                        # otherwise a recovery command like /new-session,
+                        # which acts on get_active_tool_set(), resets the
+                        # wrong (still-healthy) tool set's session while the
+                        # actually-broken one is left untouched.
+                        # connection_context is Any (None for non-UI callers,
+                        # e.g. tests/CLI) -- getattr guards both cases.
+                        set_active_tool_set = getattr(connection_context, "set_active_tool_set", None)
+                        if callable(set_active_tool_set):
+                            set_active_tool_set(current_tool_set)
+                        raise
 
                 # new_messages is persisted verbatim, including its own
                 # ui_context-wrapped first element (see loop.py's
