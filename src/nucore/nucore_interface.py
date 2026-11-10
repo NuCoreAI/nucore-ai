@@ -977,6 +977,15 @@ class NuCoreInterface(ABC):
         """
         raise NotImplementedError("Subclasses must implement the refresh_eisy_ai_permissions method.")
 
+    async def setup_eisy_ai_vscode_remote(self) -> dict[str, Any] | None:
+        """
+        Triggers the eisy-ai VS Code Remote setup service: installs any
+        packages the hub is missing for VS Code Remote development and
+        sets up the environment it needs. No params.
+        :return: The hub's response, or {"error": ...}.
+        """
+        raise NotImplementedError("Subclasses must implement the setup_eisy_ai_vscode_remote method.")
+
     async def notify_plugin_files_changed(self, paths: list[str]) -> dict[str, Any] | None:
         """
         Tells the platform that one or more of a plugin's on-disk files were

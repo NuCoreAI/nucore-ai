@@ -1,0 +1,14 @@
+{
+  "name": "package_generated_plugin",
+  "description": "Builds a publish-ready dist/<plugin-name>-<version>.tar.gz for a generated plugin -- not a publish/submit step, this only builds the local archive. <plugin-name> is server_entry.json's 'name' field (falls back to 'location' if missing); <version> is read directly from version.py's ud_plugin_version value, never generation_inputs.json's own version field. Archive members are stored flat, with no top-level directory inside the archive. Includes the plugin's publishable files -- profile.json, plugin.py, main.py, version.py, every node-class .py file, README.md, LICENSE.md, requirements.txt, install.sh, and POLYGLOT_CONFIG.md if present -- and any other file a developer hand-added to the plugin directory. Always excludes: server_entry.json, sources.md, context.md, tests/, generation_inputs.json, persist/ and data/ (and anything inside them, including session data), .venv/, __pycache__/, .git/, .vscode/, its own dist/ output directory, and anything that looks like a secret/key/certificate or a runtime temp file (.iox_env, *.pem, *.key, *.crt, *.cer, *.p12, *.pfx, *.env, *.pyc, *.pid, *.lock, *.tmp, *.log). Also scans every included text file's content for a configured secret value and refuses to write the archive at all (no file written) if one is found anywhere. Always overwrites any prior archive for this plugin -- cheap to regenerate, never touches plugin source.",
+  "input_schema": {
+    "type": "object",
+    "required": ["location"],
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "The subdirectory name under the server's plugin output root -- the same 'location' generate_plugin_scaffold/install_generated_plugin use."
+      }
+    }
+  }
+}

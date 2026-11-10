@@ -368,8 +368,10 @@ Stage 6's device detection.
     when a batch of files had just changed, so a freshly generated or regenerated plugin could
     fail to run until someone manually fixed permissions. Fixed with a new `NuCoreInterface`
     method, `refresh_eisy_ai_permissions` (`POST /api/udx/rest/udx.sys.ops/eisyai.ops/
-    refresh_permissions`, same three-layer `NuCoreInterface` -> `IoXWrapper` -> `IoXDiagnostics`
-    shape, and the same placeholder `"e=mc2"` body, as the existing `udx.sys.ops` calls), called
+    refresh_permissions`, implemented directly on `IoXWrapper` -- two-layer `NuCoreInterface` ->
+    `IoXWrapper` shape, not routed through `IoXDiagnostics`, since this is a plugin-authoring/
+    dev-tooling hub call rather than a diagnostic -- using the same placeholder `"e=mc2"` body as
+    the existing `udx.sys.ops` calls), called
     once -- never once per file -- after each of five file-write batches finishes:
     `generate_plugin_scaffold`, `setup_vscode_debug_config` (writes both `.iox_env` and
     `.vscode/launch.json` in one call), `regenerate_plugin_boilerplate`, and `setup_dev_venv`
@@ -409,3 +411,31 @@ Stage 6's device detection.
     and of low value to a code-browsing UI), `setup_github_repo`'s `.gitignore`/`.git` writes
     (version-control plumbing eisy-ui has no reason to read), or `handlers/install.py`'s other,
     pre-start-only `refresh_permissions_after_write` call (no file is written there at all).
+14. **VS Code Remote ask-then-setup, gated inside `setup_vscode_debug_config`** — a second,
+    separate hub-side service installs whatever packages are missing and configures the
+    environment eisy-ai needs for VS Code *Remote* development (distinct from the local-debugger
+    `.iox_env`/`launch.json` this tool already wrote). Exposed as `NuCoreInterface.
+    setup_eisy_ai_vscode_remote` (`POST /api/udx/rest/udx.sys.ops/eisyai.ops/
+    setup_vscode_remote`, same two-layer `IoXWrapper`-direct shape and placeholder `"e=mc2"` body
+    as item 12's `refresh_eisy_ai_permissions`). Whether it has already succeeded is tracked once
+    per `plugin_output_root` in `vscode_remote_config.json` (`vscode_remote_config.py`) — a
+    separate file from `developer_config.json`, deliberately: that file's writer rebuilds its
+    dict from scratch on every `configure_developer` call, which would silently drop an
+    `vscode_remote_enabled` key stashed there instead. `setup_vscode_debug_config` checks this
+    config right after resolving the plugin's `profileNum` (before touching its rc.d script): if
+    it's missing, not `true`, or the caller passed `force` (mirroring `setup_dev_venv`'s
+    skip-unless-force idiom, item 10's sibling), the call returns early with `{"stage":
+    "vscode_remote_confirm", "needs_confirmation": true, "question": ...}` instead of writing
+    anything — a plain relayed-boolean confirmation, the same lightweight pattern
+    `generate_plugin_scaffold`'s `confirm_overwrite` uses, not the heavier code-enforced
+    literal-`"YES"` delete-confirmation machinery (that's for irreversible actions; this is an
+    idempotent, re-runnable setup call). A follow-up call with `confirm_vscode_remote: true/false`
+    then either calls `setup_eisy_ai_vscode_remote` and records the outcome (`true`/`false` into
+    `vscode_remote_config.json`), or skips it — either way falling through to the unconditional
+    `.iox_env`/`launch.json` write already there. On success, the result's `vscode_remote.
+    instructions` field gives ready-to-relay VS Code Remote-SSH setup steps, including an
+    `~/.ssh/config` `Host` block built from the hub's own real `"Network Interface IP"`/`"Friendly
+    Name"` (already returned by `get_full_system_config()`'s `/desc` fetch — no new hub-side
+    lookup needed), never a hardcoded example IP. The new config file is included in the same
+    batched `refresh_permissions_after_write`/`notify_files_changed` calls this handler already
+    makes for `.iox_env`/`launch.json`, only when it was actually (re)written this call.

@@ -36,6 +36,7 @@ from .handlers import (
     discovery,
     github_repo,
     install,
+    package,
     profile_authoring,
     scaffold,
     vscode_debug,
@@ -140,6 +141,9 @@ def build_tool_handlers(
     )
     handlers["regenerate_plugin_boilerplate"] = functools.partial(
         boilerplate.regenerate_plugin_boilerplate, plugin_output_root=plugin_output_root
+    )
+    handlers["package_generated_plugin"] = functools.partial(
+        package.package_generated_plugin, plugin_output_root=plugin_output_root, secret_values=secret_values
     )
     return handlers
 

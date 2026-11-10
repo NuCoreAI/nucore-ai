@@ -1,4 +1,4 @@
-"""IoXDiagnostics.refresh_eisy_ai_permissions -- the single-request POST to
+"""IoXWrapper.refresh_eisy_ai_permissions -- the single-request POST to
 the eisy-ai permissions-refresh service that plugin-authoring call sites
 trigger once after writing a batch of files. Covers: happy path, non-200
 response, no response (connection failure), and an exception while parsing
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from iox.diagnostics.iox_diagnostics import IoXDiagnostics
+from iox.iox_wrapper import IoXWrapper
 
 
 class FakeResp:
@@ -24,22 +24,23 @@ class FakeResp:
         return self._data
 
 
-class FakeWrapper:
-    def __init__(self, response):
-        self._response = response
-        self.requested_calls = []
+def _bare_wrapper(response) -> IoXWrapper:
+    wrapper = object.__new__(IoXWrapper)
+    wrapper.requested_calls = []
 
-    async def post(self, path, body):
-        self.requested_calls.append((path, body))
-        return self._response
+    async def fake_post(path, body, headers=None):
+        wrapper.requested_calls.append((path, body))
+        return response
+
+    wrapper.post = fake_post
+    return wrapper
 
 
 @pytest.mark.asyncio
 async def test_refresh_eisy_ai_permissions_posts_expected_path_and_body():
-    wrapper = FakeWrapper(FakeResp(data={"successful": True}))
-    diagnostics = IoXDiagnostics(wrapper)
+    wrapper = _bare_wrapper(FakeResp(data={"successful": True}))
 
-    result = await diagnostics.refresh_eisy_ai_permissions()
+    result = await wrapper.refresh_eisy_ai_permissions()
 
     assert result == {"successful": True}
     assert wrapper.requested_calls == [("/api/udx/rest/udx.sys.ops/eisyai.ops/refresh_permissions", "e=mc2")]
@@ -47,29 +48,26 @@ async def test_refresh_eisy_ai_permissions_posts_expected_path_and_body():
 
 @pytest.mark.asyncio
 async def test_refresh_eisy_ai_permissions_returns_error_on_non_200():
-    wrapper = FakeWrapper(FakeResp(status_code=500))
-    diagnostics = IoXDiagnostics(wrapper)
+    wrapper = _bare_wrapper(FakeResp(status_code=500))
 
-    result = await diagnostics.refresh_eisy_ai_permissions()
+    result = await wrapper.refresh_eisy_ai_permissions()
 
     assert "error" in result
 
 
 @pytest.mark.asyncio
 async def test_refresh_eisy_ai_permissions_returns_error_on_no_response():
-    wrapper = FakeWrapper(None)
-    diagnostics = IoXDiagnostics(wrapper)
+    wrapper = _bare_wrapper(None)
 
-    result = await diagnostics.refresh_eisy_ai_permissions()
+    result = await wrapper.refresh_eisy_ai_permissions()
 
     assert "error" in result
 
 
 @pytest.mark.asyncio
 async def test_refresh_eisy_ai_permissions_returns_error_on_exception():
-    wrapper = FakeWrapper(FakeResp(json_raises=ValueError("bad json")))
-    diagnostics = IoXDiagnostics(wrapper)
+    wrapper = _bare_wrapper(FakeResp(json_raises=ValueError("bad json")))
 
-    result = await diagnostics.refresh_eisy_ai_permissions()
+    result = await wrapper.refresh_eisy_ai_permissions()
 
     assert "error" in result

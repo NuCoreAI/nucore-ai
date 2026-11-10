@@ -1,5 +1,11 @@
 # Release Notes
 
+## 3.4.0 - 2026-11-10
+
+- Add `NuCoreInterface.setup_eisy_ai_vscode_remote`, implemented directly on `IoXWrapper` (and move the existing `refresh_eisy_ai_permissions` there too, out of `IoXDiagnostics` -- neither is a diagnostic).
+- `setup_vscode_debug_config` now also gates eisy-ai's VS Code *Remote* hub-side setup (installs missing packages, configures the environment) once per plugin output root: asks for confirmation the first time (or whenever `force` is passed), then on a follow-up call either runs it -- returning ready-to-relay Remote-SSH instructions built from the hub's own real IP/friendly name -- or skips it, before continuing to its existing `.iox_env`/`launch.json` write.
+- Add `package_generated_plugin`: builds a publish-ready `dist/<plugin-name>-<version>.tar.gz` for a generated plugin -- excludes secrets/keys/certificates, runtime temp files, persistent/data directories, and internal bookkeeping (`server_entry.json`, `sources.md`, `context.md`, `tests/`, `generation_inputs.json`), and refuses to write anything if a configured secret value turns up in any included file's content.
+
 ## 3.3.2 - 2026-11-06
 
 - Handle Claude's `pause_turn` stop reason (a long-running server tool, e.g. web search, still in progress) by resending the paused content back unmodified and continuing the turn, instead of treating it as a final answer.

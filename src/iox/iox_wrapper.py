@@ -2373,8 +2373,29 @@ class IoXWrapper(NuCoreInterface):
     async def get_core_services_status(self) -> dict[str, Any] | None:
         return await self.diagnostics.get_core_services_status()
 
-    async def refresh_eisy_ai_permissions(self) -> dict[str, Any] | None:
-        return await self.diagnostics.refresh_eisy_ai_permissions()
+    async def refresh_eisy_ai_permissions(self) -> dict[str, Any]:
+        try:
+            # /rest/udx.sys.ops/eisyai.ops/refresh_permissions
+            response = await self.post("/api/udx/rest/udx.sys.ops/eisyai.ops/refresh_permissions", "e=mc2")
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to refresh eisy-ai permissions: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to refresh eisy-ai permissions: {response.status_code if response else 'No response'}"}
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to refresh eisy-ai permissions: {e}")
+            return {"error": f"Failed to refresh eisy-ai permissions: {e}"}
+
+    async def setup_eisy_ai_vscode_remote(self) -> dict[str, Any]:
+        try:
+            # /rest/udx.sys.ops/eisyai.ops/setup_vscode_remote
+            response = await self.post("/api/udx/rest/udx.sys.ops/eisyai.ops/setup_vscode_remote", "e=mc2")
+            if response is None or response.status_code != 200:
+                logger.error(f"Failed to set up eisy-ai VS Code remote: {response.status_code if response else 'No response'}")
+                return {"error": f"Failed to set up eisy-ai VS Code remote: {response.status_code if response else 'No response'}"}
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to set up eisy-ai VS Code remote: {e}")
+            return {"error": f"Failed to set up eisy-ai VS Code remote: {e}"}
 
     async def get_device_family(self, device_id: str) -> str | None:
         return await self.diagnostics.get_device_family(device_id=device_id)
