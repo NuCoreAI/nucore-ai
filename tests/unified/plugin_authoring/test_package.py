@@ -70,6 +70,12 @@ def _write_full_plugin_dir(tmp_path, *, name="Acme Pool", version="1.2.3", gener
     data_dir.mkdir()
     (data_dir / "upload.bin").write_bytes(b"\x00")
 
+    pytest_cache_dir = plugin_dir / ".pytest_cache"
+    pytest_cache_dir.mkdir()
+    (pytest_cache_dir / "CACHEDIR.TAG").write_text("Signature: 8a477f597d\n")
+
+    (plugin_dir / "plugin_9.cert").write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+
     return plugin_dir
 
 
@@ -138,6 +144,8 @@ async def test_happy_path_includes_expected_files_excludes_the_rest(tmp_path):
         "tests/test_plugin.py",
         "persist/session.json",
         "data/upload.bin",
+        "plugin_9.cert",
+        ".pytest_cache/CACHEDIR.TAG",
     }
     assert names.isdisjoint(excluded)
 

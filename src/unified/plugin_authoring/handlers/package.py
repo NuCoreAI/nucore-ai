@@ -73,6 +73,9 @@ _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _EXCLUDED_DIRNAMES = {
     ".venv",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
     _PERSIST_DIRNAME,
     _DATA_DIRNAME,
     _TESTS_DIRNAME,
@@ -99,6 +102,7 @@ _EXCLUDED_FILE_GLOBS = (
     "*.key",
     "*.crt",
     "*.cer",
+    "*.cert",
     "*.p12",
     "*.pfx",
     "*.env",
