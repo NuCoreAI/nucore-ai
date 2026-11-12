@@ -1,6 +1,6 @@
 # Release Notes
 
-## 3.4.1 - 2026-11-11
+## 3.5.0 - 2026-11-11
 
 - Fix `package_generated_plugin` shipping a system-issued plugin SSL certificate (`*.cert`, not matched by the existing `*.cer`/`*.crt` exclusions) and the `.pytest_cache/` directory in the built archive.
 - Stop calling the installation "a hub" anywhere in the customer-facing or plugin-authoring system prompts or tool descriptions -- say "the system"/"your installation" generically, or the real product name and model number when the customer specifically asks what they're running. Add `host_identity`, fetched once from the real system config and cached for the process's lifetime, to supply that real product/model/OS fact to both prompt builders; fixes `IoXDiagnostics` having stopped actually populating Model Name/Model Number.
