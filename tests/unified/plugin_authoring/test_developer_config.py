@@ -77,13 +77,26 @@ async def test_configure_developer_requires_matching_authenticated_user(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_configure_developer_allows_no_authenticated_user_at_all(tmp_path):
-    # REPL/CLI mode has no mechanism to ever populate an authenticated
-    # identity -- commissioning must still work, since the check only
-    # blocks a confirmed mismatch, never the absence of an identity to
-    # compare against.
+async def test_configure_developer_refuses_when_login_concept_applies_but_nobody_logged_in(tmp_path):
+    # get_user_id given but returning None means a login concept applies to
+    # this session (e.g. an eisyUI chat before its first context message) --
+    # commissioning blind, with no account to verify the email against, is
+    # exactly the gap this guard closes.
     result = await configure_developer(
         None, {"email": "dev@example.com", "name": "Dev"}, plugin_output_root=str(tmp_path), get_user_id=lambda: None
+    )
+    assert "error" in result
+    assert developer_config.load_developer_config(str(tmp_path)) is None
+
+
+@pytest.mark.asyncio
+async def test_configure_developer_allows_no_login_concept_at_all(tmp_path):
+    # get_user_id itself being None (not merely returning None) means no
+    # login concept applies to this session at all -- the MCP/CLI path,
+    # which has no context-message mechanism and no user-session notion
+    # whatsoever. Commissioning must still work there.
+    result = await configure_developer(
+        None, {"email": "dev@example.com", "name": "Dev"}, plugin_output_root=str(tmp_path), get_user_id=None
     )
     assert result["configured"] is True
     assert developer_config.load_developer_config(str(tmp_path))["email"] == "dev@example.com"
@@ -128,3 +141,23 @@ async def test_get_developer_config_reports_the_commissioned_identity(tmp_path):
 async def test_get_developer_config_never_writes_anything(tmp_path):
     await get_developer_config(None, {}, plugin_output_root=str(tmp_path))
     assert not (tmp_path / developer_config.DEVELOPER_CONFIG_FILENAME).exists()
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_omits_authenticated_user_id_when_no_login_concept(tmp_path):
+    result = await get_developer_config(None, {}, plugin_output_root=str(tmp_path), get_user_id=None)
+    assert "authenticated_user_id" not in result
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_reports_none_when_login_concept_applies_but_not_logged_in(tmp_path):
+    result = await get_developer_config(None, {}, plugin_output_root=str(tmp_path), get_user_id=lambda: None)
+    assert result["authenticated_user_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_developer_config_reports_the_authenticated_email_when_logged_in(tmp_path):
+    result = await get_developer_config(
+        None, {}, plugin_output_root=str(tmp_path), get_user_id=lambda: "dev@example.com"
+    )
+    assert result["authenticated_user_id"] == "dev@example.com"

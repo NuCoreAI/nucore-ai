@@ -43,6 +43,7 @@ from typing import Any
 from nucore import NuCoreInterface
 from rag import DedupeRoutines
 
+from . import host_identity
 from .preferences.preference_store import get_store
 
 _PROMPT_DIR = Path(__file__).parent / "prompt"
@@ -145,9 +146,10 @@ async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> lis
         time_data = None
     time_info = _render_time_info(time_data)
     preference_aliases = _render_preference_aliases(nucore_interface)
+    identity_text = await host_identity.get_identity_text(nucore_interface)
 
     substitutions = {
-        "<<host_environment>>": _HOST_ENVIRONMENT,
+        "<<host_environment>>": f"{_HOST_ENVIRONMENT}\n\n{identity_text}",
         "<<device_database>>": device_database,
         "<<routines_database>>": routines_database,
         "<<time_info>>": time_info,

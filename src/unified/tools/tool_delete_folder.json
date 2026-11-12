@@ -16,7 +16,7 @@
       },
       "move_to_folder_id": {
         "type": ["integer", "null"],
-        "description": "Required when contents_action is 'move' -- the real id of a DIFFERENT folder (never the same as folder_id) to relocate every item in folder_id into before folder_id itself is deleted. The root folder is \"My Programs\" -- to move them to the top level/root, omit this field entirely rather than passing any specific number; the root folder's real id varies by hub, so no particular numeral (not 0, not 1) can be assumed to mean root."
+        "description": "Required when contents_action is 'move' -- the real id of a DIFFERENT folder (never the same as folder_id) to relocate every item in folder_id into before folder_id itself is deleted. The root folder is \"My Programs\" -- to move them to the top level/root, omit this field entirely rather than passing any specific number; the root folder's real id varies by installation, so no particular numeral (not 0, not 1) can be assumed to mean root."
       },
       "confirmed": {
         "type": "boolean",

@@ -285,8 +285,8 @@ class IoXDiagnostics:
             full_config["Upgrade-to OS Version"] = system_opt.get("upgradeOSVersion", "")
             full_config["Friendly Name"] = system_opt.get("friendlyName", "")
             full_config["MAC Address"] = system_opt.get("UDN", "").replace("uuid:", "")
-            #full_config["Model Name"] = system_opt.get("modelName", "")
-            #full_config["Model Number"] = system_opt.get("modelNumber", "")
+            full_config["Model Name"] = system_opt.get("modelName", "")
+            full_config["Model Number"] = system_opt.get("modelNumber", "")
             full_config["Network Interface IP"] = system_opt.get("interfaceIP", "")
             if len(interface_adapters) > 0:
                 full_config["Network Interface Adapters"] = interface_adapters

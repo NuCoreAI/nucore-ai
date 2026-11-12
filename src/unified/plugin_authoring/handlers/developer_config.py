@@ -3,11 +3,22 @@ developer whose email/name ``generate_plugin_scaffold`` stamps into every
 generated ``server_entry.json``'s ``developer``/``author`` fields. The
 provided email must match this session's own authenticated identity
 (``EisyUIContext.get_user_id()``, threaded through as *get_user_id*) when
-one is known -- refuses outright on an actual mismatch. When no
-authenticated identity is available at all (e.g. the CLI/REPL path, which
-has no context-message mechanism to ever populate one), commissioning is
-still allowed: the check only ever blocks a confirmed mismatch, never the
-absence of an identity to compare against.
+one is known -- refuses outright on an actual mismatch, and refuses just as
+outright when a login concept applies to this session but nobody is logged
+in yet (*get_user_id* is given but returns ``None``): commissioning a new
+identity blind, with no account to verify it against, is exactly the gap
+that let a mismatched/unverified email slip through before. Only when no
+login concept applies to this session at all -- *get_user_id* itself is
+``None`` (e.g. the MCP/CLI path, which has no context-message mechanism and
+no user-session notion whatsoever) -- does commissioning proceed without an
+identity to compare against, since there is nothing to check it against.
+
+Also: get_user_id / "logged in" is deliberately resolved as a 2-level check
+-- ``get_user_id is None`` means no login concept applies here at all;
+``get_user_id() is None`` means a login concept applies but nobody is
+logged in yet. Conflating these would either block the MCP/CLI path (which
+never has a login) or let an unauthenticated eisyUI session commission an
+identity (which must log in first).
 
 Also ``get_developer_config`` -- the read-only counterpart a caller should
 check *first*, every time, before ever calling ``configure_developer``.
@@ -49,6 +60,12 @@ async def configure_developer(
     if not name:
         return {"error": "name is required"}
 
+    if get_user_id is not None and get_user_id() is None:
+        return {
+            "error": "not logged in -- the person must log in to eisyUI before a developer "
+                     "identity can be commissioned"
+        }
+
     authenticated_user_id = get_user_id() if get_user_id is not None else None
     if authenticated_user_id and authenticated_user_id.strip().lower() != email.lower():
         return {
@@ -67,13 +84,24 @@ async def configure_developer(
 
 
 async def get_developer_config(
-    nucore_interface: NuCoreInterface, args: dict[str, Any], *, plugin_output_root: str
+    nucore_interface: NuCoreInterface,
+    args: dict[str, Any],
+    *,
+    plugin_output_root: str,
+    get_user_id: Callable[[], str | None] | None = None,
 ) -> Any:
     """Read-only: the ``{email, name, github_url?}`` already on file for
     this *plugin_output_root*, or ``{"configured": False}`` if none has
     been commissioned yet. Never writes anything -- call this before
-    ``configure_developer``, not instead of checking it."""
+    ``configure_developer``, not instead of checking it.
+
+    Also surfaces ``authenticated_user_id`` when *get_user_id* is given, so
+    a caller learns the known login state up front instead of only via a
+    later refusal: absent entirely when no login concept applies to this
+    session (e.g. the MCP/CLI path); ``None`` when a login concept applies
+    but nobody is logged in yet; the actual email otherwise."""
     config = developer_config.load_developer_config(plugin_output_root)
-    if config is None:
-        return {"configured": False}
-    return {"configured": True, **config}
+    result: dict[str, Any] = {"configured": False} if config is None else {"configured": True, **config}
+    if get_user_id is not None:
+        result["authenticated_user_id"] = get_user_id()
+    return result

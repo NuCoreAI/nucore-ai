@@ -1046,9 +1046,12 @@ async def test_make_dispatch_binds_live_eisy_ui_context_get_user_id(tmp_path):
     _, dispatch_factory, _ = _resolve_plugin_authoring(plugin_output_root=str(tmp_path))
     dispatch = dispatch_factory(ctx).dispatch
 
-    # No identity known yet -- commissioning under a different email is allowed.
+    # No identity known yet -- a login concept applies (this is a real
+    # EisyUIContext, not the no-context-at-all MCP/CLI path) but nobody is
+    # logged in yet, so commissioning must be refused rather than allowed
+    # blind.
     first = await dispatch("configure_developer", {"email": "dev@example.com", "name": "Dev"})
-    assert first["configured"] is True
+    assert "error" in first
 
     # Mutate the same ctx instance after the dispatch bundle was built.
     ctx.process_message(
@@ -1057,6 +1060,11 @@ async def test_make_dispatch_binds_live_eisy_ui_context_get_user_id(tmp_path):
 
     second = await dispatch("configure_developer", {"email": "dev@example.com", "name": "Dev"})
     assert "error" in second
+
+    # Now logged in as the matching user -- commissioning succeeds.
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "dev@example.com"}}}))
+    third = await dispatch("configure_developer", {"email": "dev@example.com", "name": "Dev"})
+    assert third["configured"] is True
 
 
 # --- _resolve_tool_set: search_web registration (design/developers/impl_plan.md Phase 2) ---

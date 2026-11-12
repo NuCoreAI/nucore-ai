@@ -1016,17 +1016,37 @@ async def test_server_entry_renders_devd_rule_when_given(tmp_path):
     args = _base_args(
         server_entry={
             "name": "AcmePool",
-            "devd": {"vendor_id": "10c4", "product_id": "ea60", "name": "acmepool"},
+            "devd": {"vendor_id": "10c4", "product_id": "ea60"},
         }
     )
     result = await _generate(tmp_path, args)
     assert "error" not in result
-    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
-    assert 'match "vendor" "0x10c4"' in entry["devd"]
-    assert 'match "product" "0xea60"' in entry["devd"]
-    assert "pg3.acmepool" in entry["devd"]
-    assert "UDX_OWNER_PLACE_HOLDER" in entry["devd"]
-    assert "UDX_PERMISSION_PLACE_HOLDER" in entry["devd"]
+    plugin_dir = tmp_path / "acme_pool"
+    entry = json.loads((plugin_dir / "server_entry.json").read_text())
+    assert entry["devd"] == json.dumps({"filename": "acmepool.conf"})
+    devd_conf = (plugin_dir / "acmepool.conf").read_text()
+    assert 'match "vendor" "0x10c4"' in devd_conf
+    assert 'match "product" "0xea60"' in devd_conf
+    assert "pg3.acmepool" in devd_conf
+    assert "UDX_OWNER_PLACE_HOLDER" in devd_conf
+    assert "UDX_PERMISSION_PLACE_HOLDER" in devd_conf
+
+
+@pytest.mark.asyncio
+async def test_server_entry_devd_filename_lowercases_and_underscores_the_plugin_name(tmp_path):
+    args = _base_args(
+        server_entry={
+            "name": "Acme Pool",
+            "devd": {"vendor_id": "10c4", "product_id": "ea60"},
+        }
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    plugin_dir = tmp_path / "acme_pool"
+    entry = json.loads((plugin_dir / "server_entry.json").read_text())
+    assert entry["devd"] == json.dumps({"filename": "acme_pool.conf"})
+    devd_conf = (plugin_dir / "acme_pool.conf").read_text()
+    assert "pg3.acme_pool" in devd_conf
 
 
 @pytest.mark.asyncio
@@ -1038,7 +1058,7 @@ async def test_server_entry_omits_devd_when_not_given(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_entry_devd_requires_all_three_fields(tmp_path):
+async def test_server_entry_devd_requires_both_fields(tmp_path):
     args = _base_args(server_entry={"name": "AcmePool", "devd": {"vendor_id": "10c4"}})
     result = await _generate(tmp_path, args)
     assert "error" in result
@@ -1805,8 +1825,21 @@ async def test_mismatched_authenticated_user_is_refused(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_authenticated_user_id_does_not_block_generation(tmp_path):
+async def test_not_logged_in_is_refused_even_with_a_developer_config_on_file(tmp_path):
+    # get_user_id given but returning None means a login concept applies to
+    # this session (e.g. an eisyUI chat before its first context message) --
+    # an unauthenticated session must not generate a plugin attributed to an
+    # already-commissioned developer, even though no *mismatch* was found.
     result = await _generate(tmp_path, _base_args(), get_user_id=lambda: None)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_no_login_concept_at_all_does_not_block_generation(tmp_path):
+    # get_user_id itself being None (not merely returning None) means no
+    # login concept applies to this session at all -- the MCP/CLI path.
+    result = await _generate(tmp_path, _base_args(), get_user_id=None)
     assert "error" not in result
 
 

@@ -1,5 +1,13 @@
 # Release Notes
 
+## 3.4.1 - 2026-11-11
+
+- Fix `package_generated_plugin` shipping a system-issued plugin SSL certificate (`*.cert`, not matched by the existing `*.cer`/`*.crt` exclusions) and the `.pytest_cache/` directory in the built archive.
+- Stop calling the installation "a hub" anywhere in the customer-facing or plugin-authoring system prompts or tool descriptions -- say "the system"/"your installation" generically, or the real product name and model number when the customer specifically asks what they're running. Add `host_identity`, fetched once from the real system config and cached for the process's lifetime, to supply that real product/model/OS fact to both prompt builders; fixes `IoXDiagnostics` having stopped actually populating Model Name/Model Number.
+- `configure_developer`/`generate_plugin_scaffold` now refuse outright when a login concept applies to the session (eisyUI) but nobody is logged in yet, instead of letting an unauthenticated session commission a developer identity or generate a plugin blind. `get_developer_config` now also surfaces the session's `authenticated_user_id` so a caller learns the login state up front.
+- `generate_plugin_scaffold`'s `server_entry.devd` no longer takes a separate `name` field -- the devd.conf hardware-attach rule is derived from the plugin's own name instead, and its rendered rule text is now written to a sibling `{name}.conf` file in the plugin's directory rather than inlined into `server_entry.json`'s `devd` field (now just a `{"filename": ...}` pointer).
+- Fix a stale test (`test_merged_handlers_union_customer_and_plugin_authoring`) still asserting 19 plugin_authoring-only tools; `package_generated_plugin` (3.4.0) brought that to 20.
+
 ## 3.4.0 - 2026-11-10
 
 - Add `NuCoreInterface.setup_eisy_ai_vscode_remote`, implemented directly on `IoXWrapper` (and move the existing `refresh_eisy_ai_permissions` there too, out of `IoXDiagnostics` -- neither is a diagnostic).

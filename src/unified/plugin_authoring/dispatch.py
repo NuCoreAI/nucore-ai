@@ -81,10 +81,11 @@ def build_tool_handlers(
     not just one of them. ``list_generated_plugins``/``read_generated_plugin``
     are always added -- local-disk-only, nothing external to be missing.
     *get_user_id*, when given, is this connection's own live
-    ``EisyUIContext.get_user_id`` bound method -- ``configure_developer``/
-    ``generate_plugin_scaffold`` call it at use time, never caching its
-    result, so it always reflects the connection's current authenticated
-    identity rather than a snapshot taken when the handlers were built."""
+    ``EisyUIContext.get_user_id`` bound method -- ``get_developer_config``/
+    ``configure_developer``/``generate_plugin_scaffold`` call it at use time,
+    never caching its result, so it always reflects the connection's current
+    authenticated identity rather than a snapshot taken when the handlers
+    were built."""
     handlers: dict[str, ToolHandler] = dict(TOOL_HANDLERS)
     handlers["configure_developer"] = functools.partial(
         developer_config_handlers.configure_developer,
@@ -94,6 +95,7 @@ def build_tool_handlers(
     handlers["get_developer_config"] = functools.partial(
         developer_config_handlers.get_developer_config,
         plugin_output_root=plugin_output_root,
+        get_user_id=get_user_id,
     )
     handlers["search_store_plugins"] = functools.partial(discovery.search_store_plugins, ledger=ledger)
     handlers["search_github_plugins"] = functools.partial(

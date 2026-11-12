@@ -566,20 +566,25 @@ def _build_server_entry(
     developer: str,
     author: str,
     default_run_as: str,
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None, tuple[str, str] | None]:
     """Builds the exact ``PUT /api/plugins/store/local/entry`` body (guard
     7 for the oauth-placeholder rule is enforced here too) -- returns
-    ``(entry, None)`` on success or ``(None, error)``. Only explicitly
-    known fields are copied across; nothing in *server_entry* passes
-    through un-vetted.
+    ``(entry, None, devd_file)`` on success or ``(None, error, None)``.
+    *devd_file*, when ``server_entry.devd`` was given, is ``(filename,
+    content)`` for the sibling devd.conf file the caller must write
+    alongside the other generated files -- ``None`` otherwise. Only
+    explicitly known fields are copied across; nothing in *server_entry*
+    passes through un-vetted.
 
-    ``customParams``/``oauth``/``nsdata``/``aiTools`` are JSON-encoded
-    *strings* in the real wire body, not raw objects/arrays -- confirmed
-    against a real failed registration (the host rejects a raw array) and
-    against the real ``StoreEntry`` schema. ``devd`` already follows this
-    same "structured input -> plain string value" shape via
-    ``render_devd_rule``, below -- this just extends the same precedent to
-    the other four fields, via ``json.dumps`` instead of a template.
+    ``customParams``/``oauth``/``nsdata``/``aiTools``/``devd`` are
+    JSON-encoded *strings* in the real wire body, not raw objects/arrays --
+    confirmed against a real failed registration (the host rejects a raw
+    array) and against the real ``StoreEntry`` schema. ``devd``'s rendered
+    devd.conf rule text is written to a sibling ``{name}.conf`` file in the
+    plugin's own directory (below, alongside the other generated files)
+    rather than embedded inline -- the ``devd`` field itself is just
+    ``json.dumps({"filename": ...})``, a pointer to that file, same
+    "structured input -> JSON-encoded string" shape as the other four.
 
     ``customParams`` itself (before that encoding) is a *flat*
     ``{field_name: value}`` object -- PG3's actual ``customparams`` shape
@@ -603,9 +608,9 @@ def _build_server_entry(
     anything else."""
     name = (server_entry.get("name") or "").strip()
     if not name:
-        return None, "server_entry.name is required"
+        return None, "server_entry.name is required", None
     if len(name) > 15:
-        return None, f"server_entry.name must be at most 15 characters, got {len(name)!r}"
+        return None, f"server_entry.name must be at most 15 characters, got {len(name)!r}", None
 
     entry: dict[str, Any] = {
         "name": name,
@@ -646,7 +651,7 @@ def _build_server_entry(
             return None, (
                 "server_entry.oauth requires name, auth_endpoint, and token_endpoint when "
                 "authorize is true"
-            )
+            ), None
         for secret_field in ("client_id", "client_secret"):
             configured = oauth.get(secret_field)
             if configured is not None and configured != OAUTH_PLACEHOLDER:
@@ -654,7 +659,7 @@ def _build_server_entry(
                     f"server_entry.oauth.{secret_field} must be the literal placeholder "
                     f"'{OAUTH_PLACEHOLDER}' at generation time, never a real value -- "
                     "real values are set after install via configure_plugin(key='oauth')"
-                )
+                ), None
             oauth[secret_field] = OAUTH_PLACEHOLDER
         entry["oauth"] = json.dumps(oauth)
 
@@ -664,16 +669,21 @@ def _build_server_entry(
             entry["aiPrompt"] = server_entry["aiPrompt"]
         entry["aiTools"] = json.dumps(server_entry.get("aiTools") or [])
 
+    devd_file: tuple[str, str] | None = None
     devd = server_entry.get("devd")
     if devd:
         if not isinstance(devd, dict):
-            return None, "server_entry.devd must be an object with vendor_id/product_id/name"
-        vendor_id, product_id, devd_name = devd.get("vendor_id"), devd.get("product_id"), devd.get("name")
-        if not (vendor_id and product_id and devd_name):
-            return None, "server_entry.devd requires vendor_id, product_id, and name"
-        entry["devd"] = plugin_skeleton.render_devd_rule(vendor_id=vendor_id, product_id=product_id, name=devd_name)
+            return None, "server_entry.devd must be an object with vendor_id/product_id", None
+        vendor_id, product_id = devd.get("vendor_id"), devd.get("product_id")
+        if not (vendor_id and product_id):
+            return None, "server_entry.devd requires vendor_id and product_id", None
+        devd_name = name.replace(" ", "_").lower()
+        devd_content = plugin_skeleton.render_devd_rule(vendor_id=vendor_id, product_id=product_id, name=devd_name)
+        devd_filename = f"{devd_name}.conf"
+        entry["devd"] = json.dumps({"filename": devd_filename})
+        devd_file = (devd_filename, devd_content)
 
-    return entry, None
+    return entry, None, devd_file
 
 
 def _render_readme(*, server_entry: dict[str, Any], readme_body: str, sources: list[dict[str, Any]]) -> str:
@@ -813,6 +823,11 @@ async def generate_plugin_scaffold(
         return {
             "error": "no developer config found for this plugin_output_root -- "
                      "call configure_developer first (email + name) before generating a scaffold"
+        }
+    if get_user_id is not None and get_user_id() is None:
+        return {
+            "error": "not logged in -- the person must log in to eisyUI before a plugin can be "
+                     "generated and attributed to the commissioned developer"
         }
     authenticated_user_id = get_user_id() if get_user_id is not None else None
     if authenticated_user_id and authenticated_user_id.strip().lower() != developer_entry["email"].strip().lower():
@@ -1087,7 +1102,7 @@ async def generate_plugin_scaffold(
         }
 
     default_run_as = _DEFAULT_RUN_AS
-    entry, entry_error = _build_server_entry(
+    entry, entry_error, devd_file = _build_server_entry(
         location=location,
         plugin_dir=plugin_dir,
         server_entry=server_entry_input,
@@ -1168,6 +1183,12 @@ async def generate_plugin_scaffold(
         candidate_files[plugin_dir / f"{node_name}.py"] = node_source
     for test_name, test_source in tests.items():
         candidate_files[plugin_dir / "tests" / test_name] = test_source
+    if devd_file:
+        devd_filename, devd_content = devd_file
+        try:
+            candidate_files[confine_path(plugin_dir, devd_filename)] = devd_content
+        except ValueError as exc:
+            return {"error": str(exc)}
 
     if not confirm_overwrite:
         conflicts = sorted(str(p.relative_to(plugin_dir)) for p in candidate_files if p.is_file())

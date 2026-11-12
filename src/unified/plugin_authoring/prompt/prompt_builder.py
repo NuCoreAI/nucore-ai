@@ -13,12 +13,14 @@ from typing import Any
 
 from nucore import NuCoreInterface
 
+from ... import host_identity
+
 _PROMPT_DIR = Path(__file__).parent
 
 
 async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> list[str]:
     template = (_PROMPT_DIR / "system_prompt.md").read_text(encoding="utf-8")
-    sections = [template]
+    sections = [template, await host_identity.get_identity_text(nucore_interface)]
 
     installed_section = await _build_installed_plugins_section(nucore_interface)
     if installed_section:
