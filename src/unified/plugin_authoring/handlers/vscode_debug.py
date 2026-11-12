@@ -54,6 +54,7 @@ _PG3INIT_PATTERN = re.compile(r"^\s*export\s+PG3INIT=(\S+)\s*$", re.MULTILINE)
 _IOX_ENV_FILENAME = ".iox_env"
 _VSCODE_DIRNAME = ".vscode"
 _LAUNCH_JSON_FILENAME = "launch.json"
+_MAIN_PY_FILENAME = "main.py"
 _SSH_USER = "admin"
 _SSH_BASH_ENV = ".bash_linux"
 _NON_ALNUM_PATTERN = re.compile(r"[^a-zA-Z0-9]+")
@@ -182,7 +183,7 @@ async def setup_vscode_debug_config(
                 "name": entry.get("name") or location,
                 "type": "debugpy",
                 "request": "launch",
-                "program": "main.py",
+                "program": f"${{workspaceFolder}}/{_MAIN_PY_FILENAME}",
                 "console": "integratedTerminal",
                 "envFile": f"${{workspaceFolder}}/{_IOX_ENV_FILENAME}",
                 "justMyCode": False,

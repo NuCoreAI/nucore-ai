@@ -167,7 +167,7 @@ async def test_success_writes_iox_env_and_launch_json(tmp_path, monkeypatch):
                 "name": "AcmePool",
                 "type": "debugpy",
                 "request": "launch",
-                "program": "main.py",
+                "program": "${workspaceFolder}/main.py",
                 "console": "integratedTerminal",
                 "envFile": "${workspaceFolder}/.iox_env",
                 "justMyCode": False,

@@ -439,3 +439,24 @@ Stage 6's device detection.
     lookup needed), never a hardcoded example IP. The new config file is included in the same
     batched `refresh_permissions_after_write`/`notify_files_changed` calls this handler already
     makes for `.iox_env`/`launch.json`, only when it was actually (re)written this call.
+15. **`setup_github_ssh`: deploy key by default, gated on the signed-in user's email** — `setup_github_repo`
+    only runs plain `git push` and relies on SSH access that nothing set up, so a first push failed
+    in a way the developer had to debug by hand-running `ssh-keygen`/`ssh-keyscan`/`ssh -T` through
+    chat. `setup_github_ssh` does every automatable step and leaves only the one that can't be:
+    adding the public key in GitHub's web UI (`needs_key_upload`, re-call to verify). Default scope
+    is a per-repo **deploy key** (least privilege): GitHub rejects one public key on a second repo
+    and plain `git@github.com` can't choose between keys, so each repo gets its own key file plus
+    a marked `~/.ssh/config` Host alias (`HostKeyAlias github.com` keeps one `known_hosts` entry),
+    and the returned `ssh_remote_url` uses that alias. `key_scope="account"` is the offered
+    alternative (reuse or create the default key; reaches every repo on the account). Behaviors
+    that differ from the hand-run steps: success is parsed from GitHub's "successfully
+    authenticated" message because `ssh -T` exits 1 on success; `known_hosts` is only appended
+    after the scanned ed25519 fingerprint matches GitHub's published one (and only if not already
+    present); all ssh calls are `BatchMode`; commands get an explicit `HOME=` because
+    `run_shell_command`'s child env has none; an existing private key is never overwritten. Gate:
+    the person must be signed in and the supplied `github_email` must equal the signed-in user's
+    email, else a refusal with plain-text `instructions` -- same two-level `get_user_id` semantics
+    as `configure_developer` (no login concept on the MCP/CLI path skips the comparison). The email
+    check is an attestation, not proof: SSH reveals only a GitHub username and GitHub hides most
+    emails; a real check would need a GitHub token, deliberately out of scope along with creating
+    the repo or uploading the key for the developer.

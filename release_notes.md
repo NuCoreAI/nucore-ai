@@ -1,5 +1,11 @@
 # Release Notes
 
+## 3.6.0 - 2026-11-12
+
+- Add `setup_github_ssh` to plugin authoring: configures the system's SSH access to GitHub if it isn't already, so `setup_github_repo`'s plain `git push` works non-interactively. Defaults to a dedicated per-repository deploy key (own key file plus a `~/.ssh/config` Host alias, returned as `ssh_remote_url`); `key_scope="account"` reuses or creates the host's default key instead. Pre-trusts github.com in `known_hosts` only after its ed25519 fingerprint matches GitHub's published one, and detects success from GitHub's "successfully authenticated" message because `ssh -T` exits 1 even on success. Idempotent. The one step it can't do is adding the public key in GitHub's web UI, so it returns `needs_key_upload` with the key and step-by-step instructions, then verifies on a re-call.
+- `setup_vscode_debug_config` now writes `launch.json` with `program` set to `${workspaceFolder}/main.py` (the full path) instead of a bare `main.py`; re-run it to fix an existing plugin.
+- `setup_github_ssh` requires a signed-in user and a `github_email` equal to the signed-in user's email (an attestation, since SSH only reveals a GitHub username); otherwise it refuses with plain-text instructions.
+
 ## 3.5.0 - 2026-11-11
 
 - Fix `package_generated_plugin` shipping a system-issued plugin SSL certificate (`*.cert`, not matched by the existing `*.cer`/`*.crt` exclusions) and the `.pytest_cache/` directory in the built archive.

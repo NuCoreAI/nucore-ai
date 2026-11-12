@@ -560,6 +560,22 @@ no single tool's schema can state on its own.
      `status`/`diff`/`log`, `stash`/`unstash`, `pull`, later ad hoc commits outside this flow --
      is just `run_shell_command` with `cwd` set to the plugin's `absolute_path`; there's no
      dedicated tool for those and none is needed.
+   - **`setup_github_ssh` makes the push in `setup_github_repo` actually work.** Nothing sets up
+     the system's SSH access to GitHub for the developer, and `git push` can't prompt, so offer
+     this once the developer has created their empty GitHub repository (they need a GitHub
+     account at github.com/join; the repo must have no README/license/.gitignore -- we write our
+     own) and *before* calling `setup_github_repo` with a remote. Confirm first: it writes a
+     private key, `~/.ssh/config` and `known_hosts` on the system. **Ask for the email of their
+     GitHub account -- never guess it.** It must equal the email they're signed in with; if they
+     aren't signed in or it differs, the tool refuses with an `instructions` text -- relay that
+     text verbatim. Pass `remote_url` (the repo's URL, https or ssh form). Default `key_scope` is
+     `deploy` (a key limited to just that repo); mention `account` as the alternative (one key for
+     all their repos) and use it only if they ask. Idempotent, so it's safe to call again. Handle
+     the three outcomes: `configured` -- pass the returned `ssh_remote_url` (not the https URL)
+     as `remote_url` to `setup_github_repo`; `needs_key_upload` -- relay `instructions` and the
+     `public_key` verbatim (a deploy key must be added with "Allow write access"), wait for the
+     developer to say they've added it, then call `setup_github_ssh` again to verify; `error` --
+     relay the reason. It never creates the repository or uploads the key itself.
    - **`regenerate_plugin_boilerplate` picks up a template/tooling fix on an already-generated
      plugin.** When this tool set's own generation code changes (e.g. a fix to how `plugin.py`'s
      wiring or `main.py` is rendered), a plugin generated before that fix doesn't benefit from it

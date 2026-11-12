@@ -35,6 +35,7 @@ from .handlers import (
     device_detection,
     discovery,
     github_repo,
+    github_ssh,
     install,
     package,
     profile_authoring,
@@ -141,6 +142,7 @@ def build_tool_handlers(
     handlers["setup_github_repo"] = functools.partial(
         github_repo.setup_github_repo, plugin_output_root=plugin_output_root
     )
+    handlers["setup_github_ssh"] = functools.partial(github_ssh.setup_github_ssh, get_user_id=get_user_id)
     handlers["regenerate_plugin_boilerplate"] = functools.partial(
         boilerplate.regenerate_plugin_boilerplate, plugin_output_root=plugin_output_root
     )

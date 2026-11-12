@@ -439,6 +439,35 @@ async def test_setup_github_repo_routes_through_dispatch(tmp_path):
     assert "error" in result
 
 
+# --- setup_github_ssh (local/dev-testing only) ---
+
+
+def test_build_tool_handlers_always_adds_setup_github_ssh():
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(), search_engine=None, search_engine_api_key=None, secret_values=[], plugin_output_root="/tmp/plugin-projects"
+    )
+    assert "setup_github_ssh" in handlers
+
+
+@pytest.mark.asyncio
+async def test_setup_github_ssh_routes_through_dispatch_with_get_user_id_bound(tmp_path):
+    handlers = build_tool_handlers(
+        ledger=EvidenceLedger(),
+        search_engine=None,
+        search_engine_api_key=None,
+        secret_values=[],
+        plugin_output_root=str(tmp_path),
+        get_user_id=lambda: None,
+    )
+    result = await execute_tool(
+        "setup_github_ssh",
+        {"github_email": "dev@example.com", "remote_url": "https://github.com/acme/pool.git"},
+        nucore_interface=FakeBackend(),
+        tool_handlers=handlers,
+    )
+    assert "not logged in" in result["error"]
+
+
 # --- regenerate_plugin_boilerplate (local/dev-testing only) ---
 
 

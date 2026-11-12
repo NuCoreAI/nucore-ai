@@ -1,0 +1,28 @@
+{
+  "name": "setup_github_ssh",
+  "description": "Local/dev-testing only -- configures this system's SSH access to GitHub, if it isn't already, so setup_github_repo's plain 'git push' works non-interactively. Does every automatable step: creates ~/.ssh, generates an ed25519 key with no passphrase (never overwriting an existing private key), adds a ~/.ssh/config Host alias for a deploy key, pre-trusts github.com in known_hosts only after its ed25519 fingerprint matches GitHub's published one, and tests the connection (it parses GitHub's 'successfully authenticated' message -- ssh -T exits 1 even on success). Idempotent and safe to re-call: if access already works it changes nothing and returns status 'configured'. The one step it can't do is adding the public key in GitHub's web UI: it returns status 'needs_key_upload' with the public_key, a key_title and step-by-step 'instructions' text to relay to the developer verbatim; once they've done it, call this tool again to verify. Default key_scope is 'deploy' -- a dedicated key limited to one repository (the developer must create the empty repository first and pass remote_url; they must tick 'Allow write access' when adding it). key_scope 'account' instead reuses or creates the host's default key, which the developer adds to their GitHub account and which then reaches all of their repositories -- offer it as the alternative, not the default. REQUIRES the person to be signed in, and github_email must equal the signed-in user's email (case-insensitive); otherwise it refuses with an 'error' and plain-text 'instructions' to relay. The email check is an attestation by the developer -- SSH only reveals a GitHub username -- so ask them for their GitHub account email rather than guessing it. Always get the developer's explicit go-ahead before calling this: it writes a private key, ~/.ssh/config and known_hosts on the system. When it returns 'configured', pass the returned ssh_remote_url (not the https:// URL) as remote_url to setup_github_repo. It never creates a GitHub repository or uploads the key for them.",
+  "input_schema": {
+    "type": "object",
+    "required": ["github_email"],
+    "properties": {
+      "github_email": {
+        "type": "string",
+        "description": "The email address of the developer's GitHub account. Must equal the signed-in user's email, or the tool refuses. Also used as the generated key's comment."
+      },
+      "remote_url": {
+        "type": ["string", "null"],
+        "description": "The already-created (usually empty) GitHub repository's URL, https or ssh form (e.g. https://github.com/yourname/your-plugin.git). Required for key_scope 'deploy'; optional for 'account' (only used to compute the returned ssh_remote_url)."
+      },
+      "key_scope": {
+        "type": "string",
+        "enum": ["deploy", "account"],
+        "description": "'deploy' (default): a dedicated per-repository deploy key. 'account': the host's default SSH key, added to the developer's GitHub account (access to all their repositories).",
+        "default": "deploy"
+      },
+      "key_title": {
+        "type": "string",
+        "description": "Title to suggest for the key on GitHub. Defaults to 'eisy - <hostname>'."
+      }
+    }
+  }
+}
