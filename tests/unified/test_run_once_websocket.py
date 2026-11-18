@@ -27,9 +27,6 @@ class FakeRuntime:
     def is_tool_set_enabled(self, tool_set_name: str) -> bool:
         return True
 
-    def profile_max_turns(self, tool_set_name: str) -> int:
-        return 20
-
 
 class FakeStreamHandler:
     def __init__(self, chunk_count: int = 0):

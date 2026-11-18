@@ -114,7 +114,68 @@ def _build_history_messages(turns: Iterable[ConversationTurn], *, current_provid
     history_messages: list[dict[str, Any]] = []
     for turn in turns:
         history_messages.extend(_replay_turn(turn, current_provider=current_provider))
-    return history_messages
+    return _drop_unpaired_web_search_blocks(history_messages)
+
+
+def _drop_unpaired_web_search_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove Claude ``server_tool_use`` (web search) blocks that have no
+    ``web_search_tool_result`` anywhere in *messages*, and results with no
+    matching use.
+
+    A turn can be stored with a search request whose result block never came
+    back in any stored response (the search is issued in one round alongside a
+    client ``tool_use`` and resolved server-side in the next, and that next
+    response can carry only text). Replaying such an orphan makes the API
+    reject the *entire* request ("web_search tool use ... was found without a
+    corresponding web_search_tool_result block"), and since the orphan is in
+    persisted history, every later turn of that session fails the same way.
+    Pairing is checked across all of *messages*, not per message, because a
+    use and its result legitimately land in different assistant messages
+    (the use alongside a client tool_use, the result at the start of the
+    next round). Returns *messages* itself when nothing needs removing; never
+    mutates the stored messages.
+    """
+    use_ids: set[str] = set()
+    result_ids: set[str] = set()
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "server_tool_use" and block.get("id"):
+                use_ids.add(block["id"])
+            elif block.get("type") == "web_search_tool_result" and block.get("tool_use_id"):
+                result_ids.add(block["tool_use_id"])
+    orphan_uses = use_ids - result_ids
+    orphan_results = result_ids - use_ids
+    if not orphan_uses and not orphan_results:
+        return messages
+
+    def is_orphan(block: Any) -> bool:
+        if not isinstance(block, dict):
+            return False
+        if block.get("type") == "server_tool_use":
+            return block.get("id") in orphan_uses
+        if block.get("type") == "web_search_tool_result":
+            return block.get("tool_use_id") in orphan_results
+        return False
+
+    cleaned: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(is_orphan(block) for block in content):
+            kept = [block for block in content if not is_orphan(block)]
+            if not kept:
+                continue
+            message = {**message, "content": kept}
+        cleaned.append(message)
+    logger.warning(
+        "unified: dropped %d unpaired web_search block(s) from replayed history",
+        len(orphan_uses) + len(orphan_results),
+    )
+    return cleaned
 
 
 def resolve_llm_profile(runtime_config: dict[str, Any], *, preferred_key: str = "unified") -> dict[str, Any]:
@@ -402,14 +463,6 @@ class UnifiedRuntime:
     def _profile_config(self, tool_set_name: str) -> dict[str, Any]:
         return self.runtime_config.get("nucore_runtime", {}).get(tool_set_name, {})
 
-    def profile_max_turns(self, tool_set_name: str) -> int:
-        """Public wrapper around this tool set's configured ``max_turns``
-        -- used by ``run_unified_runtime.py``'s session-management command
-        handlers (``/load-session`` etc.), which need the same value
-        :meth:`handle_query` uses without reaching into the private
-        ``_profile_config``."""
-        return int(self._profile_config(tool_set_name).get("max_turns", 20))
-
     async def compact_session(self, user_id: str, tool_set: str) -> bool:
         """Force-compact the current session's history for
         ``(user_id, tool_set)``, regardless of whether it's actually over
@@ -425,9 +478,8 @@ class UnifiedRuntime:
         history.
 
         Returns:
-            False if there isn't enough history yet to meaningfully compact
-            (see ``history_compaction._MIN_TURNS_TO_COMPACT``) -- true
-            otherwise.
+            False if there is nothing older than the latest turn to compact
+            -- true otherwise.
         """
         current_session_num = await self.session_store.resolve_current_session_id(
             user_id, tool_set, durable=True
@@ -439,7 +491,6 @@ class UnifiedRuntime:
                 user_id,
                 tool_set,
                 current_session_num,
-                max_turns=int(profile_cfg.get("max_turns", 20)),
                 durable=True,
             )
             compacted = await maybe_compact_history(
@@ -613,7 +664,6 @@ class UnifiedRuntime:
                     session_id,
                     current_tool_set,
                     current_session_num,
-                    max_turns=int(profile_cfg.get("max_turns", 20)),
                     durable=durable_session,
                 )
                 await maybe_compact_history(
@@ -673,7 +723,6 @@ class UnifiedRuntime:
                             session_id,
                             current_tool_set,
                             current_session_num,
-                            max_turns=int(self._profile_config(current_tool_set).get("max_turns", 20)),
                             durable=durable_session,
                         )
                         current_provider = self._resolve_llm_config(current_tool_set).get("provider")

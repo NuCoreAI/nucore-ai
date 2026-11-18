@@ -1,18 +1,20 @@
-"""maybe_compact_history -- triggers on estimated token size (not turn
-count), collapses the oldest half of turns into one summary pseudo-turn via
-a single LLM call, and falls back to plain truncation (never raises) when
-that call fails.
+"""maybe_compact_history -- the only limit on replayed history (there is no
+turn-count cap): triggers on estimated token size, keeps the newest turns
+that fit in half the budget (hysteresis, so the provider's cached prefix
+stays stable between compactions), collapses everything older into one
+summary pseudo-turn via a single LLM call, and falls back to plain
+truncation (never raises) when that call fails.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from unified import history_compaction
 from unified.history_compaction import (
     _budget_notice,
     _COMPACTED_NOTICE,
     _COMPACTED_QUERY_LABEL,
-    _MIN_TURNS_TO_COMPACT,
     _history_tokens,
     estimate_tokens,
     maybe_compact_history,
@@ -41,7 +43,7 @@ class _FakeLLMClient:
 
 
 def _history_with_turns(n: int, *, body: str = "x") -> ConversationHistory:
-    history = ConversationHistory(max_turns=100)
+    history = ConversationHistory()
     for i in range(n):
         history.turns.append(ConversationTurn(query=f"query {i} {body}", response=f"response {i} {body}"))
     return history
@@ -51,9 +53,16 @@ def _big_body(chars: int) -> str:
     return "x" * chars
 
 
+def _budget_keeping(history: ConversationHistory, kept: int) -> int:
+    """A token budget the (uniformly sized) *history* is over, whose half-
+    budget keep target fits exactly the newest *kept* turns."""
+    per_turn = _history_tokens(history.turns[:1])
+    return 2 * kept * per_turn + 1
+
+
 @pytest.mark.asyncio
 async def test_no_compaction_below_token_budget():
-    history = _history_with_turns(_MIN_TURNS_TO_COMPACT + 2, body="short")
+    history = _history_with_turns(8, body="short")
     original_turns = list(history.turns)
     llm = _FakeLLMClient()
 
@@ -65,32 +74,33 @@ async def test_no_compaction_below_token_budget():
 
 
 @pytest.mark.asyncio
-async def test_no_compaction_below_min_turns_even_over_budget():
-    # Each turn is huge, but there aren't enough turns to bother compacting.
-    history = _history_with_turns(_MIN_TURNS_TO_COMPACT - 1, body=_big_body(5000))
-    original_turns = list(history.turns)
-    llm = _FakeLLMClient()
+async def test_a_few_huge_turns_over_budget_still_compact():
+    # No minimum-turn gate: three turns that together blow the budget (and
+    # would blow a model's context window) must still be compacted.
+    history = _history_with_turns(3, body=_big_body(5000))
+    llm = _FakeLLMClient(text="the summary text")
 
     compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
 
-    assert compacted is False
-    assert history.turns == original_turns
-    assert llm.calls == []
+    assert compacted is True
+    assert [t.query for t in history.turns] == [_COMPACTED_QUERY_LABEL, f"query 2 {_big_body(5000)}"]
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_compaction_collapses_oldest_half_into_summary_turn():
+async def test_compaction_keeps_newest_turns_fitting_half_the_budget_and_summarizes_the_rest():
     history = _history_with_turns(8, body=_big_body(2000))
     llm = _FakeLLMClient(text="the summary text")
+    budget = _budget_keeping(history, 3)
 
-    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=100)
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=budget)
 
     assert compacted is True
-    # 8 turns -> split at 4: oldest 4 summarized into 1, newest 4 kept.
-    assert len(history.turns) == 5
+    # Newest 3 fit in budget // 2: oldest 5 summarized into 1, newest 3 kept.
+    assert len(history.turns) == 4
     assert history.turns[0].query == _COMPACTED_QUERY_LABEL
     assert history.turns[0].response == "the summary text"
-    assert [t.query for t in history.turns[1:]] == [f"query {i} {_big_body(2000)}" for i in range(4, 8)]
+    assert [t.query for t in history.turns[1:]] == [f"query {i} {_big_body(2000)}" for i in range(5, 8)]
     assert len(llm.calls) == 1
 
 
@@ -130,12 +140,14 @@ async def test_summarization_failure_falls_back_to_hard_truncation_without_raisi
     history = _history_with_turns(8, body=_big_body(2000))
     llm = _FakeLLMClient(raises=RuntimeError("provider unavailable"))
 
-    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=_budget_keeping(history, 3)
+    )
 
     assert compacted is True
-    assert len(history.turns) == 4
+    assert len(history.turns) == 3
     assert all(t.query != _COMPACTED_QUERY_LABEL for t in history.turns)
-    assert [t.query for t in history.turns] == [f"query {i} {_big_body(2000)}" for i in range(4, 8)]
+    assert [t.query for t in history.turns] == [f"query {i} {_big_body(2000)}" for i in range(5, 8)]
 
 
 @pytest.mark.asyncio
@@ -143,10 +155,12 @@ async def test_empty_summary_text_also_falls_back_to_truncation():
     history = _history_with_turns(8, body=_big_body(2000))
     llm = _FakeLLMClient(text="   ")  # blank after strip()
 
-    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=_budget_keeping(history, 3)
+    )
 
     assert compacted is True
-    assert len(history.turns) == 4
+    assert len(history.turns) == 3
     assert all(t.query != _COMPACTED_QUERY_LABEL for t in history.turns)
 
 
@@ -157,7 +171,7 @@ async def test_second_compaction_pass_resummarizes_the_pseudo_turn_with_newer_tu
     await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
     assert history.turns[0].query == _COMPACTED_QUERY_LABEL
 
-    # Grow the history again past the min-turns floor and re-trigger.
+    # Grow the history again past the budget and re-trigger.
     for i in range(8, 13):
         history.turns.append(ConversationTurn(query=f"query {i} {_big_body(2000)}", response=f"response {i}"))
 
@@ -172,10 +186,10 @@ async def test_second_compaction_pass_resummarizes_the_pseudo_turn_with_newer_tu
     assert _COMPACTED_QUERY_LABEL in first_call_messages[0]["content"]
 
 
-def test_estimate_tokens_is_roughly_chars_over_four():
+def test_estimate_tokens_is_roughly_chars_over_three():
     assert estimate_tokens("") == 0
-    assert estimate_tokens("abcd") == 1
-    assert estimate_tokens("a" * 40) == 10
+    assert estimate_tokens("abc") == 1
+    assert estimate_tokens("a" * 30) == 10
 
 
 def test_history_tokens_sizes_from_rich_messages_when_present():
@@ -187,7 +201,7 @@ def test_history_tokens_sizes_from_rich_messages_when_present():
     turn = ConversationTurn(query="hi", response="ok", messages=big_messages)
 
     assert _history_tokens([turn]) > estimate_tokens("hi") + estimate_tokens("ok")
-    assert _history_tokens([turn]) >= 1900  # ~8000 chars / 4, minus json overhead slack
+    assert _history_tokens([turn]) >= 2600  # ~8000 chars / 3, minus json overhead slack
 
 
 def test_history_tokens_falls_back_to_query_response_when_messages_empty():
@@ -215,8 +229,8 @@ async def test_compaction_collapses_summarized_turns_rich_messages_to_text_only(
 
 @pytest.mark.asyncio
 async def test_compaction_preserves_the_kept_turns_rich_messages():
-    # The newest half, which survives compaction untouched, must keep its
-    # own rich transcript -- only the summarized-away older half collapses.
+    # The newest turn(s), which survive compaction untouched, must keep its
+    # own rich transcript -- only the summarized-away older turns collapse.
     history = _history_with_turns(8, body=_big_body(2000))
     rich = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]}]
     history.turns[-1].messages = rich
@@ -251,7 +265,7 @@ async def test_summarization_prompt_ignores_rich_messages_and_uses_query_respons
 
 @pytest.mark.asyncio
 async def test_notify_fires_once_per_decile_and_is_capped_below_100_percent():
-    history = _history_with_turns(_MIN_TURNS_TO_COMPACT, body=_big_body(200))
+    history = _history_with_turns(6, body=_big_body(200))
     total = _history_tokens(history.turns)
     llm = _FakeLLMClient()
     notices: list[str] = []
@@ -288,7 +302,7 @@ async def test_notify_fires_once_per_decile_and_is_capped_below_100_percent():
 
 @pytest.mark.asyncio
 async def test_notify_is_silent_below_50_percent():
-    history = _history_with_turns(_MIN_TURNS_TO_COMPACT, body="short")
+    history = _history_with_turns(6, body="short")
     notices: list[str] = []
 
     async def notify(text):
@@ -320,7 +334,7 @@ async def test_notify_gets_the_compacted_wording_when_compaction_actually_runs()
 
 @pytest.mark.asyncio
 async def test_force_compacts_even_under_budget():
-    history = _history_with_turns(_MIN_TURNS_TO_COMPACT, body="short")
+    history = _history_with_turns(6, body="short")
     llm = _FakeLLMClient(text="forced summary")
     notices: list[str] = []
 
@@ -337,8 +351,18 @@ async def test_force_compacts_even_under_budget():
 
 
 @pytest.mark.asyncio
-async def test_force_still_requires_min_turns_to_compact():
-    history = _history_with_turns(_MIN_TURNS_TO_COMPACT - 1, body="short")
+async def test_force_keeps_about_the_newest_half_by_size():
+    history = _history_with_turns(6, body="short")
+    llm = _FakeLLMClient(text="forced summary")
+
+    await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=10_000_000, force=True)
+
+    assert [t.query for t in history.turns[1:]] == [f"query {i} short" for i in (3, 4, 5)]
+
+
+@pytest.mark.asyncio
+async def test_force_with_only_one_turn_is_a_noop():
+    history = _history_with_turns(1, body="short")
     llm = _FakeLLMClient()
 
     compacted = await maybe_compact_history(
@@ -346,4 +370,122 @@ async def test_force_still_requires_min_turns_to_compact():
     )
 
     assert compacted is False
-    assert len(history.turns) == _MIN_TURNS_TO_COMPACT - 1
+    assert len(history.turns) == 1
+    assert llm.calls == []
+
+
+# --- hysteresis, over-budget single turns, and the summary's own size cap ---
+
+
+@pytest.mark.asyncio
+async def test_compaction_does_not_refire_on_the_very_next_turn():
+    history = _history_with_turns(9, body=_big_body(300))
+    per_turn = _history_tokens(history.turns[:1])
+    budget = 8 * per_turn  # 9 turns is over; the kept ~4 are well under
+    llm = _FakeLLMClient(text="s")
+
+    assert await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=budget) is True
+    history.turns.append(ConversationTurn(query=f"query 9 {_big_body(300)}", response=f"response 9 {_big_body(300)}"))
+
+    assert await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=budget) is False
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_history_stays_bounded_and_compaction_is_infrequent_over_a_long_session():
+    history = ConversationHistory()
+    llm = _FakeLLMClient(text="s")
+    per_turn = _history_tokens([ConversationTurn(query=f"query 0 {_big_body(300)}", response=f"response 0 {_big_body(300)}")])
+    budget = 10 * per_turn
+    compaction_turns: list[int] = []
+
+    for i in range(100):
+        history.turns.append(
+            ConversationTurn(query=f"query {i % 10} {_big_body(300)}", response=f"response {i % 10} {_big_body(300)}")
+        )
+        if await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=budget):
+            compaction_turns.append(i)
+        assert _history_tokens(history.turns) <= budget
+
+    assert len(compaction_turns) >= 5
+    # Half-budget hysteresis: never back-to-back, and far fewer than one per turn.
+    assert all(b - a >= 3 for a, b in zip(compaction_turns, compaction_turns[1:]))
+    assert len(compaction_turns) <= 100 // 3
+
+
+@pytest.mark.asyncio
+async def test_latest_turn_alone_over_budget_is_a_noop_with_a_warning(monkeypatch):
+    history = _history_with_turns(1, body=_big_body(5000))
+    llm = _FakeLLMClient()
+    warnings: list[str] = []
+    monkeypatch.setattr(history_compaction.logger, "warning", lambda msg, *a, **k: warnings.append(msg))
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
+
+    assert compacted is False
+    assert llm.calls == []
+    assert len(history.turns) == 1
+    assert any("nothing older than the latest turn" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_a_lone_summary_pseudo_turn_is_never_resummarized(monkeypatch):
+    history = ConversationHistory()
+    history.turns = [
+        ConversationTurn(query=_COMPACTED_QUERY_LABEL, response="old summary"),
+        ConversationTurn(query="q", response="r" * 5000),
+    ]
+    llm = _FakeLLMClient()
+    monkeypatch.setattr(history_compaction.logger, "warning", lambda *a, **k: None)
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
+
+    assert compacted is False
+    assert llm.calls == []
+    assert history.turns[0].response == "old summary"
+
+
+@pytest.mark.asyncio
+async def test_compaction_leaving_an_over_budget_latest_turn_warns(monkeypatch):
+    history = ConversationHistory()
+    history.turns = [
+        ConversationTurn(query="small", response="small"),
+        ConversationTurn(query="huge", response="h" * 5000),
+    ]
+    llm = _FakeLLMClient(text="s")
+    warnings: list[str] = []
+    monkeypatch.setattr(history_compaction.logger, "warning", lambda msg, *a, **k: warnings.append(msg))
+
+    compacted = await maybe_compact_history(history, llm_client=llm, llm_config={}, token_budget=100)
+
+    assert compacted is True
+    assert [t.query for t in history.turns] == [_COMPACTED_QUERY_LABEL, "huge"]
+    assert any("still over budget after compaction" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_summary_call_output_is_capped_below_the_profiles_generation_max_tokens():
+    # A profile's max_tokens (e.g. 64000 for plugin_authoring) is sized for
+    # generation; the summary must not be allowed to eat the budget it protects.
+    history = _history_with_turns(8, body=_big_body(2000))
+    llm = _FakeLLMClient(text="s")
+
+    await maybe_compact_history(
+        history, llm_client=llm, llm_config={"max_tokens": 64000}, token_budget=_budget_keeping(history, 3)
+    )
+
+    sent = llm.calls[0]
+    assert sent["config"]["max_tokens"] == max(512, _budget_keeping(_history_with_turns(8, body=_big_body(2000)), 3) // 4)
+    assert "words" in sent["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_summary_call_respects_a_smaller_configured_max_tokens():
+    history = _history_with_turns(8, body=_big_body(2000))
+    llm = _FakeLLMClient(text="s")
+
+    await maybe_compact_history(
+        history, llm_client=llm, llm_config={"max_tokens": 300}, token_budget=_budget_keeping(history, 3)
+    )
+
+    assert llm.calls[0]["config"]["max_tokens"] == 300

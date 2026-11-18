@@ -182,14 +182,15 @@ class ConversationTurn:
 
 @dataclass
 class ConversationHistory:
-    """Rolling window of recent :class:`ConversationTurn` objects.
+    """Ordered list of :class:`ConversationTurn` objects.
 
-    Older turns are automatically evicted when the window exceeds
-    ``max_turns``.
+    Turns are never evicted by count: size is bounded solely by token-based
+    compaction (see ``history_compaction.maybe_compact_history``), because
+    dropping the oldest turn on every append would shift the provider's
+    cached prompt prefix every turn.
 
     Attributes:
         turns:            Ordered list of turns from oldest to newest.
-        max_turns:        Maximum number of turns to retain (default 20).
         pending_intent:   Name of the intent that is mid-clarification (asked
                           the user something and has not yet completed its
                           task) or whose last attempt failed, or ``None`` when
@@ -224,7 +225,6 @@ class ConversationHistory:
     ROUTER_PENDING: ClassVar[str] = "__router__"
 
     turns: list[ConversationTurn] = field(default_factory=list)
-    max_turns: int = 20
     pending_intent: str | None = None
     pending_question: str | None = None
     pending_failed: bool = False
@@ -238,7 +238,7 @@ class ConversationHistory:
         messages: list[dict[str, Any]] | None = None,
         provider: str | None = None,
     ) -> None:
-        """Add a new turn and evict the oldest if the window is full.
+        """Add a new turn.
 
         *messages*/*provider* are this turn's rich transcript and the
         provider that produced it (see ``ConversationTurn``) -- both
@@ -249,8 +249,6 @@ class ConversationHistory:
         self.turns.append(
             ConversationTurn(query=query, response=response, messages=list(messages or []), provider=provider)
         )
-        if len(self.turns) > self.max_turns:
-            self.turns = self.turns[-self.max_turns:]
 
     def recent(self, n: int | None = None) -> list[ConversationTurn]:
         """Return the ``n`` most recent turns, or all turns when ``n`` is ``None``."""

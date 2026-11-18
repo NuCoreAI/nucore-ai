@@ -16,11 +16,11 @@ from utils import secret_redaction
 
 
 def test_history_to_dict_and_back_round_trips_turns_and_fields():
-    history = ConversationHistory(turns=[], max_turns=5, pending_intent="foo", pending_question="bar?", pending_turns=2)
+    history = ConversationHistory(turns=[], pending_intent="foo", pending_question="bar?", pending_turns=2)
     history.append("hi", "hello", messages=[{"role": "user", "content": "hi"}], provider="claude")
 
     data = history_to_dict(history)
-    restored = history_from_dict(data, max_turns=5)
+    restored = history_from_dict(data)
 
     assert restored.turns == [ConversationTurn(query="hi", response="hello", messages=[{"role": "user", "content": "hi"}], provider="claude")]
     assert restored.pending_intent == "foo"
@@ -28,27 +28,26 @@ def test_history_to_dict_and_back_round_trips_turns_and_fields():
     assert restored.pending_turns == 2
 
 
-def test_history_from_dict_trims_to_the_current_max_turns():
-    data = {"turns": [{"query": f"q{i}", "response": f"r{i}"} for i in range(5)]}
+def test_history_from_dict_keeps_every_stored_turn():
+    data = {"turns": [{"query": f"q{i}", "response": f"r{i}"} for i in range(30)]}
 
-    restored = history_from_dict(data, max_turns=2)
+    restored = history_from_dict(data)
 
-    assert [t.query for t in restored.turns] == ["q3", "q4"]
-    assert restored.max_turns == 2
+    assert len(restored.turns) == 30
 
 
 def test_history_from_dict_ignores_unknown_turn_fields():
     data = {"turns": [{"query": "q", "response": "r", "future_field": "x"}]}
 
-    restored = history_from_dict(data, max_turns=20)
+    restored = history_from_dict(data)
 
     assert restored.turns == [ConversationTurn(query="q", response="r")]
 
 
 def test_history_from_dict_returns_none_on_bad_shape():
-    assert history_from_dict(None, max_turns=20) is None
-    assert history_from_dict({"turns": "not a list"}, max_turns=20) is None
-    assert history_from_dict("not a dict", max_turns=20) is None
+    assert history_from_dict(None) is None
+    assert history_from_dict({"turns": "not a list"}) is None
+    assert history_from_dict("not a dict") is None
 
 
 def test_session_round_trips_across_instances(tmp_path):

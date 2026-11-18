@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import unified.runtime as runtime_module
-from unified.history_compaction import _MIN_TURNS_TO_COMPACT
 from unified.runtime import _TOOLS_DIR, DispatchBundle, ToolSetBundle, UnifiedRuntime, resolve_llm_profile
+from unified.models import ConversationTurn
 from unified.session_store import SessionStore
 
 
@@ -438,7 +438,7 @@ async def test_persisted_rich_messages_keep_the_exact_wrapped_content_actually_s
 
     await runtime.handle_query("real query", session_id="ctx-session", framework_context={"screen": "home"})
 
-    history = runtime.session_store.get("ctx-session::unified", max_turns=20)
+    history = runtime.session_store.get("ctx-session::unified")
     assert history.turns[-1].query == "real query"
     assert history.turns[-1].messages[0] == {
         "role": "user",
@@ -458,7 +458,7 @@ async def test_a_provider_mismatch_falls_back_to_the_text_pair_instead_of_replay
     monkeypatch.setattr(runtime_module, "AgenticLoop", _RecordingLoop)
     _RecordingLoop.calls = []
     runtime = _runtime({"supported_llms": {"unified": {"provider": "claude"}}})
-    history = runtime.session_store.get("mismatch-session::unified", max_turns=20)
+    history = runtime.session_store.get("mismatch-session::unified")
     history.append(
         "old query",
         "old response",
@@ -684,7 +684,7 @@ async def test_compact_session_compacts_an_eligible_session_and_reports_true():
     runtime = _runtime()
     session_num = await runtime.session_store.resolve_current_session_id("a@example.com", "unified", durable=True)
     history = await runtime.session_store.get_or_load("a@example.com", "unified", session_num, durable=True)
-    for i in range(_MIN_TURNS_TO_COMPACT):
+    for i in range(6):
         history.append(f"query {i}", f"response {i}")
 
     compacted = await runtime.compact_session("a@example.com", "unified")
@@ -1023,7 +1023,7 @@ async def test_handoff_summary_is_prepended_to_the_new_tool_sets_user_message():
         assert "customer wants a SimpliSafe plugin" in captured_user_messages[1]
         assert captured_user_messages[1].endswith("\n\n4")  # original query still present, verbatim
 
-        history = runtime.session_store.get("default::plugin_authoring", max_turns=20)
+        history = runtime.session_store.get("default::plugin_authoring")
         assert history.turns[-1].query == "4"  # persisted history stays clean, not the wrapped version
         assert result.output["text"] == "answered-in-plugin_authoring"
     finally:
@@ -1139,3 +1139,74 @@ async def test_mid_turn_switch_persists_into_the_switched_to_tool_sets_own_saved
     verify_num = await verify_store.resolve_current_session_id("a@example.com", "plugin_authoring", durable=True)
     history = await verify_store.get_or_load("a@example.com", "plugin_authoring", verify_num, durable=True)
     assert [t.query for t in history.turns] == ["seeded before restart", "switch please"]
+
+
+# --- replayed history: unpaired Claude web_search blocks must never reach the API ---
+
+
+def _search_use(id_: str) -> dict:
+    return {"type": "server_tool_use", "id": id_, "name": "web_search", "input": {"query": "q"}}
+
+
+def _search_result(id_: str) -> dict:
+    return {"type": "web_search_tool_result", "tool_use_id": id_, "content": []}
+
+
+def test_build_history_drops_a_web_search_use_whose_result_never_came_back():
+    # Seen live: a search issued alongside a client tool_use whose result was
+    # never stored; replaying it 400s every later turn of the session.
+    orphan_turn = ConversationTurn(
+        query="q",
+        response="r",
+        provider="claude",
+        messages=[
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}, _search_use("srv_1"), {"type": "tool_use", "id": "t1", "name": "n", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+            {"role": "assistant", "content": "final"},
+        ],
+    )
+
+    built = runtime_module._build_history_messages([orphan_turn], current_provider="claude")
+
+    blocks = [b for m in built if isinstance(m["content"], list) for b in m["content"]]
+    assert not any(b.get("type") == "server_tool_use" for b in blocks)
+    assert any(b.get("type") == "tool_use" for b in blocks)  # the client tool_use stays
+    assert len(built) == 4
+    # Stored history itself is untouched.
+    assert any(b.get("type") == "server_tool_use" for b in orphan_turn.messages[1]["content"])
+
+
+def test_build_history_keeps_a_search_use_and_result_split_across_assistant_messages():
+    turn = ConversationTurn(
+        query="q",
+        response="r",
+        provider="claude",
+        messages=[
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": [_search_use("srv_1"), {"type": "tool_use", "id": "t1", "name": "n", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+            {"role": "assistant", "content": [_search_result("srv_1"), {"type": "text", "text": "done"}]},
+        ],
+    )
+
+    built = runtime_module._build_history_messages([turn], current_provider="claude")
+
+    assert built == turn.messages
+
+
+def test_build_history_drops_an_orphan_search_result_and_empty_messages():
+    turn = ConversationTurn(
+        query="q",
+        response="r",
+        provider="claude",
+        messages=[
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": [_search_result("srv_gone")]},
+            {"role": "assistant", "content": "final"},
+        ],
+    )
+
+    built = runtime_module._build_history_messages([turn], current_provider="claude")
+
+    assert built == [{"role": "user", "content": "q"}, {"role": "assistant", "content": "final"}]

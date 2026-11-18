@@ -93,14 +93,14 @@ Both tool sets' settings live in a single runtime config JSON, as two profiles u
       "enabled": true,
       "provider": "claude", "model": "claude-haiku-4-5-20251001", "api_key": "${ANTHROPIC_API_KEY}",
       "stream": true, "url": null, "temperature": 0.2, "cache_ttl": "5m",
-      "max_iterations": 20, "max_turns": 20, "max_tokens": 64000, "history_token_budget": 20000,
+      "max_iterations": 20, "max_tokens": 64000, "history_token_budget": 20000,
       "fabrication_guard_mode": "log", "max_fabrication_retries": 1
     },
     "plugin_authoring": {
       "enabled": true,
       "provider": "claude", "model": "claude-sonnet-5", "api_key": "${ANTHROPIC_API_KEY}",
       "stream": true, "url": null, "temperature": 0.2, "cache_ttl": "5m",
-      "max_iterations": 50, "max_turns": 20, "max_tokens": 64000, "history_token_budget": 20000,
+      "max_iterations": 50, "max_tokens": 64000, "history_token_budget": 20000,
       "fabrication_guard_mode": "log", "max_fabrication_retries": 1
     }
   }
@@ -116,7 +116,7 @@ the first two are also installation-wide, not tool-set-specific** -- see "CLI-on
 below for why all three are CLI-only instead.
 
 Per-profile keys that used to be global and move here because they genuinely differ by tool set:
-`max_iterations`, `max_turns`, `max_tokens`, `history_token_budget`, `fabrication_guard_mode`,
+`max_iterations`, `max_tokens`, `history_token_budget`, `fabrication_guard_mode`,
 `max_fabrication_retries` -- the last two by the same logic as the first (no established reason
 customer and plugin_authoring need the same fabrication-guard strictness any more than they need
 the same `max_iterations`).

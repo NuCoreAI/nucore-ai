@@ -58,11 +58,11 @@ def _coerce_runtime_profile(
     profile opts in, others don't. Streaming only actually happens when a
     real ``stream_handler`` was also supplied by the caller.
 
-    ``max_iterations``/``max_turns``/``history_token_budget``/
+    ``max_iterations``/``history_token_budget``/
     ``fabrication_guard_mode``/``max_fabrication_retries`` live here, per
     profile, rather than as top-level config keys -- see
     design/developers/merged-toolsets.md: different tool sets (``unified``
-    vs. ``plugin_authoring``) genuinely need different values for all five,
+    vs. ``plugin_authoring``) genuinely need different values for all four,
     the same way they need different models. ``enabled`` (default ``True``)
     is the gate on whether this tool set is reachable at all -- see that
     same doc. ``plugin_output_root`` is CLI-only (``--plugin-output-root``),
@@ -103,7 +103,6 @@ def _coerce_runtime_profile(
         "model": payload.get("model"),
         "api_key": payload.get("api_key"),
         "url": payload.get("url"),
-        "max_turns": int(payload.get("max_turns", 20)),
         "temperature": payload.get("temperature"),
         "max_tokens": payload.get("max_tokens"),
         "reasoning_effort": payload.get("reasoning_effort"),
@@ -230,7 +229,6 @@ def _load_runtime_config(
     # when both are enabled (today's behavior); otherwise whichever single
     # profile is enabled (see merged-toolsets.md's "enabled flag" section).
     default_profile_name = "unified" if "unified" in enabled_profiles else enabled_profiles[0]
-    default_max_turns = int(normalized_profiles[default_profile_name].get("max_turns", 20))
 
     configured_max_switches = payload.get("max_tool_set_switches_per_turn")
     if configured_max_switches is not None and not isinstance(configured_max_switches, int):
@@ -251,7 +249,6 @@ def _load_runtime_config(
         "supported_llms": supported_llms,
         "enabled_profiles": enabled_profiles,
         "default_profile_name": default_profile_name,
-        "default_max_turns": default_max_turns,
         "provider_capabilities": dict(_PROVIDER_CAPABILITIES),
         # Bounds how many times one turn may chain from one tool set's
         # AgenticLoop into the other's after a switch-tool call -- see

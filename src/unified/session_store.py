@@ -116,26 +116,23 @@ class SessionStore:
             self._locks[session_id] = asyncio.Lock()
         return self._locks[session_id]
 
-    def get(self, session_id: str, max_turns: int = 20) -> ConversationHistory:
+    def get(self, session_id: str) -> ConversationHistory:
         """Return the :class:`~models.ConversationHistory` for ``session_id``.
 
-        Creates a new history object with ``max_turns`` when the session is
-        seen for the first time.  On subsequent calls the existing object is
-        returned as-is; ``max_turns`` has no effect after creation. Purely
-        in-memory -- never consults disk, even when persistence is
+        Creates a new, empty history object when the session is seen for
+        the first time.  On subsequent calls the existing object is
+        returned as-is. Purely in-memory -- never consults disk, even when persistence is
         configured; see :meth:`get_or_load` for the persistence-aware
         counterpart.
 
         Args:
             session_id: Arbitrary string key identifying the conversation.
-            max_turns:  Maximum number of turns to retain in the rolling
-                        window.  Only applied at session creation time.
 
         Returns:
             The :class:`~models.ConversationHistory` for the session.
         """
         if session_id not in self._sessions:
-            self._sessions[session_id] = ConversationHistory(max_turns=max_turns)
+            self._sessions[session_id] = ConversationHistory()
         return self._sessions[session_id]
 
     def clear(self, session_id: str) -> None:
@@ -312,7 +309,6 @@ class SessionStore:
         tool_set: str,
         session_num: int | None,
         *,
-        max_turns: int = 20,
         durable: bool = False,
     ) -> ConversationHistory:
         """Persistence-aware counterpart to :meth:`get`.
@@ -327,7 +323,7 @@ class SessionStore:
         if key in self._sessions:
             return self._sessions[key]
         if not durable or self._persistence is None or session_num is None:
-            return self.get(key, max_turns)
+            return self.get(key)
 
         try:
             data = await asyncio.to_thread(self._persistence.read_session, identity, tool_set, session_num)
@@ -338,8 +334,8 @@ class SessionStore:
         if key in self._sessions:  # Filled concurrently while we were awaiting disk.
             return self._sessions[key]
 
-        history = history_from_dict(data.get("history") if data else None, max_turns=max_turns) if data else None
-        self._sessions[key] = history if history is not None else ConversationHistory(max_turns=max_turns)
+        history = history_from_dict(data.get("history") if data else None) if data else None
+        self._sessions[key] = history if history is not None else ConversationHistory()
         return self._sessions[key]
 
     async def persist(

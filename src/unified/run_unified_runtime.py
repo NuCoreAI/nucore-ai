@@ -712,9 +712,7 @@ async def _handle_session_command(
         entry = await store.load_session(user_id, tool_set, session_id)
         if entry is None:
             return f"No session with id {arg_text} in {mode_label} mode. Use /sessions to see your saved sessions."
-        history = await store.get_or_load(
-            user_id, tool_set, session_id, max_turns=runtime.profile_max_turns(tool_set), durable=True
-        )
+        history = await store.get_or_load(user_id, tool_set, session_id, durable=True)
         header = f'Switched to session "{entry.get("name")}" ({mode_label} mode).'
         display = SessionStore.format_history_for_display(history, mode_label=mode_label)
         return f"{header}\n\n{display}" if display else f"{header} (No messages saved in it yet.)"

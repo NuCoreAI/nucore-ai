@@ -492,9 +492,6 @@ class _FakeRuntime:
     def is_tool_set_enabled(self, tool_set_name: str) -> bool:
         return True
 
-    def profile_max_turns(self, tool_set_name: str) -> int:
-        return 20
-
     async def compact_session(self, user_id: str, tool_set: str) -> bool:
         self.compact_session_calls.append((user_id, tool_set))
         return self._compact_session_result

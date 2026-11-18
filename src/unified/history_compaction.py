@@ -1,12 +1,16 @@
 """Token-based compaction for :class:`~models.ConversationHistory`.
 
-``ConversationHistory.append`` already caps *turn count* (oldest turn
-dropped once ``max_turns`` is exceeded), but says nothing about how large
-those turns are -- a handful of diagnostic-dump turns can bloat the prompt
-built into every subsequent request long before the turn-count cap bites.
-``maybe_compact_history`` triggers on estimated *token size* instead, and
-collapses the oldest half of the turns into one summary pseudo-turn (via a
-single LLM call) rather than silently dropping them.
+This is the *only* limit on how much history is replayed -- there is no
+turn-count cap. Dropping the oldest turn on every append would shift the
+provider's cached prompt prefix every turn; compaction instead runs only
+when the estimated token size exceeds the budget, and then compacts down to
+about half the budget (hysteresis), so the prefix stays stable until the
+history has regrown by about half the budget.
+
+``maybe_compact_history`` keeps the most recent turns that fit in that
+half-budget (always at least the latest turn) and collapses everything older
+into one summary pseudo-turn via a single LLM call, rather than silently
+dropping it.
 """
 
 from __future__ import annotations
@@ -21,7 +25,6 @@ from utils import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_TOKEN_BUDGET = 20000
-_MIN_TURNS_TO_COMPACT = 6
 _COMPACTED_QUERY_LABEL = "[earlier conversation, summarized]"
 
 # Lowest token-budget decile (5 == 50%) that ever triggers a `notify` call --
@@ -42,14 +45,15 @@ _SUMMARY_PROMPT_HEADER = (
     "needed unless they help). Preserve concrete facts a later turn might still depend on -- "
     "device/routine names and ids, decisions made, values reported by tools -- and omit "
     "meta-commentary about the summarization itself. Do not fabricate anything not present "
-    "below.\n\n"
+    "below. Keep the summary under {max_words} words.\n\n"
 )
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token-count estimate (~4 chars/token) -- no tokenizer dependency
-    in this codebase to call instead."""
-    return len(text or "") // 4
+    """Rough, conservative token-count estimate (~3 chars/token; real
+    JSON/code-heavy transcripts measure closer to 2-3, prose closer to 4) --
+    no tokenizer dependency in this codebase to call instead."""
+    return len(text or "") // 3
 
 
 def _turn_tokens(turn: ConversationTurn) -> int:
@@ -89,16 +93,45 @@ def _render_turns_for_summary(turns: list[ConversationTurn]) -> str:
     return "\n\n".join(parts)
 
 
+def _is_summary(turn: ConversationTurn) -> bool:
+    return turn.query == _COMPACTED_QUERY_LABEL
+
+
+def _summary_max_tokens(token_budget: int, configured: Any) -> int:
+    """Cap on the summary call's own output so a summary can never eat the
+    budget it exists to protect -- a profile's configured ``max_tokens``
+    (e.g. 64000 for plugin_authoring) is sized for generation, not this."""
+    cap = max(512, token_budget // 4)
+    return min(int(configured), cap) if configured else cap
+
+
+def _split_for_compaction(turns: list[ConversationTurn], keep_budget: int) -> int:
+    """Index such that ``turns[split:]`` is the longest recent suffix whose
+    estimated size fits ``keep_budget`` -- always at least the latest turn,
+    however large. ``turns[:split]`` is what gets summarized."""
+    kept = 0
+    split = len(turns)
+    for idx in range(len(turns) - 1, -1, -1):
+        size = _turn_tokens(turns[idx])
+        if split < len(turns) and kept + size > keep_budget:
+            break
+        kept += size
+        split = idx
+    return split
+
+
 async def _summarize_turns(
-    turns: list[ConversationTurn], *, llm_client: LLMAdapter, llm_config: dict[str, Any]
+    turns: list[ConversationTurn], *, llm_client: LLMAdapter, llm_config: dict[str, Any], max_tokens: int
 ) -> str:
-    prompt = _SUMMARY_PROMPT_HEADER + _render_turns_for_summary(turns)
+    header = _SUMMARY_PROMPT_HEADER.format(max_words=max(100, int(max_tokens * 0.6)))
+    prompt = header + _render_turns_for_summary(turns)
     # Never stream this internal call into whatever live handler the caller's
     # config carries -- that handler is wired to the user-facing reply, not
     # this behind-the-scenes summarization call.
     summary_config = dict(llm_config)
     summary_config.pop("stream_handler", None)
     summary_config["stream"] = False
+    summary_config["max_tokens"] = max_tokens
     response = await llm_client.generate(messages=[{"role": "user", "content": prompt}], config=summary_config, tools=None)
     response = response or {}
     return (response.get("text") or response.get("content") or "").strip()
@@ -113,15 +146,24 @@ async def maybe_compact_history(
     notify: Callable[[str], Awaitable[None]] | None = None,
     force: bool = False,
 ) -> bool:
-    """Collapse the oldest half of ``history.turns`` into one summary
+    """Collapse the older turns of ``history.turns`` into one summary
     pseudo-turn when the history's estimated token size exceeds
     ``token_budget``. Mutates ``history.turns`` in place.
 
-    No-ops when there aren't enough turns to meaningfully compact (even with
-    *force*), or (without *force*) the history is already under budget.
-    Never raises -- a failed summarization call falls back to plain hard
-    truncation of the oldest half rather than blocking the user's actual
-    turn.
+    The most recent turns that fit in half the budget (always at least the
+    latest turn) are kept verbatim; everything older is summarized. Targeting
+    half the budget is deliberate hysteresis: the history must regrow by
+    about half the budget before the next compaction, so the provider's
+    cached prompt prefix stays stable in between instead of being rewritten
+    (plus an extra summarization call) every turn.
+
+    No-ops when there is nothing older than the kept suffix to summarize --
+    including when the latest turn alone exceeds the budget (a warning is
+    logged; nothing short of dropping the live turn could help) -- or, without
+    *force*, when the history is already under budget. A lone summary
+    pseudo-turn is never re-summarized. Never raises -- a failed
+    summarization call falls back to plain hard truncation of the same older
+    turns rather than blocking the user's actual turn.
 
     *notify*, when given, is awaited with one italic Markdown status line
     whenever estimated usage crosses a new 10%-of-budget decile at or above
@@ -134,18 +176,18 @@ async def maybe_compact_history(
     as every other hook in this codebase (see AgenticLoop's
     on_raw_response).
 
-    *force*, when True, skips the token-budget gate entirely (still
-    requires ``_MIN_TURNS_TO_COMPACT`` turns) -- the manual
+    *force*, when True, skips the token-budget gate -- the manual
     ``/compact-session`` command's path (see
     ``UnifiedRuntime.compact_session``), letting a customer compact early
-    even while under budget. *notify* isn't meaningful there -- that
-    caller composes its own reply -- and should be left ``None``.
+    even while under budget (keeping about the newest half of the history
+    by size). *notify* isn't meaningful there -- that caller composes its
+    own reply -- and should be left ``None``.
 
     Returns:
         True iff compaction (summarized or fallback-truncated) happened.
     """
     turns = history.turns
-    if len(turns) < _MIN_TURNS_TO_COMPACT:
+    if not turns:
         return False
 
     before_tokens = _history_tokens(turns)
@@ -167,12 +209,29 @@ async def maybe_compact_history(
                     logger.error("unified: history-budget notify hook failed: %s", exc)
         return False
 
-    split = len(turns) // 2
+    keep_budget = token_budget // 2
+    if force:
+        keep_budget = min(keep_budget, before_tokens // 2)
+    split = _split_for_compaction(turns, keep_budget)
     to_summarize = turns[:split]
     keep = turns[split:]
 
+    if not to_summarize or all(_is_summary(t) for t in to_summarize):
+        if over_budget:
+            logger.warning(
+                f"History is over budget (~{before_tokens} > ~{token_budget} estimated tokens) but "
+                f"nothing older than the latest turn can be compacted -- the latest turn alone is "
+                f"~{_history_tokens(keep)} estimated tokens. Consider raising history_token_budget."
+            )
+        return False
+
     try:
-        summary_text = await _summarize_turns(to_summarize, llm_client=llm_client, llm_config=llm_config)
+        summary_text = await _summarize_turns(
+            to_summarize,
+            llm_client=llm_client,
+            llm_config=llm_config,
+            max_tokens=_summary_max_tokens(token_budget, llm_config.get("max_tokens")),
+        )
         if not summary_text:
             raise ValueError("empty summary")
         history.turns = [ConversationTurn(query=_COMPACTED_QUERY_LABEL, response=summary_text)] + keep
@@ -186,6 +245,14 @@ async def maybe_compact_history(
             f"History summarization failed ({exc!r}) -- fell back to dropping the oldest "
             f"{len(to_summarize)} turns without a summary "
             f"(~{before_tokens} -> ~{_history_tokens(history.turns)} estimated tokens)"
+        )
+
+    after_tokens = _history_tokens(history.turns)
+    if after_tokens > token_budget:
+        logger.warning(
+            f"History is still over budget after compaction (~{after_tokens} > ~{token_budget} "
+            f"estimated tokens): the most recent turn(s) alone exceed it. Consider raising "
+            f"history_token_budget so compaction doesn't fire on every turn."
         )
 
     history.last_budget_notice_decile = 0

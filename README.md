@@ -475,7 +475,6 @@ Runtime profile for llama.cpp (`--runtime-config` target):
       "provider": "llama.cpp",
       "model": "qwen3-instruct",
       "url": "http://192.168.6.113:8013/v1",
-      "max_turns": 20,
       "temperature": 0.2,
       "max_tokens": 32000
     }
@@ -494,7 +493,6 @@ The `llama.cpp` provider is a generic OpenAI-compatible client, so it also works
       "provider": "llama.cpp",
       "model": "llama3.1",
       "url": "http://localhost:11434/v1",
-      "max_turns": 20,
       "temperature": 0.2,
       "max_tokens": 32000
     }

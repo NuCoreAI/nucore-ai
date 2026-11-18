@@ -61,16 +61,13 @@ def history_to_dict(history: ConversationHistory) -> dict[str, Any]:
 _TURN_FIELDS = {f.name for f in dataclasses.fields(ConversationTurn)}
 
 
-def history_from_dict(data: Any, *, max_turns: int) -> ConversationHistory | None:
+def history_from_dict(data: Any) -> ConversationHistory | None:
     """Reconstruct a :class:`ConversationHistory` from :func:`history_to_dict`
     output (or anything shaped like it). Each turn dict is filtered down to
     :class:`ConversationTurn`'s own known fields first, so a file written by
     an older or newer version of this schema (an added/removed field)
-    doesn't crash the load. *max_turns* always comes from the **current**
-    profile config, not whatever was stored -- loading from disk counts as
-    "session creation" for that rule, the same as ``SessionStore.get``.
-    Returns ``None`` on any shape error rather than raising -- the caller
-    falls back to a fresh, empty history."""
+    doesn't crash the load. Returns ``None`` on any shape error rather than
+    raising -- the caller falls back to a fresh, empty history."""
     if not isinstance(data, dict):
         return None
     try:
@@ -82,17 +79,13 @@ def history_from_dict(data: Any, *, max_turns: int) -> ConversationHistory | Non
             for turn in raw_turns
             if isinstance(turn, dict)
         ]
-        history = ConversationHistory(
+        return ConversationHistory(
             turns=turns,
-            max_turns=max_turns,
             pending_intent=data.get("pending_intent"),
             pending_question=data.get("pending_question"),
             pending_failed=bool(data.get("pending_failed", False)),
             pending_turns=int(data.get("pending_turns", 0)),
         )
-        if len(history.turns) > history.max_turns:
-            history.turns = history.turns[-history.max_turns :]
-        return history
     except Exception:
         logger.warning("session_persistence: failed to reconstruct history from stored data", exc_info=True)
         return None
