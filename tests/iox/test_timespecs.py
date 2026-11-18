@@ -77,6 +77,7 @@ async def test_get_timespecs_current_time_is_computed_fresh_not_from_the_fetched
     # it's always datetime.now(tzinfo), computed locally, so it reflects
     # real "now" regardless of what the (possibly stale) fetch response says.
     import datetime
+    from zoneinfo import ZoneInfo
 
     wrapper = _bare_wrapper()
 
@@ -87,7 +88,11 @@ async def test_get_timespecs_current_time_is_computed_fresh_not_from_the_fetched
 
     result = await wrapper.get_timespecs()
 
-    assert result["current_time"].endswith("-07:00")
+    # The UTC offset depends on whether DST is in effect today, so derive it
+    # from the zone instead of hardcoding -07:00 (PDT) or -08:00 (PST).
+    expected_offset = datetime.datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%z")
+    expected_suffix = f"{expected_offset[:3]}:{expected_offset[3:]}"
+    assert result["current_time"].endswith(expected_suffix)
     parsed = datetime.datetime.fromisoformat(result["current_time"])
     now = datetime.datetime.now(parsed.tzinfo)
     assert abs((now - parsed).total_seconds()) < 5

@@ -531,8 +531,8 @@ async def test_only_the_last_three_system_blocks_carry_a_breakpoint():
 # --- cache_messages: a trailing breakpoint on the conversation itself,
 # mirroring Claude Code's own incremental caching of its growing transcript
 # (see AgenticLoop.run, which opts into this every round) -- opt-in and
-# budget-gated, since unified's 3-section system prompt plus the tools
-# breakpoint already spends the API's 4-breakpoint cap ---
+# budget-aware: unified's 3-section system prompt plus the tools breakpoint
+# would exceed the API's 4-breakpoint cap, so the volatile tail gives up its breakpoint ---
 
 
 @pytest.mark.asyncio
@@ -586,10 +586,11 @@ async def test_cache_messages_marks_last_block_of_list_content():
 
 
 @pytest.mark.asyncio
-async def test_cache_messages_is_noop_once_breakpoint_budget_is_exhausted():
-    # unified's real shape: 5 system sections (only the last 3 get a
-    # breakpoint) + a tools breakpoint == 4, the API's hard cap -- nothing
-    # left to spend on the conversation itself.
+async def test_cache_messages_drops_volatile_tail_breakpoint_when_budget_is_exhausted():
+    # unified's real shape: 3+ system sections + a tools breakpoint would be
+    # 4 breakpoints before the conversation's own -- the volatile last system
+    # block gives up its breakpoint (nothing reads it back across turns) so
+    # the conversation still gets cached.
     adapter = _adapter()
     calls: list = []
     adapter._client.beta.messages.stream = _capture_stream(calls)
@@ -598,7 +599,77 @@ async def test_cache_messages_is_noop_once_breakpoint_budget_is_exhausted():
 
     await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
 
-    assert calls[0]["messages"][-1]["content"] == "hi"
+    sent = calls[0]
+    assert ["cache_control" in b for b in sent["system"]] == [False, False, True, True, False]
+    assert "cache_control" in sent["tools"][-1]
+    assert sent["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    total = sum("cache_control" in b for b in sent["system"]) + 1 + 1
+    assert total == 4
+
+
+@pytest.mark.asyncio
+async def test_cache_messages_keeps_every_system_breakpoint_when_budget_allows():
+    # 2 system blocks + tools + conversation == 4: nothing to give up.
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.beta.messages.stream = _capture_stream(calls)
+    tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
+    messages = [{"role": "system", "content": "s0"}, {"role": "system", "content": "s1"}, {"role": "user", "content": "hi"}]
+
+    await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
+
+    assert ["cache_control" in b for b in calls[0]["system"]] == [True, True]
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_cache_messages_dropped_tail_leaves_configured_ttl_on_remaining_system_blocks():
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.beta.messages.stream = _capture_stream(calls)
+    tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
+    messages = [{"role": "system", "content": f"s{i}"} for i in range(3)] + [{"role": "user", "content": "hi"}]
+
+    await adapter.generate(messages=messages, config={"cache_messages": True, "cache_ttl": "1h"}, tools=tools)
+
+    system = calls[0]["system"]
+    assert system[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert system[1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in system[2]
+    # Longer TTLs must precede shorter ones -- the conversation breakpoint is 5m.
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_plugin_authoring_prompt_leaves_room_for_the_conversation_breakpoint(monkeypatch):
+    # Regression: identity text once became its own system section, which
+    # (with installed-plugins + tools) spent all 4 breakpoints and silently
+    # disabled conversation caching for plugin_authoring.
+    from unified import host_identity
+    from unified.plugin_authoring.prompt import prompt_builder
+
+    async def fake_identity(_nucore):
+        return "IDENTITY"
+
+    monkeypatch.setattr(host_identity, "get_identity_text", fake_identity)
+
+    class _Nucore:
+        async def get_installed_plugins(self):
+            return {"successful": True, "data": [{"name": "P", "profileNum": 1, "state": "running"}]}
+
+    sections = await prompt_builder.build_system_prompt_sections(_Nucore())
+    assert len(sections) == 2 and "IDENTITY" in sections[0]
+
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.beta.messages.stream = _capture_stream(calls)
+    tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
+    messages = [{"role": "system", "content": s} for s in sections] + [{"role": "user", "content": "hi"}]
+
+    await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
+
+    assert ["cache_control" in b for b in calls[0]["system"]] == [True, True]
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 @pytest.mark.asyncio

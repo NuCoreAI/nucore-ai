@@ -1,5 +1,11 @@
 # Release Notes
 
+## 4.0.0 - 2026-11-18
+
+- Fix a prompt-cache regression in `plugin_authoring` on Claude, introduced in 3.5.0: the standing OS/product-identity text (`host_identity`) had become its own system section, which with the installed-plugins section and the tools breakpoint used all 4 of Claude's allowed cache breakpoints, so the conversation itself silently stopped being cached. Every round of a multi-round turn then re-sent the whole growing transcript (up to ~235K tokens in one logged session) at full price, dropping the measured cache hit rate from ~70-83% to ~26%. The identity text now shares the main template block, as the customer prompt already does.
+- `ClaudeAdapter` no longer gives up conversation caching when 3+ system sections and tools would exceed the 4-breakpoint cap: it drops the volatile last system section's breakpoint (which changes every turn, so is never read back across turns) to make room. This also gives the customer-facing `unified` tool set conversation caching, which it never had.
+- Fix `test_get_timespecs_current_time_is_computed_fresh_not_from_the_fetched_gmt_field` hardcoding the Pacific daylight-time offset (`-07:00`); it now derives the expected offset from the zone, so it passes year-round.
+
 ## 3.7.0 - 2026-11-17
 
 - Make `fileUpload` plugins actually receive uploaded files: the host's File Manager only sends a bare `CONFIG` event (the full config, nothing about the file), so `generate_plugin_scaffold` now generates wiring that sweeps `data/` (subfolders included) on every `CONFIG`, passes each file to a new required `handle_file_upload(self, path)` override, then moves it to `data/processed/` (or `data/failed/` if the handler raised). The sweep is guarded by a non-blocking lock (a `CONFIG` arriving mid-sweep requests a follow-up pass) and defers a file modified in the last second to a one-shot re-sweep, since `CONFIG` can arrive right as the upload finishes.

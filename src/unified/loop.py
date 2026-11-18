@@ -189,10 +189,9 @@ class AgenticLoop:
             # list, including every prior round's tool_use/tool_result
             # content from this same turn, so without this each round pays
             # full price to reprocess what the previous round already sent.
-            # Harmless for a provider/profile that can't spend it (e.g.
-            # `unified`'s system prompt already uses the full 4-breakpoint
-            # budget) -- ClaudeAdapter no-ops rather than erroring, and every
-            # other adapter simply ignores an unrecognized config key.
+            # ClaudeAdapter makes room under the API's 4-breakpoint cap by
+            # dropping the volatile system tail's breakpoint when needed;
+            # every other adapter simply ignores an unrecognized config key.
             round_config["cache_messages"] = True
             raw_response = await self.llm_client.generate(
                 messages=messages,

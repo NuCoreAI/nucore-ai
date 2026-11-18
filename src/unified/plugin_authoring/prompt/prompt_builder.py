@@ -20,7 +20,12 @@ _PROMPT_DIR = Path(__file__).parent
 
 async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> list[str]:
     template = (_PROMPT_DIR / "system_prompt.md").read_text(encoding="utf-8")
-    sections = [template, await host_identity.get_identity_text(nucore_interface)]
+    # Identity shares the template's block (as unified's <<host_environment>>
+    # does) instead of being its own section: each section is a separate
+    # system block, and one more of them exhausts Claude's 4-breakpoint cap,
+    # silently disabling the conversation cache breakpoint.
+    identity = await host_identity.get_identity_text(nucore_interface)
+    sections = [f"{template.rstrip()}\n\n{identity}"]
 
     installed_section = await _build_installed_plugins_section(nucore_interface)
     if installed_section:

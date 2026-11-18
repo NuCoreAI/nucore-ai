@@ -56,7 +56,10 @@ class ClaudeAdapter(LLMAdapter):
         itself also gets a trailing cache breakpoint on the last content
         block of the last message -- see ``_with_message_cache_breakpoint``
         -- so a multi-round tool-calling turn reads its own prior rounds from
-        cache instead of reprocessing them from scratch each round. Opt-in,
+        cache instead of reprocessing them from scratch each round. When 3+
+        system blocks and tools would leave no breakpoint to spare, the
+        volatile last system block's breakpoint is dropped to make room (see
+        the comment in the body). Opt-in,
         not automatic: a one-shot call (e.g. ``history_compaction.py``'s
         summarization request) would just pay the cache-write premium for a
         breakpoint nothing ever reads back.
@@ -132,24 +135,30 @@ class ClaudeAdapter(LLMAdapter):
         # shorter ones, so a configured longer TTL goes on the tools and
         # every system block except the last; the volatile tail keeps the
         # default TTL.
+        #
+        # Claude's API hard-caps a request at 4 total cache breakpoints. When
+        # `cache_messages` is requested (the growing conversation gets the
+        # last one) and 3 system blocks + tools would already spend all 4, the
+        # volatile tail's breakpoint is the one given up: it changes every
+        # turn, so nothing ever reads it back across turns, and within a turn
+        # the conversation breakpoint's prefix already covers it. Dropping any
+        # other breakpoint would instead make an edit to a mid-prompt block
+        # (e.g. ROUTINES DATABASE) reprocess everything before it.
         blocks = [{"type": "text", "text": part} for part in system_parts if part]
-        for i in range(max(0, len(blocks) - 3), len(blocks)):
+        message_breakpoint_wanted = bool(cfg.get("cache_messages"))
+        # 3 system + tools + conversation = 5 > 4 only when all three exist.
+        drop_volatile_tail = message_breakpoint_wanted and bool(tools) and len(blocks) >= 3
+        marked_end = len(blocks) - 1 if drop_volatile_tail else len(blocks)
+        marked_count = 2 if drop_volatile_tail else 3
+        for i in range(max(0, marked_end - marked_count), marked_end):
             is_last = i == len(blocks) - 1
             blocks[i]["cache_control"] = self._cache_control(None if is_last else ttl)
         if blocks:
             kwargs["system"] = blocks
         if tools:
             kwargs["tools"] = self._with_tools_ttl(tools, ttl)
-        if cfg.get("cache_messages"):
-            # Claude's API hard-caps a request at 4 total cache breakpoints.
-            # `unified`'s 3-section system prompt plus the tools breakpoint
-            # already uses all 4 (see test_only_the_last_three_system_blocks_
-            # carry_a_breakpoint) -- this is deliberately a no-op there, not
-            # an error. `plugin_authoring`'s 1-2 section system prompt leaves
-            # 1-2 spare, which is what this spends.
-            used_breakpoints = min(len(blocks), 3) + (1 if tools else 0)
-            if used_breakpoints < 4:
-                kwargs["messages"] = self._with_message_cache_breakpoint(anthropic_messages)
+        if message_breakpoint_wanted:
+            kwargs["messages"] = self._with_message_cache_breakpoint(anthropic_messages)
         if cfg.get("tool_choice"):
             # Forwarded as-is, e.g. {"type": "any"} to force a call on a
             # turn the caller already knows needs one (see AgenticLoop's
