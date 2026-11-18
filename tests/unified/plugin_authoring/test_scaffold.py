@@ -2043,3 +2043,39 @@ async def test_install_sh_participates_in_overwrite_conflict_check(tmp_path):
     await _generate(tmp_path, _base_args())
     second = await _generate(tmp_path, _base_args())
     assert "install.sh" in second["conflicts"]
+@pytest.mark.asyncio
+async def test_install_sh_chmod_failure_on_regenerate_is_non_fatal(tmp_path, monkeypatch):
+    # EPERM from chmod (process doesn't own install.sh) must not skip
+    # context.md/sources.md or the permissions refresh/notify steps.
+    first = await _generate(tmp_path, _base_args())
+    assert "error" not in first
+    install_path = tmp_path / "acme_pool" / "install.sh"
+    install_path.chmod(0o644)
+
+    def _deny(self, mode):
+        raise PermissionError(1, "Operation not permitted", str(self))
+
+    monkeypatch.setattr(type(install_path), "chmod", _deny)
+    result = await _generate(tmp_path, _base_args(confirm_overwrite=True, iteration_note="Second pass."))
+    assert "error" not in result
+    assert "Operation not permitted" in result["install_chmod_error"]
+    assert "Second pass." in (tmp_path / "acme_pool" / "context.md").read_text()
+    assert "sources.md" in result["files_written"]
+
+
+@pytest.mark.asyncio
+async def test_install_sh_chmod_skipped_when_already_executable(tmp_path, monkeypatch):
+    first = await _generate(tmp_path, _base_args())
+    assert "error" not in first
+    install_path = tmp_path / "acme_pool" / "install.sh"
+    install_path.chmod(0o777)
+
+    def _fail(self, mode):
+        raise AssertionError("chmod should not be called when install.sh is already executable")
+
+    monkeypatch.setattr(type(install_path), "chmod", _fail)
+    result = await _generate(tmp_path, _base_args(confirm_overwrite=True))
+    assert "error" not in result
+    assert "install_chmod_error" not in result
+
+

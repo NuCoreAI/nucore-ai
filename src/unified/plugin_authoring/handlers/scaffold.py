@@ -1112,6 +1112,8 @@ async def generate_plugin_scaffold(
     )
     if entry_error:
         return {"error": entry_error}
+    if file_upload:
+        expected_methods.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
 
     # Carry forward a previously-persisted nsid (install_generated_plugin
     # writes one into server_entry.json after a successful registration --
@@ -1198,7 +1200,17 @@ async def generate_plugin_scaffold(
     for path, content in candidate_files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    (plugin_dir / _INSTALL_FILENAME).chmod(0o755)
+    # chmod needs file ownership (EPERM otherwise), but writing only needs the
+    # write bit -- on a regenerate, install.sh may be owned by another account
+    # (e.g. 'admin') yet already executable. Skip when so; a failure must never
+    # abort the context.md/sources.md/permissions/notify steps below.
+    install_path = plugin_dir / _INSTALL_FILENAME
+    install_chmod_error = None
+    if install_path.stat().st_mode & 0o111 != 0o111:
+        try:
+            install_path.chmod(0o755)
+        except OSError as exc:
+            install_chmod_error = str(exc)
 
     context_path = plugin_dir / _CONTEXT_FILENAME
     context_path.parent.mkdir(parents=True, exist_ok=True)
