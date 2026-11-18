@@ -297,7 +297,17 @@ Stage 6's device detection.
    every generated plugin (not just webhook ones), matching this repo's own pinned version.
    Expected to be rare, like `ai_enabled` — most integrations only poll or call out, never receive
    inbound pushed calls.
-8. **OAuth2 token-lifecycle fix** — three bugs in Stage 2's `authorize` conditional, found by
+8. **File-upload sweep** — `server_entry.fileUpload` creates `data/`, but the host's File Manager
+   upload only produces a bare `CONFIG` event (the full config, nothing about the file). Stage 2's
+   `fileUpload` conditional therefore adds a tool-generated `__sweepUploads` to `__configHandler`
+   (non-blocking lock; recursive walk of `data/` skipping `processed/`/`failed/`; files modified in
+   the last second deferred to a one-shot `threading.Timer` re-sweep; each file passed to the
+   required `handle_file_upload(self, path)` override, then moved to `data/processed/`, or
+   `data/failed/` if the handler raised). `handle_file_upload` is required in `override_bodies`
+   whenever `fileUpload` is true -- a no-op default would sweep every upload away unread -- and
+   `regenerate_plugin_boilerplate` refuses, rather than stubs, when a stored `fileUpload` plugin
+   has no such body.
+9. **OAuth2 token-lifecycle fix** — three bugs in Stage 2's `authorize` conditional, found by
    diffing the generated wiring against the installed `udi_interface` package's own OAuth source
    rather than just its docs. `__customNSHandler` now forwards both `"oauth"` and `"oauthTokens"`
    `CUSTOMNS` keys to `oauthService` (previously only `"oauth"` — the saved-tokens key PG3 resends

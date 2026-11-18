@@ -400,7 +400,9 @@ def _assemble_plugin_py(
         "from __future__ import annotations\n\n",
         "import json\n",
         "import os\n",
+        *(["import shutil\n"] if file_upload else []),
         "import threading\n",
+        *(["import time\n"] if file_upload else []),
         "import udi_interface\n\n",
         "LOGGER = udi_interface.LOGGER\n\n\n",
         f"class {controller_class}(udi_interface.Node):\n",
@@ -418,7 +420,7 @@ def _assemble_plugin_py(
             controller_node_name=controller_node_name,
         ),
         "\n",
-        plugin_skeleton.render_private_wiring_methods(authorize=authorize),
+        plugin_skeleton.render_private_wiring_methods(authorize=authorize, file_upload=file_upload),
         "\n    # --- developer-authored overrides (edit freely; regeneration preserves them) ---\n\n",
     ]
     for name in plugin_skeleton.BASE_OVERRIDE_METHODS:
@@ -441,6 +443,11 @@ def _assemble_plugin_py(
     if webhook_enabled:
         body = override_bodies.get(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD) or plugin_skeleton.default_override_method(
             plugin_skeleton.WEBHOOK_OVERRIDE_METHOD
+        )
+        parts.append(_reindent_method(body) + "\n")
+    if file_upload:
+        body = override_bodies.get(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD) or plugin_skeleton.default_override_method(
+            plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD
         )
         parts.append(_reindent_method(body) + "\n")
     if custom_typed_params:
@@ -508,6 +515,7 @@ def _validate_override_keys(
     ai_enabled: bool,
     ai_tool_names: list[str],
     webhook_enabled: bool,
+    file_upload_enabled: bool,
     custom_typed_params_enabled: bool,
     new_command_override_names: set[str],
 ) -> str | None:
@@ -522,7 +530,10 @@ def _validate_override_keys(
     non-empty) requires ``CUSTOM_TYPED_DATA_OVERRIDE_METHOD`` present, same
     reasoning as *webhook_enabled* below -- a no-op default there would
     silently discard every value the customer enters in the typed-params
-    config UI."""
+    config UI. *file_upload_enabled* (``server_entry.fileUpload``) requires
+    ``FILE_UPLOAD_OVERRIDE_METHOD`` present for the same reason: the
+    generated sweep would otherwise move every uploaded file to
+    ``data/processed/`` without anything having read it."""
     allowed = set(plugin_skeleton.BASE_OVERRIDE_METHODS)
     allowed.update(new_command_override_names)
     if ai_enabled:
@@ -530,6 +541,8 @@ def _validate_override_keys(
         allowed.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         allowed.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if file_upload_enabled:
+        allowed.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
     if custom_typed_params_enabled:
         allowed.add(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
 
@@ -547,6 +560,13 @@ def _validate_override_keys(
             "server_entry.webhook_enabled is true but override_bodies has no "
             f"'{plugin_skeleton.WEBHOOK_OVERRIDE_METHOD}' entry -- a plugin that enables webhooks "
             "must author its own handler for incoming webhook calls"
+        )
+    if file_upload_enabled and plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD not in override_bodies:
+        return (
+            "server_entry.fileUpload is true but override_bodies has no "
+            f"'{plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD}' entry -- the host only sends a bare CONFIG "
+            "event after an upload, so a plugin that enables file uploads must author "
+            "handle_file_upload(self, path) itself to process each uploaded file"
         )
     if custom_typed_params_enabled and plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD not in override_bodies:
         return (
@@ -989,6 +1009,7 @@ async def generate_plugin_scaffold(
         ai_enabled=ai_enabled,
         ai_tool_names=ai_tool_names,
         webhook_enabled=webhook_enabled,
+        file_upload_enabled=file_upload,
         custom_typed_params_enabled=bool(custom_typed_params),
         new_command_override_names=new_command_override_names,
     )
@@ -1091,6 +1112,8 @@ async def generate_plugin_scaffold(
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if file_upload:
+        expected_methods.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
     if custom_typed_params:
         expected_methods.add(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
     actual_methods = _class_method_names(plugin_py, controller_class) or set()
@@ -1112,8 +1135,6 @@ async def generate_plugin_scaffold(
     )
     if entry_error:
         return {"error": entry_error}
-    if file_upload:
-        expected_methods.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
 
     # Carry forward a previously-persisted nsid (install_generated_plugin
     # writes one into server_entry.json after a successful registration --
@@ -1245,6 +1266,8 @@ async def generate_plugin_scaffold(
         + [_CONTEXT_FILENAME, _SOURCES_FILENAME]
         + extra_dirs,
     }
+    if install_chmod_error is not None:
+        result["install_chmod_error"] = install_chmod_error
     if permissions_refresh_error is not None:
         result["permissions_refresh_error"] = permissions_refresh_error
     if files_changed_notify_error is not None:

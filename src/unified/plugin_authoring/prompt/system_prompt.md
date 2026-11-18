@@ -186,6 +186,19 @@ specifically asking which product or OS they're running. Never hedge or guess ab
     same `configDone` wait `start()`'s override is -- `handle_webhook` can fire at any time once the
     plugin process is up, before `CONFIG`/`CUSTOMPARAMS`/`CONFIGDONE` have ever arrived. Don't write
     it assuming customParams or discovered nodes are already available.
+  - For a `fileUpload` plugin specifically: the host's File Manager does **not** tell the plugin
+    which file arrived -- an upload only produces a bare `CONFIG` event carrying the full config.
+    The tool-generated `__configHandler` therefore calls `processConfig(config)` and then sweeps
+    `self.data_dir` (subfolders included) itself: every file found there is passed to your
+    required `handle_file_upload(self, path)` override, one call per file (`path` is absolute),
+    and is then moved to `data/processed/` -- or `data/failed/` if your handler raised -- so the
+    next `CONFIG` only ever sees new files. Don't scan `data_dir` from `processConfig`, and don't
+    use `CONFIG`'s payload to guess what was uploaded. Write `handle_file_upload` to process just
+    the one file it is given; it may delete or move the file itself (the sweep then leaves it
+    alone), but doesn't have to. It runs on `udi_interface`'s event thread, so hand long-running
+    work to a worker thread. Like `CONFIG` itself it can fire before `start()` has run (files
+    uploaded while the plugin was down are swept on the first `CONFIG` after boot), so don't
+    assume `start()`-time state exists.
 
 - **Using `nucore-ai` itself as a dependency, for reach beyond the plugin's own nodes.** A plugin
   isn't limited to `udi_interface`'s own node model. Treat `nucore-ai` as an ordinary third-party
@@ -414,7 +427,9 @@ no single tool's schema can state on its own.
      `customData` belongs. `self.data_dir` (a `data/` subdirectory) is only created when
      `server_entry.fileUpload` is `true` -- it's the directory the host's File Manager API/UI
      operate on, not a general persistence location; don't write ordinary runtime state there even
-     when it happens to exist.
+     when it happens to exist. Customer uploads are picked up by the generated sweep described in
+     the startup-order bullet above (`handle_file_upload`, required whenever `fileUpload` is
+     true); `data/processed/` and `data/failed/` are that sweep's own output directories.
    - **Validating node names/addresses.** Before constructing a device `Node` and calling
      `self.poly.addNode(...)` in a `discover()`/`start()` override body, run any dynamically
      derived name/address (from a discovered device's hostname, serial number, etc.) through

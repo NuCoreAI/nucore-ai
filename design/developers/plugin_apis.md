@@ -521,7 +521,11 @@ Uploads a file into the data directory. Max 200 MB.
 
 **Body:** `multipart/form-data` with field `file`. Optional `name` field overrides the filename.
 
-Notifies the plugin via MQTT after upload.
+Notifies the plugin via MQTT after upload using the polyglot.CONFIG event. That event carries the full
+config and **no information about the uploaded file** -- the plugin has to find new files in `data/`
+itself, process them, and discard or move them so the next sweep only sees new ones. Plugins built by
+`generate_plugin_scaffold` do this in the generated `__configHandler` (see
+[Lifecycle and runtime → Stage 2a](plugin_lifecycle_and_runtime.md)).
 
 ---
 

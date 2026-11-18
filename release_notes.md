@@ -1,5 +1,11 @@
 # Release Notes
 
+## 3.7.0 - 2026-11-17
+
+- Make `fileUpload` plugins actually receive uploaded files: the host's File Manager only sends a bare `CONFIG` event (the full config, nothing about the file), so `generate_plugin_scaffold` now generates wiring that sweeps `data/` (subfolders included) on every `CONFIG`, passes each file to a new required `handle_file_upload(self, path)` override, then moves it to `data/processed/` (or `data/failed/` if the handler raised). The sweep is guarded by a non-blocking lock (a `CONFIG` arriving mid-sweep requests a follow-up pass) and defers a file modified in the last second to a one-shot re-sweep, since `CONFIG` can arrive right as the upload finishes.
+- `generate_plugin_scaffold` refuses a `fileUpload` plugin that has no `handle_file_upload` override body, and `regenerate_plugin_boilerplate` refuses to regenerate one whose stored `generation_inputs.json` lacks it, rather than silently sweeping every upload into `data/processed/` unread. Plugin-authoring system prompt, tool schema and design docs updated to match.
+- Fix `generate_plugin_scaffold` failing with `[Errno 1] Operation not permitted` on `install.sh` when regenerating a plugin whose files are owned by another OS account: the unconditional `chmod` is now skipped when `install.sh` is already executable, and a failed one is non-fatal (reported as `install_chmod_error`) instead of aborting the `context.md`/`sources.md` updates, the permissions refresh and the file-change notification.
+
 ## 3.6.0 - 2026-11-12
 
 - Add `setup_github_ssh` to plugin authoring: configures the system's SSH access to GitHub if it isn't already, so `setup_github_repo`'s plain `git push` works non-interactively. Defaults to a dedicated per-repository deploy key (own key file plus a `~/.ssh/config` Host alias, returned as `ssh_remote_url`); `key_scope="account"` reuses or creates the host's default key instead. Pre-trusts github.com in `known_hosts` only after its ed25519 fingerprint matches GitHub's published one, and detects success from GitHub's "successfully authenticated" message because `ssh -T` exits 1 even on success. Idempotent. The one step it can't do is adding the public key in GitHub's web UI, so it returns `needs_key_upload` with the key and step-by-step instructions, then verifies on a re-call.

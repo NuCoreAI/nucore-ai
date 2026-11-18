@@ -115,6 +115,13 @@ async def regenerate_plugin_boilerplate(
     ai_tool_names = [tool["name"] for tool in (server_entry_input.get("aiTools") or []) if isinstance(tool, dict) and tool.get("name")]
 
     override_bodies = generation_inputs.get("override_bodies") or {}
+    if file_upload and plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD not in override_bodies:
+        return {
+            "error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has server_entry.fileUpload true but no stored "
+            f"'{plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD}' override body -- regenerate once with "
+            "generate_plugin_scaffold (confirm_overwrite: true) and author handle_file_upload(self, path) first; "
+            "regenerating with a no-op stub would silently sweep every uploaded file into data/processed/"
+        }
     node_classes = generation_inputs.get("node_classes") or {}
     custom_param_docs = generation_inputs.get("custom_param_docs")
     custom_typed_params = generation_inputs.get("custom_typed_params")
@@ -191,6 +198,8 @@ async def regenerate_plugin_boilerplate(
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if file_upload:
+        expected_methods.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
     if custom_typed_params:
         expected_methods.add(plugin_skeleton.CUSTOM_TYPED_DATA_OVERRIDE_METHOD)
     actual_methods = _class_method_names(plugin_py, controller_class) or set()

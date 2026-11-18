@@ -42,6 +42,13 @@ AI_REQUEST_OVERRIDE_METHOD = "handle_custom_request"
 # AI_REQUEST_OVERRIDE_METHOD.
 WEBHOOK_OVERRIDE_METHOD = "handle_webhook"
 
+# The one file-upload override, present only when server_entry.fileUpload is true -- listed
+# separately from BASE_OVERRIDE_METHODS for the same reason as WEBHOOK_OVERRIDE_METHOD, and
+# required for the same reason too: the host's File Manager upload only sends a bare CONFIG
+# event (the full config, nothing about the file), so a no-op default would silently let every
+# uploaded file be swept into processed/ unread. Receives one absolute path per uploaded file.
+FILE_UPLOAD_OVERRIDE_METHOD = "handle_file_upload"
+
 # The one customTypedParams-wiring override, present only when custom_typed_params was given
 # (generate_plugin_scaffold's own top-level input, not a server_entry field -- see
 # render_custom_param_docs_call for why that split exists) -- listed separately from
@@ -236,6 +243,8 @@ def render_init(
             [
                 "        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"data\")",
                 "        os.makedirs(self.data_dir, exist_ok=True)",
+                "        self.uploadSweepLock = threading.Lock()",
+                "        self.uploadSweepRequested = False",
             ]
         )
     custom_param_docs_call = render_custom_param_docs_call(custom_param_docs)
@@ -292,7 +301,59 @@ def render_init(
     return "\n".join(lines) + "\n"
 
 
-def render_private_wiring_methods(*, authorize: bool) -> str:
+_UPLOAD_SWEEP_METHODS = '''    def __sweepUploads(self):
+        if not self.uploadSweepLock.acquire(blocking=False):
+            self.uploadSweepRequested = True
+            return
+        try:
+            self.uploadSweepRequested = False
+            skipped = (os.path.join(self.data_dir, "processed"), os.path.join(self.data_dir, "failed"))
+            deferred = False
+            for root, dirs, files in os.walk(self.data_dir):
+                dirs[:] = [d for d in dirs if os.path.join(root, d) not in skipped]
+                for filename in sorted(files):
+                    path = os.path.join(root, filename)
+                    try:
+                        if time.time() - os.path.getmtime(path) < 1:
+                            deferred = True
+                            continue
+                    except OSError:
+                        continue
+                    self.__handleUploadedFile(path)
+            if deferred:
+                timer = threading.Timer(1.5, self.__sweepUploads)
+                timer.daemon = True
+                timer.start()
+        except Exception as ex:
+            LOGGER.error("%s: upload sweep failed: %s", self.name, ex)
+        finally:
+            self.uploadSweepLock.release()
+        if self.uploadSweepRequested:
+            self.__sweepUploads()
+
+    def __handleUploadedFile(self, path):
+        relpath = os.path.relpath(path, self.data_dir)
+        outcome = "processed"
+        try:
+            self.handle_file_upload(path)
+        except Exception as ex:
+            LOGGER.error("%s: handling uploaded file %s failed: %s", self.name, relpath, ex)
+            outcome = "failed"
+        if not os.path.exists(path):
+            return
+        dest = os.path.join(self.data_dir, outcome, relpath)
+        if os.path.exists(dest):
+            stem, ext = os.path.splitext(dest)
+            dest = "%s.%d%s" % (stem, int(time.time() * 1000), ext)
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(path, dest)
+        except OSError as ex:
+            LOGGER.error("%s: could not move uploaded file %s to %s: %s", self.name, relpath, outcome, ex)
+'''
+
+
+def render_private_wiring_methods(*, authorize: bool, file_upload: bool = False) -> str:
     """The private (name-mangled, ``__``-prefixed) wiring methods every
     ``subscribe()`` call in ``render_init`` actually points at -- unchanged
     across every generated plugin, so there is nothing LLM-authored here.
@@ -334,7 +395,17 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
     against the installed package as the only two paths that ever populate
     ``self.oauthService``'s saved tokens at all; omitting either leaves
     ``getAccessToken()`` permanently raising ``ValueError`` even after a
-    real, successful authentication."""
+    real, successful authentication.
+
+    When *file_upload* (``server_entry.fileUpload``), ``__configHandler``
+    additionally calls ``__sweepUploads`` after ``processConfig``. The host's
+    File Manager upload sends only a bare ``CONFIG`` event (the full config,
+    no information about the file), so the plugin has to find new files in
+    ``self.data_dir`` itself: each one is handed to ``handle_file_upload``
+    and then moved to ``data/processed/`` (or ``data/failed/`` if the
+    handler raised), so the next sweep only ever sees new files. A file
+    modified in the last second is deferred to a one-shot re-sweep rather
+    than skipped, since ``CONFIG`` can arrive right as the upload finishes."""
     if authorize:
         methods = [
             '''    def __start(self):
@@ -378,8 +449,10 @@ def render_private_wiring_methods(*, authorize: bool) -> str:
 ''',
         '''    def __configHandler(self, config):
         self.processConfig(config)
-''',
+''' + ('        self.__sweepUploads()\n' if file_upload else ''),
     ])
+    if file_upload:
+        methods.append(_UPLOAD_SWEEP_METHODS)
     if authorize:
         methods.append(
             '''    def __configDoneHandler(self):

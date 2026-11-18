@@ -450,6 +450,53 @@ async def test_webhook_enabled_preserved_across_refresh(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_file_upload_sweep_preserved_across_refresh(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "fileUpload": True},
+        override_bodies={
+            "start": 'def start(self):\n    LOGGER.info("custom start")\n',
+            "handle_file_upload": "def handle_file_upload(self, path):\n    LOGGER.info(path)\n",
+        },
+    )
+    gen_result = await _generate(tmp_path, args)
+    assert "error" not in gen_result
+    plugin_dir = tmp_path / "acme_pool"
+    before = (plugin_dir / "plugin.py").read_text()
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+    assert "error" not in result
+
+    plugin_py = (plugin_dir / "plugin.py").read_text()
+    assert plugin_py == before
+    assert "self.__sweepUploads()" in plugin_py
+    assert "def handle_file_upload(self, path):" in plugin_py
+
+
+@pytest.mark.asyncio
+async def test_file_upload_without_stored_handler_is_rejected_rather_than_stubbed(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "fileUpload": True},
+        override_bodies={"handle_file_upload": "def handle_file_upload(self, path):\n    pass\n"},
+    )
+    gen_result = await _generate(tmp_path, args)
+    assert "error" not in gen_result
+    inputs_path = tmp_path / "acme_pool" / "generation_inputs.json"
+    inputs = json.loads(inputs_path.read_text())
+    inputs["override_bodies"].pop("handle_file_upload")
+    inputs_path.write_text(json.dumps(inputs))
+    plugin_before = (tmp_path / "acme_pool" / "plugin.py").read_text()
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+
+    assert "handle_file_upload" in result["error"]
+    assert (tmp_path / "acme_pool" / "plugin.py").read_text() == plugin_before
+
+
+@pytest.mark.asyncio
 async def test_custom_typed_params_preserved_across_refresh(tmp_path):
     typed_params = [{"name": "host", "title": "Host", "isRequired": True}]
     args = _base_args(

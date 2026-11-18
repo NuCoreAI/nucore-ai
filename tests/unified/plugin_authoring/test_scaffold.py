@@ -1386,7 +1386,7 @@ async def test_data_directory_is_not_created_when_file_upload_is_not_set(tmp_pat
 
 @pytest.mark.asyncio
 async def test_data_directory_is_created_on_disk_when_file_upload_is_true(tmp_path):
-    args = _base_args(server_entry={"name": "AcmePool", "desc": "Acme pool controller", "fileUpload": True})
+    args = _file_upload_args()
     result = await _generate(tmp_path, args)
     assert "error" not in result
     assert (tmp_path / "acme_pool" / "data").is_dir()
@@ -1395,11 +1395,244 @@ async def test_data_directory_is_created_on_disk_when_file_upload_is_true(tmp_pa
 
 @pytest.mark.asyncio
 async def test_rendered_plugin_py_points_data_dir_at_the_data_subdirectory_when_file_upload_is_true(tmp_path):
-    args = _base_args(server_entry={"name": "AcmePool", "desc": "Acme pool controller", "fileUpload": True})
+    args = _file_upload_args()
     result = await _generate(tmp_path, args)
     assert "error" not in result
     source = (tmp_path / "acme_pool" / "plugin.py").read_text()
     assert 'self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")' in source
+
+
+# --- fileUpload: the host's File Manager upload sends only a bare CONFIG event (the full
+# config, nothing about the file), so the generated __configHandler sweeps data/ itself ---
+
+FILE_UPLOAD_HANDLER_BODY = (
+    "def handle_file_upload(self, path):\n"
+    "    self.seen.append(path)\n"
+    "    if path.endswith('bad.txt'):\n"
+    "        raise ValueError('boom')\n"
+    "    if path.endswith('gone.txt'):\n"
+    "        os.remove(path)\n"
+)
+
+
+def _file_upload_args(**overrides):
+    return _base_args(
+        server_entry={"name": "AcmePool", "desc": "Acme pool controller", "fileUpload": True},
+        override_bodies={"handle_file_upload": FILE_UPLOAD_HANDLER_BODY},
+        **overrides,
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_upload_wires_config_handler_to_sweep_data_dir(tmp_path):
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.poly.subscribe(self.poly.CONFIG, self.__configHandler)" in source
+    assert "        self.processConfig(config)\n        self.__sweepUploads()\n" in source
+    assert "def handle_file_upload(self, path):" in source
+    assert "self.uploadSweepLock = threading.Lock()" in source
+
+
+@pytest.mark.asyncio
+async def test_file_upload_false_omits_the_upload_sweep(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "__sweepUploads" not in source
+    assert "handle_file_upload" not in source
+    assert "import shutil" not in source
+
+
+@pytest.mark.asyncio
+async def test_file_upload_without_handle_file_upload_override_is_rejected(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "desc": "Acme pool controller", "fileUpload": True})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert "handle_file_upload" in result["error"]
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_file_upload_override_without_file_upload_is_rejected(tmp_path):
+    args = _base_args(override_bodies={"handle_file_upload": FILE_UPLOAD_HANDLER_BODY})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+def _load_generated_controller(tmp_path, monkeypatch):
+    """Executes the generated plugin.py against a stub udi_interface and
+    returns an instance built without running __init__ (which needs a real
+    Polyglot), with just the attributes the upload sweep itself touches."""
+    import sys
+    import threading
+    import types
+
+    stub = types.ModuleType("udi_interface")
+    stub.LOGGER = __import__("logging").getLogger("test_upload_sweep")
+    stub.Node = type("Node", (), {})
+    monkeypatch.setitem(sys.modules, "udi_interface", stub)
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    namespace: dict = {"__name__": "generated_plugin"}
+    exec(compile(source, "plugin.py", "exec"), namespace)
+    controller = object.__new__(namespace["Controller"])
+    controller.name = "AcmePool Controller"
+    controller.data_dir = str(tmp_path / "acme_pool" / "data")
+    controller.uploadSweepLock = threading.Lock()
+    controller.uploadSweepRequested = False
+    controller.seen = []
+    return controller
+
+
+def _write_uploaded(controller, relpath, content="x", *, age=60):
+    import os
+    import time
+
+    path = os.path.join(controller.data_dir, relpath)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_hands_each_file_to_handler_and_moves_it_to_processed(tmp_path, monkeypatch):
+    import os
+
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    top = _write_uploaded(controller, "a.txt")
+    nested = _write_uploaded(controller, os.path.join("sub", "deeper", "b.txt"))
+
+    controller._Controller__sweepUploads()
+
+    assert sorted(controller.seen) == sorted([top, nested])
+    data = tmp_path / "acme_pool" / "data"
+    assert not os.path.exists(top) and not os.path.exists(nested)
+    assert (data / "processed" / "a.txt").read_text() == "x"
+    assert (data / "processed" / "sub" / "deeper" / "b.txt").read_text() == "x"
+
+    controller.seen.clear()
+    controller._Controller__sweepUploads()
+    assert controller.seen == []
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_moves_a_file_whose_handler_raised_to_failed(tmp_path, monkeypatch):
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    _write_uploaded(controller, "bad.txt")
+
+    controller._Controller__sweepUploads()
+
+    data = tmp_path / "acme_pool" / "data"
+    assert (data / "failed" / "bad.txt").exists()
+    assert not (data / "processed" / "bad.txt").exists()
+    assert not (data / "bad.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_skips_a_file_the_handler_already_removed(tmp_path, monkeypatch):
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    _write_uploaded(controller, "gone.txt")
+
+    controller._Controller__sweepUploads()
+
+    data = tmp_path / "acme_pool" / "data"
+    assert len(controller.seen) == 1
+    assert not (data / "gone.txt").exists()
+    assert not (data / "processed" / "gone.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_never_reprocesses_files_already_in_processed_or_failed(tmp_path, monkeypatch):
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    _write_uploaded(controller, "processed/old.txt")
+    _write_uploaded(controller, "failed/older.txt")
+
+    controller._Controller__sweepUploads()
+
+    assert controller.seen == []
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_keeps_both_copies_when_the_same_name_is_uploaded_twice(tmp_path, monkeypatch):
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    _write_uploaded(controller, "a.txt", "first")
+    controller._Controller__sweepUploads()
+    _write_uploaded(controller, "a.txt", "second")
+    controller._Controller__sweepUploads()
+
+    processed = sorted(p.name for p in (tmp_path / "acme_pool" / "data" / "processed").iterdir())
+    assert len(processed) == 2
+    assert processed[0].startswith("a") and "a.txt" in processed
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_defers_a_just_written_file_to_a_one_shot_resweep(tmp_path, monkeypatch):
+    import threading
+
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    started = []
+
+    class _RecordingTimer:
+        def __init__(self, interval, function):
+            self.interval, self.function, self.daemon = interval, function, False
+
+        def start(self):
+            started.append(self)
+
+    monkeypatch.setattr(threading, "Timer", _RecordingTimer)
+    _write_uploaded(controller, "fresh.txt", age=0)
+
+    controller._Controller__sweepUploads()
+    assert controller.seen == []
+    assert len(started) == 1 and started[0].daemon is True
+
+    import os
+    import time
+
+    stamp = time.time() - 60
+    os.utime(os.path.join(controller.data_dir, "fresh.txt"), (stamp, stamp))
+    started[0].function()
+    assert len(controller.seen) == 1
+    assert (tmp_path / "acme_pool" / "data" / "processed" / "fresh.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_sweep_requested_while_one_is_running_triggers_a_followup(tmp_path, monkeypatch):
+    result = await _generate(tmp_path, _file_upload_args())
+    assert "error" not in result
+    controller = _load_generated_controller(tmp_path, monkeypatch)
+    late = []
+
+    original = controller.handle_file_upload
+
+    def first_file_triggers_second_config(path):
+        original(path)
+        if not late:
+            late.append(_write_uploaded(controller, "late.txt"))
+            controller._Controller__sweepUploads()  # a second CONFIG arrives mid-sweep
+
+    controller.handle_file_upload = first_file_triggers_second_config
+    _write_uploaded(controller, "first.txt")
+
+    controller._Controller__sweepUploads()
+
+    assert any(p.endswith("late.txt") for p in controller.seen)
 
 
 # --- main.py sends the Dynamic Profile on startup -- writing profile.json
@@ -2020,30 +2253,6 @@ async def test_install_sh_is_executable(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_install_sh_does_not_enumerate_extra_requirements_itself(tmp_path):
-    # install.sh always just invokes requirements.txt, which already
-    # carries any extras -- it never needs to list them a second time.
-    args = _base_args(server_entry={"name": "AcmePool", "extra_requirements": ["requests>=2.31.0"]})
-    result = await _generate(tmp_path, args)
-    assert "error" not in result
-    install_sh = (tmp_path / "acme_pool" / "install.sh").read_text()
-    assert "requests" not in install_sh
-
-
-@pytest.mark.asyncio
-async def test_server_entry_install_field_is_the_script_filename(tmp_path):
-    result = await _generate(tmp_path, _base_args())
-    assert "error" not in result
-    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
-    assert entry["install"] == "install.sh"
-
-
-@pytest.mark.asyncio
-async def test_install_sh_participates_in_overwrite_conflict_check(tmp_path):
-    await _generate(tmp_path, _base_args())
-    second = await _generate(tmp_path, _base_args())
-    assert "install.sh" in second["conflicts"]
-@pytest.mark.asyncio
 async def test_install_sh_chmod_failure_on_regenerate_is_non_fatal(tmp_path, monkeypatch):
     # EPERM from chmod (process doesn't own install.sh) must not skip
     # context.md/sources.md or the permissions refresh/notify steps.
@@ -2079,3 +2288,27 @@ async def test_install_sh_chmod_skipped_when_already_executable(tmp_path, monkey
     assert "install_chmod_error" not in result
 
 
+@pytest.mark.asyncio
+async def test_install_sh_does_not_enumerate_extra_requirements_itself(tmp_path):
+    # install.sh always just invokes requirements.txt, which already
+    # carries any extras -- it never needs to list them a second time.
+    args = _base_args(server_entry={"name": "AcmePool", "extra_requirements": ["requests>=2.31.0"]})
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    install_sh = (tmp_path / "acme_pool" / "install.sh").read_text()
+    assert "requests" not in install_sh
+
+
+@pytest.mark.asyncio
+async def test_server_entry_install_field_is_the_script_filename(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["install"] == "install.sh"
+
+
+@pytest.mark.asyncio
+async def test_install_sh_participates_in_overwrite_conflict_check(tmp_path):
+    await _generate(tmp_path, _base_args())
+    second = await _generate(tmp_path, _base_args())
+    assert "install.sh" in second["conflicts"]
