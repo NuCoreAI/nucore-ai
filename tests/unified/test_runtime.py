@@ -1210,3 +1210,55 @@ def test_build_history_drops_an_orphan_search_result_and_empty_messages():
     built = runtime_module._build_history_messages([turn], current_provider="claude")
 
     assert built == [{"role": "user", "content": "q"}, {"role": "assistant", "content": "final"}]
+
+
+@pytest.mark.asyncio
+async def test_saved_turn_never_stores_a_web_search_request_that_got_no_result(monkeypatch):
+    # An unresolved search request at the end of its own turn never gets a
+    # result later; it's stripped at save time so it never reaches disk (or
+    # needs re-repairing on every replay).
+    class _OrphanLoop:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            return "answer", [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": [_search_use("srv_1"), {"type": "tool_use", "id": "t1", "name": "n", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+                {"role": "assistant", "content": "answer"},
+            ]
+
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _OrphanLoop)
+    runtime = _runtime()
+
+    await runtime.handle_query("q", session_id="orphan-session")
+
+    stored = runtime.session_store.get("orphan-session::unified").turns[-1].messages
+    blocks = [b for m in stored if isinstance(m["content"], list) for b in m["content"]]
+    assert not any(b.get("type") == "server_tool_use" for b in blocks)
+    assert any(b.get("type") == "tool_use" for b in blocks)
+
+
+@pytest.mark.asyncio
+async def test_saved_turn_keeps_a_search_request_and_result_split_across_messages(monkeypatch):
+    paired = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": [_search_use("srv_1"), {"type": "tool_use", "id": "t1", "name": "n", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        {"role": "assistant", "content": [_search_result("srv_1"), {"type": "text", "text": "done"}]},
+    ]
+
+    class _PairedLoop:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+            return "done", [{"role": "user", "content": user_message}, *paired[1:]]
+
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _PairedLoop)
+    runtime = _runtime()
+
+    await runtime.handle_query("q", session_id="paired-session")
+
+    assert runtime.session_store.get("paired-session::unified").turns[-1].messages == paired

@@ -7,6 +7,7 @@ from typing import Any
 
 from utils import get_logger
 
+from .history_repair import drop_unpaired_web_search_blocks
 from .models import ConversationHistory, ConversationTurn
 from .session_persistence import SessionPersistence, history_from_dict, history_to_dict
 
@@ -335,6 +336,15 @@ class SessionStore:
             return self._sessions[key]
 
         history = history_from_dict(data.get("history") if data else None) if data else None
+        if history is not None:
+            # Heal turns saved before orphaned web_search blocks were stripped
+            # at save time -- once, here, so replay doesn't re-repair (and
+            # re-warn) on every later turn. Pairing is per turn: a search
+            # request left unresolved at the end of its own turn never gets a
+            # result later.
+            for turn in history.turns:
+                if turn.messages:
+                    turn.messages = drop_unpaired_web_search_blocks(turn.messages)
         self._sessions[key] = history if history is not None else ConversationHistory()
         return self._sessions[key]
 

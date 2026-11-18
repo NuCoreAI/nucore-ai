@@ -379,3 +379,35 @@ def test_format_sessions_table_handles_no_sessions():
     table = SessionStore.format_sessions_table([], current_id=None)
 
     assert table.splitlines() == ["| id | name | description |", "| --- | --- | --- |"]
+
+
+async def test_get_or_load_heals_orphaned_web_search_blocks_in_persisted_turns(tmp_path):
+    # Turns saved before orphans were stripped at save time still sit on disk
+    # with an unpaired server_tool_use; loading repairs them once.
+    store = SessionStore(persist_dir=tmp_path)
+    session_num = await store.resolve_current_session_id("a@example.com", "plugin_authoring", durable=True)
+    history = await store.get_or_load("a@example.com", "plugin_authoring", session_num, durable=True)
+    history.append(
+        "q",
+        "r",
+        messages=[
+            {"role": "user", "content": "q"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {}},
+                    {"type": "tool_use", "id": "t1", "name": "n", "input": {}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+            {"role": "assistant", "content": "r"},
+        ],
+    )
+    await store.persist("a@example.com", "plugin_authoring", session_num, durable=True)
+
+    fresh = SessionStore(persist_dir=tmp_path)
+    fresh_num = await fresh.resolve_current_session_id("a@example.com", "plugin_authoring", durable=True)
+    loaded = await fresh.get_or_load("a@example.com", "plugin_authoring", fresh_num, durable=True)
+
+    blocks = [b for m in loaded.turns[0].messages if isinstance(m["content"], list) for b in m["content"]]
+    assert [b["type"] for b in blocks] == ["tool_use", "tool_result"]
