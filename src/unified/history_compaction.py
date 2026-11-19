@@ -44,9 +44,18 @@ _SUMMARY_PROMPT_HEADER = (
     "Summarize the conversation turns below concisely, in plain prose (no headers/bullets "
     "needed unless they help). Preserve concrete facts a later turn might still depend on -- "
     "device/routine names and ids, decisions made, values reported by tools -- and omit "
-    "meta-commentary about the summarization itself. Do not fabricate anything not present "
-    "below. Keep the summary under {max_words} words.\n\n"
+    "meta-commentary about the summarization itself. Each turn also lists the tools the "
+    "assistant called, with short excerpts of what they returned: treat those as things the "
+    "assistant actually observed, and keep the concrete ones (names, folders, ids, paths, "
+    "values) in the summary as established facts, so later turns don't doubt or retract them. "
+    "Do not fabricate anything not present below. Keep the summary under {max_words} words.\n\n"
 )
+
+# What the summarizer sees of a turn's tool calls: enough to keep concrete
+# findings (a folder name, an id, a value) alive, nowhere near the full output.
+_TOOL_ARGS_CHARS = 150
+_TOOL_RESULT_CHARS = 500
+_TOOL_ACTIVITY_CHARS_PER_TURN = 2500
 
 
 def estimate_tokens(text: str) -> int:
@@ -86,10 +95,77 @@ def _history_tokens(turns: list[ConversationTurn]) -> int:
     return sum(_turn_tokens(t) for t in turns)
 
 
+def _one_line(value: Any, limit: int, *, note_length: bool = False) -> str:
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+        except Exception:
+            value = str(value)
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return value
+    return value[:limit] + (f"... [{len(value):,} chars in all]" if note_length else "...")
+
+
+def _result_text(content: Any) -> Any:
+    """A tool result's text whether it is a string or a list of content blocks."""
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return content
+
+
+def _tool_activity(turn: ConversationTurn) -> list[str]:
+    """One ``name(args) -> result excerpt`` line per tool call in a turn's rich
+    transcript, in call order. Recognizes Claude's ``tool_use``/``tool_result``
+    blocks, OpenAI chat's ``tool_calls``/``role: "tool"`` messages and OpenAI
+    Responses' ``function_call``/``function_call_output`` items; a native web
+    search shows only its query (its result block is opaque). A turn with no
+    rich transcript has none."""
+    calls: list[tuple[str, str, Any]] = []  # (call id, name, args)
+    results: dict[str, Any] = {}
+    for message in turn.messages or []:
+        if message.get("type") == "function_call":
+            calls.append((str(message.get("call_id", "")), message.get("name", "?"), message.get("arguments")))
+        elif message.get("type") == "function_call_output":
+            results[str(message.get("call_id", ""))] = message.get("output")
+        elif message.get("role") == "tool":
+            results[str(message.get("tool_call_id", ""))] = message.get("content")
+        content = message.get("content")
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            calls.append((str(call.get("id", "")), function.get("name", "?"), function.get("arguments")))
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    calls.append((str(block.get("id", "")), block.get("name", "?"), block.get("input")))
+                elif block.get("type") == "server_tool_use":
+                    calls.append(("", block.get("name", "?"), block.get("input")))
+                elif block.get("type") == "tool_result":
+                    results[str(block.get("tool_use_id", ""))] = _result_text(block.get("content"))
+    lines: list[str] = []
+    used = 0
+    for index, (call_id, name, args) in enumerate(calls):
+        line = f"- {name}({_one_line(args if args is not None else '', _TOOL_ARGS_CHARS)})"
+        if call_id and call_id in results:
+            line += f" -> {_one_line(results[call_id], _TOOL_RESULT_CHARS, note_length=True)}"
+        if used + len(line) > _TOOL_ACTIVITY_CHARS_PER_TURN:
+            lines.append(f"- ({len(calls) - index} more tool call(s) omitted)")
+            break
+        lines.append(line)
+        used += len(line)
+    return lines
+
+
 def _render_turns_for_summary(turns: list[ConversationTurn]) -> str:
     parts = []
     for turn in turns:
-        parts.append(f"User: {turn.query}\nAssistant: {turn.response}")
+        part = f"User: {turn.query}\nAssistant: {turn.response}"
+        activity = _tool_activity(turn)
+        if activity:
+            part += "\nTools the assistant called this turn:\n" + "\n".join(activity)
+        parts.append(part)
     return "\n\n".join(parts)
 
 

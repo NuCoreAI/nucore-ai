@@ -12,7 +12,10 @@ import pytest
 
 from unified import history_compaction
 from unified.history_compaction import (
+    _TOOL_ACTIVITY_CHARS_PER_TURN,
+    _TOOL_RESULT_CHARS,
     _budget_notice,
+    _render_turns_for_summary,
     _COMPACTED_NOTICE,
     _COMPACTED_QUERY_LABEL,
     _history_tokens,
@@ -243,9 +246,9 @@ async def test_compaction_preserves_the_kept_turns_rich_messages():
 
 
 @pytest.mark.asyncio
-async def test_summarization_prompt_ignores_rich_messages_and_uses_query_response_text():
-    # The summarization call's own prompt must stay driven by the clean
-    # query/response text, not balloon with a turn's raw tool-call JSON.
+async def test_summarization_prompt_stays_bounded_even_with_a_giant_tool_call():
+    # The summary call sees each turn's tool calls, but only a short excerpt --
+    # never a turn's raw tool-call JSON in full.
     history = _history_with_turns(8, body=_big_body(2000))
     history.turns[0].messages = [
         {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {"giant": "z" * 50000}}]}
@@ -255,7 +258,7 @@ async def test_summarization_prompt_ignores_rich_messages_and_uses_query_respons
     await maybe_compact_history(history, llm_client=llm, llm_config={"model": "m"}, token_budget=100)
 
     sent_prompt = llm.calls[0]["messages"][0]["content"]
-    assert "giant" not in sent_prompt
+    assert "z" * 1000 not in sent_prompt
     assert f"query 0 {_big_body(2000)}" in sent_prompt
 
 
@@ -489,3 +492,89 @@ async def test_summary_call_respects_a_smaller_configured_max_tokens():
     )
 
     assert llm.calls[0]["config"]["max_tokens"] == 300
+
+
+# --- the summarizer sees which tools ran and short excerpts of what they returned ---
+
+
+def _tool_turn(messages) -> ConversationTurn:
+    return ConversationTurn(query="q", response="r", messages=messages)
+
+
+def test_summary_input_lists_claude_tool_calls_with_result_excerpts():
+    turn = _tool_turn(
+        [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "list_generated_plugins", "input": {}}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "a", "content": [{"type": "text", "text": 'folders: ["lg_webos", "midas_rates"]'}]}
+                ],
+            },
+        ]
+    )
+
+    rendered = _render_turns_for_summary([turn])
+
+    assert "list_generated_plugins({})" in rendered
+    assert '-> folders: ["lg_webos", "midas_rates"]' in rendered
+
+
+def test_summary_input_excerpts_are_truncated_and_multi_line_results_flattened():
+    turn = _tool_turn(
+        [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "read_file", "input": {"path": "x.py"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "line1\nline2 " + "y" * 5000}]},
+        ]
+    )
+
+    rendered = _render_turns_for_summary([turn])
+
+    assert "line1 line2" in rendered
+    assert "y" * (_TOOL_RESULT_CHARS + 50) not in rendered
+    assert "chars in all]" in rendered  # tells the summarizer the excerpt is partial
+    assert rendered.count("\n") == 3  # User, Assistant, header, one tool line -- nothing multi-line
+
+
+def test_summary_input_handles_openai_chat_and_responses_shapes():
+    chat = _tool_turn(
+        [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "get_time_info", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "it is noon"},
+        ]
+    )
+    responses = _tool_turn(
+        [
+            {"type": "function_call", "call_id": "k", "name": "list_variables", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "k", "output": "3 variables"},
+        ]
+    )
+
+    rendered = _render_turns_for_summary([chat, responses])
+
+    assert "get_time_info({}) -> it is noon" in rendered
+    assert "list_variables({}) -> 3 variables" in rendered
+
+
+def test_summary_input_shows_only_the_query_of_a_native_web_search():
+    turn = _tool_turn(
+        [{"role": "assistant", "content": [{"type": "server_tool_use", "id": "s", "name": "web_search", "input": {"query": "eero api"}}]}]
+    )
+
+    assert 'web_search({"query":"eero api"})' in _render_turns_for_summary([turn])
+
+
+def test_summary_input_caps_tool_activity_per_turn():
+    blocks = [{"type": "tool_use", "id": str(i), "name": "t", "input": {"i": "x" * 100}} for i in range(100)]
+    turn = _tool_turn([{"role": "assistant", "content": blocks}])
+
+    rendered = _render_turns_for_summary([turn])
+
+    assert len(rendered) < _TOOL_ACTIVITY_CHARS_PER_TURN + 300
+    assert "more tool call(s) omitted" in rendered
+
+
+def test_summary_input_for_a_turn_without_a_rich_transcript_is_unchanged():
+    turn = ConversationTurn(query="q", response="r")
+
+    assert _render_turns_for_summary([turn]) == "User: q\nAssistant: r"
