@@ -240,6 +240,16 @@ def test_plugin_authoring_reuses_run_shell_command_and_detect_usb_device():
     assert "detect_usb_device" in TOOL_HANDLERS
 
 
+def test_mdns_search_is_registered_with_a_matching_tool_spec():
+    import json
+
+    from unified.plugin_authoring import TOOLS_DIR
+
+    assert "mdns_search" in TOOL_HANDLERS
+    spec = json.loads((TOOLS_DIR / "tool_mdns_search.json").read_text())
+    assert spec["name"] == "mdns_search"
+
+
 @pytest.mark.parametrize("engine", ["brave", "tavily"])
 def test_build_tool_handlers_adds_search_web_only_when_engine_and_key_both_given(engine):
     missing_key = build_tool_handlers(

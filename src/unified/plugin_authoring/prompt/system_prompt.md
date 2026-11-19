@@ -347,6 +347,32 @@ no single tool's schema can state on its own.
      say plainly if it isn't that webhook delivery won't work until it is. When true,
      `override_bodies` must include a `handle_webhook` entry -- `generate_plugin_scaffold` refuses
      otherwise.
+   - **Deciding `server_entry.discover`.** Set it to `true` when the plugin finds devices (or
+     anything else) on demand -- e.g. a hub/bridge/cloud account whose devices the customer adds
+     later -- so the UI shows a "Discover" button that fires the `polyglot.DISCOVER` event. Leave
+     it unset/`false` for plugins whose nodes are fixed or fully derived from `customParams`. It
+     only adds that button: the `DISCOVER` subscription and `discover()` override are always
+     generated regardless, and it is **not** an mDNS/Bonjour switch (never gate `poly.bonjour()`
+     or the `BONJOUR` event on it). When true, `override_bodies` should include a real
+     `discover` body (add/refresh nodes there) rather than the no-op stub.
+   - **Deciding `mdns_enabled`.** Default to `false`; only set it when the plugin must find
+     devices on the local network by an mDNS/Bonjour service type (e.g. `_hue._tcp`, `_hap._tcp`),
+     not when the developer gives an IP/hostname or the devices are reached through a cloud API.
+     It is independent of `server_entry.discover` -- that flag only adds a UI Discover button; set
+     either, both, or neither as the spec calls for. When true, the generated Controller has a
+     `self.search_mdns(service_type, subtypes, protocol)` method (a thin wrapper over
+     `self.poly.bonjour`): `service_type` is a string or `None`, `subtypes` is a **list** of strings
+     or `None`, `protocol` is `"tcp"`, `"udp"` or `None` (`None` means everything); it returns
+     `False` and logs on invalid arguments. Call it from `discover()` or `start()`, never from
+     inside `handle_mdns_results`, and don't block waiting for an answer: the platform does the
+     search and replies later, asynchronously, and the generated wiring hands each reply to the
+     required `handle_mdns_results(self, results)` override, where the plugin adds nodes or stores
+     what it found. The shape of each result entry is not defined by `udi_interface` and has not been
+     confirmed on a real eisy -- log `results` and read fields with `.get(...)` rather than assuming
+     any, and tell the developer plainly that the result handling is untested against real
+     responses. A search that finds nothing may send no event at all, so never treat "no
+     results" as proof the device doesn't advertise over mDNS. When true, `override_bodies` must
+     include a `handle_mdns_results` entry -- `generate_plugin_scaffold` refuses otherwise.
    - **Deciding whether a property needs more than one UOM.** Default to one range/one UOM; only
      reach for multiple when the spec genuinely calls for it -- e.g. a weather/sensor/API-backed
      property whose upstream source can report in more than one unit, or a customer-configurable
@@ -525,6 +551,43 @@ no single tool's schema can state on its own.
           real device's ids (the same ones `detect_usb_device` extracted)? Is the symlink name inside
           it exactly `pg3.{name}` -- the same name the plugin is actually looking for, with no
           case/underscore/typo mismatch between the two?
+
+5b. **Devices on the local network (mDNS/Bonjour).** When the developer names a kind of device
+   ("a printer", "my speaker") or asks what's on the network ("everything that's online"), or
+   when you're unsure whether a device advertises over mDNS, call `mdns_search` instead of
+   guessing -- it searches the eisy's own local network and returns what answered: each result has
+   `service_type`, `instance` (the advertised name), `host`, `port`, `addresses` and `txt`.
+   - **`mdns_search` is the only way to look for devices on the network.** Never use
+     `run_shell_command` for it -- not `dns-sd`, `avahi-browse`, `mdns-scan`, `nmap`, `arp`, a ping
+     sweep, or checking whether `mDNSResponder`/`avahi` is running. The eisy has no mDNS client
+     daemon those tools can talk to (`dns-sd` just says "Service Not Running"), which says nothing
+     about whether a device is there; `mdns_search` doesn't need one. If it returns an error, say
+     so plainly and ask the developer for the device's IP address or service type instead -- don't
+     fall back to shell tools.
+   - **Turn a device class into full service strings** and pass them together as `service_types`
+     in one call (they share one wait). A printer: `_ipp._tcp`, `_printer._tcp`,
+     `_pdl-datastream._tcp`. Other common ones: `_http._tcp`, `_https._tcp`, `_hap._tcp`
+     (HomeKit), `_googlecast._tcp`, `_airplay._tcp`, `_raop._tcp`, `_matter._tcp`, `_smb._tcp`,
+     `_ssh._tcp`. If you don't know the service string for a device, search the web for it rather
+     than inventing one. A device often advertises more than one type (a printer shows up under
+     `_ipp._tcp`, `_pdl-datastream._tcp` and `_http._tcp`), so the same `instance` appearing under
+     several `service_type`s is normal, not a duplicate.
+   - **"Everything that's online"**: call it with no `service_types`. It first asks the network
+     which service types exist, then browses each, and returns the devices plus
+     `service_types_seen`. It takes about 10 seconds and the list can be long -- summarize it by
+     device or service type for the developer instead of dumping it, and offer to dig into one.
+   - **`txt` is where the useful detail is** -- model, firmware, a protocol path, a device id. Show
+     the developer what a device actually advertised, and don't invent fields.
+   - **Empty means "nothing answered in time", not "not there".** A sleeping or off-network device
+     may not answer; retry once with a larger `timeout_seconds` (up to 20) before concluding, and
+     ask the developer to confirm the device is powered and on the same network as the eisy. Only
+     the eisy's default network interface is searched.
+   - **Using what you found.** Use the service type, the host/port and the `txt` keys to decide
+     how the plugin should find and talk to the device. If the plugin will itself search for
+     devices at runtime, set `server_entry.mdns_enabled` and write `handle_mdns_results` -- but
+     those results arrive through the platform's `BONJOUR` event, whose field names are *not* the
+     ones `mdns_search` returns and have not been confirmed on a real eisy, so read them
+     defensively and tell the developer the handling is untested against real responses.
 
 6. **Install is a separate, system-affecting step.** `generate_plugin_scaffold` only writes local
    files -- nothing on the real system changes until `install_generated_plugin` is called. Always get

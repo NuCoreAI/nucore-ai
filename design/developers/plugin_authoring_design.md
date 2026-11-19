@@ -222,6 +222,26 @@ real, independent config/token client: config arrives via `CUSTOMNS` (`key='oaut
 `token_parameters`), fresh tokens via the separate `OAUTH` topic, `getAccessToken()`
 auto-refreshes.
 
+**mDNS/Bonjour** (`server_entry.mdns_enabled`, independent of `server_entry.discover`, which only
+adds a UI Discover button that fires `DISCOVER`): the plugin calls `Interface.bonjour(type,
+subtypes, protocol)` (verified against `udi_interface` 3.4.9: `type` str|None, `subtypes` list|None,
+`protocol` `"tcp"`/`"udp"`/None; `TypeError`/`ValueError` on bad input) and the platform replies
+asynchronously with a `BONJOUR` event. The generated Controller gets a `search_mdns(...)` wrapper
+and a `__bonjourHandler` that forwards to the required `handle_mdns_results(self, results)`
+override. `udi_interface` publishes the event item as-is and defines no shape; the `{"command":
+"bonjour", "mdns": [...]}` envelope comes from `ioxplugin`'s template and is unconfirmed on a real
+eisy, so the handler unwraps it defensively. Whether `bonjour()` needs any platform-side flag is
+also unconfirmed.
+
+The authoring agent's own `mdns_search` tool (`handlers/mdns.py`) deliberately does **not** use
+that path. It browses with `mdns_client.py`, a stdlib-only mDNS client in the same style as the
+`hp_printer` plugin: queries go out from an ephemeral UDP port with the unicast-response bit set
+(never binding 5353, which the eisy's `mDNSResponderPosix` owns), because the platform's polyglot
+connection is not available to the shared `IoXWrapper` in eisy-ai (it is built with `poly=None`),
+and the `dns-sd`/`avahi-browse` clients cannot reach any daemon on the eisy. Its results are
+`{service_type, instance, host, port, addresses, txt}`, which are *not* the shape of a plugin's
+`BONJOUR` event.
+
 `PUT /api/plugins/store/local/entry` is the authoritative local-dev-plugin parameter set (see
 [APIs](plugin_apis.md)). `customParams` is the config *schema* the plugin author defines; actual
 *values* are filled in later by the customer via `configure_plugin`. `shortPoll`/`longPoll` are

@@ -37,6 +37,7 @@ from .handlers import (
     github_repo,
     github_ssh,
     install,
+    mdns,
     package,
     profile_authoring,
     scaffold,
@@ -59,6 +60,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "call_plugin": plugin_management.call_plugin,
     "run_shell_command": shell.run_shell_command,
     "detect_usb_device": device_detection.detect_usb_device,
+    "mdns_search": mdns.mdns_search,
     "delete_plugin": plugin_management.delete_plugin,
 }
 

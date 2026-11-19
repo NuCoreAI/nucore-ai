@@ -520,3 +520,27 @@ async def test_custom_typed_params_preserved_across_refresh(tmp_path):
     assert "self.CustomTypedData = udi_interface.Custom(self.poly, 'customtypeddata')" in plugin_py
     assert "self.poly.subscribe(self.poly.CUSTOMTYPEDDATA, self.customTypedDataHandler)" in plugin_py
     assert "def customTypedDataHandler(self, custom_params):" in plugin_py
+
+
+@pytest.mark.asyncio
+async def test_mdns_enabled_preserved_across_refresh(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "mdns_enabled": True},
+        override_bodies={
+            "start": 'def start(self):\n    LOGGER.info("custom start")\n',
+            "handle_mdns_results": "def handle_mdns_results(self, results):\n    pass\n",
+        },
+    )
+    gen_result = await _generate(tmp_path, args)
+    assert "error" not in gen_result
+
+    result = await regenerate_plugin_boilerplate(
+        _FakeNuCoreInterface(), {"location": "acme_pool"}, plugin_output_root=str(tmp_path)
+    )
+    assert "error" not in result
+
+    plugin_py = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "def search_mdns(self, service_type=None, subtypes=None, protocol=None):" in plugin_py
+    assert "self.handle_mdns_results(response)" in plugin_py
+    assert "def handle_mdns_results(self, results):" in plugin_py
+

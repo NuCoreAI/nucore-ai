@@ -1,0 +1,19 @@
+{
+  "name": "mdns_search",
+  "description": "The way to look for devices on the local network -- use this instead of run_shell_command with dns-sd, avahi-browse, nmap or similar, which are not equivalent. Searches the eisy's local network over mDNS/Bonjour for a kind of device (a printer, a hub, a speaker) or for everything that's online, and returns what answered: each result has service_type, instance (the device's advertised name), host, port, addresses and txt (its TXT key/value data). Use it to learn what a device really advertises -- its service type, name, address, port and TXT data -- before authoring a plugin that finds it. 'service_types' are full service strings such as '_ipp._tcp' or '_hap._tcp'; give several to cover one device class in a single call (a printer is typically '_ipp._tcp', '_printer._tcp' and '_pdl-datastream._tcp'). Omit 'service_types' to browse everything: it first asks the network which service types exist, then browses each, and also returns 'service_types_seen'. It takes about timeout_seconds (default 6, or 10 when browsing everything; max 20) and only sees the eisy's default network interface. An empty result means nothing answered within the window, not that the device is absent -- sleeping devices answer late, so retry with a longer timeout_seconds before concluding. Results come from this tool's own mDNS query, so the field names are this tool's, not what a plugin's BONJOUR event delivers.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "service_types": {
+        "type": "array",
+        "maxItems": 10,
+        "items": {"type": "string"},
+        "description": "Full service strings to browse, e.g. ['_ipp._tcp', '_printer._tcp']. A trailing '.local' is optional. Omit or leave empty to browse everything."
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "description": "How long to collect answers, in seconds. Defaults to 6, or 10 when browsing everything; clamped to 1-20."
+      }
+    }
+  }
+}

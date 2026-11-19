@@ -615,6 +615,107 @@ async def test_handle_webhook_override_without_webhook_enabled_is_rejected(tmp_p
     assert not (tmp_path / "acme_pool").exists()
 
 
+# --- mdns_enabled wiring ---
+
+MDNS_HANDLER_BODY = "def handle_mdns_results(self, results):\n    self.mdns_seen = results\n"
+
+
+@pytest.mark.asyncio
+async def test_mdns_enabled_adds_search_method_bonjour_forwarding_and_override(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "mdns_enabled": True},
+        override_bodies={"handle_mdns_results": MDNS_HANDLER_BODY},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "self.poly.subscribe(self.poly.BONJOUR, self.__bonjourHandler)" in source
+    assert "def search_mdns(self, service_type=None, subtypes=None, protocol=None):" in source
+    assert "self.poly.bonjour(service_type, subtypes, protocol)" in source
+    assert "self.handle_mdns_results(response)" in source
+    assert "def handle_mdns_results(self, results):" in source
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert "discover" not in entry
+
+
+@pytest.mark.asyncio
+async def test_mdns_enabled_false_keeps_log_only_bonjour_stub(tmp_path):
+    result = await _generate(tmp_path, _base_args())
+    assert "error" not in result
+    source = (tmp_path / "acme_pool" / "plugin.py").read_text()
+    assert "search_mdns" not in source
+    assert "handle_mdns_results" not in source
+    assert 'LOGGER.debug("%s: bonjour: %s", self.name, response)' in source
+
+
+@pytest.mark.asyncio
+async def test_mdns_enabled_without_handle_mdns_results_override_is_rejected(tmp_path):
+    args = _base_args(server_entry={"name": "AcmePool", "mdns_enabled": True}, override_bodies={})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_mdns_results_override_without_mdns_enabled_is_rejected(tmp_path):
+    args = _base_args(override_bodies={"handle_mdns_results": MDNS_HANDLER_BODY})
+    result = await _generate(tmp_path, args)
+    assert "error" in result
+    assert not (tmp_path / "acme_pool").exists()
+
+
+@pytest.mark.asyncio
+async def test_mdns_enabled_does_not_set_store_entry_discover_flag(tmp_path):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "mdns_enabled": True, "discover": False},
+        override_bodies={"handle_mdns_results": MDNS_HANDLER_BODY},
+    )
+    result = await _generate(tmp_path, args)
+    assert "error" not in result
+    entry = json.loads((tmp_path / "acme_pool" / "server_entry.json").read_text())
+    assert entry["discover"] is False
+
+
+class _FakePoly:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def bonjour(self, type, subtypes, protocol):
+        if self.error:
+            raise self.error
+        self.calls.append((type, subtypes, protocol))
+
+
+@pytest.mark.asyncio
+async def test_generated_mdns_methods_behave_against_a_fake_poly(tmp_path, monkeypatch):
+    args = _base_args(
+        server_entry={"name": "AcmePool", "mdns_enabled": True},
+        override_bodies={"handle_mdns_results": MDNS_HANDLER_BODY},
+    )
+    assert "error" not in await _generate(tmp_path, args)
+    ctl = _load_generated_controller(tmp_path, monkeypatch)
+    ctl.poly = _FakePoly()
+    assert ctl.search_mdns("_hue._tcp", ["_sub"], "tcp") is True
+    assert ctl.poly.calls == [("_hue._tcp", ["_sub"], "tcp")]
+    assert ctl.search_mdns() is True
+    assert ctl.poly.calls[-1] == (None, None, None)
+
+    ctl.poly = _FakePoly(error=ValueError("protocol can be either tcp or udp"))
+    assert ctl.search_mdns("_hue._tcp", None, "icmp") is False
+    ctl.poly = _FakePoly(error=TypeError("subtypes must be an array"))
+    assert ctl.search_mdns("_hue._tcp", "not-a-list", None) is False
+
+    handler = ctl._Controller__bonjourHandler
+    handler({"command": "bonjour", "mdns": [{"name": "a"}]})
+    assert ctl.mdns_seen == [{"name": "a"}]
+    handler([{"name": "bare"}])
+    assert ctl.mdns_seen == [{"name": "bare"}]
+    ctl.mdns_seen = "untouched"
+    handler({"command": "something-else", "mdns": [{"name": "x"}]})
+    assert ctl.mdns_seen == "untouched"
+
+
 # --- custom_typed_params wiring ---
 
 VALID_TYPED_PARAMS = [

@@ -112,6 +112,7 @@ async def regenerate_plugin_boilerplate(
     ai_enabled = bool(server_entry_input.get("ai_enabled"))
     file_upload = bool(server_entry_input.get("fileUpload"))
     webhook_enabled = bool(server_entry_input.get("webhook_enabled"))
+    mdns_enabled = bool(server_entry_input.get("mdns_enabled"))
     ai_tool_names = [tool["name"] for tool in (server_entry_input.get("aiTools") or []) if isinstance(tool, dict) and tool.get("name")]
 
     override_bodies = generation_inputs.get("override_bodies") or {}
@@ -121,6 +122,13 @@ async def regenerate_plugin_boilerplate(
             f"'{plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD}' override body -- regenerate once with "
             "generate_plugin_scaffold (confirm_overwrite: true) and author handle_file_upload(self, path) first; "
             "regenerating with a no-op stub would silently sweep every uploaded file into data/processed/"
+        }
+    if mdns_enabled and plugin_skeleton.MDNS_OVERRIDE_METHOD not in override_bodies:
+        return {
+            "error": f"{_GENERATION_INPUTS_FILENAME} at '{location}' has server_entry.mdns_enabled true but no stored "
+            f"'{plugin_skeleton.MDNS_OVERRIDE_METHOD}' override body -- regenerate once with "
+            "generate_plugin_scaffold (confirm_overwrite: true) and author handle_mdns_results(self, results) first; "
+            "regenerating with a no-op stub would silently drop every mDNS/Bonjour response"
         }
     node_classes = generation_inputs.get("node_classes") or {}
     custom_param_docs = generation_inputs.get("custom_param_docs")
@@ -170,6 +178,7 @@ async def regenerate_plugin_boilerplate(
         ai_enabled=ai_enabled,
         file_upload=file_upload,
         webhook_enabled=webhook_enabled,
+        mdns_enabled=mdns_enabled,
         override_bodies=override_bodies,
         ai_tool_names=ai_tool_names,
         controller_command_dispatch=controller_command_dispatch,
@@ -198,6 +207,8 @@ async def regenerate_plugin_boilerplate(
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if mdns_enabled:
+        expected_methods.add(plugin_skeleton.MDNS_OVERRIDE_METHOD)
     if file_upload:
         expected_methods.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
     if custom_typed_params:

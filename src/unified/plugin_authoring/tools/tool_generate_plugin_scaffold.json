@@ -90,7 +90,10 @@
             "type": "object",
             "description": "A one-time, developer-authored seed value handed to the plugin before it has ever run. Rarely needed -- not something a customer edits (that's customParams), not a secret (that's oauth). Omit unless a spec specifically calls for pre-seeding a value the plugin can't derive or ask for itself."
           },
-          "discover": {"type": "boolean"},
+          "discover": {
+            "type": "boolean",
+            "description": "True if the plugin discovers devices (or whatever it's looking for) on demand: adds a 'Discover' button to the UI that triggers a polyglot.DISCOVER event in the plugin. Not an mDNS/Bonjour switch. override_bodies should then include a real 'discover' body. Defaults to false."
+          },
           "fileUpload": {
             "type": "boolean",
             "description": "True only if customers should be able to upload files to this plugin through the host's File Manager (a data/ directory is created, available as self.data_dir). The host does not say which file arrived: an upload only triggers a bare CONFIG event with the full config. The generated wiring therefore sweeps data/ (including subfolders) on every CONFIG, calls handle_file_upload(self, path) once per new file, then moves it to data/processed/ (or data/failed/ if the handler raised) so the next sweep only sees new files. override_bodies must include a 'handle_file_upload' entry when this is true. Defaults to false."
@@ -98,6 +101,10 @@
           "webhook_enabled": {
             "type": "boolean",
             "description": "True only if this plugin needs to receive inbound webhook calls pushed from a third-party service (not merely to call out to one -- most integrations only poll). Requires the eisy/polisy host to be running PG3x with PG3 remote access configured and active on my.isy.io -- a system/installer-level precondition this tool cannot verify or enable; ask rather than assume. Defaults to false. When true, override_bodies must include a 'handle_webhook' entry."
+          },
+          "mdns_enabled": {
+            "type": "boolean",
+            "description": "True only if this plugin must find devices on the local network by mDNS/Bonjour service type (e.g. '_hue._tcp') rather than from a user-entered address or a cloud API. Adds a search_mdns(service_type, subtypes, protocol) method to the Controller (subtypes is a list or None, protocol is 'tcp', 'udp' or None; None means everything). The platform runs the search and answers asynchronously, and the generated wiring forwards each BONJOUR response to handle_mdns_results(self, results). Independent of 'discover' (which only adds a UI Discover button). Defaults to false. When true, override_bodies must include a 'handle_mdns_results' entry."
           },
           "isyAccess": {"type": "boolean", "description": "True if this plugin needs any communication with eisy/ISY itself -- nodes, programs, commands, properties, etc. Defaults to false."},
           "requireEisyui": {"type": "boolean", "description": "True only if this plugin is meaningless outside eisyUI (no standalone configuration path at all). The developer must know this about their own plugin. Defaults to false."},

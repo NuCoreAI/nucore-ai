@@ -389,6 +389,7 @@ def _assemble_plugin_py(
     ai_enabled: bool,
     file_upload: bool,
     webhook_enabled: bool,
+    mdns_enabled: bool = False,
     override_bodies: dict[str, str],
     ai_tool_names: list[str],
     controller_command_dispatch: dict[str, str],
@@ -420,7 +421,9 @@ def _assemble_plugin_py(
             controller_node_name=controller_node_name,
         ),
         "\n",
-        plugin_skeleton.render_private_wiring_methods(authorize=authorize, file_upload=file_upload),
+        plugin_skeleton.render_private_wiring_methods(
+            authorize=authorize, file_upload=file_upload, mdns_enabled=mdns_enabled
+        ),
         "\n    # --- developer-authored overrides (edit freely; regeneration preserves them) ---\n\n",
     ]
     for name in plugin_skeleton.BASE_OVERRIDE_METHODS:
@@ -443,6 +446,11 @@ def _assemble_plugin_py(
     if webhook_enabled:
         body = override_bodies.get(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD) or plugin_skeleton.default_override_method(
             plugin_skeleton.WEBHOOK_OVERRIDE_METHOD
+        )
+        parts.append(_reindent_method(body) + "\n")
+    if mdns_enabled:
+        body = override_bodies.get(plugin_skeleton.MDNS_OVERRIDE_METHOD) or plugin_skeleton.default_override_method(
+            plugin_skeleton.MDNS_OVERRIDE_METHOD
         )
         parts.append(_reindent_method(body) + "\n")
     if file_upload:
@@ -515,6 +523,7 @@ def _validate_override_keys(
     ai_enabled: bool,
     ai_tool_names: list[str],
     webhook_enabled: bool,
+    mdns_enabled: bool = False,
     file_upload_enabled: bool,
     custom_typed_params_enabled: bool,
     new_command_override_names: set[str],
@@ -541,6 +550,8 @@ def _validate_override_keys(
         allowed.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         allowed.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if mdns_enabled:
+        allowed.add(plugin_skeleton.MDNS_OVERRIDE_METHOD)
     if file_upload_enabled:
         allowed.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
     if custom_typed_params_enabled:
@@ -560,6 +571,13 @@ def _validate_override_keys(
             "server_entry.webhook_enabled is true but override_bodies has no "
             f"'{plugin_skeleton.WEBHOOK_OVERRIDE_METHOD}' entry -- a plugin that enables webhooks "
             "must author its own handler for incoming webhook calls"
+        )
+    if mdns_enabled and plugin_skeleton.MDNS_OVERRIDE_METHOD not in override_bodies:
+        return (
+            "server_entry.mdns_enabled is true but override_bodies has no "
+            f"'{plugin_skeleton.MDNS_OVERRIDE_METHOD}' entry -- the platform sends mDNS/Bonjour "
+            "responses back as a BONJOUR event, so a plugin that enables mDNS must author "
+            "handle_mdns_results(self, results) itself to act on them"
         )
     if file_upload_enabled and plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD not in override_bodies:
         return (
@@ -992,6 +1010,7 @@ async def generate_plugin_scaffold(
     ai_enabled = bool(server_entry_input.get("ai_enabled"))
     file_upload = bool(server_entry_input.get("fileUpload"))
     webhook_enabled = bool(server_entry_input.get("webhook_enabled"))
+    mdns_enabled = bool(server_entry_input.get("mdns_enabled"))
     ai_tools = server_entry_input.get("aiTools") or []
     if not isinstance(ai_tools, list):
         return {"error": "server_entry.aiTools must be a list"}
@@ -1009,6 +1028,7 @@ async def generate_plugin_scaffold(
         ai_enabled=ai_enabled,
         ai_tool_names=ai_tool_names,
         webhook_enabled=webhook_enabled,
+        mdns_enabled=mdns_enabled,
         file_upload_enabled=file_upload,
         custom_typed_params_enabled=bool(custom_typed_params),
         new_command_override_names=new_command_override_names,
@@ -1030,6 +1050,7 @@ async def generate_plugin_scaffold(
         ai_enabled=ai_enabled,
         file_upload=file_upload,
         webhook_enabled=webhook_enabled,
+        mdns_enabled=mdns_enabled,
         override_bodies=override_bodies,
         ai_tool_names=ai_tool_names,
         controller_command_dispatch=controller_command_dispatch,
@@ -1112,6 +1133,8 @@ async def generate_plugin_scaffold(
         expected_methods.update(plugin_skeleton.ai_tool_helper_name(n) for n in ai_tool_names)
     if webhook_enabled:
         expected_methods.add(plugin_skeleton.WEBHOOK_OVERRIDE_METHOD)
+    if mdns_enabled:
+        expected_methods.add(plugin_skeleton.MDNS_OVERRIDE_METHOD)
     if file_upload:
         expected_methods.add(plugin_skeleton.FILE_UPLOAD_OVERRIDE_METHOD)
     if custom_typed_params:

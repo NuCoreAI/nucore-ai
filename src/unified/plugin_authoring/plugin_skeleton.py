@@ -42,6 +42,11 @@ AI_REQUEST_OVERRIDE_METHOD = "handle_custom_request"
 # AI_REQUEST_OVERRIDE_METHOD.
 WEBHOOK_OVERRIDE_METHOD = "handle_webhook"
 
+# The one mDNS/Bonjour override, present only when server_entry.mdns_enabled is true -- required
+# for the same reason as WEBHOOK_OVERRIDE_METHOD: a no-op default would silently drop every
+# response the platform sends back after search_mdns()/poly.bonjour() is called.
+MDNS_OVERRIDE_METHOD = "handle_mdns_results"
+
 # The one file-upload override, present only when server_entry.fileUpload is true -- listed
 # separately from BASE_OVERRIDE_METHODS for the same reason as WEBHOOK_OVERRIDE_METHOD, and
 # required for the same reason too: the host's File Manager upload only sends a bare CONFIG
@@ -353,7 +358,7 @@ _UPLOAD_SWEEP_METHODS = '''    def __sweepUploads(self):
 '''
 
 
-def render_private_wiring_methods(*, authorize: bool, file_upload: bool = False) -> str:
+def render_private_wiring_methods(*, authorize: bool, file_upload: bool = False, mdns_enabled: bool = False) -> str:
     """The private (name-mangled, ``__``-prefixed) wiring methods every
     ``subscribe()`` call in ``render_init`` actually points at -- unchanged
     across every generated plugin, so there is nothing LLM-authored here.
@@ -405,7 +410,19 @@ def render_private_wiring_methods(*, authorize: bool, file_upload: bool = False)
     and then moved to ``data/processed/`` (or ``data/failed/`` if the
     handler raised), so the next sweep only ever sees new files. A file
     modified in the last second is deferred to a one-shot re-sweep rather
-    than skipped, since ``CONFIG`` can arrive right as the upload finishes."""
+    than skipped, since ``CONFIG`` can arrive right as the upload finishes.
+
+    When *mdns_enabled* (``server_entry.mdns_enabled``), the plugin gets two
+    things: ``search_mdns(service_type, subtypes, protocol)``, a thin wrapper
+    over ``self.poly.bonjour`` (which validates its arguments), and a
+    ``__bonjourHandler`` that forwards each ``BONJOUR`` event to the required
+    ``handle_mdns_results`` override instead of just logging. The platform runs
+    the search itself and answers asynchronously. ``udi_interface`` publishes
+    the event item as-is without defining its shape; ``ioxplugin``'s template
+    wraps results as ``{"command": "bonjour", "mdns": [...]}``, so a dict
+    carrying an ``"mdns"`` key is unwrapped and anything else is passed
+    through unchanged. Unrelated to ``server_entry.discover``, which only adds
+    a UI Discover button that fires ``DISCOVER``."""
     if authorize:
         methods = [
             '''    def __start(self):
@@ -523,11 +540,41 @@ def render_private_wiring_methods(*, authorize: bool, file_upload: bool = False)
         LOGGER.debug("%s: custom data: %s", self.name, data)
 '''
     )
-    methods.append(
-        '''    def __bonjourHandler(self, response):
+    if mdns_enabled:
+        methods.append(
+            f'''    def __bonjourHandler(self, response):
+        LOGGER.debug("%s: bonjour: %s", self.name, response)
+        try:
+            if isinstance(response, dict):
+                command = response.get("command")
+                if command is not None and command != "bonjour":
+                    return
+                response = response.get("mdns", response)
+            self.{MDNS_OVERRIDE_METHOD}(response)
+        except Exception as ex:
+            LOGGER.error("%s: bonjour handler failed: %s", self.name, ex)
+'''
+        )
+        methods.append(
+            '''    def search_mdns(self, service_type=None, subtypes=None, protocol=None):
+        # Asks the platform to search the local network over mDNS/Bonjour; results arrive
+        # later, asynchronously, in handle_mdns_results(). service_type: str or None;
+        # subtypes: list of str or None; protocol: "tcp", "udp" or None (None = everything).
+        # Returns True once the search was sent, False (and logs) on invalid arguments.
+        try:
+            self.poly.bonjour(service_type, subtypes, protocol)
+            return True
+        except (TypeError, ValueError) as ex:
+            LOGGER.error("%s: invalid mDNS search: %s", self.name, ex)
+            return False
+'''
+        )
+    else:
+        methods.append(
+            '''    def __bonjourHandler(self, response):
         LOGGER.debug("%s: bonjour: %s", self.name, response)
 '''
-    )
+        )
     if authorize:
         methods.append(
             '''    def __runStartOnce(self):

@@ -107,10 +107,10 @@ def test_merged_handlers_union_customer_and_plugin_authoring():
     )
     assert set(customer_dispatch.TOOL_HANDLERS).issubset(merged)
     # Reused customer tools collapse into one entry; the net new count is the
-    # plugin_authoring-only tools (verified directly against the source: 21
+    # plugin_authoring-only tools (verified directly against the source: 22
     # of them without search_web).
     plugin_authoring_only = set(merged) - set(customer_dispatch.TOOL_HANDLERS)
-    assert len(plugin_authoring_only) == 21
+    assert len(plugin_authoring_only) == 22
     assert "search_web" not in merged  # no search engine configured
 
 
