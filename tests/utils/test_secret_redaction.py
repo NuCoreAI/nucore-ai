@@ -55,3 +55,50 @@ def test_two_independently_registered_secrets_are_both_redacted():
     assert "alpha-secret" not in result
     assert "beta-secret" not in result
     assert result.count("[REDACTED]") == 2
+
+
+_FAKE_ANTHROPIC = "sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKE12345678"
+
+
+def test_scrub_catches_an_unregistered_key_by_its_shape():
+    assert _FAKE_ANTHROPIC not in secret_redaction.scrub(f"calling with {_FAKE_ANTHROPIC} now")
+    assert "AIza" not in secret_redaction.scrub("url?key=AIza" + "a" * 35)
+    assert "xai-" not in secret_redaction.scrub("k=xai-" + "b" * 30)
+
+
+def test_scrub_handles_the_escaped_json_a_logger_shows_for_polyglot_custom_parameters():
+    text = 'message {"value": "{\\"api_key\\": \\"hunter2hunter2\\", \\"max_tokens\\": 64000, \\"stream\\": true}"}'
+    scrubbed = secret_redaction.scrub(text)
+    assert "hunter2hunter2" not in scrubbed
+    assert '\\"max_tokens\\": 64000' in scrubbed and '\\"stream\\": true' in scrubbed
+
+
+def test_scrub_handles_dict_reprs_bearer_headers_and_url_parameters():
+    scrubbed = secret_redaction.scrub(
+        "{'api_key': 'abcdef123456'} Authorization: Bearer abcdefghijklmnopqrstuvwx https://h/x?token=abc123&a=1"
+    )
+    assert "abcdef123456" not in scrubbed and "abcdefghijklmnopqrstuvwx" not in scrubbed and "abc123" not in scrubbed
+    assert "a=1" in scrubbed
+
+
+def test_scrub_leaves_ordinary_text_code_and_empty_values_alone():
+    for text in (
+        "max_tokens: 64000 and history_token_budget: 120000",
+        'self.client_secret = self.Parameters["client_secret"]',
+        "client_secret = os.environ.get('X')",
+        '{"api_key": null, "stream": false}',
+        "{'api_key': None}",
+        "nothing secret here",
+    ):
+        assert secret_redaction.scrub(text) == text
+
+
+def test_scrub_is_idempotent_and_also_applies_the_registry():
+    secret_redaction.register_secret("plainsecret")
+    once = secret_redaction.scrub(f'"api_key": "abcdef123456" plainsecret {_FAKE_ANTHROPIC}')
+    assert "plainsecret" not in once and secret_redaction.scrub(once) == once
+
+
+def test_redact_alone_stays_registry_only_so_persisted_history_is_never_rewritten():
+    code = 'client = Client(api_key="not-registered-123456")'
+    assert secret_redaction.redact(code) == code

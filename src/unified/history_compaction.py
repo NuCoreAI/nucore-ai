@@ -7,10 +7,16 @@ when the estimated token size exceeds the budget, and then compacts down to
 about half the budget (hysteresis), so the prefix stays stable until the
 history has regrown by about half the budget.
 
-``maybe_compact_history`` keeps the most recent turns that fit in that
-half-budget (always at least the latest turn) and collapses everything older
-into one summary pseudo-turn via a single LLM call, rather than silently
-dropping it.
+When the caller supplies a *fork_summarizer* (the Claude path),
+``maybe_compact_history`` asks it to summarize the whole live conversation --
+a fork of the real request, so the summarizer reads the already-cached
+history and sees every tool result -- and replaces the entire history with
+that one summary ("simple compaction").
+
+Otherwise it keeps the most recent turns that fit in that half-budget (always
+at least the latest turn) and collapses everything older into one summary
+pseudo-turn via a single standalone LLM call, rather than silently dropping
+it. That is also the fallback when a fork fails.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from typing import Any, Awaitable, Callable
 
 from .adapters import LLMAdapter
 from .models import ConversationHistory, ConversationTurn
+from .usage_stats import record_compaction
 from utils import get_logger
 
 logger = get_logger(__name__)
@@ -31,14 +38,16 @@ _COMPACTED_QUERY_LABEL = "[earlier conversation, summarized]"
 # see maybe_compact_history's own docstring.
 _MIN_BUDGET_NOTICE_DECILE = 5
 
+# Trailing blank line: the UI appends the reply stream to the notice's bubble,
+# so without it the first reply token fuses onto the closing asterisk.
 _COMPACTED_NOTICE = (
     "*Session history was over budget, so I compacted the older turns. You can also do "
-    "this any time with /compact-session.*"
+    "this any time with /compact-session.*\n\n"
 )
 
 
 def _budget_notice(percent: int) -> str:
-    return f"*Session history is at {percent}% of its budget -- you can compact it any time with /compact-session.*"
+    return f"*Session history is at {percent}% of its budget -- you can compact it any time with /compact-session.*\n\n"
 
 _SUMMARY_PROMPT_HEADER = (
     "Summarize the conversation turns below concisely, in plain prose (no headers/bullets "
@@ -49,6 +58,20 @@ _SUMMARY_PROMPT_HEADER = (
     "assistant actually observed, and keep the concrete ones (names, folders, ids, paths, "
     "values) in the summary as established facts, so later turns don't doubt or retract them. "
     "Do not fabricate anything not present below. Keep the summary under {max_words} words.\n\n"
+)
+
+# The final message of a forked summarization request: the live conversation
+# so far, then this. The summary alone replaces the history, so it has to carry
+# everything a later turn will depend on.
+_FORK_INSTRUCTION = (
+    "The conversation will continue from a summary alone -- everything above is about to be "
+    "replaced by it. Write that summary now, in plain prose, and do not call any tools. Cover: "
+    "(1) what the user has asked for and why; (2) what has been done so far and what has not; "
+    "(3) the concrete facts you observed from tool results -- names, folders, files, ids, paths, "
+    "values, errors -- stated as established facts so they are not doubted or retracted later; "
+    "(4) decisions and preferences the user expressed; (5) the current state and the exact next "
+    "step, including any question you just asked the user and what you were about to do. Do not "
+    "invent anything that is not present above. Keep it under {max_words} words."
 )
 
 # What the summarizer sees of a turn's tool calls: enough to keep concrete
@@ -221,6 +244,7 @@ async def maybe_compact_history(
     token_budget: int = _DEFAULT_TOKEN_BUDGET,
     notify: Callable[[str], Awaitable[None]] | None = None,
     force: bool = False,
+    fork_summarizer: Callable[[str, int], Awaitable[str]] | None = None,
 ) -> bool:
     """Collapse the older turns of ``history.turns`` into one summary
     pseudo-turn when the history's estimated token size exceeds
@@ -251,6 +275,13 @@ async def maybe_compact_history(
     Best-effort: an exception here is logged and swallowed, same contract
     as every other hook in this codebase (see AgenticLoop's
     on_raw_response).
+
+    *fork_summarizer*, when given and the history has at least 2 turns, is
+    awaited first with ``(instruction, max_tokens)`` and must return a
+    summary of the whole live conversation (see ``AgenticLoop.summarize``).
+    On success the entire history becomes that one summary turn. If it raises
+    or returns nothing, a warning is logged and the standalone summarizer
+    path below runs as if no fork had been offered.
 
     *force*, when True, skips the token-budget gate -- the manual
     ``/compact-session`` command's path (see
@@ -285,6 +316,33 @@ async def maybe_compact_history(
                     logger.error("unified: history-budget notify hook failed: %s", exc)
         return False
 
+    if fork_summarizer is not None and len(turns) >= 2:
+        max_tokens = _summary_max_tokens(token_budget, llm_config.get("max_tokens"))
+        try:
+            fork_text = await fork_summarizer(
+                _FORK_INSTRUCTION.format(max_words=max(100, int(max_tokens * 0.6))), max_tokens
+            )
+            fork_text = (fork_text or "").strip()
+            if not fork_text:
+                raise ValueError("empty summary")
+        except Exception as exc:
+            logger.warning(f"Forked summarization failed ({exc!r}) -- falling back to the standalone summarizer")
+        else:
+            turn_count = len(turns)
+            history.turns = [ConversationTurn(query=_COMPACTED_QUERY_LABEL, response=fork_text)]
+            logger.info(
+                f"Compacted {turn_count} conversation turns via fork into a summary "
+                f"(~{before_tokens} -> ~{_history_tokens(history.turns)} estimated tokens)"
+            )
+            record_compaction(history.usage, "fork", before_tokens, _history_tokens(history.turns))
+            history.last_budget_notice_decile = 0
+            if notify is not None:
+                try:
+                    await notify(_COMPACTED_NOTICE)
+                except Exception as exc:
+                    logger.error("unified: history-budget notify hook failed: %s", exc)
+            return True
+
     keep_budget = token_budget // 2
     if force:
         keep_budget = min(keep_budget, before_tokens // 2)
@@ -301,6 +359,7 @@ async def maybe_compact_history(
             )
         return False
 
+    compaction_kind = "summary"
     try:
         summary_text = await _summarize_turns(
             to_summarize,
@@ -316,6 +375,7 @@ async def maybe_compact_history(
             f"(~{before_tokens} -> ~{_history_tokens(history.turns)} estimated tokens)"
         )
     except Exception as exc:
+        compaction_kind = "truncated"
         history.turns = keep
         logger.warning(
             f"History summarization failed ({exc!r}) -- fell back to dropping the oldest "
@@ -324,6 +384,7 @@ async def maybe_compact_history(
         )
 
     after_tokens = _history_tokens(history.turns)
+    record_compaction(history.usage, compaction_kind, before_tokens, after_tokens)
     if after_tokens > token_budget:
         logger.warning(
             f"History is still over budget after compaction (~{after_tokens} > ~{token_budget} "

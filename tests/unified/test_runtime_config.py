@@ -58,32 +58,16 @@ def test_reasoning_effort_passed_through_when_set(tmp_path):
     assert cfg["supported_llms"]["unified"]["reasoning_effort"] is None
 
 
-def test_cache_ttl_passed_through_and_defaults_to_none(tmp_path):
-    payload = {
-        "nucore_runtime": {
-            "unified": {"provider": "claude", "model": "m"},
-            "other": {"provider": "claude", "model": "m", "cache_ttl": "1h"},
-        }
-    }
+def test_a_leftover_cache_ttl_key_is_ignored(tmp_path):
+    # The cache TTL is fixed in the Claude adapter now; an old config that
+    # still sets it must keep loading, and the key is no longer carried along.
+    payload = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "cache_ttl": "2h"}}}
     path = tmp_path / "runtime_config.json"
     path.write_text(json.dumps(payload))
+
     cfg = _load_runtime_config(path=str(path), stream_handler=None)
 
-    assert cfg["supported_llms"]["other"]["cache_ttl"] == "1h"
-    assert cfg["supported_llms"]["unified"]["cache_ttl"] is None
-
-
-def test_cache_ttl_rejects_an_unknown_value(tmp_path):
-    payload = {
-        "nucore_runtime": {
-            "unified": {"provider": "claude", "model": "m", "cache_ttl": "2h"},
-        }
-    }
-    path = tmp_path / "runtime_config.json"
-    path.write_text(json.dumps(payload))
-
-    with pytest.raises(ValueError):
-        _load_runtime_config(path=str(path), stream_handler=None)
+    assert "cache_ttl" not in cfg["supported_llms"]["unified"]
 
 
 def test_profile_stream_flag_honored_when_handler_present(tmp_path):
@@ -304,3 +288,16 @@ def test_search_engine_api_key_passed_through_as_placeholder(tmp_path):
     cfg = _load_runtime_config(path=path, stream_handler=None)
 
     assert cfg["search_engine_api_key"] == "${SEARCH_ENGINE_API_KEY}"
+
+
+def test_context_window_is_carried_and_validated(tmp_path):
+    ok = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "context_window": 500000}}}
+    assert _load_runtime_config(path=ok, stream_handler=None)["supported_llms"]["unified"]["context_window"] == 500000
+
+    absent = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m"}}}
+    assert _load_runtime_config(path=absent, stream_handler=None)["supported_llms"]["unified"]["context_window"] is None
+
+    for bad in (0, -5, "big", True):
+        payload = {"nucore_runtime": {"unified": {"provider": "claude", "model": "m", "context_window": bad}}}
+        with pytest.raises(ValueError, match="context_window"):
+            _load_runtime_config(path=payload, stream_handler=None)

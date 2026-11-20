@@ -11,11 +11,13 @@ which makes exactly one tool-call round then a separate call with
 
 from __future__ import annotations
 
+import json
 from typing import Any, Awaitable, Callable
 
 from .adapters import LLMAdapter, ToolCall, ToolSpec
 from .fabrication_guard import detect_completion_claim
 from utils import get_logger, get_prompt_log_manager
+from .history_compaction import estimate_tokens
 
 logger = get_logger(__name__)
 
@@ -135,6 +137,54 @@ class AgenticLoop:
             for tc in canonical
         ]
 
+    @staticmethod
+    def _report_usage(on_usage: Callable[[str, dict[str, Any]], Any] | None, kind: str, usage: dict[str, Any]) -> None:
+        if on_usage is None:
+            return
+        try:
+            on_usage(kind, usage)
+        except Exception as exc:
+            logger.error("unified: on_usage hook failed: %s", exc)
+
+    async def summarize(
+        self,
+        *,
+        system_prompt: str | list[str],
+        history_messages: list[dict[str, Any]],
+        instruction: str,
+        llm_config: dict[str, Any] | None = None,
+        max_tokens: int,
+        on_usage: Callable[[str, dict[str, Any]], Any] | None = None,
+    ) -> str:
+        """A fork of :meth:`run`'s round-1 request: the same system sections,
+        the same history, and this loop's own exported tools -- so a provider
+        with prompt caching reads the already-cached conversation instead of
+        reprocessing it -- followed by one final ``user`` message holding
+        *instruction*. The model is told not to call tools (``tool_choice``
+        none), nothing is streamed to the user, and the reply is capped at
+        *max_tokens*. Returns the reply text (empty string when there is
+        none); any provider error propagates to the caller.
+        """
+        sections = [system_prompt] if isinstance(system_prompt, str) else list(system_prompt)
+        messages: list[dict[str, Any]] = (
+            [{"role": "system", "content": section} for section in sections if section]
+            + list(history_messages)
+            + [{"role": "user", "content": instruction}]
+        )
+        config = dict(llm_config or {})
+        config.pop("stream_handler", None)
+        config["stream"] = False
+        config["max_tokens"] = max_tokens
+        config["cache_messages"] = True
+        config["tool_choice"] = {"type": "none"}
+        response = await self.llm_client.generate(messages=messages, config=config, tools=self._exported_tools)
+        response = response or {}
+        usage = response.get("usage") or {}
+        if usage:
+            await get_prompt_log_manager().write_usage("unified (compaction fork)", usage)
+            self._report_usage(on_usage, "compaction fork", usage)
+        return (response.get("text") or response.get("content") or "").strip()
+
     async def run(
         self,
         *,
@@ -142,8 +192,20 @@ class AgenticLoop:
         history_messages: list[dict[str, Any]],
         user_message: str,
         llm_config: dict[str, Any] | None = None,
+        on_usage: Callable[[str, dict[str, Any]], Any] | None = None,
+        mid_turn_budget: int | None = None,
+        on_mid_turn_over_budget: Callable[[int, int, int], Any] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Run the loop for one user turn.
+
+        *on_usage*, when given, is called with ``("round", usage)`` after each
+        model request. *mid_turn_budget*/*on_mid_turn_over_budget*: observation
+        only -- before each round after the first, if the conversation sent so
+        far (history plus this turn's messages, system sections excluded) is
+        estimated above the budget, the callback gets ``(round, tokens,
+        budget)``; it fires again only when the estimate passes the next
+        multiple of the budget. Nothing is compacted or changed. Both hooks
+        are best-effort: an exception is logged and never breaks the turn.
 
         ``system_prompt`` may be a list of sections, ordered least-to-most
         volatile (see prompt_builder.build_system_prompt_sections); each
@@ -179,8 +241,21 @@ class AgenticLoop:
         # text the customer ends up seeing (see _FABRICATION_RETRY_NOTICE).
         pending_notice = ""
 
+        mid_turn_crossings = 0
         for iteration in range(self.max_iterations):
             intent_name = f"unified (round {iteration + 1})"
+            if iteration > 0 and mid_turn_budget and on_mid_turn_over_budget is not None:
+                try:
+                    in_flight = estimate_tokens(
+                        json.dumps([m for m in messages if m.get("role") != "system"], ensure_ascii=False, default=str)
+                    )
+                    if in_flight > mid_turn_budget * (mid_turn_crossings + 1):
+                        mid_turn_crossings = in_flight // mid_turn_budget
+                        result = on_mid_turn_over_budget(iteration + 1, in_flight, mid_turn_budget)
+                        if hasattr(result, "__await__"):
+                            await result
+                except Exception as exc:
+                    logger.error("unified: mid-turn budget hook failed: %s", exc)
             await get_prompt_log_manager().write(intent_name, messages, conversation_id=conversation_id)
             round_config = dict(llm_config or {})
             # Opt into ClaudeAdapter.generate()'s trailing conversation cache
@@ -206,6 +281,7 @@ class AgenticLoop:
             usage = raw_response.get("usage") or {}
             if usage:
                 await get_prompt_log_manager().write_usage(intent_name, usage)
+                self._report_usage(on_usage, "round", usage)
             stop_reason = raw_response.get("stop_reason")
             if stop_reason:
                 logger.info("unified: round %d stop_reason=%s", iteration + 1, stop_reason)

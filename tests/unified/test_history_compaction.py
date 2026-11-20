@@ -578,3 +578,109 @@ def test_summary_input_for_a_turn_without_a_rich_transcript_is_unchanged():
     turn = ConversationTurn(query="q", response="r")
 
     assert _render_turns_for_summary([turn]) == "User: q\nAssistant: r"
+
+
+# --- forked summarization: the whole live conversation becomes one summary ---
+
+
+class _Fork:
+    def __init__(self, text="the fork summary", raises=None):
+        self.text = text
+        self.raises = raises
+        self.calls: list[tuple[str, int]] = []
+
+    async def __call__(self, instruction, max_tokens):
+        self.calls.append((instruction, max_tokens))
+        if self.raises is not None:
+            raise self.raises
+        return self.text
+
+
+@pytest.mark.asyncio
+async def test_fork_summary_replaces_the_entire_history_and_skips_the_standalone_summarizer():
+    history = _history_with_turns(8, body=_big_body(2000))
+    llm = _FakeLLMClient()
+    fork = _Fork()
+    notices: list[str] = []
+
+    async def notify(text):
+        notices.append(text)
+
+    history.last_budget_notice_decile = 9
+    compacted = await maybe_compact_history(
+        history, llm_client=llm, llm_config={}, token_budget=100, notify=notify, fork_summarizer=fork
+    )
+
+    assert compacted is True
+    assert [(t.query, t.response, t.messages) for t in history.turns] == [(_COMPACTED_QUERY_LABEL, "the fork summary", [])]
+    assert llm.calls == []  # the blind summarizer never ran
+    assert len(fork.calls) == 1
+    instruction, max_tokens = fork.calls[0]
+    assert "do not call any tools" in instruction and "words" in instruction
+    assert max_tokens == max(512, 100 // 4)
+    assert notices == [_COMPACTED_NOTICE]
+    assert history.last_budget_notice_decile == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fork", [_Fork(raises=RuntimeError("400")), _Fork(text="   ")])
+async def test_a_failed_or_empty_fork_falls_back_to_the_standalone_summarizer(fork):
+    history = _history_with_turns(8, body=_big_body(2000))
+    llm = _FakeLLMClient(text="blind summary")
+
+    compacted = await maybe_compact_history(
+        history,
+        llm_client=llm,
+        llm_config={},
+        token_budget=_budget_keeping(history, 3),
+        fork_summarizer=fork,
+    )
+
+    assert compacted is True
+    assert len(fork.calls) == 1 and len(llm.calls) == 1
+    assert history.turns[0].response == "blind summary"
+    assert len(history.turns) == 4  # keep-tail path: summary + newest 3
+
+
+@pytest.mark.asyncio
+async def test_fork_is_not_attempted_for_a_single_turn_or_when_under_budget():
+    one = _history_with_turns(1, body=_big_body(5000))
+    fork = _Fork()
+    assert await maybe_compact_history(one, llm_client=_FakeLLMClient(), llm_config={}, token_budget=100, fork_summarizer=fork) is False
+
+    small = _history_with_turns(4, body="short")
+    assert await maybe_compact_history(small, llm_client=_FakeLLMClient(), llm_config={}, token_budget=10_000, fork_summarizer=fork) is False
+
+    assert fork.calls == []
+
+
+@pytest.mark.asyncio
+async def test_force_uses_the_fork_even_under_budget():
+    history = _history_with_turns(3, body="short")
+    fork = _Fork(text="forced fork summary")
+
+    compacted = await maybe_compact_history(
+        history, llm_client=_FakeLLMClient(), llm_config={}, token_budget=10_000_000, force=True, fork_summarizer=fork
+    )
+
+    assert compacted is True
+    assert [t.response for t in history.turns] == ["forced fork summary"]
+
+
+def test_notices_end_with_a_blank_line_so_the_reply_does_not_fuse_onto_them():
+    assert _budget_notice(60).endswith("*\n\n")
+    assert _COMPACTED_NOTICE.endswith("*\n\n")
+
+
+@pytest.mark.asyncio
+async def test_compactions_are_recorded_in_the_sessions_usage_stats():
+    history = _history_with_turns(8, body=_big_body(2000))
+    await maybe_compact_history(
+        history, llm_client=_FakeLLMClient(), llm_config={}, token_budget=100, fork_summarizer=_Fork()
+    )
+    event = history.usage["compactions"][-1]
+    assert event["kind"] == "fork" and event["before"] > event["after"]
+
+    history = _history_with_turns(8, body=_big_body(2000))
+    await maybe_compact_history(history, llm_client=_FakeLLMClient(), llm_config={}, token_budget=100)
+    assert history.usage["compactions"][-1]["kind"] == "summary"

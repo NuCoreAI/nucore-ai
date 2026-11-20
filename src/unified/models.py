@@ -214,6 +214,9 @@ class ConversationHistory:
                           field-by-field and never restores this one, so a
                           reload (process restart, session switch) always
                           starts back at 0 regardless of what was serialized.
+        usage:            Token-usage accounting for this session (see
+                          usage_stats.py) -- unlike the notice decile, saved
+                          and restored with the session.
     """
 
     PENDING_TTL_TURNS: ClassVar[int] = 3
@@ -230,6 +233,7 @@ class ConversationHistory:
     pending_failed: bool = False
     pending_turns: int = 0
     last_budget_notice_decile: int = 0
+    usage: dict[str, Any] = field(default_factory=dict)
 
     def append(
         self,

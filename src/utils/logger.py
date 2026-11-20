@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from .secret_redaction import redact
+from .secret_redaction import scrub
 
 
 class RedactingFilter(logging.Filter):
@@ -29,8 +29,41 @@ class RedactingFilter(logging.Filter):
         if record.args:
             record.msg = record.getMessage()
             record.args = ()
-        record.msg = redact(str(record.msg))
+        record.msg = scrub(str(record.msg))
         return True
+
+
+_FACTORY_MARK = "_nucore_redacting_factory"
+
+
+def install_redacting_record_factory() -> None:
+    """Scrub secrets out of every log record at creation, process-wide.
+
+    ``RedactingFilter`` only protects the handlers this module builds. A
+    third-party library that installs its own handler -- udi_interface's
+    PolyLogger writes the plugin's ``debug.log`` and logs every Polyglot
+    message it receives, API keys in the custom parameters included -- is out
+    of its reach. The record factory sits upstream of every logger and handler,
+    including ones added later, so nothing has to be attached to them.
+    Idempotent; a failure to scrub a record leaves it unchanged."""
+    current = logging.getLogRecordFactory()
+    if getattr(current, _FACTORY_MARK, False):
+        return
+
+    def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = current(*args, **kwargs)
+        try:
+            message = record.getMessage() if record.args else str(record.msg)
+            scrubbed = scrub(message)
+            if scrubbed != message:
+                record.msg = scrubbed
+                record.args = ()
+        except Exception:
+            pass
+        return record
+
+    setattr(factory, _FACTORY_MARK, True)
+    logging.setLogRecordFactory(factory)
 
 
 @dataclass(frozen=True)
@@ -198,6 +231,7 @@ def configure_logging(
         backup_count=backup_count,
     )
 
+    install_redacting_record_factory()
     root = logging.getLogger()
     root.setLevel(_normalize_level(config.level))
 
@@ -282,3 +316,6 @@ def get_logger(name: str | None = None) -> logging.Logger:
 
 def bind_logger(logger: logging.Logger, **context: Any) -> ContextLoggerAdapter:
     return ContextLoggerAdapter(logger, context)
+
+
+install_redacting_record_factory()

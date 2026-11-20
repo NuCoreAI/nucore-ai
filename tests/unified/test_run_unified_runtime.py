@@ -492,7 +492,7 @@ class _FakeRuntime:
     def is_tool_set_enabled(self, tool_set_name: str) -> bool:
         return True
 
-    async def compact_session(self, user_id: str, tool_set: str) -> bool:
+    async def compact_session(self, user_id: str, tool_set: str, connection_context=None) -> bool:
         self.compact_session_calls.append((user_id, tool_set))
         return self._compact_session_result
 
@@ -1220,3 +1220,25 @@ async def test_no_native_and_no_fallback_leaves_web_search_unavailable(monkeypat
     # (no native, no fallback engine), so can_ask_for_urls() is True
     # immediately and the mocked fetch itself succeeds.
     assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_session_stats_command_replies_with_the_runtimes_report(tmp_path, capsys):
+    store = SessionStore(persist_dir=tmp_path)
+    await store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    runtime = _FakeRuntime(session_store=store)
+    seen: list = []
+
+    async def session_stats(user_id, tool_set, connection_context=None):
+        seen.append((user_id, tool_set, connection_context is not None))
+        return "REPORT BODY"
+
+    runtime.session_stats = session_stats
+    ctx = EisyUIContext(session_store=store)
+    ctx.process_message(json.dumps({"type": "context", "context": {"user": {"username": "a@example.com"}}}))
+
+    await _run_once(runtime, "/session-stats", ctx, session_id="fallback")
+
+    assert "REPORT BODY" in capsys.readouterr().out
+    assert seen == [("a@example.com", "unified", True)]
+    assert runtime.calls == []  # never reached the model

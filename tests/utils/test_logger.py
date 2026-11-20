@@ -157,3 +157,40 @@ def test_unregistered_text_passes_through_untouched(tmp_path):
         handler.flush()
 
     assert "nothing secret here" in log_file.read_text()
+
+
+def test_a_third_party_handler_added_later_still_never_sees_a_secret():
+    # udi_interface's PolyLogger writes debug.log through a handler this
+    # module never builds; the record factory scrubs upstream of it.
+    import io
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    third_party = logging.getLogger("udi_interface.interface_test")
+    third_party.setLevel(logging.DEBUG)
+    third_party.propagate = False
+    third_party.addHandler(handler)
+    try:
+        third_party.debug("PROCESS getAll message %s", '{"value": "{\\"api_key\\": \\"sk-ant-api03-FAKEFAKEFAKEFAKEFAKE1234\\"}"}')
+        third_party.debug("plain secret sk-ant-api03-FAKEFAKEFAKEFAKEFAKE1234 in the message")
+    finally:
+        third_party.removeHandler(handler)
+
+    output = stream.getvalue()
+    assert "FAKEFAKE" not in output
+    assert output.count("[REDACTED]") == 2
+
+
+def test_installing_the_record_factory_twice_does_not_stack_it():
+    from utils.logger import install_redacting_record_factory
+
+    install_redacting_record_factory()
+    first = logging.getLogRecordFactory()
+    install_redacting_record_factory()
+    assert logging.getLogRecordFactory() is first
+
+
+def test_a_record_that_cannot_be_formatted_passes_through_without_raising():
+    logger = logging.getLogger("nucore.factory_test")
+    record = logger.makeRecord("n", logging.INFO, __file__, 1, "bad %d format", ("x",), None)
+    assert record.msg == "bad %d format"

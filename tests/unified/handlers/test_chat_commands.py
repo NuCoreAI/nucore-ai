@@ -20,6 +20,7 @@ _EXPECTED_SESSION_COMMANDS = {
     "/delete-session",
     "/delete-all-sessions",
     "/compact-session",
+    "/session-stats",
 }
 
 

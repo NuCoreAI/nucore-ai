@@ -22,6 +22,9 @@ _TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "tools"
 _PLUGIN_AUTHORING_TOOLS_DIR = Path(__file__).parents[3] / "src" / "unified" / "plugin_authoring" / "tools"
 
 
+_ONE_HOUR = {"type": "ephemeral", "ttl": "1h"}
+
+
 def _adapter() -> ClaudeAdapter:
     return ClaudeAdapter(api_key="test-key")
 
@@ -42,7 +45,7 @@ def test_export_tools_marks_only_the_last_tool_as_a_cache_breakpoint():
 
     assert "cache_control" not in tools[0]
     assert "cache_control" not in tools[1]
-    assert tools[2]["cache_control"] == {"type": "ephemeral"}
+    assert tools[2]["cache_control"] == _ONE_HOUR
     # Content itself must be untouched by the mutation.
     assert tools[2]["name"] == "c" and tools[2]["description"] == "third"
 
@@ -483,7 +486,7 @@ async def test_each_system_message_becomes_its_own_cached_block(config):
     # The prompt builder sends [static, volatile tail]; as one joined block
     # the tail changing every turn busted the cache for the whole system
     # prompt on every new conversation. Each section gets its own block and
-    # breakpoint; 5m (the default) emits no ttl key at all.
+    # breakpoint, all at the fixed 1-hour TTL (a leftover cache_ttl is ignored).
     adapter = _adapter()
     calls: list = []
     adapter._client.beta.messages.stream = _capture_stream(calls)
@@ -491,28 +494,38 @@ async def test_each_system_message_becomes_its_own_cached_block(config):
     await adapter.generate(messages=_TWO_SECTION_MESSAGES, config=config)
 
     assert calls[0]["system"] == [
-        {"type": "text", "text": "static", "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": "tail", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "static", "cache_control": _ONE_HOUR},
+        {"type": "text", "text": "tail", "cache_control": _ONE_HOUR},
     ]
 
 
 @pytest.mark.asyncio
-async def test_cache_ttl_applies_to_tools_and_static_blocks_but_not_the_volatile_tail():
-    # Longer TTLs must precede shorter ones in the request, so a configured
-    # 1h goes on the tools and the static block(s); the tail -- which changes
-    # every turn anyway -- keeps the default. The exported tools list is
-    # shared across rounds and must not be mutated in place.
+async def test_every_breakpoint_uses_the_one_hour_ttl():
+    # Tools, every system block (the volatile tail included) and the
+    # conversation all carry the same TTL, so the API's longer-TTLs-first
+    # ordering rule can't be violated. The exported tools list is shared
+    # across rounds and must not be mutated in place.
     adapter = _adapter()
     calls: list = []
     adapter._client.beta.messages.stream = _capture_stream(calls)
     tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
 
-    await adapter.generate(messages=_TWO_SECTION_MESSAGES, config={"cache_ttl": "1h"}, tools=tools)
+    await adapter.generate(messages=_TWO_SECTION_MESSAGES, config={"cache_messages": True}, tools=tools)
 
-    assert calls[0]["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert tools[-1]["cache_control"] == {"type": "ephemeral"}
-    assert calls[0]["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert calls[0]["system"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert calls[0]["tools"][-1]["cache_control"] == _ONE_HOUR
+    assert [b["cache_control"] for b in calls[0]["system"]] == [_ONE_HOUR, _ONE_HOUR]
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == _ONE_HOUR
+
+
+@pytest.mark.asyncio
+async def test_a_leftover_cache_ttl_config_key_changes_nothing():
+    adapter = _adapter()
+    calls: list = []
+    adapter._client.beta.messages.stream = _capture_stream(calls)
+
+    await adapter.generate(messages=_TWO_SECTION_MESSAGES, config={"cache_ttl": "5m"})
+
+    assert [b["cache_control"] for b in calls[0]["system"]] == [_ONE_HOUR, _ONE_HOUR]
 
 
 @pytest.mark.asyncio
@@ -546,7 +559,7 @@ async def test_cache_messages_marks_last_text_message_when_budget_allows():
     await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
 
     assert calls[0]["messages"][-1]["content"] == [
-        {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+        {"type": "text", "text": "hi", "cache_control": _ONE_HOUR}
     ]
     # The caller's own list/dicts must be untouched -- they're reused across
     # every round of this same turn by AgenticLoop.run.
@@ -579,7 +592,7 @@ async def test_cache_messages_marks_last_block_of_list_content():
         "type": "tool_result",
         "tool_use_id": "t2",
         "content": "ok2",
-        "cache_control": {"type": "ephemeral"},
+        "cache_control": _ONE_HOUR,
     }
     # Original list/dict untouched.
     assert "cache_control" not in messages[-1]["content"][-1]
@@ -602,7 +615,7 @@ async def test_cache_messages_drops_volatile_tail_breakpoint_when_budget_is_exha
     sent = calls[0]
     assert ["cache_control" in b for b in sent["system"]] == [False, False, True, True, False]
     assert "cache_control" in sent["tools"][-1]
-    assert sent["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert sent["messages"][-1]["content"][-1]["cache_control"] == _ONE_HOUR
     total = sum("cache_control" in b for b in sent["system"]) + 1 + 1
     assert total == 4
 
@@ -619,32 +632,31 @@ async def test_cache_messages_keeps_every_system_breakpoint_when_budget_allows()
     await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
 
     assert ["cache_control" in b for b in calls[0]["system"]] == [True, True]
-    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == _ONE_HOUR
 
 
 @pytest.mark.asyncio
-async def test_cache_messages_dropped_tail_leaves_configured_ttl_on_remaining_system_blocks():
+async def test_cache_messages_dropped_tail_leaves_the_remaining_system_blocks_at_one_hour():
     adapter = _adapter()
     calls: list = []
     adapter._client.beta.messages.stream = _capture_stream(calls)
     tools = adapter.export_tools([ToolSpec(name="a", description="d", json_schema={})])
     messages = [{"role": "system", "content": f"s{i}"} for i in range(3)] + [{"role": "user", "content": "hi"}]
 
-    await adapter.generate(messages=messages, config={"cache_messages": True, "cache_ttl": "1h"}, tools=tools)
+    await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
 
     system = calls[0]["system"]
-    assert system[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert system[1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert system[0]["cache_control"] == _ONE_HOUR
+    assert system[1]["cache_control"] == _ONE_HOUR
     assert "cache_control" not in system[2]
-    # Longer TTLs must precede shorter ones -- the conversation breakpoint is 5m.
-    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == _ONE_HOUR
 
 
 @pytest.mark.asyncio
 async def test_plugin_authoring_prompt_leaves_room_for_the_conversation_breakpoint(monkeypatch):
     # Regression: identity text once became its own system section, which
-    # (with installed-plugins + tools) spent all 4 breakpoints and silently
-    # disabled conversation caching for plugin_authoring.
+    # (with a separate plugins section + tools) spent all 4 breakpoints and
+    # silently disabled conversation caching for plugin_authoring.
     from unified import host_identity
     from unified.plugin_authoring.prompt import prompt_builder
 
@@ -658,7 +670,7 @@ async def test_plugin_authoring_prompt_leaves_room_for_the_conversation_breakpoi
             return {"successful": True, "data": [{"name": "P", "profileNum": 1, "state": "running"}]}
 
     sections = await prompt_builder.build_system_prompt_sections(_Nucore())
-    assert len(sections) == 2 and "IDENTITY" in sections[0]
+    assert len(sections) == 1 and "IDENTITY" in sections[0]
 
     adapter = _adapter()
     calls: list = []
@@ -668,8 +680,8 @@ async def test_plugin_authoring_prompt_leaves_room_for_the_conversation_breakpoi
 
     await adapter.generate(messages=messages, config={"cache_messages": True}, tools=tools)
 
-    assert ["cache_control" in b for b in calls[0]["system"]] == [True, True]
-    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert ["cache_control" in b for b in calls[0]["system"]] == [True]
+    assert calls[0]["messages"][-1]["content"][-1]["cache_control"] == _ONE_HOUR
 
 
 @pytest.mark.asyncio

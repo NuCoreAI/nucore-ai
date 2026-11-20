@@ -31,7 +31,7 @@ class _FakeLoop:
     def __init__(self, **kwargs):
         _FakeLoop.captured_init_kwargs = kwargs
 
-    async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+    async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
         _FakeLoop.captured_llm_config = llm_config
         _FakeLoop.captured_system_prompt = system_prompt
         return "ok", []
@@ -311,7 +311,7 @@ class _RecordingLoop:
     def __init__(self, **kwargs):
         pass
 
-    async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+    async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
         _RecordingLoop.calls.append({"user_message": user_message, "history_messages": list(history_messages)})
         if user_message == "first":
             # Yields control mid-turn, before this call's own
@@ -360,7 +360,7 @@ class _RichOnceLoop:
     def __init__(self, **kwargs):
         pass
 
-    async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+    async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
         _RichOnceLoop.calls.append({"user_message": user_message, "history_messages": list(history_messages)})
         if len(_RichOnceLoop.calls) == 1:
             new_messages = [
@@ -427,7 +427,7 @@ async def test_persisted_rich_messages_keep_the_exact_wrapped_content_actually_s
         def __init__(self, **kwargs):
             pass
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             return "answer", [
                 {"role": "user", "content": user_message},
                 {"role": "assistant", "content": "answer"},
@@ -573,7 +573,7 @@ async def test_handle_query_records_the_switched_to_tool_set_on_connection_conte
         def __init__(self, **kwargs):
             self._dispatch = kwargs["dispatch"]
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             _SwitchThenBoomLoop.calls += 1
             if _SwitchThenBoomLoop.calls == 1:
                 result = await self._dispatch("switch_to_developer_mode", {})
@@ -921,7 +921,7 @@ async def test_handle_query_chains_to_the_other_tool_set_on_switch_request():
         def __init__(self, **kwargs):
             self._dispatch = kwargs["dispatch"]
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             _SwitchOnceLoop.calls += 1
             if _SwitchOnceLoop.calls == 1:
                 result = await self._dispatch("switch_to_developer_mode", {})
@@ -977,7 +977,7 @@ async def test_handoff_summary_is_prepended_to_the_new_tool_sets_user_message():
         def __init__(self, **kwargs):
             self._dispatch = kwargs["dispatch"]
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             _SwitchOnceLoop.calls += 1
             captured_user_messages.append(user_message)
             if _SwitchOnceLoop.calls == 1:
@@ -1097,7 +1097,7 @@ async def test_mid_turn_switch_persists_into_the_switched_to_tool_sets_own_saved
         def __init__(self, **kwargs):
             self._dispatch = kwargs["dispatch"]
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             _SwitchOnceLoop.calls += 1
             if _SwitchOnceLoop.calls == 1:
                 result = await self._dispatch("switch_to_developer_mode", {})
@@ -1221,7 +1221,7 @@ async def test_saved_turn_never_stores_a_web_search_request_that_got_no_result(m
         def __init__(self, **kwargs):
             pass
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             return "answer", [
                 {"role": "user", "content": user_message},
                 {"role": "assistant", "content": [_search_use("srv_1"), {"type": "tool_use", "id": "t1", "name": "n", "input": {}}]},
@@ -1253,7 +1253,7 @@ async def test_saved_turn_keeps_a_search_request_and_result_split_across_message
         def __init__(self, **kwargs):
             pass
 
-        async def run(self, *, system_prompt, history_messages, user_message, llm_config):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **_):
             return "done", [{"role": "user", "content": user_message}, *paired[1:]]
 
     monkeypatch.setattr(runtime_module, "AgenticLoop", _PairedLoop)
@@ -1262,3 +1262,206 @@ async def test_saved_turn_keeps_a_search_request_and_result_split_across_message
     await runtime.handle_query("q", session_id="paired-session")
 
     assert runtime.session_store.get("paired-session::unified").turns[-1].messages == paired
+
+
+# --- compaction by forking the live request (Claude only) ---
+
+
+def _claude_config() -> dict:
+    return {"supported_llms": {"unified": {"provider": "claude", "model": "m"}}}
+
+
+@pytest.mark.asyncio
+async def test_claude_profile_hands_compaction_a_fork_summarizer_and_builds_prompt_and_loop_once(monkeypatch):
+    captured: dict = {}
+    builds = {"prompt": 0, "loop": 0}
+
+    async def _fake_maybe_compact_history(history, **kwargs):
+        captured.update(kwargs)
+        return False
+
+    async def counting_prompt_builder(nucore_interface):
+        builds["prompt"] += 1
+        return ["static", "tail"]
+
+    class _CountingLoop(_FakeLoop):
+        def __init__(self, **kwargs):
+            builds["loop"] += 1
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(runtime_module, "maybe_compact_history", _fake_maybe_compact_history)
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _CountingLoop)
+    monkeypatch.setattr(runtime_module, "build_system_prompt_sections", counting_prompt_builder)
+
+    await _runtime(_claude_config()).handle_query("hi")
+
+    assert callable(captured["fork_summarizer"])
+    assert builds == {"prompt": 1, "loop": 1}  # built early for the fork, then reused for the turn
+
+
+@pytest.mark.asyncio
+async def test_the_fork_summarizer_calls_loop_summarize_with_the_turns_prompt_and_pre_compaction_history(monkeypatch):
+    summarize_calls: list[dict] = []
+    history_seen_by_compaction: list = []
+
+    class _ForkableLoop(_FakeLoop):
+        async def summarize(self, **kwargs):
+            summarize_calls.append(kwargs)
+            return "fork text"
+
+    async def _compact(history, **kwargs):
+        history_seen_by_compaction.append(len(history.turns))
+        assert await kwargs["fork_summarizer"]("INSTRUCTION", 321) == "fork text"
+        return True
+
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _ForkableLoop)
+    monkeypatch.setattr(runtime_module, "maybe_compact_history", _compact)
+    runtime = _runtime(_claude_config())
+    session_num = await runtime.session_store.resolve_current_session_id("s", "unified", durable=False)
+    history = await runtime.session_store.get_or_load("s", "unified", session_num, durable=False)
+    history.append("earlier q", "earlier a")
+
+    await runtime.handle_query("hi", session_id="s")
+
+    call = summarize_calls[0]
+    assert call["system_prompt"] == ["static", "tail"]
+    assert call["instruction"] == "INSTRUCTION" and call["max_tokens"] == 321
+    assert call["history_messages"] == [
+        {"role": "user", "content": "earlier q"},
+        {"role": "assistant", "content": "earlier a"},
+    ]
+    assert call["llm_config"]["session_id"].startswith("s::unified")
+
+
+@pytest.mark.asyncio
+async def test_non_claude_profile_gets_no_fork_summarizer(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_maybe_compact_history(history, **kwargs):
+        captured.update(kwargs)
+        return False
+
+    monkeypatch.setattr(runtime_module, "maybe_compact_history", _fake_maybe_compact_history)
+    config = {"supported_llms": {"unified": {"provider": "openai", "model": "m"}}}
+
+    await _runtime(config).handle_query("hi")
+
+    assert captured["fork_summarizer"] is None
+
+
+@pytest.mark.asyncio
+async def test_compact_session_passes_a_fork_summarizer_for_claude_and_the_connection_context(monkeypatch):
+    captured: dict = {}
+    contexts: list = []
+
+    async def _fake_maybe_compact_history(history, **kwargs):
+        captured.update(kwargs)
+        return False
+
+    monkeypatch.setattr(runtime_module, "maybe_compact_history", _fake_maybe_compact_history)
+    runtime = _runtime(_claude_config())
+    original_build_loop = runtime._build_loop
+
+    async def spying_build_loop(tool_set_name, connection_context, query):
+        contexts.append(connection_context)
+        return await original_build_loop(tool_set_name, connection_context, query)
+
+    runtime._build_loop = spying_build_loop
+
+    await runtime.compact_session("a@example.com", "unified", connection_context="ctx")
+
+    assert captured["force"] is True and callable(captured["fork_summarizer"])
+    assert contexts == ["ctx"]
+
+
+@pytest.mark.asyncio
+async def test_compact_session_falls_back_to_the_standalone_summarizer_when_the_fork_cant_be_prepared(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_maybe_compact_history(history, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(runtime_module, "maybe_compact_history", _fake_maybe_compact_history)
+    runtime = _runtime(_claude_config())
+
+    async def boom(*args, **kwargs):
+        raise AttributeError("no connection context")
+
+    runtime._prepare_fork_summarizer = boom
+
+    assert await runtime.compact_session("a@example.com", "unified") is True
+    assert captured["fork_summarizer"] is None
+
+
+@pytest.mark.asyncio
+async def test_handle_query_hands_the_loop_usage_and_mid_turn_hooks(monkeypatch):
+    seen: dict = {}
+
+    class _Loop(_FakeLoop):
+        async def run(self, *, system_prompt, history_messages, user_message, llm_config, **hooks):
+            seen.update(hooks)
+            hooks["on_usage"]("round", {"input_tokens": 7, "output_tokens": 3})
+            return "ok", []
+
+    monkeypatch.setattr(runtime_module, "AgenticLoop", _Loop)
+    runtime = _runtime({"nucore_runtime": {"unified": {"history_token_budget": 1234}}})
+    await runtime.handle_query("hi", session_id="s")
+
+    assert seen["mid_turn_budget"] == 2468
+    history = await runtime.session_store.get_or_load("s", "unified", None, durable=False)
+    assert history.usage["requests"] == 1 and history.usage["input_total"] == 7
+
+
+@pytest.mark.asyncio
+async def test_mid_turn_over_budget_is_logged_and_counted_without_compacting(monkeypatch):
+    flags: list = []
+
+    class _Manager:
+        async def write_flag(self, intent, kind, detail, *, conversation_id=None):
+            flags.append((intent, kind, detail, conversation_id))
+
+    monkeypatch.setattr(runtime_module, "get_prompt_log_manager", lambda: _Manager())
+    runtime = _runtime()
+    history = SimpleNamespace(usage={})
+
+    await runtime._note_mid_turn_over_budget(history, "s::unified", 5, 300_000, 240_000)
+
+    assert history.usage["mid_turn_events"] == 1
+    assert flags == [("unified (round 5)", "mid_turn_over_budget", {"tokens": 300_000, "budget": 240_000}, "s::unified")]
+
+
+@pytest.mark.asyncio
+async def test_session_stats_reports_the_composition_and_makes_no_model_call():
+    runtime = _runtime({"supported_llms": {"unified": {"provider": "claude", "model": "claude-sonnet-5", "max_tokens": 9000}}})
+    session_num = await runtime.session_store.resolve_current_session_id("a@example.com", "unified", durable=True)
+    history = await runtime.session_store.get_or_load("a@example.com", "unified", session_num, durable=True)
+    history.append("q", "a" * 300)
+    from unified.usage_stats import record_request
+
+    record_request(history.usage, "round", {"input_tokens": 2, "cache_read_input_tokens": 500, "output_tokens": 4}, "claude-sonnet-5")
+
+    async def fake_build_loop(tool_set, connection_context, query):
+        return SimpleNamespace(_exported_tools=[{"name": "t", "description": "d" * 90}])
+
+    runtime._build_loop = fake_build_loop
+
+    report = await runtime.session_stats("a@example.com", "unified")
+
+    assert "claude-sonnet-5" in report and "tools (1)" in report and "system section 1" in report
+    assert "of 1,000,000" in report and "Reply reserve (`max_tokens`):** 9,000" in report
+    assert "**Last request:** 502 in" in report
+
+
+@pytest.mark.asyncio
+async def test_session_stats_still_reports_when_the_prompt_cannot_be_rebuilt():
+    runtime = _runtime()
+
+    async def broken_build_loop(tool_set, connection_context, query):
+        raise RuntimeError("no connection context")
+
+    runtime._build_loop = broken_build_loop
+
+    report = await runtime.session_stats("a@example.com", "unified")
+
+    assert "**Session stats**" in report and "tools (0)" in report

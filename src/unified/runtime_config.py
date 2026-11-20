@@ -75,10 +75,6 @@ def _coerce_runtime_profile(
         raise ValueError(f"nucore_runtime.{profile_name} must define a non-empty 'provider'")
 
     capabilities = _PROVIDER_CAPABILITIES.get(provider, {})
-    cache_ttl = payload.get("cache_ttl")
-    if cache_ttl is not None and cache_ttl not in ("5m", "1h"):
-        raise ValueError(f'nucore_runtime.{profile_name}.cache_ttl must be "5m" or "1h", got {cache_ttl!r}')
-
     fabrication_guard_mode = payload.get("fabrication_guard_mode", "log")
     if fabrication_guard_mode not in ("off", "log", "block"):
         raise ValueError(
@@ -94,6 +90,12 @@ def _coerce_runtime_profile(
     if not isinstance(history_token_budget, int):
         raise ValueError(f"nucore_runtime.{profile_name}.history_token_budget must be an integer")
 
+    context_window = payload.get("context_window")
+    if context_window is not None and (
+        isinstance(context_window, bool) or not isinstance(context_window, int) or context_window <= 0
+    ):
+        raise ValueError(f"nucore_runtime.{profile_name}.context_window must be a positive integer")
+
     max_fabrication_retries = payload.get("max_fabrication_retries", 1)
     if not isinstance(max_fabrication_retries, int):
         raise ValueError(f"nucore_runtime.{profile_name}.max_fabrication_retries must be an integer")
@@ -106,16 +108,13 @@ def _coerce_runtime_profile(
         "temperature": payload.get("temperature"),
         "max_tokens": payload.get("max_tokens"),
         "reasoning_effort": payload.get("reasoning_effort"),
-        # Prompt-cache TTL for the static prefix (tools + static system
-        # sections); "1h" costs 2x to write vs 1.25x for "5m", so it only
-        # pays off when conversations are typically 5-60 minutes apart.
-        "cache_ttl": cache_ttl,
         "supports_system_role": bool(
             payload.get("supports_system_role", capabilities.get("supports_system_role", True))
         ),
         "enabled": bool(payload.get("enabled", True)),
         "max_iterations": max_iterations,
         "history_token_budget": history_token_budget,
+        "context_window": context_window,
         "fabrication_guard_mode": fabrication_guard_mode,
         "max_fabrication_retries": max_fabrication_retries,
     }

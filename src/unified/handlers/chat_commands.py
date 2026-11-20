@@ -1,7 +1,7 @@
 """``list_chat_commands`` -- the two mode-switch commands (`/developer`/
-`/customer`) and the seven session-management commands (`/sessions`,
+`/customer`) and the eight session-management commands (`/sessions`,
 `/new-session`, `/load-session`, `/rename-session`, `/delete-session`,
-`/delete-all-sessions`, `/compact-session`), all of which are recognized as
+`/delete-all-sessions`, `/compact-session`, `/session-stats`), all of which are recognized as
 literal strings in `run_unified_runtime.EisyUIContext._apply_switch_command_or_return`
 *before* ever reaching the LLM/tool-calling layer -- so, without this tool,
 the model has no way to answer a customer who asks what commands exist in
@@ -98,6 +98,15 @@ _SESSION_COMMANDS = [
         "description": (
             "Summarizes the current session's older turns right away to free up room, even if "
             "it isn't full yet (this also happens automatically once a session gets large)."
+        ),
+    },
+    {
+        "command": "/session-stats",
+        "usage": "/session-stats",
+        "description": (
+            "Shows how much of the model's context the current session uses -- split into the "
+            "system prompt, tools and conversation history -- plus the tokens and cache hits "
+            "of its recent requests and the session's totals."
         ),
     },
 ]

@@ -6,6 +6,12 @@ from typing import Any
 from anthropic import AsyncAnthropic, BadRequestError
 from .base_adapter import LLMAdapter, ToolCall, ToolSpec, stringify_tool_result
 
+# Every cache breakpoint (tools, each system block, the conversation) uses
+# this one TTL, so the API's "longer TTLs must precede shorter ones" rule can't
+# be violated. 1 hour writes at 2x instead of 1.25x but survives the idle gaps
+# between a person's turns, which would otherwise rewrite the whole history.
+_CACHE_TTL = "1h"
+
 
 class ClaudeAdapter(LLMAdapter):
     """LLM adapter for Anthropic Claude models.
@@ -115,7 +121,6 @@ class ClaudeAdapter(LLMAdapter):
             "messages": anthropic_messages,
             "max_tokens": int(cfg.get("max_tokens", 4096)),
         }
-        ttl = cfg.get("cache_ttl")
         # One block per system message, each with its own cache breakpoint
         # (the top-level `cache_control` kwarg would instead mark the current,
         # always-different user turn). The prompt builder splits the prompt
@@ -131,10 +136,7 @@ class ClaudeAdapter(LLMAdapter):
         # with ROUTINES DATABASE -- see prompt_builder.py's module docstring.
         # The API allows 4 breakpoints; one is on the tools list, so only the
         # last 3 system blocks are marked -- earlier ones are still cached as
-        # the prefix of the first marked block. Longer TTLs must precede
-        # shorter ones, so a configured longer TTL goes on the tools and
-        # every system block except the last; the volatile tail keeps the
-        # default TTL.
+        # the prefix of the first marked block.
         #
         # Claude's API hard-caps a request at 4 total cache breakpoints. When
         # `cache_messages` is requested (the growing conversation gets the
@@ -151,12 +153,11 @@ class ClaudeAdapter(LLMAdapter):
         marked_end = len(blocks) - 1 if drop_volatile_tail else len(blocks)
         marked_count = 2 if drop_volatile_tail else 3
         for i in range(max(0, marked_end - marked_count), marked_end):
-            is_last = i == len(blocks) - 1
-            blocks[i]["cache_control"] = self._cache_control(None if is_last else ttl)
+            blocks[i]["cache_control"] = self._cache_control()
         if blocks:
             kwargs["system"] = blocks
         if tools:
-            kwargs["tools"] = self._with_tools_ttl(tools, ttl)
+            kwargs["tools"] = tools
         if message_breakpoint_wanted:
             kwargs["messages"] = self._with_message_cache_breakpoint(anthropic_messages)
         if cfg.get("tool_choice"):
@@ -285,20 +286,8 @@ class ClaudeAdapter(LLMAdapter):
         return "thinking" in message or "block_binding" in message
 
     @staticmethod
-    def _cache_control(ttl: str | None) -> dict[str, Any]:
-        # No `ttl` key for the default 5m -- keeps the request bytes identical
-        # to before the option existed.
-        if ttl and ttl != "5m":
-            return {"type": "ephemeral", "ttl": ttl}
-        return {"type": "ephemeral"}
-
-    def _with_tools_ttl(self, tools: list[dict[str, Any]], ttl: str | None) -> list[dict[str, Any]]:
-        """Apply a configured TTL to the tools breakpoint (export_tools() has
-        no access to the per-call config). Works on a copy -- the exported
-        list is shared across every round of a turn and must not be mutated."""
-        if not ttl or ttl == "5m" or "cache_control" not in tools[-1]:
-            return tools
-        return [*tools[:-1], {**tools[-1], "cache_control": self._cache_control(ttl)}]
+    def _cache_control() -> dict[str, Any]:
+        return {"type": "ephemeral", "ttl": _CACHE_TTL}
 
     @staticmethod
     def _with_message_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -310,16 +299,9 @@ class ClaudeAdapter(LLMAdapter):
         call already cached, so only the newly appended tail is processed/
         billed fresh instead of the whole accumulated history every time.
 
-        Always the plain 5m-default breakpoint (no configured ``ttl``): this
-        is necessarily the last breakpoint in the request (tools, then
-        system, then messages, per the API's own structural order), and a
-        longer TTL may never follow a shorter one -- same constraint
-        ``generate()``'s system-blocks loop already applies to its own last
-        (volatile) block.
-
         Returns a new list -- *messages* is ``AgenticLoop.run``'s own list,
         appended to and reused across every round of this turn, and must
-        not be mutated here (same reasoning as ``_with_tools_ttl``).
+        not be mutated here.
         """
         if not messages:
             return messages
@@ -328,9 +310,9 @@ class ClaudeAdapter(LLMAdapter):
         if isinstance(content, str):
             if not content:
                 return messages
-            new_content: list[dict[str, Any]] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+            new_content: list[dict[str, Any]] = [{"type": "text", "text": content, "cache_control": ClaudeAdapter._cache_control()}]
         elif isinstance(content, list) and content:
-            new_content = [*content[:-1], {**content[-1], "cache_control": {"type": "ephemeral"}}]
+            new_content = [*content[:-1], {**content[-1], "cache_control": ClaudeAdapter._cache_control()}]
         else:
             return messages
         return [*messages[:-1], {**last, "content": new_content}]
@@ -360,7 +342,7 @@ class ClaudeAdapter(LLMAdapter):
             for spec in specs
         ]
         if tools:
-            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+            tools[-1] = {**tools[-1], "cache_control": self._cache_control()}
         return tools
 
     def parse_tool_calls(self, response: Any) -> list[ToolCall]:

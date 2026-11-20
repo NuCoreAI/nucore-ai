@@ -9,7 +9,6 @@ AgenticLoop.run), not that function's data sources.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from nucore import NuCoreInterface
 
@@ -25,30 +24,8 @@ async def build_system_prompt_sections(nucore_interface: NuCoreInterface) -> lis
     # system block, and one more of them exhausts Claude's 4-breakpoint cap,
     # silently disabling the conversation cache breakpoint.
     identity = await host_identity.get_identity_text(nucore_interface)
-    sections = [f"{template.rstrip()}\n\n{identity}"]
-
-    installed_section = await _build_installed_plugins_section(nucore_interface)
-    if installed_section:
-        sections.append(installed_section)
-
-    return sections
-
-
-async def _build_installed_plugins_section(nucore_interface: NuCoreInterface) -> str | None:
-    """Best-effort -- an installed-plugins listing is a convenience, not a
-    requirement; any failure here just means the assistant calls
-    list_installed_plugins itself instead of already knowing."""
-    try:
-        response: Any = await nucore_interface.get_installed_plugins()
-    except Exception:
-        return None
-    if not isinstance(response, dict) or not response.get("successful"):
-        return None
-    plugins = response.get("data")
-    if not isinstance(plugins, list) or not plugins:
-        return None
-
-    lines = ["CURRENTLY INSTALLED PLUGINS (for reference -- call list_installed_plugins for live state):"]
-    for p in plugins:
-        lines.append(f"- {p.get('name')} (plugin_id={p.get('profileNum')}, state={p.get('state')})")
-    return "\n".join(lines)
+    # Deliberately no installed-plugins section: its text changed whenever a
+    # plugin was installed/started/stopped, and as the last block before the
+    # messages that rewrote the whole conversation cache. The model calls
+    # list_installed_plugins for live state instead.
+    return [f"{template.rstrip()}\n\n{identity}"]

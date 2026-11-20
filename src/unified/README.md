@@ -25,7 +25,8 @@ backend.
 | `plugin_output_root_migration.py` | `migrate_plugin_output_root` -- automatic, prompt-free relocation of `--plugin-output-root`'s contents to a new directory when `--old-plugin-output-root` is given and still exists, run inline from `run_unified_runtime.py main()`; corrects each plugin's `server_entry.json` path, reinstalls any previously-installed plugin into its original slot (regenerating its rc.d service file) with its exact run state restored, and renames the old directory to `<old_root>.old` only on full success. |
 | `stream_handler.py` | `StreamHandler` -- streams live tokens to a connected websocket (`--websocket-port`/`--websocket-host` mode); a fresh `runtime_config` is built per connection since it bakes in a bound `stream_handler.handle_stream_chunk` callback (see `_run_websocket_server`'s docstring). |
 | `dispatch_builder.py`, `provider_dispatch_adapter.py`, `provider_clients.py`, `runtime_config.py` | Runtime-profile JSON loading and per-provider `LLMAdapter` construction, shared by both process entrypoints. |
-| `history_compaction.py` | `maybe_compact_history` -- collapses the oldest half of a session's conversation history into one LLM-generated summary turn once its estimated token size exceeds `history_token_budget` (runtime config, default 20000); falls back to plain truncation if the summarization call itself fails. |
+| `history_compaction.py` | `maybe_compact_history` -- once a session's estimated token size exceeds `history_token_budget` (runtime config, default 20000) the history is compacted. On Claude the live request is forked (same system prompt and tools, so the cached history is read cheaply, with a final summarize instruction and `tool_choice` none) and the whole history is replaced by that one summary; on any other provider, or if the fork fails, the oldest turns (all but the newest ~half-budget) are summarized from their text and short tool-call excerpts into one pseudo-turn, with plain truncation as the last resort. Each compaction is recorded for `/session-stats`. |
+| `usage_stats.py` | Per-session token accounting and the `/session-stats` report: per-provider usage normalization, running totals and recent-request rows kept on `ConversationHistory.usage`, compaction and mid-turn-over-budget events, component estimates and report formatting. |
 | `runtime_config.example.json`, `runtime_config.openai.example.json`, `runtime_config.openai-responses.example.json`, `runtime_config.grok.example.json` | Example runtime profiles, one per provider (see below). |
 
 ## Running it
@@ -155,10 +156,10 @@ restart, not just an in-process reconnect. `None` (the default) is a complete no
 disk I/O, identical behavior to before this existed.
 
 Within each mode, a user can hold multiple named sessions (not just one continuously-growing
-history), managed by seven chat commands recognized the same way `/developer`/`/customer` are
+history), managed by eight chat commands recognized the same way `/developer`/`/customer` are
 (`EisyUIContext._apply_switch_command_or_return`, both the websocket-JSON and plain-REPL-string
 input paths): `/new-session`, `/sessions`, `/load-session <id>`, `/rename-session <id> <name>`,
-`/delete-session <id>`, `/delete-all-sessions`, `/compact-session`. Unlike the two mode-switch
+`/delete-session <id>`, `/delete-all-sessions`, `/compact-session`, `/session-stats`. Unlike the two mode-switch
 commands, these are answered asynchronously from `_run_once` (`_handle_session_command`) rather
 than at recognition time, since a session lookup/mutation is async disk I/O.
 
@@ -171,16 +172,121 @@ multi-session history" section for the full design.
 ## History-budget notices and manual compaction
 
 `history_compaction.maybe_compact_history` (called once per turn from `UnifiedRuntime.handle_query`)
-collapses the oldest half of a session's turns into one LLM-summarized pseudo-turn once estimated
-token size exceeds that tool set's `history_token_budget`. Its `notify` parameter -- wired to
-`UnifiedRuntime._notify_history_budget`, which sends over whichever channel is attached
-(websocket JSON frame or REPL stdout) -- emits one
-italic Markdown status line the first time estimated usage crosses each 10%-of-budget decile at or
-above 50% (tracked on `ConversationHistory.last_budget_notice_decile`, deliberately never restored
-from disk -- see that field's own docstring), then a distinct "history was compacted" line for
-whichever turn actually crosses 100% and triggers real compaction, resetting the tracked decile
-back to 0.
+compacts a session once its estimated token size exceeds that tool set's `history_token_budget`.
 
-`/compact-session` is the manual counterpart (`UnifiedRuntime.compact_session`), forcing the same
-compaction early even while under budget (`maybe_compact_history`'s `force=True`), under the same
+- **On Claude (fork):** `AgenticLoop.summarize` resends the turn's own request -- same system
+  sections, same history, same exported tools, `cache_messages`, `tool_choice` none, no streaming --
+  with one final user instruction asking for a summary (requests and intent, decisions, facts the
+  tools showed, what was done and what wasn't, current state, the pending step). Because the prefix
+  matches the previous request, it reads the already-cached history at the cache-read price and the
+  model sees every tool result. On success the **entire** history is replaced by that one summary
+  turn. `handle_query` therefore builds the system prompt and loop *before* compaction on Claude
+  profiles and reuses them for the turn (`_prepare_fork_summarizer`).
+- **Elsewhere, or if the fork fails (standalone):** the oldest turns (everything except the newest
+  ~half-budget) are summarized by a separate call from their text plus short tool-call/result
+  excerpts, keeping the newest turns verbatim; if that call fails too, the oldest turns are dropped.
+- **Notices:** its `notify` parameter -- wired to `UnifiedRuntime._notify_history_budget`, which
+  sends over whichever channel is attached (websocket JSON frame or REPL stdout) -- emits one
+  italic Markdown status line the first time estimated usage crosses each 10%-of-budget decile at or
+  above 50% (tracked on `ConversationHistory.last_budget_notice_decile`, deliberately never restored
+  from disk -- see that field's own docstring), then a distinct "history was compacted" line for
+  whichever turn actually crosses 100% and triggers real compaction, resetting the tracked decile
+  back to 0. Both notices end with a blank line because the UI appends the reply stream to the
+  notice's chat bubble.
+
+`/compact-session` is the manual counterpart (`UnifiedRuntime.compact_session`, which also receives
+the connection context so the fork can rebuild the same tools), forcing the same compaction early
+even while under budget (`maybe_compact_history`'s `force=True`), under the same
 per-`(user_id, tool_set)` lock `handle_query` holds for its own automatic check.
+
+Compaction is checked only at the start of a turn. A single long turn (dozens of tool rounds) can
+therefore grow far past the budget before the next check; `AgenticLoop.run` watches for that, see
+the log-only mid-turn detection below.
+
+### Prompt caching on Claude
+
+`ClaudeAdapter` puts `cache_control` with a fixed `ttl: "1h"` (`_CACHE_TTL`) on the tools, on the
+system blocks that fit under the API's 4-breakpoint cap, and on the end of the conversation, so a
+pause of up to an hour between turns still reads the cached prefix instead of rewriting it (a 1h
+write costs 2x input instead of 1.25x; reads cost 0.1x). There is no `cache_ttl` setting; a
+leftover one in an old config is ignored. The plugin-authoring system prompt is deliberately a
+single static block: anything that changes between turns and sits before the messages (it once held
+an installed-plugins list) invalidates the cached conversation after it, so the model calls
+`list_installed_plugins` for live state instead.
+
+## Usage accounting and `/session-stats`
+
+`/session-stats` (`UnifiedRuntime.session_stats`, `usage_stats.py`) replies with a Markdown report
+for the current session of the current mode. It is answered locally from `_run_once`
+(`_handle_session_command`) like the other session commands -- so it requires `--session-persist-dir`
+and a signed-in user -- and makes **no model call**; nothing it prints enters the conversation
+history.
+
+**Recording.** `AgenticLoop.run` and `summarize` report each request's usage to an `on_usage(kind,
+usage)` callback (kinds `round` and `compaction fork`; the standalone summarizer is not recorded).
+`UnifiedRuntime` hands it a closure over the session's `ConversationHistory.usage` dict, which
+`usage_stats.record_request` updates: `normalize_usage` maps each provider's shape (Claude's
+`input_tokens`/`cache_*`, OpenAI chat `prompt_tokens`, OpenAI Responses `input_tokens`, Gemini
+`usageMetadata`) to `input_total`, `cache_read`, `cache_write_5m`, `cache_write_1h` and `output`;
+unknown shapes count as zero and nothing here raises. The dict holds running totals, a dollar total
+for models in the small price table, the last 20 requests, the last 20 compaction events
+(`fork`/`summary`/`truncated`, tokens before and after, recorded by `maybe_compact_history`) and the
+mid-turn counter. It is saved and restored with the session by `session_persistence`
+(`history_to_dict`/`history_from_dict`), so it does not depend on the prompt log (a debug option).
+
+**Composition.** To split the next request, `session_stats` rebuilds the same system sections and
+loop a real turn would (`system_prompt_builder`, `_build_loop`; if that fails -- no connection
+context -- the report still renders with empty system/tools rows) and
+`usage_stats.estimate_composition` sizes each system section (labelled by the markers it contains:
+DEVICE DATABASE, ROUTINES DATABASE, TIME & LOCATION, USER PREFERENCES), the exported tools, and
+history split into the compacted summary, conversation text and tool traffic (messages containing
+`tool_use`/`tool_result`/server-tool blocks), using `history_compaction.estimate_tokens`
+(`chars / 3`). When the newest recorded `round` request is still comparable (no compaction recorded
+at or after it, and the real/estimated ratio is within 0.5-2.0) every component is multiplied by
+`last request input_total / estimated total`, so the table sums to a measured number and the
+heading says "calibrated"; otherwise the raw estimates are shown and labelled "estimated".
+
+**Window and price.** The context window comes from the profile's optional `context_window`
+(validated in `runtime_config.py`, see `runtime_config.md`) or the built-in `_WINDOWS` table;
+dollars come from `_PRICES` (cache reads 0.1x, 5m writes 1.25x, 1h writes 2x input). A model in
+neither table just omits the window share or the cost.
+
+**Report contents:** context for the next request vs window; history vs `history_token_budget`;
+`max_tokens` reserve; the parts table; the last request (read / written / uncached, hit rate);
+session totals; compaction count and latest before/after; mid-turn events; the last five requests.
+User-facing explanation: `../../../eisy-ai/USER_GUIDE.md` ("Seeing how full a session is").
+
+**Mid-turn over-budget detection (log only).** Before each round after the first,
+`AgenticLoop.run` estimates the conversation so far (history plus this turn's messages, system
+sections excluded) and, if it exceeds `mid_turn_budget` (the runtime passes `2 *
+history_token_budget`), calls `on_mid_turn_over_budget(round, tokens, budget)`; it fires again only
+at the next multiple of the budget. `UnifiedRuntime._note_mid_turn_over_budget` logs a
+`would compact mid-turn at round N` warning, writes a `mid_turn_over_budget` prompt-log line and
+counts the event for `/session-stats`. Nothing is compacted or altered; the data is for deciding
+whether real mid-turn compaction is worth building. Both hooks are best-effort -- an exception is
+logged and never breaks the turn.
+
+## Secret redaction in logs
+
+Two layers keep API keys and tokens out of log output (`src/utils/secret_redaction.py`,
+`src/utils/logger.py`):
+
+- **Registered secrets** -- `register_secret(value)` (provider API keys as clients are built,
+  OAuth client secrets, MCP tokens) and `redact()`, applied by `RedactingFilter` on every handler
+  `configure_logging` builds, by the prompt log, and by session persistence before write.
+- **Pattern scrubbing** -- `scrub()` = `redact()` plus recognition by shape (`sk-ant-...`,
+  `sk-...`, `xai-...`, `gsk_...`, `AIza...`, `Bearer <token>`) and by quoted value after a sensitive
+  field name (`api_key`, `client_secret`, `access_token`, `refresh_token`, `password`, `secret`,
+  `authorization`, including the backslash-escaped JSON a logger shows for a JSON string inside a
+  string) or URL parameter. It catches secrets that were never registered or are logged before
+  registration. It is applied only to log records, never to persisted history: `redact()` stays
+  registry-only there because rewriting code-like text (`api_key = "..."` in generated plugin
+  code) would corrupt the stored conversation.
+
+`install_redacting_record_factory()` (run when `utils.logger` is imported, and again by
+`configure_logging`) applies `scrub()` as a `logging` record factory, upstream of every logger and
+handler in the process. That is what covers `debug.log`: it is written by udi_interface's own
+`PolyLogger` handler, which logs each Polyglot message it receives -- including the plugin's custom
+parameters, provider API keys and all -- and which `RedactingFilter` can't reach. Lines written
+before this existed stay in old logs; rotate any key that appeared in one. Polyglot's own stored
+custom parameters (database and UI) are unaffected by any of this.

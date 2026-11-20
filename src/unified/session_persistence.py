@@ -85,6 +85,7 @@ def history_from_dict(data: Any) -> ConversationHistory | None:
             pending_question=data.get("pending_question"),
             pending_failed=bool(data.get("pending_failed", False)),
             pending_turns=int(data.get("pending_turns", 0)),
+            usage=data["usage"] if isinstance(data.get("usage"), dict) else {},
         )
     except Exception:
         logger.warning("session_persistence: failed to reconstruct history from stored data", exc_info=True)

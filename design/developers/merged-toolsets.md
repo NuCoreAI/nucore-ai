@@ -92,14 +92,14 @@ Both tool sets' settings live in a single runtime config JSON, as two profiles u
     "unified": {
       "enabled": true,
       "provider": "claude", "model": "claude-haiku-4-5-20251001", "api_key": "${ANTHROPIC_API_KEY}",
-      "stream": true, "url": null, "temperature": 0.2, "cache_ttl": "5m",
+      "stream": true, "url": null, "temperature": 0.2,
       "max_iterations": 20, "max_tokens": 64000, "history_token_budget": 20000,
       "fabrication_guard_mode": "log", "max_fabrication_retries": 1
     },
     "plugin_authoring": {
       "enabled": true,
       "provider": "claude", "model": "claude-sonnet-5", "api_key": "${ANTHROPIC_API_KEY}",
-      "stream": true, "url": null, "temperature": 0.2, "cache_ttl": "5m",
+      "stream": true, "url": null, "temperature": 0.2,
       "max_iterations": 50, "max_tokens": 64000, "history_token_budget": 20000,
       "fabrication_guard_mode": "log", "max_fabrication_retries": 1
     }
@@ -370,7 +370,10 @@ current/only session auto-creates a fresh replacement, so a user always has at l
 session); `/delete-all-sessions` deletes every saved session in the mode at once and starts one
 fresh replacement, same invariant; `/compact-session` forces `history_compaction.
 maybe_compact_history` to collapse the current session's older turns into a summary right away,
-even while under its token budget (`UnifiedRuntime.compact_session`'s `force=True`). All seven are
+even while under its token budget (`UnifiedRuntime.compact_session`'s `force=True`); `/session-stats`
+reports the current session's context composition and token usage without calling the model
+(`UnifiedRuntime.session_stats`, `usage_stats.py` -- see `src/unified/README.md`'s "Usage accounting
+and `/session-stats`"). All eight are
 recognized at the same `EisyUIContext._apply_switch_command_or_return` chokepoint
 `/developer`/`/customer` already use (both the websocket JSON and plain REPL-string paths), but --
 unlike those two -- answered asynchronously from `_run_once` (`_handle_session_command`), since a

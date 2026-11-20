@@ -621,3 +621,161 @@ async def test_an_ordinary_error_result_does_not_raise_or_unwind():
     final_text, _ = await loop.run(system_prompt="sys", history_messages=[], user_message="hi")
 
     assert final_text == "explained the error"
+
+
+# --- summarize(): a fork of the round-1 request, ending in an instruction ---
+
+
+class _RecordingAdapter(_FakeAdapter):
+    def __init__(self, response):
+        super().__init__([])
+        self._response = response
+        self.calls: list[dict] = []
+
+    def export_tools(self, specs):
+        return [{"name": "t1"}]
+
+    async def generate(self, *, messages, config, tools):
+        self.calls.append({"messages": messages, "config": config, "tools": tools})
+        return self._response
+
+
+async def _noop_dispatch(name, args):
+    return {}
+
+
+async def test_summarize_forks_the_round_one_request_and_ends_with_the_instruction():
+    adapter = _RecordingAdapter({"text": "  the summary  "})
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=_noop_dispatch)
+    history = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
+    live_config = {"model": "m", "stream": True, "stream_handler": lambda chunk: None, "session_id": "s"}
+
+    text = await loop.summarize(
+        system_prompt=["static", "tail"],
+        history_messages=history,
+        instruction="summarize now",
+        llm_config=live_config,
+        max_tokens=777,
+    )
+
+    assert text == "the summary"
+    sent = adapter.calls[0]
+    assert sent["messages"] == [
+        {"role": "system", "content": "static"},
+        {"role": "system", "content": "tail"},
+        *history,
+        {"role": "user", "content": "summarize now"},
+    ]
+    assert sent["tools"] == [{"name": "t1"}]  # the loop's own exported tools, so the cached prefix matches
+    cfg = sent["config"]
+    assert cfg["tool_choice"] == {"type": "none"}
+    assert cfg["cache_messages"] is True
+    assert cfg["stream"] is False and "stream_handler" not in cfg
+    assert cfg["max_tokens"] == 777 and cfg["model"] == "m" and cfg["session_id"] == "s"
+    # The caller's own config and history list are untouched.
+    assert live_config["stream"] is True and "stream_handler" in live_config
+    assert len(history) == 2
+
+
+async def test_summarize_accepts_a_single_string_system_prompt_and_returns_empty_when_there_is_no_text():
+    adapter = _RecordingAdapter(None)
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=_noop_dispatch)
+
+    text = await loop.summarize(system_prompt="sys", history_messages=[], instruction="go", max_tokens=10)
+
+    assert text == ""
+    assert adapter.calls[0]["messages"][0] == {"role": "system", "content": "sys"}
+
+
+async def test_on_usage_hears_every_round_and_a_failing_hook_does_not_break_the_turn():
+    heard: list = []
+
+    def on_usage(kind, usage):
+        heard.append((kind, usage))
+        raise RuntimeError("boom")
+
+    responses = [
+        {"tool_calls": [{"id": "1", "name": "noop", "input": {}}], "usage": {"input_tokens": 5}},
+        {"text": "done", "usage": {"input_tokens": 9}},
+    ]
+    loop = AgenticLoop(llm_client=_FakeAdapter(responses), tool_specs=[], dispatch=lambda name, args: _ok())
+
+    text, _ = await loop.run(system_prompt="s", history_messages=[], user_message="hi", on_usage=on_usage)
+
+    assert text == "done"
+    assert heard == [("round", {"input_tokens": 5}), ("round", {"input_tokens": 9})]
+
+
+async def test_summarize_reports_its_usage_as_a_compaction_fork():
+    heard: list = []
+    adapter = _RecordingAdapter({"text": "sum", "usage": {"input_tokens": 3}})
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=lambda name, args: _ok())
+
+    await loop.summarize(
+        system_prompt="s",
+        history_messages=[],
+        instruction="go",
+        max_tokens=10,
+        on_usage=lambda kind, usage: heard.append((kind, usage)),
+    )
+
+    assert heard == [("compaction fork", {"input_tokens": 3})]
+
+
+class _EchoingAdapter(_FakeAdapter):
+    """Puts each tool result into the transcript, so the turn actually grows."""
+
+    def build_tool_round_trip_messages(self, *, raw_response, tool_calls, tool_results, config):
+        return [{"role": "user", "content": str(tool_results)}]
+
+
+def _big_tool_rounds(rounds: int, chars: int):
+    responses = [{"tool_calls": [{"id": str(i), "name": "noop", "input": {}}]} for i in range(rounds)]
+    return [*responses, {"text": "done"}]
+
+
+async def test_mid_turn_budget_reports_once_per_crossing_and_changes_nothing():
+    seen: list = []
+
+    async def dispatch(name, args):
+        return {"blob": "x" * 3000}
+
+    adapter = _EchoingAdapter(_big_tool_rounds(4, 3000))
+    loop = AgenticLoop(llm_client=adapter, tool_specs=[], dispatch=dispatch)
+
+    text, new_messages = await loop.run(
+        system_prompt="s",
+        history_messages=[],
+        user_message="hi",
+        mid_turn_budget=500,
+        on_mid_turn_over_budget=lambda rnd, tokens, budget: seen.append((rnd, tokens, budget)),
+    )
+
+    assert text == "done"
+    assert seen and seen[0][0] == 2 and all(b == 500 for _, _, b in seen)
+    assert len(seen) == len({t // 500 for _, t, _ in seen})  # one report per budget multiple
+    baseline = AgenticLoop(llm_client=_EchoingAdapter(_big_tool_rounds(4, 3000)), tool_specs=[], dispatch=dispatch)
+    _, expected = await baseline.run(system_prompt="s", history_messages=[], user_message="hi")
+    assert new_messages == expected
+
+
+async def test_mid_turn_budget_is_silent_for_a_small_turn_and_a_raising_hook_is_harmless():
+    calls: list = []
+    loop = AgenticLoop(llm_client=_FakeAdapter(_big_tool_rounds(2, 10)), tool_specs=[], dispatch=lambda n, a: _ok())
+    await loop.run(
+        system_prompt="s",
+        history_messages=[],
+        user_message="hi",
+        mid_turn_budget=1_000_000,
+        on_mid_turn_over_budget=lambda *a: calls.append(a),
+    )
+    assert calls == []
+
+    def explode(*_):
+        raise RuntimeError("boom")
+
+    loop = AgenticLoop(llm_client=_EchoingAdapter(_big_tool_rounds(2, 10)), tool_specs=[], dispatch=lambda n, a: _ok())
+    text, _ = await loop.run(
+        system_prompt="s", history_messages=[], user_message="hi", mid_turn_budget=1, on_mid_turn_over_budget=explode
+    )
+    assert text == "done"

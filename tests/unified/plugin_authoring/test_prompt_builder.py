@@ -1,8 +1,7 @@
 """plugin_authoring.build_system_prompt_sections -- the static
 system_prompt.md with the standing OS/product-identity text (see
-host_identity.py) folded into the same block, and an optional best-effort installed-plugins section
-(see prompt_builder.py's own docstring for why it's not
-unified.prompt_builder.build_system_prompt_sections).
+host_identity.py) folded into the same block (see prompt_builder.py's own
+docstring for why it's not unified.prompt_builder.build_system_prompt_sections).
 """
 
 from __future__ import annotations
@@ -15,9 +14,7 @@ from unified.plugin_authoring import build_system_prompt_sections
 @pytest.mark.asyncio
 async def test_build_system_prompt_sections_mentions_list_chat_commands():
     # Developers need to discover /customer and the session-management
-    # commands too -- no get_installed_plugins on this stub, so the
-    # best-effort installed-plugins section is skipped entirely, leaving
-    # just the one template+identity block.
+    # commands too -- just the one template+identity block.
     sections = await build_system_prompt_sections(object())
 
     assert len(sections) == 1
@@ -35,3 +32,21 @@ async def test_build_system_prompt_sections_includes_identity_text():
 
     assert "real product is unknown" in sections[0]
     assert "never guess or hedge" in sections[0]
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_sections_never_lists_installed_plugins():
+    # An installed-plugins block changed whenever a plugin was installed or
+    # changed state, which rewrote the whole conversation cache after it.
+    calls = []
+
+    class _Interface:
+        async def get_installed_plugins(self):
+            calls.append(1)
+            return {"successful": True, "data": [{"name": "Chess", "profileNum": 6, "state": "connected"}]}
+
+    sections = await build_system_prompt_sections(_Interface())
+
+    assert len(sections) == 1
+    assert "CURRENTLY INSTALLED PLUGINS" not in sections[0]
+    assert calls == []

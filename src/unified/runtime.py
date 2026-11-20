@@ -22,12 +22,19 @@ from .session_store import SessionStore
 from nucore import NuCoreInterface
 
 from .dispatch import execute_tool
-from .history_compaction import maybe_compact_history
+from .history_compaction import _COMPACTED_QUERY_LABEL, _history_tokens, maybe_compact_history
 from .history_repair import drop_unpaired_web_search_blocks
 from .loop import AgenticLoop, ToolDispatch, ToolSetSwitchRequested
 from .prompt_builder import build_system_prompt_sections
 from .stream_handler import StreamHandler
-from utils import get_logger
+from .usage_stats import (
+    context_window,
+    estimate_composition,
+    format_report,
+    record_mid_turn_over_budget,
+    record_request,
+)
+from utils import get_logger, get_prompt_log_manager
 
 logger = get_logger(__name__)
 
@@ -403,7 +410,112 @@ class UnifiedRuntime:
     def _profile_config(self, tool_set_name: str) -> dict[str, Any]:
         return self.runtime_config.get("nucore_runtime", {}).get(tool_set_name, {})
 
-    async def compact_session(self, user_id: str, tool_set: str) -> bool:
+    def _forks_summaries(self, tool_set_name: str) -> bool:
+        """Compaction summarizes by forking the live request only on Claude --
+        the one provider whose prompt cache makes that cheap and whose adapter
+        accepts ``tool_choice`` none; every other provider keeps the
+        standalone summarizer."""
+        provider = self._resolve_llm_config(tool_set_name).get("provider")
+        return ProviderDispatchLLMAdapter._normalize(provider or "") == "claude"
+
+    async def _prepare_fork_summarizer(
+        self,
+        tool_set_name: str,
+        connection_context: Any,
+        query: str,
+        history: Any,
+        composite_session_id: str,
+    ) -> tuple[Any, Any, Any]:
+        """``(fork_summarizer, system_prompt, loop)`` for a Claude tool set, or
+        ``(None, None, None)`` otherwise. The system prompt and loop are the
+        very ones the turn is about to use, so a caller can reuse them instead
+        of building them twice. The fork reads *history* when it is called --
+        i.e. before compaction has changed it -- so it matches what the last
+        real request sent."""
+        if not self._forks_summaries(tool_set_name):
+            return None, None, None
+        system_prompt = await self._tool_sets[tool_set_name].system_prompt_builder(self.nucore_interface)
+        loop = await self._build_loop(tool_set_name, connection_context, query)
+        llm_config = self._resolve_llm_config(tool_set_name)
+        llm_config["session_id"] = composite_session_id
+        provider = llm_config.get("provider")
+
+        async def fork_summarizer(instruction: str, max_tokens: int) -> str:
+            return await loop.summarize(
+                system_prompt=system_prompt,
+                history_messages=_build_history_messages(history.turns, current_provider=provider),
+                instruction=instruction,
+                llm_config=llm_config,
+                max_tokens=max_tokens,
+                on_usage=lambda kind, usage: record_request(history.usage, kind, usage, llm_config.get("model")),
+            )
+
+        return fork_summarizer, system_prompt, loop
+
+    def _ensure_switch_state(self) -> None:
+        # _build_loop wires this into the dispatch it builds; a caller that
+        # only inspects or summarizes (never dispatches) still can't build
+        # the loop without one, and handle_query may not have run yet.
+        if getattr(self, "_current_switch_state", None) is None:
+            self._current_switch_state = _SwitchState(
+                enabled_tool_sets=self.enabled_tool_sets,
+                max_switches=int(self.runtime_config.get("max_tool_set_switches_per_turn", 1)),
+            )
+
+    async def _note_mid_turn_over_budget(
+        self, history: Any, composite_session_id: str, round_number: int, tokens: int, budget: int
+    ) -> None:
+        """Observation only (no compaction yet): a turn's own rounds pushed the
+        conversation past twice the history budget, which per-turn compaction
+        can't see until the next turn starts."""
+        logger.warning(
+            "unified: would compact mid-turn at round %d (conversation ~%d estimated tokens > ~%d); log-only",
+            round_number,
+            tokens,
+            budget,
+        )
+        record_mid_turn_over_budget(history.usage, round_number, tokens, budget)
+        await get_prompt_log_manager().write_flag(
+            f"unified (round {round_number})",
+            "mid_turn_over_budget",
+            {"tokens": tokens, "budget": budget},
+            conversation_id=composite_session_id,
+        )
+
+    async def session_stats(self, user_id: str, tool_set: str, connection_context: Any = None) -> str:
+        """The ``/session-stats`` report for ``(user_id, tool_set)``'s current
+        session: what the next request is made of, and what the session has
+        used so far. Makes no model call."""
+        current_session_num = await self.session_store.resolve_current_session_id(
+            user_id, tool_set, durable=True
+        )
+        composite_session_id = SessionStore.composite_key(user_id, tool_set, current_session_num)
+        async with self.session_store.lock(composite_session_id):
+            history = await self.session_store.get_or_load(user_id, tool_set, current_session_num, durable=True)
+            llm_config = self._resolve_llm_config(tool_set)
+            profile_cfg = self._profile_config(tool_set)
+            sections: list[str] = []
+            tools: list[Any] = []
+            try:
+                self._ensure_switch_state()
+                prompt = await self._tool_sets[tool_set].system_prompt_builder(self.nucore_interface)
+                sections = [prompt] if isinstance(prompt, str) else list(prompt)
+                tools = list((await self._build_loop(tool_set, connection_context, ""))._exported_tools)
+            except Exception as exc:
+                logger.warning("unified: /session-stats couldn't rebuild the prompt and tools: %s", exc)
+            composition = estimate_composition(sections, tools, history.turns, _COMPACTED_QUERY_LABEL)
+            model = llm_config.get("model")
+            return format_report(
+                history.usage,
+                composition,
+                history_tokens=_history_tokens(history.turns),
+                history_budget=int(profile_cfg.get("history_token_budget", 20000)),
+                window=context_window(model, llm_config.get("context_window")),
+                max_tokens=llm_config.get("max_tokens"),
+                model=model,
+            )
+
+    async def compact_session(self, user_id: str, tool_set: str, connection_context: Any = None) -> bool:
         """Force-compact the current session's history for
         ``(user_id, tool_set)``, regardless of whether it's actually over
         its token budget -- the manual counterpart to :meth:`handle_query`'s
@@ -433,12 +545,23 @@ class UnifiedRuntime:
                 current_session_num,
                 durable=True,
             )
+            self._ensure_switch_state()
+            try:
+                fork_summarizer, _, _ = await self._prepare_fork_summarizer(
+                    tool_set, connection_context, "", history, composite_session_id
+                )
+            except Exception as exc:
+                # No connection context to rebuild the tools from, say -- the
+                # standalone summarizer still works.
+                logger.warning("unified: couldn't prepare a forked summary for /compact-session: %s", exc)
+                fork_summarizer = None
             compacted = await maybe_compact_history(
                 history,
                 llm_client=self.llm_client,
                 llm_config=self._resolve_llm_config(tool_set),
                 token_budget=int(profile_cfg.get("history_token_budget", 20000)),
                 force=True,
+                fork_summarizer=fork_summarizer,
             )
             if compacted:
                 await self.session_store.persist(user_id, tool_set, current_session_num, durable=True)
@@ -606,12 +729,26 @@ class UnifiedRuntime:
                     current_session_num,
                     durable=durable_session,
                 )
+                # _build_loop captures this, so it must exist before the
+                # early build below.
+                self._current_switch_state = _SwitchState(
+                    enabled_tool_sets=self.enabled_tool_sets,
+                    max_switches=int(self.runtime_config.get("max_tool_set_switches_per_turn", 1)),
+                )
+                # On Claude, compaction summarizes by forking this turn's own
+                # request, which needs the system prompt and loop the turn is
+                # about to build anyway -- build them once, here, and reuse
+                # them for the first pass of the loop below.
+                fork_summarizer, prebuilt_prompt, prebuilt_loop = await self._prepare_fork_summarizer(
+                    current_tool_set, connection_context, query, history, composite_session_id
+                )
                 await maybe_compact_history(
                     history,
                     llm_client=self.llm_client,
                     llm_config=self._resolve_llm_config(current_tool_set),
                     token_budget=int(profile_cfg.get("history_token_budget", 20000)),
                     notify=self._notify_history_budget,
+                    fork_summarizer=fork_summarizer,
                 )
 
                 current_provider = self._resolve_llm_config(current_tool_set).get("provider")
@@ -622,14 +759,15 @@ class UnifiedRuntime:
                 handoff_notes: list[str] = []
                 user_message = _build_user_message(query, framework_context=framework_context, handoff_notes=handoff_notes)
 
-                self._current_switch_state = _SwitchState(
-                    enabled_tool_sets=self.enabled_tool_sets,
-                    max_switches=int(self.runtime_config.get("max_tool_set_switches_per_turn", 1)),
-                )
-
                 while True:
-                    system_prompt = await self._tool_sets[current_tool_set].system_prompt_builder(self.nucore_interface)
-                    loop = await self._build_loop(current_tool_set, connection_context, query)
+                    if prebuilt_loop is not None:
+                        system_prompt, loop = prebuilt_prompt, prebuilt_loop
+                        prebuilt_loop = None
+                    else:
+                        system_prompt = await self._tool_sets[current_tool_set].system_prompt_builder(
+                            self.nucore_interface
+                        )
+                        loop = await self._build_loop(current_tool_set, connection_context, query)
                     llm_config = self._resolve_llm_config(current_tool_set)
                     # Grok's adapter reads this back out to set the x-grok-conv-id
                     # header that keeps repeat calls in this conversation routed to
@@ -641,6 +779,13 @@ class UnifiedRuntime:
                             history_messages=history_messages,
                             user_message=user_message,
                             llm_config=llm_config,
+                            on_usage=lambda kind, usage: record_request(
+                                history.usage, kind, usage, llm_config.get("model")
+                            ),
+                            mid_turn_budget=2 * int(profile_cfg.get("history_token_budget", 20000)),
+                            on_mid_turn_over_budget=lambda rnd, tokens, budget: self._note_mid_turn_over_budget(
+                                history, composite_session_id, rnd, tokens, budget
+                            ),
                         )
                         break
                     except ToolSetSwitchRequested as switch:

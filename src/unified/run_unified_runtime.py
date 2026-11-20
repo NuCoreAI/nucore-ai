@@ -131,6 +131,7 @@ class EisyUIContext:
             "/delete-session",
             "/delete-all-sessions",
             "/compact-session",
+            "/session-stats",
         }
     )
 
@@ -505,7 +506,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Directory to persist per-user conversation history (customer and developer modes "
             "kept separately, each supporting multiple named sessions -- /new-session, "
             "/sessions, /load-session, /rename-session, /delete-session, /delete-all-sessions, "
-            "/compact-session) "
+            "/compact-session, /session-stats) "
             "and last-active mode "
             "in. There is no default and no runtime-config fallback: persistence is off, and "
             "every connection is in-memory-only for the process's lifetime, unless this is set. "
@@ -669,7 +670,7 @@ async def _handle_session_command(
 ) -> str:
     """Compute the reply for one of :attr:`EisyUIContext._SESSION_COMMANDS`
     (``/new-session``, ``/sessions``, ``/load-session``, ``/rename-session``,
-    ``/delete-session``, ``/delete-all-sessions``, ``/compact-session``). Called from ``_run_once`` after popping the
+    ``/delete-session``, ``/delete-all-sessions``, ``/compact-session``, ``/session-stats``). Called from ``_run_once`` after popping the
     command off ``eisy_ui_context`` -- this needs the runtime's
     ``session_store`` and async disk access, neither of which the
     synchronous recognition chokepoint
@@ -754,10 +755,13 @@ async def _handle_session_command(
         )
 
     if command == "/compact-session":
-        compacted = await runtime.compact_session(user_id, tool_set)
+        compacted = await runtime.compact_session(user_id, tool_set, connection_context=eisy_ui_context)
         if not compacted:
             return "*Not enough history yet to compact -- keep chatting a bit more first.*"
         return "*Session history has been compacted.*"
+
+    if command == "/session-stats":
+        return await runtime.session_stats(user_id, tool_set, connection_context=eisy_ui_context)
 
     raise AssertionError(f"Unreachable: {command!r} is not in EisyUIContext._SESSION_COMMANDS")
 
